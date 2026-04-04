@@ -70,6 +70,25 @@ def emit(message: str) -> None:
     print(message, flush=True)
 
 
+def parse_auto_turns(value: str) -> int | None:
+    normalized = value.strip().lower()
+    if normalized in {"inf", "infinite", "unlimited", "-1"}:
+        return None
+    try:
+        parsed = int(normalized)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--max-auto-turns 는 0 이상의 정수 또는 inf/infinite/unlimited/-1 이어야 합니다."
+        ) from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("--max-auto-turns 는 0 이상의 정수 또는 inf/infinite/unlimited/-1 이어야 합니다.")
+    return parsed
+
+
+def format_auto_turn_limit(value: int | None) -> str:
+    return "infinite" if value is None else str(value)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(argv if argv is not None else sys.argv[1:])
     if raw_argv and raw_argv[0] not in {"run", "sessions", "verify", "-h", "--help", "-V", "--version"}:
@@ -100,9 +119,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     run_parser.add_argument(
         "--max-auto-turns",
-        type=int,
+        type=parse_auto_turns,
         default=1,
-        help="number of automatic resume turns after the first prompt",
+        help="number of automatic resume turns after the first prompt, or inf/infinite/unlimited/-1",
     )
     run_parser.add_argument("--cwd", type=Path, help="working directory for new sessions")
     run_parser.add_argument("--codex-bin", default="codex", help="Codex executable to run")
@@ -273,10 +292,16 @@ def validate_session_or_exit(session_token: str, limit: int) -> SessionRecord:
     return record
 
 
-def render_followup(template: str, auto_turn: int, max_auto_turns: int, session_id: str, last_message: str) -> str:
+def render_followup(
+    template: str,
+    auto_turn: int,
+    max_auto_turns: int | None,
+    session_id: str,
+    last_message: str,
+) -> str:
     values = SafeFormatDict(
         auto_turn=auto_turn,
-        max_auto_turns=max_auto_turns,
+        max_auto_turns=format_auto_turn_limit(max_auto_turns),
         session_id=session_id,
         last_message=last_message,
     )
@@ -380,9 +405,6 @@ def run_verify_command(args: argparse.Namespace) -> int:
 
 
 def run_loop(args: argparse.Namespace) -> int:
-    if args.max_auto_turns < 0:
-        raise SystemExit("--max-auto-turns 는 0 이상이어야 합니다.")
-
     ensure_codex_executable(args.codex_bin)
 
     mode = choose_run_mode(args)
@@ -417,8 +439,10 @@ def run_loop(args: argparse.Namespace) -> int:
         raise SystemExit("첫 프롬프트가 비어 있습니다. --prompt-file 또는 PROMPT 를 지정하세요.")
 
     followup_template = ""
-    if args.max_auto_turns > 0:
+    if args.max_auto_turns != 0:
         followup_template = build_followup_template(args)
+    if args.max_auto_turns is None and not args.stop_on_keyword and not args.stop_when_no_files_changed:
+        emit("[WARN] infinite auto-turns 에 stop rule 이 없습니다. 명시적으로 중단하기 전까지 계속 실행됩니다.")
 
     cwd_for_new_runs = args.cwd.expanduser().resolve() if args.cwd else None
     effective_root_dir = cwd_for_new_runs
@@ -434,7 +458,7 @@ def run_loop(args: argparse.Namespace) -> int:
 
     append_transcript_line(
         transcript_path,
-        f"===== wrapper start mode={mode} auto_turns={args.max_auto_turns} started_at={datetime.now().astimezone().isoformat()} =====",
+        f"===== wrapper start mode={mode} auto_turns={format_auto_turn_limit(args.max_auto_turns)} started_at={datetime.now().astimezone().isoformat()} =====",
     )
 
     runner_config = CodexCommandConfig(
@@ -457,13 +481,15 @@ def run_loop(args: argparse.Namespace) -> int:
     turn_reports: list[dict] = []
 
     try:
-        for zero_based_turn in range(args.max_auto_turns + 1):
+        zero_based_turn = 0
+        while True:
             turn_number = zero_based_turn + 1
+            total_turns_display = f"{args.max_auto_turns + 1}" if args.max_auto_turns is not None else "∞"
             resume_mode = mode == "existing" or zero_based_turn > 0
             label = "resume" if resume_mode else "new"
             output_last_message_path = artifacts.turn_last_message_path(turn_number)
 
-            emit(f"[RUN] {label} turn {turn_number}/{args.max_auto_turns + 1}")
+            emit(f"[RUN] {label} turn {turn_number}/{total_turns_display}")
             emit("[USER]")
             emit(prompt)
             append_transcript_line(transcript_path, f"[USER TURN {turn_number}] {prompt}")
@@ -523,7 +549,7 @@ def run_loop(args: argparse.Namespace) -> int:
                 }
             )
 
-            if zero_based_turn >= args.max_auto_turns:
+            if args.max_auto_turns is not None and zero_based_turn >= args.max_auto_turns:
                 stop_reason = "max-auto-turns"
                 break
 
@@ -540,7 +566,8 @@ def run_loop(args: argparse.Namespace) -> int:
                 session_id=session_id,
                 last_message=last_message,
             )
-            emit(f"[AUTO] queued follow-up {turn_number}/{args.max_auto_turns}")
+            emit(f"[AUTO] queued follow-up {turn_number}/{format_auto_turn_limit(args.max_auto_turns)}")
+            zero_based_turn += 1
 
     except RunError as exc:
         stop_reason = "error"
@@ -564,6 +591,7 @@ def run_loop(args: argparse.Namespace) -> int:
             "transcript_path": str(transcript_path) if transcript_path else None,
             "followup_strategy": args.followup_strategy,
             "max_auto_turns": args.max_auto_turns,
+            "max_auto_turns_label": format_auto_turn_limit(args.max_auto_turns),
             "stop_reason": stop_reason,
             "turns": turn_reports,
         }

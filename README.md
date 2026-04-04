@@ -185,6 +185,7 @@ codex-exec-loop verify \
   - `last-message`, `plan-queue`, `bugfix`, `docs`, `next-task`
 - `--max-auto-turns`
   - 첫 턴 뒤에 몇 번 자동 resume 할지
+  - `inf`, `infinite`, `unlimited`, `-1` 도 지원
 - `--stop-on-keyword`
   - 마지막 답변에 특정 키워드가 나오면 다음 follow-up 중단
 - `--stop-when-no-files-changed`
@@ -245,6 +246,33 @@ codex-exec-loop verify \
   - Codex CLI `-o` 로 저장한 마지막 메시지
 
 즉, 공식 문서에 있는 `-o, --output-last-message` 를 wrapper 내부에서 turn별로 활용합니다.
+
+## 무한 자동 턴
+
+무한 반복도 지원합니다.
+
+```bash
+codex-exec-loop \
+  --yes \
+  --max-auto-turns infinite \
+  --stop-when-no-files-changed \
+  --followup-strategy next-task \
+  --output-dir logs/infinite-run \
+  "현재 작업 기준으로 다음 작업을 계속 이어서 진행하세요."
+```
+
+또는 아래 별칭도 같습니다.
+
+```bash
+--max-auto-turns inf
+--max-auto-turns unlimited
+--max-auto-turns -1
+```
+
+권장사항:
+
+- 무한 모드에서는 `--stop-when-no-files-changed` 또는 `--stop-on-keyword` 를 같이 쓰세요.
+- stop rule 없이 무한 모드를 쓰면 사용자가 직접 중단하기 전까지 계속 돌 수 있습니다.
 
 ## 세션 선택 UX
 
