@@ -15,7 +15,9 @@ mkdir -p "$ROOT/artifacts" "$ROOT/logs"
 STAMP="$(date +%s)"
 TARGET_REL="artifacts/SMOKE_WORK_PRODUCT_${STAMP}.md"
 TARGET_ABS="$ROOT/$TARGET_REL"
-LOG_PATH="$ROOT/logs/artifact-smoke-${STAMP}.log"
+RUN_DIR="$ROOT/logs/artifact-smoke-${STAMP}"
+SUMMARY_PATH="$RUN_DIR/summary.json"
+TRANSCRIPT_PATH="$RUN_DIR/transcript.log"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -47,16 +49,24 @@ cat >"$FOLLOWUP_PROMPT" <<EOF
 EOF
 
 echo "[INFO] target file: $TARGET_ABS"
-echo "[INFO] transcript:  $LOG_PATH"
+echo "[INFO] run dir:      $RUN_DIR"
 
 "$CLI" \
+  --yes \
   --mode new \
   --cwd "$ROOT" \
   --prompt-file "$INITIAL_PROMPT" \
   --followup-file "$FOLLOWUP_PROMPT" \
   --max-auto-turns 1 \
   --full-auto \
-  --transcript "$LOG_PATH"
+  --output-dir "$RUN_DIR"
+
+"$CLI" verify \
+  --summary "$SUMMARY_PATH" \
+  --must-exist "$TARGET_ABS" \
+  --must-contain "$TARGET_ABS::- turn-1" \
+  --must-contain "$TARGET_ABS::- followup-1" \
+  --expect-changed "$TARGET_ABS"
 
 echo
 echo "[RESULT] created file:"
@@ -64,5 +74,8 @@ echo "$TARGET_ABS"
 echo
 sed -n '1,120p' "$TARGET_ABS"
 echo
+echo "[RESULT] summary:"
+echo "$SUMMARY_PATH"
+echo
 echo "[RESULT] transcript:"
-echo "$LOG_PATH"
+echo "$TRANSCRIPT_PATH"

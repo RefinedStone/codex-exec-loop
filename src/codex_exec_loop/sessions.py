@@ -18,11 +18,33 @@ class SessionRecord:
     last_ts: int
     preview: str
     source: str
+    cwd: str = ""
     rollout_path: Path | None = None
 
     @property
     def last_seen(self) -> str:
         return datetime.fromtimestamp(self.last_ts).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+    def matches(self, token: str) -> bool:
+        normalized = token.strip().lower()
+        if not normalized:
+            return True
+        return any(
+            normalized in candidate.lower()
+            for candidate in (self.session_id, self.preview, self.cwd, self.source)
+            if candidate
+        )
+
+    def to_dict(self) -> dict[str, str | int | None]:
+        return {
+            "session_id": self.session_id,
+            "last_ts": self.last_ts,
+            "last_seen": self.last_seen,
+            "preview": self.preview,
+            "source": self.source,
+            "cwd": self.cwd,
+            "rollout_path": str(self.rollout_path) if self.rollout_path else None,
+        }
 
 
 def _clean_preview(text: str, limit: int = 120) -> str:
@@ -98,6 +120,7 @@ def load_rollout_sessions(codex_home: Path | None = None) -> dict[str, SessionRe
                 last_ts=ts,
                 preview=_clean_preview(str(payload.get("cwd", ""))),
                 source="rollout",
+                cwd=str(payload.get("cwd", "")),
                 rollout_path=path,
             )
     return records
@@ -116,17 +139,31 @@ def build_session_index(codex_home: Path | None = None) -> dict[str, SessionReco
             session_id=session_id,
             last_ts=max(record.last_ts, current.last_ts),
             preview=record.preview or current.preview,
-            source=record.source,
+            source="history+rollout",
+            cwd=current.cwd or record.cwd,
             rollout_path=current.rollout_path,
         )
     return merged
 
 
-def list_recent_sessions(limit: int = 10, codex_home: Path | None = None) -> list[SessionRecord]:
+def list_recent_sessions(limit: int = 10, query: str | None = None, codex_home: Path | None = None) -> list[SessionRecord]:
     index = build_session_index(codex_home)
     records = sorted(index.values(), key=lambda item: item.last_ts, reverse=True)
+    if query:
+        records = [record for record in records if record.matches(query)]
     return records[:limit]
 
 
 def resolve_session(session_id: str, codex_home: Path | None = None) -> SessionRecord | None:
     return build_session_index(codex_home).get(session_id)
+
+
+def find_session_matches(token: str, limit: int = 20, codex_home: Path | None = None) -> list[SessionRecord]:
+    records = list_recent_sessions(limit=limit, query=token, codex_home=codex_home)
+    exact = [record for record in records if record.session_id == token]
+    if exact:
+        return exact
+    prefix = [record for record in records if record.session_id.startswith(token)]
+    if prefix:
+        return prefix
+    return records

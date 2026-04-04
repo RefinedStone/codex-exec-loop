@@ -1,0 +1,7 @@
+대리인입니다.
+자동 후속 {auto_turn}/{max_auto_turns} 입니다.
+
+방금 작업을 기준으로 README 또는 사용자 문서에 빠진 내용 1개만 보강하세요.
+
+직전 답변:
+{last_message}

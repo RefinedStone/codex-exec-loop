@@ -1,20 +1,24 @@
 # codex-exec-loop
 
-`codex-exec-loop` 는 `codex exec` 와 `codex exec resume` 를 감싸서, 같은 Codex 세션을 자동으로 이어가는 실험용 CLI 입니다.
+`codex-exec-loop` 는 `codex exec` 와 `codex exec resume` 를 감싸서, 같은 Codex 세션을 자동으로 이어가는 CLI 입니다.
 
-핵심 목표는 두 가지입니다.
+핵심은 세 가지입니다.
 
-- 새 세션을 열거나 기존 `session_id` 를 골라 같은 세션을 이어서 실행
-- 각 턴이 끝나면 우리 쪽 follow-up 프롬프트를 같은 세션에 자동으로 다시 넣기
+- 새 세션 또는 기존 `session_id` 를 선택해서 같은 세션 흐름 유지
+- 각 턴 종료를 `codex exec --json` 의 `turn.completed` 로 감지
+- 후속 프롬프트를 같은 세션에 `codex exec resume` 으로 다시 넣기
 
-이 프로젝트는 PTY 주입이 아니라, Codex가 공식 제공하는 `exec` / `exec resume` 경로만 사용합니다.
+이 프로젝트는 PTY 주입이 아니라, Codex CLI의 공식 non-interactive 경로 위에서 동작합니다.
 
 ## 상태
 
 - 확인 일시: 2026-04-05
 - 로컬 검증 대상 Codex CLI: `0.118.0`
-- 완료 판정 기준: `codex exec --json` 의 `turn.completed`
-- 성격: 공식 CLI 위에 얹는 비공식 오케스트레이터
+- 공식 문서 기준으로 반영한 포인트:
+  - `codex exec --json`
+  - `codex exec resume`
+  - `-o, --output-last-message`
+  - `--output-schema`
 
 ## 저장소 구조
 
@@ -23,15 +27,24 @@
 ├── README.md
 ├── examples/
 │   ├── followup_prompt.txt
+│   ├── followups/
+│   │   ├── bugfix.txt
+│   │   ├── docs.txt
+│   │   ├── next_task.txt
+│   │   └── plan_queue.txt
 │   └── initial_prompt.txt
 ├── pyproject.toml
+├── scripts/
+│   └── run_artifact_smoke_test.sh
 └── src/
     └── codex_exec_loop/
         ├── __init__.py
         ├── __main__.py
         ├── cli.py
         ├── runner.py
-        └── sessions.py
+        ├── runs.py
+        ├── sessions.py
+        └── verifier.py
 ```
 
 ## 요구사항
@@ -39,7 +52,7 @@
 - Python 3.10+
 - Codex CLI 설치
 - Codex 로그인 완료
-- `~/.codex/history.jsonl` 와 `~/.codex/sessions/` 에 접근 가능한 로컬 환경
+- 로컬 `~/.codex/history.jsonl` / `~/.codex/sessions/` 접근 가능
 
 ## 설치
 
@@ -47,47 +60,40 @@
 cd /home/akra/codex-exec-loop
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -U pip
-pip install -e .
+PYTHONPATH=/usr/lib/python3/dist-packages python -m pip install --no-build-isolation -e .
 ```
 
-## 빠른 시작
+현재 WSL/오프라인 환경에서는 위 방식이 가장 안전합니다.
 
-새 세션 시작 후 1번 자동 follow-up:
+## 가장 간단한 실행
+
+대화형 입력 없이 새 세션으로 1회 자동 follow-up:
 
 ```bash
 cd /home/akra/codex-exec-loop
 . .venv/bin/activate
 
 codex-exec-loop \
-  --cwd /home/akra/codex-exec-loop \
-  --prompt-file examples/initial_prompt.txt \
-  --followup-file examples/followup_prompt.txt \
+  --yes \
   --max-auto-turns 1 \
-  --full-auto \
-  --transcript logs/demo.log
+  --followup 'Reply with the single word AGAIN.' \
+  --output-dir logs/demo-run \
+  'Reply with the single word OK.'
 ```
 
-기존 세션 이어서 시작:
+정상이면:
 
-```bash
-codex-exec-loop \
-  --mode existing \
-  --session-id 019d5a13-afb3-7850-a416-523662e99b3a \
-  "방금 답변 기준으로 다음 작업 하나만 이어서 진행해 주세요."
-```
-
-최근 세션 목록 확인:
-
-```bash
-codex-exec-loop sessions --limit 10
-```
+- 첫 턴에서 `OK`
+- 같은 `session_id` 로 자동 resume
+- 두 번째 턴에서 `AGAIN`
+- `logs/demo-run/summary.json`
+- `logs/demo-run/transcript.log`
+- `logs/demo-run/turns/turn-01-last-message.txt`
+- `logs/demo-run/turns/turn-02-last-message.txt`
 
 ## 실제 작업물 테스트
 
-가장 눈에 잘 보이는 테스트는 Codex가 실제 파일을 만들고, 자동 follow-up 턴에서 그 파일에 내용을 이어붙이게 하는 방식입니다.
-
-아래 스크립트는 실행할 때마다 새 Markdown 파일을 `artifacts/` 아래에 생성합니다.
+실제 파일이 생성되고, 자동 후속 턴에서 같은 파일에 내용이 추가되는 스모크 테스트입니다.
 
 ```bash
 cd /home/akra/codex-exec-loop
@@ -96,118 +102,178 @@ cd /home/akra/codex-exec-loop
 ./scripts/run_artifact_smoke_test.sh
 ```
 
-정상이라면:
+정상이면:
 
-- `artifacts/SMOKE_WORK_PRODUCT_<timestamp>.md` 파일이 생김
-- 파일 안에 `turn-1` 과 `followup-1` 이 둘 다 들어감
-- `logs/artifact-smoke-<timestamp>.log` 에 두 번의 `turn.completed` 가 남음
+- `artifacts/SMOKE_WORK_PRODUCT_<timestamp>.md` 생성
+- 파일 안에 `- turn-1` 과 `- followup-1` 둘 다 존재
+- `logs/artifact-smoke-<timestamp>/summary.json` 생성
+- `codex-exec-loop verify` 가 성공
 
-스크립트 끝에는 생성된 파일 경로, 파일 내용, 로그 경로를 같이 출력합니다.
+## 사용법
 
-## 동작 방식
-
-1. 로컬 `~/.codex/history.jsonl` 에서 최근 세션 목록을 읽습니다.
-2. 필요하면 `~/.codex/sessions/**/rollout-*.jsonl` 의 `session_meta` 로 세션 존재를 다시 검증합니다.
-3. 첫 턴은 `codex exec --json` 또는 `codex exec resume --json` 으로 실행합니다.
-4. JSON 이벤트를 읽다가 `turn.completed` 가 오면 턴 종료로 판정합니다.
-5. follow-up 템플릿을 렌더링합니다.
-6. 같은 `session_id` 로 `codex exec resume --json SESSION_ID FOLLOWUP` 을 다시 실행합니다.
-
-## CLI 사용법
-
-기본 명령은 `run` 이고, 생략할 수 있습니다.
+기본 명령은 `run` 이며 생략할 수 있습니다.
 
 ```bash
 codex-exec-loop run [PROMPT]
 codex-exec-loop [PROMPT]
 ```
 
-주요 옵션:
+### 새 세션 시작
 
-- `--mode {new,existing}`
-  - 생략하면 TTY 에서 `new` / `existing` 를 묻습니다.
-- `--session-id`
-  - 기존 세션 모드에서 사용할 세션 ID
-- `--prompt-file`
-  - 첫 프롬프트를 파일에서 읽습니다.
-- `--followup`
-  - follow-up 텍스트 직접 지정
-- `--followup-file`
-  - follow-up 템플릿 파일
-- `--max-auto-turns`
-  - 첫 턴 이후 자동 후속 턴 수
-- `--cwd`
-  - 새 세션 시작 시 `codex exec -C ...` 에 전달할 디렉터리
-- `--full-auto`
-  - Codex 쪽 실행을 `--full-auto` 로 돌립니다.
-- `--transcript`
-  - raw JSONL 과 wrapper 로그를 같이 남깁니다.
-- `--skip-git-repo-check` / `--no-skip-git-repo-check`
-  - 기본값은 `--skip-git-repo-check` 입니다.
+```bash
+codex-exec-loop \
+  --yes \
+  --mode new \
+  --cwd /path/to/project \
+  --prompt-file examples/initial_prompt.txt \
+  --followup-file examples/followups/next_task.txt \
+  --max-auto-turns 1 \
+  --full-auto \
+  --output-dir logs/run-001
+```
 
-`sessions` 서브커맨드는 최근 세션과 마지막 입력 미리보기를 보여줍니다.
+### 기존 세션 이어서 시작
+
+```bash
+codex-exec-loop sessions --limit 10
+
+codex-exec-loop \
+  --yes \
+  --mode existing \
+  --session-id 019d5a7a-cee0-7e33-8fed-41819faa07f4 \
+  --followup-strategy plan-queue \
+  --max-auto-turns 1 \
+  "방금 결과 기준으로 다음 작업 하나만 이어서 진행하세요."
+```
+
+### 최근 세션 보기
 
 ```bash
 codex-exec-loop sessions --limit 20
+codex-exec-loop sessions --limit 20 --query plan
+codex-exec-loop sessions --limit 5 --json
 ```
+
+### 작업 결과 검증
+
+```bash
+codex-exec-loop verify \
+  --summary logs/demo-run/summary.json \
+  --must-exist artifacts/example.md \
+  --must-contain 'artifacts/example.md::- turn-1' \
+  --must-contain 'artifacts/example.md::- followup-1' \
+  --expect-changed artifacts/example.md \
+  --show-file artifacts/example.md
+```
+
+## 주요 옵션
+
+- `--yes`, `--non-interactive`
+  - 모드 선택과 프롬프트 입력을 묻지 않습니다.
+- `--mode {new,existing}`
+  - 세션 시작 방식 지정
+- `--session-id`
+  - 기존 세션 모드에서 사용할 세션
+- `--prompt-file`
+  - 첫 프롬프트 파일
+- `--followup`
+  - 후속 프롬프트 텍스트 직접 지정
+- `--followup-file`
+  - 후속 프롬프트 템플릿 파일
+- `--followup-strategy`
+  - 내장 후속 전략 선택
+  - `last-message`, `plan-queue`, `bugfix`, `docs`, `next-task`
+- `--max-auto-turns`
+  - 첫 턴 뒤에 몇 번 자동 resume 할지
+- `--stop-on-keyword`
+  - 마지막 답변에 특정 키워드가 나오면 다음 follow-up 중단
+- `--stop-when-no-files-changed`
+  - 해당 턴의 `file_change` 이벤트가 없으면 중단
+- `--fallback-new-on-missing-session`
+  - 기존 세션 resume 실패 시 새 세션으로 fallback
+- `--output-dir`
+  - `summary.json`, `transcript.log`, `turn-XX-last-message.txt` 저장
+- `--output-schema`
+  - Codex CLI의 `--output-schema` 를 그대로 전달
+- `--transcript`
+  - 별도 transcript 파일 경로
 
 ## Follow-up 템플릿 변수
 
-follow-up 템플릿에는 아래 변수를 쓸 수 있습니다.
+후속 프롬프트 템플릿에는 아래 변수를 쓸 수 있습니다.
 
-- `{auto_turn}`: 현재 자동 후속 턴 번호. `1` 부터 시작
-- `{max_auto_turns}`: 전체 자동 후속 턴 수
-- `{session_id}`: 현재 세션 ID
-- `{last_message}`: 직전 Codex 마지막 답변
+- `{auto_turn}`
+- `{max_auto_turns}`
+- `{session_id}`
+- `{last_message}`
 
-예시:
+## 내장 follow-up 전략
 
-```text
-대리인입니다.
-자동 후속 {auto_turn}/{max_auto_turns} 입니다.
+### `last-message`
 
-방금 답변:
-{last_message}
+직전 답변을 인용하고 다음 작업 1개를 이어서 하게 합니다.
 
-이 내용을 바탕으로 다음 작업 1개만 이어서 진행하세요.
-```
+### `plan-queue`
 
-## 인터랙티브 모드
+`plan_priority_queue.md` 에 후보를 적고, 가장 우선순위 높은 1개를 바로 진행하게 합니다.
 
-아무 옵션 없이 실행하면 간단한 선택형 프롬프트가 뜹니다.
+### `bugfix`
 
-```bash
-codex-exec-loop
-```
+직전 변경분 기준으로 남은 버그나 리스크 1개만 고치게 합니다.
 
-여기서:
+### `docs`
 
-- `new` 또는 `existing` 을 고르고
-- `existing` 이면 최근 세션 목록을 보고 번호 또는 `session_id` 를 입력하고
-- 그 세션 ID 가 실제로 존재하는지 검증한 뒤
-- 보낼 프롬프트를 입력하게 됩니다
+직전 작업을 바탕으로 README 또는 사용자 문서 보강을 지시합니다.
 
-긴 프롬프트는 `--prompt-file` 사용을 권장합니다.
+### `next-task`
+
+직전 결과 기준으로 다음 작업 1개만 이어서 하게 하는 최소 템플릿입니다.
+
+## Structured Run Output
+
+`--output-dir logs/run-001` 를 주면 아래 파일이 생성됩니다.
+
+- `summary.json`
+  - 세션 ID
+  - stop reason
+  - 각 턴의 prompt / usage / file_changes
+- `transcript.log`
+  - raw JSONL 이벤트와 wrapper 로그
+- `last-session-id.txt`
+  - 마지막 세션 ID
+- `turns/turn-01-last-message.txt`
+  - Codex CLI `-o` 로 저장한 마지막 메시지
+
+즉, 공식 문서에 있는 `-o, --output-last-message` 를 wrapper 내부에서 turn별로 활용합니다.
+
+## 세션 선택 UX
+
+`--mode existing` 에서 interactive 모드로 실행하면:
+
+- 최근 세션 목록 출력
+- 번호 입력 가능
+- 정확한 `session_id` 입력 가능
+- `/검색어` 로 미리보기 / cwd / session_id 필터 가능
+- 로컬 기록에서 실제 존재 여부 검증
 
 ## 한계
 
-- `codex exec --json` 이벤트 형식이 바뀌면 파서가 수정되어야 합니다.
-- 현재 완료 기준은 `turn.completed` 하나입니다.
-- 출력은 스트리밍 토큰 단위가 아니라 턴 단위 메시지 중심입니다.
-- `resume` 은 기존 세션의 컨텍스트를 이어가지만, 현재 래퍼는 Codex 내부 계획 상태를 별도로 해석하지 않습니다.
-- 세션 목록은 로컬 히스토리 파일 기준입니다.
-  - 다른 머신이나 다른 `CODEX_HOME` 에 있는 세션은 바로 보이지 않습니다.
-- `--full-auto` 를 쓰지 않으면 Codex 쪽 승인 흐름에서 자동 루프가 멈출 수 있습니다.
-- 새 세션의 trust / repo 정책 자체를 우회하지는 않습니다.
-  - 필요하면 `--skip-git-repo-check` 를 유지하고, Codex 쪽 trust 설정은 사용 환경에서 따로 맞춰야 합니다.
+- `codex exec --json` 이벤트 형식이 바뀌면 파서 수정이 필요합니다.
+- `stop-when-no-files-changed` 는 `file_change` 이벤트 기준입니다.
+  - 파일을 바꿨는데 Codex가 해당 이벤트를 내리지 않는 특수 경우는 놓칠 수 있습니다.
+- 세션 존재 검증은 로컬 history / rollout 기준이며, 원격 유효성 검사 API는 사용하지 않습니다.
+- `fallback-new-on-missing-session` 은 resume 실패 시 새 세션으로 넘어가는 보완책일 뿐, 기존 컨텍스트를 복구하지는 않습니다.
+- MCP 기반 OpenAI docs 조회는 현재 세션 재시작 전까지 활성화되지 않을 수 있습니다.
+  - 이 경우 공식 OpenAI 웹 문서를 fallback 으로 참조했습니다.
 
-## 권장 사용법
+## OpenAI 문서 기준 메모
 
-- 짧은 실험은 `--max-auto-turns 1` 로 시작하세요.
-- 긴 follow-up 보다는 결정적인 후속 지시 2~5줄이 안정적입니다.
-- 로그가 필요하면 항상 `--transcript` 를 켜는 편이 좋습니다.
-- 기존 세션을 이어갈 때는 먼저 `codex-exec-loop sessions` 로 최근 세션을 확인하세요.
-- 실제 작업물 검증은 `./scripts/run_artifact_smoke_test.sh` 로 먼저 확인하세요.
+OpenAI 공식 Codex 문서와 Prompting Guide 기준으로 현재 구조에서 특히 의미 있는 포인트는 아래 두 가지였습니다.
+
+- non-interactive 자동화는 `codex exec` / `codex exec resume` / `--json` 조합이 기본 경로
+- 마지막 응답 파일은 `-o, --output-last-message` 로 따로 저장하는 편이 더 안정적
+
+또한 Stop hook continuation 도 공식 경로이지만, 이 프로젝트는 사용자가 원한 `session_id 기반 exec/resume 루프` 를 중심으로 유지했습니다.
 
 ## 검증
 
@@ -216,7 +282,6 @@ codex-exec-loop
 - `python -m py_compile src/codex_exec_loop/*.py`
 - `codex-exec-loop --help`
 - `codex-exec-loop sessions --limit 3`
-- `codex exec --json` 에서 `turn.completed` 감지
-- 새 `thread_id` 를 `codex exec resume --json SESSION_ID ...` 에 바로 재사용 가능함 확인
-
-실제 follow-up 자동 루프는 Codex 로그인 상태와 실행 권한에 따라 달라지므로, 사용 환경에서 한 번 더 현장 검증하는 것을 권장합니다.
+- `codex-exec-loop verify --help`
+- `OK -> AGAIN` 자동 resume 스모크 테스트
+- 실제 파일 생성 + 후속 파일 수정 스모크 테스트
