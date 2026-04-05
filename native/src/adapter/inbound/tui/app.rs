@@ -83,6 +83,38 @@ enum ConversationState {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConversationInputState {
+    DraftReady,
+    ReadyToContinue,
+    SubmittingTurn,
+    StreamingTurn,
+}
+
+impl ConversationInputState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::DraftReady => "draft ready",
+            Self::ReadyToContinue => "ready",
+            Self::SubmittingTurn => "submitting",
+            Self::StreamingTurn => "streaming",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::DraftReady => "first prompt will create a new thread",
+            Self::ReadyToContinue => "session is ready for the next prompt",
+            Self::SubmittingTurn => "sending prompt to codex app-server",
+            Self::StreamingTurn => "current turn is still running",
+        }
+    }
+
+    fn can_submit_now(self) -> bool {
+        matches!(self, Self::DraftReady | Self::ReadyToContinue)
+    }
+}
+
 enum BackgroundMessage {
     StartupLoaded(Result<StartupDiagnostics, String>),
     SessionsLoaded(Result<RecentSessions, String>),
@@ -101,6 +133,7 @@ struct ConversationViewModel {
     input_buffer: String,
     is_turn_running: bool,
     active_turn_id: Option<String>,
+    input_state: ConversationInputState,
     status_text: String,
 }
 
@@ -116,6 +149,7 @@ impl ConversationViewModel {
             input_buffer: String::new(),
             is_turn_running: false,
             active_turn_id: None,
+            input_state: ConversationInputState::DraftReady,
             status_text: "new thread draft".to_string(),
         };
         view_model.refresh_conversation_lines();
@@ -139,6 +173,7 @@ impl ConversationViewModel {
             input_buffer: String::new(),
             is_turn_running: false,
             active_turn_id: None,
+            input_state: ConversationInputState::ReadyToContinue,
             status_text,
         };
         view_model.refresh_conversation_lines();
@@ -151,6 +186,35 @@ impl ConversationViewModel {
 
     fn has_active_thread(&self) -> bool {
         !self.thread_id.trim().is_empty()
+    }
+
+    fn ready_input_state(&self) -> ConversationInputState {
+        if self.has_active_thread() {
+            ConversationInputState::ReadyToContinue
+        } else {
+            ConversationInputState::DraftReady
+        }
+    }
+
+    fn can_submit_prompt(&self) -> bool {
+        self.input_state.can_submit_now()
+    }
+
+    fn mark_turn_submitting(&mut self) {
+        self.is_turn_running = true;
+        self.input_state = ConversationInputState::SubmittingTurn;
+    }
+
+    fn mark_turn_started(&mut self, turn_id: String) {
+        self.active_turn_id = Some(turn_id);
+        self.is_turn_running = true;
+        self.input_state = ConversationInputState::StreamingTurn;
+    }
+
+    fn mark_turn_finished(&mut self) {
+        self.active_turn_id = None;
+        self.is_turn_running = false;
+        self.input_state = self.ready_input_state();
     }
 }
 
@@ -252,7 +316,7 @@ impl NativeTuiApp {
         ));
         conversation.refresh_conversation_lines();
         conversation.input_buffer.clear();
-        conversation.is_turn_running = true;
+        conversation.mark_turn_submitting();
         conversation.status_text = "starting turn".to_string();
 
         let outer_tx = self.tx.clone();
@@ -336,8 +400,7 @@ impl NativeTuiApp {
                 conversation.status_text = "thread started".to_string();
             }
             ConversationStreamEvent::TurnStarted { turn_id } => {
-                conversation.active_turn_id = Some(turn_id);
-                conversation.is_turn_running = true;
+                conversation.mark_turn_started(turn_id);
                 conversation.status_text = "turn started".to_string();
             }
             ConversationStreamEvent::StatusUpdated { text } => {
@@ -401,13 +464,11 @@ impl NativeTuiApp {
                 should_refresh_lines = true;
             }
             ConversationStreamEvent::TurnCompleted { turn_id } => {
-                conversation.active_turn_id = None;
-                conversation.is_turn_running = false;
+                conversation.mark_turn_finished();
                 conversation.status_text = format!("turn completed: {turn_id}");
             }
             ConversationStreamEvent::Failed { message } => {
-                conversation.active_turn_id = None;
-                conversation.is_turn_running = false;
+                conversation.mark_turn_finished();
                 conversation.status_text = "turn failed".to_string();
                 conversation.messages.push(ConversationMessage::new(
                     ConversationMessageKind::Status,
@@ -496,7 +557,7 @@ impl NativeTuiApp {
     fn conversation_can_accept_input(&self) -> bool {
         matches!(
             &self.conversation_state,
-            ConversationState::Ready(conversation) if !conversation.is_turn_running
+            ConversationState::Ready(conversation) if conversation.can_submit_prompt()
         )
     }
 
@@ -954,14 +1015,20 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" / {}", conversation.title)),
             ]),
-            Line::from(format!(
-                "thread: {}",
-                if conversation.has_active_thread() {
-                    conversation.thread_id.as_str()
-                } else {
-                    "not started yet"
-                }
-            )),
+            Line::from(vec![
+                Span::raw(format!(
+                    "thread: {}  |  input: ",
+                    if conversation.has_active_thread() {
+                        conversation.thread_id.as_str()
+                    } else {
+                        "not started yet"
+                    }
+                )),
+                Span::styled(
+                    conversation.input_state.label(),
+                    input_state_style(conversation.input_state),
+                ),
+            ]),
         ],
         ConversationState::Failed(message) => vec![
             Line::from(vec![
@@ -992,7 +1059,11 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     frame.render_widget(activity, content_layout[1]);
 
     let input = Paragraph::new(build_input_lines(app))
-        .block(Block::default().borders(Borders::ALL).title("Input"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(build_input_title(app)),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(input, layout[2]);
 
@@ -1162,6 +1233,19 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                         "no"
                     }
                 )),
+                Line::from(format!("input state: {}", conversation.input_state.label())),
+                Line::from(format!(
+                    "input detail: {}",
+                    conversation.input_state.detail()
+                )),
+                Line::from(format!(
+                    "send action: {}",
+                    if conversation.can_submit_prompt() {
+                        "enabled"
+                    } else {
+                        "waiting for current turn"
+                    }
+                )),
                 Line::from(format!("status: {}", conversation.status_text)),
             ];
 
@@ -1185,28 +1269,83 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Idle => vec![Line::from("Select a session first.")],
-        ConversationState::Loading => vec![Line::from("Thread is still loading.")],
+        ConversationState::Loading => vec![
+            Line::from("Thread is still loading."),
+            Line::from("Input becomes available when the shell reaches ready state."),
+        ],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => {
-            if conversation.is_turn_running {
-                vec![
-                    Line::from("Codex is still working on the current turn."),
-                    Line::from("Wait for completion before sending another prompt."),
-                ]
-            } else if !conversation.has_active_thread() && conversation.input_buffer.is_empty() {
-                vec![
-                    Line::from("Type the first prompt for a new thread."),
-                    Line::from("Press Enter to create the thread and send it."),
-                ]
-            } else if conversation.input_buffer.is_empty() {
-                vec![
-                    Line::from("Type a prompt here."),
-                    Line::from("Press Enter to send."),
-                ]
-            } else {
-                vec![Line::from(conversation.input_buffer.clone())]
+        ConversationState::Ready(conversation) => build_ready_input_lines(conversation),
+    }
+}
+
+fn build_ready_input_lines(conversation: &ConversationViewModel) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    if conversation.input_buffer.is_empty() {
+        match conversation.input_state {
+            ConversationInputState::DraftReady => {
+                lines.push(Line::from("Ready to start a new thread."));
+                lines.push(Line::from("Type the first prompt and press Enter."));
+            }
+            ConversationInputState::ReadyToContinue => {
+                lines.push(Line::from("Ready to continue this session."));
+                lines.push(Line::from("Type the next prompt and press Enter."));
+            }
+            ConversationInputState::SubmittingTurn => {
+                lines.push(Line::from("Sending prompt to Codex..."));
+                lines.push(Line::from(
+                    "The current request is being handed off to app-server.",
+                ));
+            }
+            ConversationInputState::StreamingTurn => {
+                lines.push(Line::from("Codex is still working on the current turn."));
+                lines.push(Line::from("You can start typing the next prompt now."));
+                lines.push(Line::from("Press Enter after the current turn completes."));
             }
         }
+
+        return lines;
+    }
+
+    lines.push(Line::from(conversation.input_buffer.clone()));
+    lines.push(Line::from(""));
+
+    match conversation.input_state {
+        ConversationInputState::DraftReady => {
+            lines.push(Line::from(
+                "Press Enter to create the thread and send this prompt.",
+            ));
+        }
+        ConversationInputState::ReadyToContinue => {
+            lines.push(Line::from("Press Enter to send this prompt."));
+        }
+        ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn => {
+            lines.push(Line::from("Next prompt is buffered locally."));
+            lines.push(Line::from("Press Enter after the current turn completes."));
+        }
+    }
+
+    lines
+}
+
+fn build_input_title(app: &NativeTuiApp) -> String {
+    match &app.conversation_state {
+        ConversationState::Idle => "Input / idle".to_string(),
+        ConversationState::Loading => "Input / loading".to_string(),
+        ConversationState::Failed(_) => "Input / unavailable".to_string(),
+        ConversationState::Ready(conversation) => {
+            format!("Input / {}", conversation.input_state.label())
+        }
+    }
+}
+
+fn input_state_style(input_state: ConversationInputState) -> Style {
+    match input_state {
+        ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => {
+            Style::default().fg(Color::Green)
+        }
+        ConversationInputState::SubmittingTurn => Style::default().fg(Color::Yellow),
+        ConversationInputState::StreamingTurn => Style::default().fg(Color::Cyan),
     }
 }
 
@@ -1242,4 +1381,75 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
             Constraint::Percentage((100 - horizontal_percent) / 2),
         ])
         .split(vertical_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConversationInputState, ConversationViewModel, build_ready_input_lines,
+        format_conversation_lines,
+    };
+
+    fn ready_conversation() -> ConversationViewModel {
+        ConversationViewModel {
+            thread_id: "thread-1".to_string(),
+            title: "Existing session".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: Vec::new(),
+            cached_conversation_lines: format_conversation_lines(&[]),
+            warnings: Vec::new(),
+            input_buffer: String::new(),
+            is_turn_running: false,
+            active_turn_id: None,
+            input_state: ConversationInputState::ReadyToContinue,
+            status_text: "thread loaded".to_string(),
+        }
+    }
+
+    #[test]
+    fn running_turn_still_shows_buffered_prompt() {
+        let mut conversation = ready_conversation();
+        conversation.input_state = ConversationInputState::StreamingTurn;
+        conversation.is_turn_running = true;
+        conversation.input_buffer = "Continue from the last change.".to_string();
+
+        let rendered = build_ready_input_lines(&conversation)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Continue from the last change."));
+        assert!(rendered.contains("Next prompt is buffered locally."));
+    }
+
+    #[test]
+    fn empty_existing_session_prompts_for_next_message() {
+        let conversation = ready_conversation();
+
+        let rendered = build_ready_input_lines(&conversation)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Ready to continue this session."));
+        assert!(rendered.contains("Type the next prompt and press Enter."));
+    }
+
+    #[test]
+    fn empty_draft_prompts_for_first_message() {
+        let mut conversation = ready_conversation();
+        conversation.thread_id.clear();
+        conversation.input_state = ConversationInputState::DraftReady;
+
+        let rendered = build_ready_input_lines(&conversation)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Ready to start a new thread."));
+        assert!(rendered.contains("Type the first prompt and press Enter."));
+    }
 }
