@@ -45,6 +45,10 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - `codex exec`
   - `codex exec resume`
 - Keep commits small and milestone-based.
+- After finishing a meaningful feature or refactor:
+  - commit the change set
+  - push the working branch
+  - open a pull request to the intended base branch unless blocked by missing permissions or user instruction
 - Verify with `cargo fmt`, `cargo build`, and `cargo test` for native changes.
 - Do not introduce unnecessary traits. Add a port trait when it improves a boundary.
 
