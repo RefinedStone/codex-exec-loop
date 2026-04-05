@@ -91,7 +91,7 @@ cargo run
 - builtin auto-follow-up toggle
 - builtin follow-up strategy cycle
   - `a`: auto-follow-up on/off
-  - `f`: next strategy
+  - `Ctrl+f`: next strategy
   - strategies: `next-task`, `plan-queue`, `bugfix`, `docs`
 
 legacy Python CLI 예시는 아래에 남겨두지만, 새 기능 기준 설명은 native 를 우선합니다.

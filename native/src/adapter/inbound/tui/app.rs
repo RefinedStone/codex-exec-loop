@@ -939,7 +939,7 @@ fn run_event_loop(
             Screen::ConversationShell => match key.code {
                 KeyCode::Char('q') if key.modifiers.is_empty() => should_quit = true,
                 KeyCode::Char('a') if key.modifiers.is_empty() => app.toggle_auto_followup(),
-                KeyCode::Char('f') if key.modifiers.is_empty() => {
+                KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
                     app.cycle_auto_followup_template()
                 }
                 KeyCode::Char('b') if key.modifiers.is_empty() => {
@@ -1325,7 +1325,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let help = Paragraph::new(vec![
         Line::from("Type your prompt and press Enter to send"),
         Line::from(
-            "a: auto on/off    f: next template    Backspace: delete    b/Ctrl+C: back    q: quit",
+            "a: auto on/off    Ctrl+f: next template    Backspace: delete    b/Ctrl+C: back    q: quit",
         ),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
