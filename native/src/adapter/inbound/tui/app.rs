@@ -1046,9 +1046,13 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
         .split(layout[1]);
 
-    let conversation = Paragraph::new(build_conversation_lines(app))
-        .block(Block::default().borders(Borders::ALL).title("Conversation"))
-        .wrap(Wrap { trim: false });
+    let conversation_lines = build_conversation_lines(app);
+    let conversation = Paragraph::new(tail_visible_lines(
+        conversation_lines,
+        content_layout[0].height.saturating_sub(2) as usize,
+    ))
+    .block(Block::default().borders(Borders::ALL).title("Conversation"))
+    .wrap(Wrap { trim: false });
     frame.render_widget(conversation, content_layout[0]);
 
     let activity = Paragraph::new(build_conversation_activity_lines(app))
@@ -1177,6 +1181,14 @@ fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
     }
+}
+
+fn tail_visible_lines(lines: Vec<Line<'static>>, max_visible_lines: usize) -> Vec<Line<'static>> {
+    if max_visible_lines == 0 || lines.len() <= max_visible_lines {
+        return lines;
+    }
+
+    lines[lines.len() - max_visible_lines..].to_vec()
 }
 
 fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {
@@ -1382,7 +1394,7 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 mod tests {
     use super::{
         ConversationInputState, ConversationViewModel, build_ready_input_lines,
-        format_conversation_lines,
+        format_conversation_lines, tail_visible_lines,
     };
 
     fn ready_conversation() -> ConversationViewModel {
@@ -1444,5 +1456,22 @@ mod tests {
 
         assert!(rendered.contains("Ready to start a new thread."));
         assert!(rendered.contains("Type the first prompt and press Enter."));
+    }
+
+    #[test]
+    fn conversation_tail_render_keeps_latest_visible_lines() {
+        let lines = vec![
+            ratatui::text::Line::from("line-1"),
+            ratatui::text::Line::from("line-2"),
+            ratatui::text::Line::from("line-3"),
+            ratatui::text::Line::from("line-4"),
+        ];
+
+        let rendered = tail_visible_lines(lines, 2)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["line-3".to_string(), "line-4".to_string()]);
     }
 }
