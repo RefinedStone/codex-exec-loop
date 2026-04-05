@@ -33,6 +33,11 @@
 │   │   ├── next_task.txt
 │   │   └── plan_queue.txt
 │   └── initial_prompt.txt
+├── native/
+│   ├── Cargo.toml
+│   ├── README.md
+│   ├── schema/
+│   └── src/
 ├── pyproject.toml
 ├── scripts/
 │   └── run_artifact_smoke_test.sh
@@ -90,6 +95,32 @@ codex-exec-loop \
 - `logs/demo-run/transcript.log`
 - `logs/demo-run/turns/turn-01-last-message.txt`
 - `logs/demo-run/turns/turn-02-last-message.txt`
+
+## Native TUI Prototype
+
+`native/` 는 `codex app-server` 기반 Rust TUI 프로토타입입니다. 현재는 아래 흐름까지 확인됐습니다.
+
+- startup dashboard
+- Codex binary / workspace / `initialize` / `account/read` 체크
+- `thread/list` 로 최근 세션 목록 조회
+- 선택한 세션의 resume preview 화면 진입
+
+실행:
+
+```bash
+cd /home/akra/codex-exec-loop/native
+. "$HOME/.cargo/env"
+cargo run
+```
+
+조작:
+
+- `Enter`: 홈에서 최근 세션 목록으로 이동
+- `j` `k` 또는 `Up` `Down`: 세션 선택
+- `Enter`: 선택 세션 preview 화면
+- `b`: 뒤로
+- `r`: 현재 화면 데이터 다시 읽기
+- `q`: 종료
 
 ## 실제 작업물 테스트
 
