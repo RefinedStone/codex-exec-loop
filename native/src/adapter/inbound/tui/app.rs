@@ -1047,12 +1047,15 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .split(layout[1]);
 
     let conversation_lines = build_conversation_lines(app);
-    let conversation = Paragraph::new(tail_visible_lines(
-        conversation_lines,
-        content_layout[0].height.saturating_sub(2) as usize,
-    ))
-    .block(Block::default().borders(Borders::ALL).title("Conversation"))
-    .wrap(Wrap { trim: false });
+    let conversation_scroll = build_conversation_scroll_offset(
+        &conversation_lines,
+        content_layout[0].width.saturating_sub(2),
+        content_layout[0].height.saturating_sub(2),
+    );
+    let conversation = Paragraph::new(conversation_lines)
+        .block(Block::default().borders(Borders::ALL).title("Conversation"))
+        .scroll((conversation_scroll, 0))
+        .wrap(Wrap { trim: false });
     frame.render_widget(conversation, content_layout[0]);
 
     let activity = Paragraph::new(build_conversation_activity_lines(app))
@@ -1183,12 +1186,44 @@ fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn tail_visible_lines(lines: Vec<Line<'static>>, max_visible_lines: usize) -> Vec<Line<'static>> {
-    if max_visible_lines == 0 || lines.len() <= max_visible_lines {
-        return lines;
+fn build_conversation_scroll_offset(
+    lines: &[Line<'static>],
+    content_width: u16,
+    visible_height: u16,
+) -> u16 {
+    if content_width == 0 || visible_height == 0 {
+        return 0;
     }
 
-    lines[lines.len() - max_visible_lines..].to_vec()
+    let rendered_line_count = count_rendered_conversation_lines(lines, content_width);
+    let visible_height = visible_height as usize;
+    rendered_line_count
+        .saturating_sub(visible_height)
+        .min(u16::MAX as usize) as u16
+}
+
+fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16) -> usize {
+    if content_width == 0 {
+        return 0;
+    }
+
+    lines
+        .iter()
+        .map(|line| count_wrapped_rows(line, content_width))
+        .sum()
+}
+
+fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {
+    if content_width == 0 {
+        return 0;
+    }
+
+    let line_width = line.width();
+    if line_width == 0 {
+        return 1;
+    }
+
+    line_width.div_ceil(content_width as usize)
 }
 
 fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {
@@ -1393,8 +1428,8 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        ConversationInputState, ConversationViewModel, build_ready_input_lines,
-        format_conversation_lines, tail_visible_lines,
+        ConversationInputState, ConversationViewModel, build_conversation_scroll_offset,
+        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
 
     fn ready_conversation() -> ConversationViewModel {
@@ -1459,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_tail_render_keeps_latest_visible_lines() {
+    fn conversation_scroll_offset_moves_to_latest_rows() {
         let lines = vec![
             ratatui::text::Line::from("line-1"),
             ratatui::text::Line::from("line-2"),
@@ -1467,11 +1502,31 @@ mod tests {
             ratatui::text::Line::from("line-4"),
         ];
 
-        let rendered = tail_visible_lines(lines, 2)
-            .iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
+        let scroll_offset = build_conversation_scroll_offset(&lines, 20, 2);
 
-        assert_eq!(rendered, vec!["line-3".to_string(), "line-4".to_string()]);
+        assert_eq!(scroll_offset, 2);
+    }
+
+    #[test]
+    fn conversation_scroll_offset_counts_wrapped_rows() {
+        let lines = vec![
+            ratatui::text::Line::from("1234567890"),
+            ratatui::text::Line::from("tail"),
+        ];
+
+        let rendered_line_count = count_rendered_conversation_lines(&lines, 4);
+        let scroll_offset = build_conversation_scroll_offset(&lines, 4, 2);
+
+        assert_eq!(rendered_line_count, 4);
+        assert_eq!(scroll_offset, 2);
+    }
+
+    #[test]
+    fn conversation_scroll_offset_handles_zero_visible_height() {
+        let lines = vec![ratatui::text::Line::from("line-1")];
+
+        let scroll_offset = build_conversation_scroll_offset(&lines, 10, 0);
+
+        assert_eq!(scroll_offset, 0);
     }
 }
