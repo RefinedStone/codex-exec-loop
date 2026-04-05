@@ -1,24 +1,26 @@
 # codex-exec-loop
 
-`codex-exec-loop` 는 `codex exec` 와 `codex exec resume` 를 감싸서, 같은 Codex 세션을 자동으로 이어가는 CLI 입니다.
+`codex-exec-loop` 는 이제 `codex app-server` 기반 Rust native client 를 메인 제품으로 삼습니다.
+
+Python CLI 는 이전 실험 경로이자 migration/compatibility 용으로만 남아 있습니다.
 
 핵심은 세 가지입니다.
 
-- 새 세션 또는 기존 `session_id` 를 선택해서 같은 세션 흐름 유지
-- 각 턴 종료를 `codex exec --json` 의 `turn.completed` 로 감지
-- 후속 프롬프트를 같은 세션에 `codex exec resume` 으로 다시 넣기
+- 새 세션 또는 기존 thread 를 선택해서 같은 Codex 흐름 유지
+- `turn/start` 스트리밍 응답을 native shell 에서 바로 보기
+- 턴 완료 뒤 canned auto-follow-up prompt 로 다음 작업을 이어가기
 
-이 프로젝트는 PTY 주입이 아니라, Codex CLI의 공식 non-interactive 경로 위에서 동작합니다.
+이 프로젝트는 PTY 주입이 아니라, 공식 Codex surface 위에서 동작합니다.
 
 ## 상태
 
 - 확인 일시: 2026-04-05
 - 로컬 검증 대상 Codex CLI: `0.118.0`
-- 공식 문서 기준으로 반영한 포인트:
+- 현재 메인 경로:
+  - `codex app-server`
+- legacy 경로:
   - `codex exec --json`
   - `codex exec resume`
-  - `-o, --output-last-message`
-  - `--output-schema`
 
 ## 저장소 구조
 
@@ -71,6 +73,24 @@ PYTHONPATH=/usr/lib/python3/dist-packages python -m pip install --no-build-isola
 현재 WSL/오프라인 환경에서는 위 방식이 가장 안전합니다.
 
 ## 가장 간단한 실행
+
+native TUI 실행:
+
+```bash
+cd /home/akra/codex-exec-loop/native
+. "$HOME/.cargo/env"
+cargo run
+```
+
+현재 native 쪽에서 확인된 흐름:
+
+- startup checks
+- recent session list
+- existing thread resume / new thread start
+- streamed response rendering
+- builtin auto-follow-up toggle
+
+legacy Python CLI 예시는 아래에 남겨두지만, 새 기능 기준 설명은 native 를 우선합니다.
 
 대화형 입력 없이 새 세션으로 1회 자동 follow-up:
 

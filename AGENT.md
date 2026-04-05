@@ -2,12 +2,12 @@
 
 ## Project
 
-`codex-exec-loop` has two tracks.
+`codex-exec-loop` is now a native-first project.
 
-- Python CLI: wraps `codex exec` and `codex exec resume` for session-based automation.
-- Rust native client: a TUI prototype that talks to `codex app-server`.
+- Rust native client: the primary product track, built on `codex app-server`
+- Python CLI: legacy compatibility path only, kept temporarily during native migration
 
-The current product direction is the Rust client. The goal is a cross-platform Codex-style CLI that feels interactive while staying on top of official Codex surfaces.
+The product goal is a cross-platform Codex-style CLI that feels interactive and can continue work automatically with canned follow-up prompts.
 
 ## Architecture
 
@@ -42,8 +42,7 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 
 - Use official Codex interfaces first.
   - `codex app-server`
-  - `codex exec`
-  - `codex exec resume`
+  - keep `codex exec` / `codex exec resume` only for legacy compatibility work
 - Keep commits small and milestone-based.
 - After finishing a meaningful feature or refactor:
   - commit the change set
@@ -67,6 +66,7 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 
 ## Native TODO
 
+- Make native auto-follow-up/template selection the main workflow.
 - Render streamed notifications, activity, and approval states in the shell.
 - Add session search, paging, and recent filter options.
 - Add GitHub PR review/comment change detection.

@@ -2,8 +2,9 @@
 
 Rust TUI client prototype for `codex-exec-loop`.
 
-This crate is the start of the `codex app-server` based client. The current
-milestones are intentionally small and incremental:
+This crate is the main product track for `codex-exec-loop`.
+
+Current milestones:
 
 - spawn `codex app-server` over stdio
 - perform `initialize`
@@ -13,6 +14,7 @@ milestones are intentionally small and incremental:
 - load selected thread history with `thread/read`
 - resume a selected thread and send a prompt with `turn/start`
 - stream agent message deltas into the shell view
+- continue work automatically with a builtin next-task follow-up prompt
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
 
