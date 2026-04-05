@@ -89,6 +89,10 @@ cargo run
 - existing thread resume / new thread start
 - streamed response rendering
 - builtin auto-follow-up toggle
+- builtin follow-up strategy cycle
+  - `a`: auto-follow-up on/off
+  - `f`: next strategy
+  - strategies: `next-task`, `plan-queue`, `bugfix`, `docs`
 
 legacy Python CLI 예시는 아래에 남겨두지만, 새 기능 기준 설명은 native 를 우선합니다.
 
@@ -128,6 +132,8 @@ codex-exec-loop \
 - 새 thread를 `thread/start` 로 만들고 첫 prompt 전송
 - 선택한 세션에 실제 prompt 전송
 - `turn/start` 스트리밍 응답 표시
+- builtin auto-follow-up prompt 실행
+- builtin follow-up strategy 변경
 
 계획 중인 항목:
 

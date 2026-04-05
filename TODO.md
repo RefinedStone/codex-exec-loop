@@ -21,10 +21,14 @@
 - conversation tail visibility for long histories
 - Ctrl+C back navigation and exit confirmation
 - native auto-follow-up v1 with builtin next-task prompt and per-conversation toggle
+- native builtin follow-up strategy picker
+  - next-task
+  - plan-queue
+  - bugfix
+  - docs
 
 ## Next
 
-- allow selecting a follow-up strategy inside the native TUI
 - support external prompt/template files instead of builtin template only
 - add stop rules for native auto-follow-up
   - keyword stop

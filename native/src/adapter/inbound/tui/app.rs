@@ -32,10 +32,33 @@ use crate::domain::startup_diagnostics::StartupDiagnostics;
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
-const DEFAULT_AUTO_FOLLOW_TEMPLATE: &str = r#"대리인입니다.
+const AUTO_FOLLOW_TEMPLATE_NEXT_TASK: &str = r#"대리인입니다.
 자동 후속 {auto_turn}/{max_auto_turns} 입니다.
 
 방금 결과를 기준으로 다음 작업 1개만 이어서 진행하세요.
+
+직전 답변:
+{last_message}"#;
+const AUTO_FOLLOW_TEMPLATE_PLAN_QUEUE: &str = r#"대리인입니다.
+자동 후속 {auto_turn}/{max_auto_turns} 입니다.
+
+방금 결과를 바탕으로 개선점과 다음 작업 후보를 `plan_priority_queue.md` 에 정리하고,
+가장 우선순위가 높은 항목 1개를 바로 진행하세요.
+
+직전 답변:
+{last_message}"#;
+const AUTO_FOLLOW_TEMPLATE_BUGFIX: &str = r#"대리인입니다.
+자동 후속 {auto_turn}/{max_auto_turns} 입니다.
+
+직전 결과 기준으로 아직 남아 있는 버그나 리스크 1개만 골라 수정하세요.
+수정이 끝나면 무엇을 고쳤는지 짧게 요약하세요.
+
+직전 답변:
+{last_message}"#;
+const AUTO_FOLLOW_TEMPLATE_DOCS: &str = r#"대리인입니다.
+자동 후속 {auto_turn}/{max_auto_turns} 입니다.
+
+방금 작업을 기준으로 README 또는 사용자 문서에 빠진 내용 1개만 보강하세요.
 
 직전 답변:
 {last_message}"#;
@@ -138,12 +161,49 @@ enum AutoFollowupDecision {
     NoAgentReply,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoFollowTemplateKind {
+    NextTask,
+    PlanQueue,
+    Bugfix,
+    Docs,
+}
+
+impl AutoFollowTemplateKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NextTask => "builtin next-task",
+            Self::PlanQueue => "builtin plan-queue",
+            Self::Bugfix => "builtin bugfix",
+            Self::Docs => "builtin docs",
+        }
+    }
+
+    fn template(self) -> &'static str {
+        match self {
+            Self::NextTask => AUTO_FOLLOW_TEMPLATE_NEXT_TASK,
+            Self::PlanQueue => AUTO_FOLLOW_TEMPLATE_PLAN_QUEUE,
+            Self::Bugfix => AUTO_FOLLOW_TEMPLATE_BUGFIX,
+            Self::Docs => AUTO_FOLLOW_TEMPLATE_DOCS,
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::NextTask => Self::PlanQueue,
+            Self::PlanQueue => Self::Bugfix,
+            Self::Bugfix => Self::Docs,
+            Self::Docs => Self::NextTask,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct AutoFollowState {
     enabled: bool,
     completed_auto_turns: usize,
     max_auto_turns: usize,
-    template: String,
+    template_kind: AutoFollowTemplateKind,
 }
 
 impl Default for AutoFollowState {
@@ -152,7 +212,7 @@ impl Default for AutoFollowState {
             enabled: true,
             completed_auto_turns: 0,
             max_auto_turns: DEFAULT_AUTO_FOLLOW_MAX_TURNS,
-            template: DEFAULT_AUTO_FOLLOW_TEMPLATE.to_string(),
+            template_kind: AutoFollowTemplateKind::NextTask,
         }
     }
 }
@@ -167,7 +227,7 @@ impl AutoFollowState {
     }
 
     fn template_label(&self) -> &'static str {
-        "builtin next-task"
+        self.template_kind.label()
     }
 
     fn next_auto_turn_index(&self) -> usize {
@@ -190,8 +250,13 @@ impl AutoFollowState {
         self.enabled = !self.enabled;
     }
 
+    fn cycle_template_kind(&mut self) {
+        self.template_kind = self.template_kind.next();
+    }
+
     fn render_prompt(&self, thread_id: &str, last_message: &str) -> String {
-        self.template
+        self.template_kind
+            .template()
             .replace("{auto_turn}", &self.next_auto_turn_index().to_string())
             .replace("{max_auto_turns}", &self.max_auto_turns.to_string())
             .replace("{session_id}", thread_id)
@@ -742,6 +807,16 @@ impl NativeTuiApp {
         }
     }
 
+    fn cycle_auto_followup_template(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.auto_follow_state.cycle_template_kind();
+            conversation.status_text = format!(
+                "auto follow-up template: {}",
+                conversation.auto_follow_state.template_label()
+            );
+        }
+    }
+
     fn current_workspace_directory(&self) -> String {
         match &self.startup_state {
             StartupState::Ready(diagnostics) => diagnostics.workspace_path.clone(),
@@ -864,6 +939,9 @@ fn run_event_loop(
             Screen::ConversationShell => match key.code {
                 KeyCode::Char('q') if key.modifiers.is_empty() => should_quit = true,
                 KeyCode::Char('a') if key.modifiers.is_empty() => app.toggle_auto_followup(),
+                KeyCode::Char('f') if key.modifiers.is_empty() => {
+                    app.cycle_auto_followup_template()
+                }
                 KeyCode::Char('b') if key.modifiers.is_empty() => {
                     app.leave_conversation_shell();
                 }
@@ -1246,7 +1324,9 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 
     let help = Paragraph::new(vec![
         Line::from("Type your prompt and press Enter to send"),
-        Line::from("a: auto follow-up on/off    Backspace: delete    b/Ctrl+C: back    q: quit"),
+        Line::from(
+            "a: auto on/off    f: next template    Backspace: delete    b/Ctrl+C: back    q: quit",
+        ),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[3]);
@@ -1612,9 +1692,10 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoFollowState, AutoFollowupDecision, ConversationInputState, ConversationMessage,
-        ConversationMessageKind, ConversationViewModel, build_conversation_scroll_offset,
-        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
+        AutoFollowState, AutoFollowTemplateKind, AutoFollowupDecision, ConversationInputState,
+        ConversationMessage, ConversationMessageKind, ConversationViewModel,
+        build_conversation_scroll_offset, build_ready_input_lines,
+        count_rendered_conversation_lines, format_conversation_lines,
     };
 
     fn ready_conversation() -> ConversationViewModel {
@@ -1750,5 +1831,39 @@ mod tests {
             conversation.decide_auto_followup(),
             AutoFollowupDecision::ManualInputBuffered
         );
+    }
+
+    #[test]
+    fn auto_followup_template_kind_cycles_in_expected_order() {
+        let mut state = AutoFollowState::default();
+
+        assert_eq!(state.template_kind, AutoFollowTemplateKind::NextTask);
+        state.cycle_template_kind();
+        assert_eq!(state.template_kind, AutoFollowTemplateKind::PlanQueue);
+        state.cycle_template_kind();
+        assert_eq!(state.template_kind, AutoFollowTemplateKind::Bugfix);
+        state.cycle_template_kind();
+        assert_eq!(state.template_kind, AutoFollowTemplateKind::Docs);
+        state.cycle_template_kind();
+        assert_eq!(state.template_kind, AutoFollowTemplateKind::NextTask);
+    }
+
+    #[test]
+    fn auto_followup_prompt_uses_selected_template_kind() {
+        let mut conversation = ready_conversation();
+        conversation.auto_follow_state.template_kind = AutoFollowTemplateKind::PlanQueue;
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+            panic!("plan queue prompt should render");
+        };
+
+        assert!(prompt.contains("plan_priority_queue.md"));
+        assert!(prompt.contains("latest answer"));
     }
 }

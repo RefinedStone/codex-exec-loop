@@ -15,6 +15,7 @@ Current milestones:
 - resume a selected thread and send a prompt with `turn/start`
 - stream agent message deltas into the shell view
 - continue work automatically with a builtin next-task follow-up prompt
+- switch builtin follow-up strategies from the TUI
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
 
