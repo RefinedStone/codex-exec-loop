@@ -1,8 +1,7 @@
+pub mod adapter;
 pub mod application;
 pub mod domain;
-pub mod infrastructure;
-pub mod ui;
 
 pub fn run() -> anyhow::Result<()> {
-    ui::app::run()
+    adapter::inbound::tui::app::run()
 }

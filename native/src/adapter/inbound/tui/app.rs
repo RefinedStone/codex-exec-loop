@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -16,22 +17,25 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
-use crate::application::session_service::SessionService;
-use crate::application::startup_service::StartupService;
+use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
+use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
+use crate::application::service::session_service::SessionService;
+use crate::application::service::startup_service::StartupService;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
-use crate::infrastructure::app_server_client::AppServerClient;
 
 const SESSION_PAGE_SIZE: usize = 10;
 
 pub fn run() -> Result<()> {
-    let app_server_client =
-        AppServerClient::new("codex-exec-loop-native", env!("CARGO_PKG_VERSION"));
-    let startup_service = StartupService::new(app_server_client.clone());
-    let session_service = SessionService::new(app_server_client);
+    let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
+        "codex-exec-loop-native",
+        env!("CARGO_PKG_VERSION"),
+    ));
+    let startup_service = StartupService::new(codex_app_server_port.clone());
+    let session_service = SessionService::new(codex_app_server_port);
 
-    let mut app = NativeApp::new(startup_service, session_service);
+    let mut app = NativeTuiApp::new(startup_service, session_service);
     app.start_startup_check();
     run_tui(app)
 }
@@ -64,7 +68,7 @@ enum BackgroundMessage {
     SessionsLoaded(Result<RecentSessions, String>),
 }
 
-struct NativeApp {
+struct NativeTuiApp {
     current_screen: Screen,
     startup_state: StartupState,
     session_state: SessionState,
@@ -76,7 +80,7 @@ struct NativeApp {
     rx: Receiver<BackgroundMessage>,
 }
 
-impl NativeApp {
+impl NativeTuiApp {
     fn new(startup_service: StartupService, session_service: SessionService) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
@@ -181,7 +185,7 @@ impl NativeApp {
     }
 }
 
-fn run_tui(mut app: NativeApp) -> Result<()> {
+fn run_tui(mut app: NativeTuiApp) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -198,7 +202,7 @@ fn run_tui(mut app: NativeApp) -> Result<()> {
 
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut NativeApp,
+    app: &mut NativeTuiApp,
 ) -> Result<()> {
     let mut should_quit = false;
 
@@ -244,7 +248,7 @@ fn run_event_loop(
     Ok(())
 }
 
-fn draw(frame: &mut Frame<'_>, app: &NativeApp) {
+fn draw(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     match app.current_screen {
         Screen::Home => draw_home(frame, app),
         Screen::SessionList => draw_session_list(frame, app),
@@ -252,7 +256,7 @@ fn draw(frame: &mut Frame<'_>, app: &NativeApp) {
     }
 }
 
-fn draw_home(frame: &mut Frame<'_>, app: &NativeApp) {
+fn draw_home(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
@@ -346,7 +350,7 @@ fn draw_home(frame: &mut Frame<'_>, app: &NativeApp) {
     frame.render_widget(help, layout[4]);
 }
 
-fn draw_session_list(frame: &mut Frame<'_>, app: &NativeApp) {
+fn draw_session_list(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
@@ -402,7 +406,7 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &NativeApp) {
     frame.render_widget(help, layout[3]);
 }
 
-fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeApp) {
+fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     match &app.session_state {
         SessionState::Idle => {
             let widget = Paragraph::new("session list has not loaded yet")
@@ -455,7 +459,7 @@ fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeApp) {
     }
 }
 
-fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeApp) {
+fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let lines = match &app.session_state {
         SessionState::Idle => vec![Line::from("session details are not available yet")],
         SessionState::Loading => vec![Line::from("waiting for session list response")],
@@ -508,7 +512,7 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeApp)
     frame.render_widget(detail, area);
 }
 
-fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeApp) {
+fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
@@ -586,7 +590,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeApp) {
     frame.render_widget(help, layout[3]);
 }
 
-fn build_check_items(app: &NativeApp) -> Vec<ListItem<'static>> {
+fn build_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {
     match &app.startup_state {
         StartupState::Idle => vec![ListItem::new("startup check has not started")],
         StartupState::Loading => vec![
@@ -621,7 +625,7 @@ fn build_check_items(app: &NativeApp) -> Vec<ListItem<'static>> {
     }
 }
 
-fn build_startup_warning_lines(app: &NativeApp) -> Vec<Line<'static>> {
+fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.startup_state {
         StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
             .warnings
@@ -634,7 +638,7 @@ fn build_startup_warning_lines(app: &NativeApp) -> Vec<Line<'static>> {
     }
 }
 
-fn build_session_warning_lines(app: &NativeApp) -> Vec<Line<'static>> {
+fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.session_state {
         SessionState::Ready(recent_sessions) if !recent_sessions.warnings.is_empty() => {
             recent_sessions

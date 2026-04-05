@@ -9,15 +9,21 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::application::port::outbound::codex_app_server_port::{
+    AppServerStartupContext, CodexAppServerPort,
+};
+use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::session_summary::SessionSummary;
+
 const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
-pub struct AppServerClient {
+pub struct CodexAppServerAdapter {
     client_name: String,
     client_version: String,
 }
 
-impl AppServerClient {
+impl CodexAppServerAdapter {
     pub fn new(client_name: impl Into<String>, client_version: impl Into<String>) -> Self {
         Self {
             client_name: client_name.into(),
@@ -25,7 +31,7 @@ impl AppServerClient {
         }
     }
 
-    pub fn open_connection(&self) -> Result<AppServerConnection> {
+    fn open_connection(&self) -> Result<AppServerConnection> {
         let mut child = Command::new("codex")
             .arg("app-server")
             .stdin(Stdio::piped())
@@ -64,7 +70,67 @@ impl AppServerClient {
     }
 }
 
-pub struct AppServerConnection {
+impl CodexAppServerPort for CodexAppServerAdapter {
+    fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+        let mut connection = self.open_connection()?;
+        let initialize_response = connection.initialize()?;
+        let account_response = connection.read_account()?;
+        let warnings = connection.finish();
+
+        Ok(AppServerStartupContext {
+            initialize_detail: format!(
+                "{} / {} / {}",
+                initialize_response.platform_os,
+                initialize_response.platform_family,
+                initialize_response.user_agent,
+            ),
+            account_detail: account_response.to_summary_text(),
+            account_ok: account_response.is_authenticated(),
+            warnings,
+        })
+    }
+
+    fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
+        let mut connection = self.open_connection()?;
+        connection.initialize()?;
+        let thread_list_response = connection.list_threads(ThreadListParams {
+            limit: Some(limit),
+            ..ThreadListParams::default()
+        })?;
+        let warnings = connection.finish();
+
+        let items = thread_list_response
+            .data
+            .into_iter()
+            .map(Self::to_session_summary)
+            .collect::<Vec<_>>();
+
+        Ok(RecentSessions {
+            items,
+            warnings,
+            next_cursor: thread_list_response.next_cursor,
+        })
+    }
+}
+
+impl CodexAppServerAdapter {
+    fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary {
+        SessionSummary {
+            id: thread_record.id,
+            name: thread_record.name,
+            preview: thread_record.preview,
+            cwd: thread_record.cwd,
+            source: thread_record.source,
+            model_provider: thread_record.model_provider,
+            updated_at_epoch: thread_record.updated_at,
+            status_type: thread_record.status.status_type,
+            path: thread_record.path,
+            git_branch: thread_record.git_info.and_then(|git_info| git_info.branch),
+        }
+    }
+}
+
+struct AppServerConnection {
     child: Child,
     stdin: ChildStdin,
     rx: Receiver<AppServerLine>,
@@ -76,7 +142,7 @@ pub struct AppServerConnection {
 }
 
 impl AppServerConnection {
-    pub fn initialize(&mut self) -> Result<InitializeResponse> {
+    fn initialize(&mut self) -> Result<InitializeResponse> {
         if self.initialized {
             bail!("initialize was already called");
         }
@@ -99,17 +165,17 @@ impl AppServerConnection {
         Ok(response)
     }
 
-    pub fn read_account(&mut self) -> Result<AccountReadResponse> {
+    fn read_account(&mut self) -> Result<AccountReadResponse> {
         self.ensure_initialized()?;
         self.send_request("account/read", json!({}))
     }
 
-    pub fn list_threads(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {
+    fn list_threads(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {
         self.ensure_initialized()?;
         self.send_request("thread/list", serde_json::to_value(params)?)
     }
 
-    pub fn finish(mut self) -> Vec<String> {
+    fn finish(mut self) -> Vec<String> {
         self.collect_remaining_warnings();
         self.warnings.sort();
         self.warnings.dedup();
@@ -268,26 +334,25 @@ fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {
-    pub user_agent: String,
-    pub codex_home: String,
-    pub platform_family: String,
-    pub platform_os: String,
+struct InitializeResponse {
+    user_agent: String,
+    platform_family: String,
+    platform_os: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountReadResponse {
-    pub account: Option<AccountRecord>,
-    pub requires_openai_auth: Option<bool>,
+struct AccountReadResponse {
+    account: Option<AccountRecord>,
+    requires_openai_auth: Option<bool>,
 }
 
 impl AccountReadResponse {
-    pub fn is_authenticated(&self) -> bool {
+    fn is_authenticated(&self) -> bool {
         self.account.is_some() || !self.requires_openai_auth.unwrap_or(false)
     }
 
-    pub fn to_summary_text(&self) -> String {
+    fn to_summary_text(&self) -> String {
         match &self.account {
             Some(account) if account.account_type == "chatgpt" => format!(
                 "chatgpt / {} / {}",
@@ -306,58 +371,59 @@ impl AccountReadResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountRecord {
+struct AccountRecord {
     #[serde(rename = "type")]
-    pub account_type: String,
-    pub email: Option<String>,
-    pub plan_type: Option<String>,
+    account_type: String,
+    email: Option<String>,
+    plan_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadListParams {
+struct ThreadListParams {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub archived: Option<bool>,
+    archived: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
+    cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
+    limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub search_term: Option<String>,
+    search_term: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_kinds: Option<Vec<String>>,
+    source_kinds: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadListResponse {
-    pub data: Vec<ThreadRecord>,
-    pub next_cursor: Option<String>,
+struct ThreadListResponse {
+    data: Vec<ThreadRecord>,
+    next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadRecord {
-    pub id: String,
-    pub name: Option<String>,
-    pub preview: String,
-    pub cwd: String,
-    pub source: String,
-    pub model_provider: String,
-    pub updated_at: i64,
-    pub path: String,
-    pub status: ThreadStatus,
-    pub git_info: Option<ThreadGitInfo>,
+struct ThreadRecord {
+    id: String,
+    name: Option<String>,
+    preview: String,
+    cwd: String,
+    source: String,
+    #[serde(rename = "modelProvider")]
+    model_provider: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: i64,
+    path: String,
+    status: ThreadStatus,
+    #[serde(rename = "gitInfo")]
+    git_info: Option<ThreadGitInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ThreadStatus {
+struct ThreadStatus {
     #[serde(rename = "type")]
-    pub status_type: String,
+    status_type: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadGitInfo {
-    pub branch: Option<String>,
+struct ThreadGitInfo {
+    branch: Option<String>,
 }

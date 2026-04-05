@@ -1,18 +1,21 @@
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
-use crate::infrastructure::app_server_client::AppServerClient;
 
 #[derive(Clone)]
 pub struct StartupService {
-    app_server_client: AppServerClient,
+    codex_app_server_port: Arc<dyn CodexAppServerPort>,
 }
 
 impl StartupService {
-    pub fn new(app_server_client: AppServerClient) -> Self {
-        Self { app_server_client }
+    pub fn new(codex_app_server_port: Arc<dyn CodexAppServerPort>) -> Self {
+        Self {
+            codex_app_server_port,
+        }
     }
 
     pub fn run_checks(&self) -> Result<StartupDiagnostics> {
@@ -26,19 +29,7 @@ impl StartupService {
         let workspace_ok =
             workspace_detail.starts_with("git repo") || workspace_detail.starts_with("directory");
 
-        let mut connection = self.app_server_client.open_connection()?;
-        let initialize_result = connection.initialize()?;
-        let account_result = connection.read_account()?;
-        let warnings = connection.finish();
-
-        let initialize_detail = format!(
-            "{} / {} / {}",
-            initialize_result.platform_os,
-            initialize_result.platform_family,
-            initialize_result.user_agent,
-        );
-
-        let account_detail = account_result.to_summary_text();
+        let startup_context = self.codex_app_server_port.load_startup_context()?;
 
         Ok(StartupDiagnostics {
             cwd: current_directory,
@@ -47,10 +38,10 @@ impl StartupService {
             workspace_ok,
             workspace_detail,
             initialize_ok: true,
-            initialize_detail,
-            account_ok: account_result.is_authenticated(),
-            account_detail,
-            warnings,
+            initialize_detail: startup_context.initialize_detail,
+            account_ok: startup_context.account_ok,
+            account_detail: startup_context.account_detail,
+            warnings: startup_context.warnings,
             schema_snapshot: "native/schema/codex_app_server_protocol.v2.schemas.json".to_string(),
         })
     }

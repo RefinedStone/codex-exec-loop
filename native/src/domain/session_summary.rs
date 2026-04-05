@@ -1,7 +1,5 @@
 use chrono::{Local, TimeZone};
 
-use crate::infrastructure::app_server_client::ThreadRecord;
-
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub id: String,
@@ -72,22 +70,5 @@ impl SessionSummary {
         }
 
         value.chars().take(LIMIT - 1).collect::<String>() + "..."
-    }
-}
-
-impl From<ThreadRecord> for SessionSummary {
-    fn from(value: ThreadRecord) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            preview: value.preview,
-            cwd: value.cwd,
-            source: value.source,
-            model_provider: value.model_provider,
-            updated_at_epoch: value.updated_at,
-            status_type: value.status.status_type,
-            path: value.path,
-            git_branch: value.git_info.and_then(|git_info| git_info.branch),
-        }
     }
 }
