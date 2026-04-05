@@ -60,6 +60,4 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 
 - Render streamed notifications, activity, and approval states in the shell.
 - Add session search, paging, and recent filter options.
-- Add `Ctrl+C` back navigation.
-  - If already on home, pressing it once more should ask for `y/n` before exit.
 - Add Windows-focused validation and packaging.

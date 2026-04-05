@@ -53,6 +53,12 @@ enum Screen {
     ConversationShell,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitConfirmationState {
+    Hidden,
+    Visible,
+}
+
 #[derive(Debug, Clone)]
 enum StartupState {
     Idle,
@@ -151,6 +157,7 @@ impl ConversationViewModel {
 struct NativeTuiApp {
     current_screen: Screen,
     conversation_return_screen: Screen,
+    exit_confirmation_state: ExitConfirmationState,
     startup_state: StartupState,
     session_state: SessionState,
     conversation_state: ConversationState,
@@ -173,6 +180,7 @@ impl NativeTuiApp {
         Self {
             current_screen: Screen::Home,
             conversation_return_screen: Screen::Home,
+            exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
             conversation_state: ConversationState::Idle,
@@ -424,6 +432,7 @@ impl NativeTuiApp {
     }
 
     fn open_session_list(&mut self) {
+        self.exit_confirmation_state = ExitConfirmationState::Hidden;
         self.current_screen = Screen::SessionList;
         self.active_session = None;
         self.conversation_state = ConversationState::Idle;
@@ -453,6 +462,7 @@ impl NativeTuiApp {
             let thread_id = session.id.clone();
             self.active_session = Some(session);
             self.conversation_return_screen = Screen::SessionList;
+            self.exit_confirmation_state = ExitConfirmationState::Hidden;
             self.current_screen = Screen::ConversationShell;
             self.start_conversation_load(thread_id);
         }
@@ -510,6 +520,47 @@ impl NativeTuiApp {
                 .unwrap_or_else(|_| ".".to_string()),
         }
     }
+
+    fn is_exit_confirmation_visible(&self) -> bool {
+        self.exit_confirmation_state == ExitConfirmationState::Visible
+    }
+
+    fn handle_exit_confirmation_key(&mut self, key: event::KeyEvent) -> Option<bool> {
+        if !self.is_exit_confirmation_visible() {
+            return None;
+        }
+
+        if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
+            return None;
+        }
+
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.exit_confirmation_state = ExitConfirmationState::Hidden;
+                Some(false)
+            }
+            _ => Some(false),
+        }
+    }
+
+    fn handle_ctrl_c(&mut self) {
+        self.exit_confirmation_state = ExitConfirmationState::Hidden;
+
+        match self.current_screen {
+            Screen::ConversationShell => {
+                self.leave_conversation_shell();
+            }
+            Screen::SessionList => {
+                self.current_screen = Screen::Home;
+                self.active_session = None;
+                self.conversation_state = ConversationState::Idle;
+            }
+            Screen::Home => {
+                self.exit_confirmation_state = ExitConfirmationState::Visible;
+            }
+        }
+    }
 }
 
 fn run_tui(mut app: NativeTuiApp) -> Result<()> {
@@ -545,6 +596,18 @@ fn run_event_loop(
             continue;
         };
         if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        if let Some(confirmed_exit) = app.handle_exit_confirmation_key(key) {
+            if confirmed_exit {
+                should_quit = true;
+            }
+            continue;
+        }
+
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+            app.handle_ctrl_c();
             continue;
         }
 
@@ -596,6 +659,10 @@ fn draw(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         Screen::Home => draw_home(frame, app),
         Screen::SessionList => draw_session_list(frame, app),
         Screen::ConversationShell => draw_conversation_shell(frame, app),
+    }
+
+    if app.is_exit_confirmation_visible() {
+        draw_exit_confirmation(frame);
     }
 }
 
@@ -687,7 +754,7 @@ fn draw_home(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 
     let help = Paragraph::new(vec![
         Line::from("Enter: open recent sessions    n: new conversation"),
-        Line::from("r: rerun checks    q: quit"),
+        Line::from("r: rerun checks    Ctrl+C: exit confirm    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[4]);
@@ -743,7 +810,7 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 
     let help = Paragraph::new(vec![
         Line::from("Up/Down or j/k: move    Enter: open live shell"),
-        Line::from("n: new conversation    r: reload    b: back    q: quit"),
+        Line::from("n: new conversation    r: reload    b/Ctrl+C: back    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[3]);
@@ -931,10 +998,26 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 
     let help = Paragraph::new(vec![
         Line::from("Type your prompt and press Enter to send"),
-        Line::from("Backspace: delete    b: back    q: quit"),
+        Line::from("Backspace: delete    b/Ctrl+C: back    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[3]);
+}
+
+fn draw_exit_confirmation(frame: &mut Frame<'_>) {
+    let popup_area = centered_rect(42, 22, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let popup = Paragraph::new(vec![
+        Line::from("You are already at home."),
+        Line::from("Exit codex-exec-loop?"),
+        Line::from(""),
+        Line::from("y: exit    n: stay"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title("Confirm Exit"))
+    .wrap(Wrap { trim: true });
+
+    frame.render_widget(popup, popup_area);
 }
 
 fn build_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {
@@ -1139,4 +1222,24 @@ fn label_style(kind: ConversationMessageKind) -> Style {
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {
     let marker = if ok { "[ok]" } else { "[warn]" };
     ListItem::new(format!("{marker} {title}: {detail}"))
+}
+
+fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
+    let vertical_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - vertical_percent) / 2),
+            Constraint::Percentage(vertical_percent),
+            Constraint::Percentage((100 - vertical_percent) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - horizontal_percent) / 2),
+            Constraint::Percentage(horizontal_percent),
+            Constraint::Percentage((100 - horizontal_percent) / 2),
+        ])
+        .split(vertical_layout[1])[1]
 }
