@@ -13,3 +13,13 @@ milestones are intentionally small and incremental:
 - open a placeholder shell screen for the selected session
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
+
+## Architecture
+
+The native crate prefers a Spring Boot Kotlin style hexagonal layout.
+
+- `domain`
+- `application/service`
+- `application/port`
+- `adapter/inbound`
+- `adapter/outbound`
