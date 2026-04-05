@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -19,8 +19,12 @@ use ratatui::{Frame, Terminal};
 
 use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
 use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
+use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::domain::conversation::{
+    ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
+};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -33,9 +37,10 @@ pub fn run() -> Result<()> {
         env!("CARGO_PKG_VERSION"),
     ));
     let startup_service = StartupService::new(codex_app_server_port.clone());
-    let session_service = SessionService::new(codex_app_server_port);
+    let session_service = SessionService::new(codex_app_server_port.clone());
+    let conversation_service = ConversationService::new(codex_app_server_port);
 
-    let mut app = NativeTuiApp::new(startup_service, session_service);
+    let mut app = NativeTuiApp::new(startup_service, session_service, conversation_service);
     app.start_startup_check();
     run_tui(app)
 }
@@ -63,34 +68,87 @@ enum SessionState {
     Failed(String),
 }
 
+#[derive(Debug, Clone)]
+enum ConversationState {
+    Idle,
+    Loading,
+    Ready(ConversationViewModel),
+    Failed(String),
+}
+
 enum BackgroundMessage {
     StartupLoaded(Result<StartupDiagnostics, String>),
     SessionsLoaded(Result<RecentSessions, String>),
+    ConversationLoaded(Result<ConversationSnapshot, String>),
+    ConversationStream(ConversationStreamEvent),
+}
+
+#[derive(Debug, Clone)]
+struct ConversationViewModel {
+    thread_id: String,
+    title: String,
+    cwd: String,
+    messages: Vec<ConversationMessage>,
+    warnings: Vec<String>,
+    input_buffer: String,
+    is_turn_running: bool,
+    active_turn_id: Option<String>,
+    status_text: String,
+}
+
+impl ConversationViewModel {
+    fn from_snapshot(snapshot: ConversationSnapshot) -> Self {
+        let status_text = if snapshot.warnings.is_empty() {
+            "thread loaded".to_string()
+        } else {
+            snapshot.warnings.join(" | ")
+        };
+
+        Self {
+            thread_id: snapshot.thread_id,
+            title: snapshot.title,
+            cwd: snapshot.cwd,
+            messages: snapshot.messages,
+            warnings: snapshot.warnings,
+            input_buffer: String::new(),
+            is_turn_running: false,
+            active_turn_id: None,
+            status_text,
+        }
+    }
 }
 
 struct NativeTuiApp {
     current_screen: Screen,
     startup_state: StartupState,
     session_state: SessionState,
+    conversation_state: ConversationState,
     selected_session_index: usize,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,
     session_service: SessionService,
+    conversation_service: ConversationService,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
 }
 
 impl NativeTuiApp {
-    fn new(startup_service: StartupService, session_service: SessionService) -> Self {
+    fn new(
+        startup_service: StartupService,
+        session_service: SessionService,
+        conversation_service: ConversationService,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             current_screen: Screen::Home,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
+            conversation_state: ConversationState::Idle,
             selected_session_index: 0,
             active_session: None,
             startup_service,
             session_service,
+            conversation_service,
             tx,
             rx,
         }
@@ -118,6 +176,68 @@ impl NativeTuiApp {
         });
     }
 
+    fn start_conversation_load(&mut self, thread_id: String) {
+        self.conversation_state = ConversationState::Loading;
+        let tx = self.tx.clone();
+        let service = self.conversation_service.clone();
+        thread::spawn(move || {
+            let result = service
+                .load_snapshot(&thread_id)
+                .map_err(|error| error.to_string());
+            let _ = tx.send(BackgroundMessage::ConversationLoaded(result));
+        });
+    }
+
+    fn start_turn_submission(&mut self) {
+        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+            return;
+        };
+        if conversation.is_turn_running {
+            return;
+        }
+
+        let prompt = conversation.input_buffer.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+
+        let thread_id = conversation.thread_id.clone();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::User,
+            prompt.clone(),
+            None,
+            None,
+        ));
+        conversation.input_buffer.clear();
+        conversation.is_turn_running = true;
+        conversation.status_text = "starting turn".to_string();
+
+        let outer_tx = self.tx.clone();
+        let service = self.conversation_service.clone();
+        thread::spawn(move || {
+            let (event_tx, event_rx) = mpsc::channel();
+
+            let forward_outer_tx = outer_tx.clone();
+            let forwarder = thread::spawn(move || {
+                while let Ok(event) = event_rx.recv() {
+                    let should_stop = matches!(
+                        event,
+                        ConversationStreamEvent::TurnCompleted { .. }
+                            | ConversationStreamEvent::Failed { .. }
+                    );
+                    let _ = forward_outer_tx.send(BackgroundMessage::ConversationStream(event));
+                    if should_stop {
+                        break;
+                    }
+                }
+            });
+
+            let _ = service.run_turn_stream(&thread_id, &prompt, event_tx);
+
+            let _ = forwarder.join();
+        });
+    }
+
     fn poll_background_messages(&mut self) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
@@ -136,6 +256,104 @@ impl NativeTuiApp {
                         Err(message) => SessionState::Failed(message),
                     };
                 }
+                BackgroundMessage::ConversationLoaded(result) => {
+                    self.conversation_state = match result {
+                        Ok(snapshot) => {
+                            ConversationState::Ready(ConversationViewModel::from_snapshot(snapshot))
+                        }
+                        Err(message) => ConversationState::Failed(message),
+                    };
+                }
+                BackgroundMessage::ConversationStream(event) => {
+                    self.apply_conversation_event(event);
+                }
+            }
+        }
+    }
+
+    fn apply_conversation_event(&mut self, event: ConversationStreamEvent) {
+        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+            return;
+        };
+
+        match event {
+            ConversationStreamEvent::TurnStarted { turn_id } => {
+                conversation.active_turn_id = Some(turn_id);
+                conversation.is_turn_running = true;
+                conversation.status_text = "turn started".to_string();
+            }
+            ConversationStreamEvent::StatusUpdated { text } => {
+                conversation.status_text = text;
+            }
+            ConversationStreamEvent::AgentMessageDelta {
+                item_id,
+                phase,
+                delta,
+            } => {
+                if let Some(message) = conversation
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
+                {
+                    message.text.push_str(&delta);
+                    if message.phase.is_none() {
+                        message.phase = phase;
+                    }
+                } else {
+                    conversation.messages.push(ConversationMessage::new(
+                        ConversationMessageKind::Agent,
+                        delta,
+                        phase,
+                        Some(item_id),
+                    ));
+                }
+            }
+            ConversationStreamEvent::AgentMessageCompleted {
+                item_id,
+                phase,
+                text,
+            } => {
+                if let Some(message) = conversation
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
+                {
+                    message.text = text;
+                    message.phase = phase;
+                } else {
+                    conversation.messages.push(ConversationMessage::new(
+                        ConversationMessageKind::Agent,
+                        text,
+                        phase,
+                        Some(item_id),
+                    ));
+                }
+            }
+            ConversationStreamEvent::ToolMessage { text } => {
+                conversation.messages.push(ConversationMessage::new(
+                    ConversationMessageKind::Tool,
+                    text,
+                    None,
+                    None,
+                ));
+            }
+            ConversationStreamEvent::TurnCompleted { turn_id } => {
+                conversation.active_turn_id = None;
+                conversation.is_turn_running = false;
+                conversation.status_text = format!("turn completed: {turn_id}");
+            }
+            ConversationStreamEvent::Failed { message } => {
+                conversation.active_turn_id = None;
+                conversation.is_turn_running = false;
+                conversation.status_text = "turn failed".to_string();
+                conversation.messages.push(ConversationMessage::new(
+                    ConversationMessageKind::Status,
+                    message,
+                    None,
+                    None,
+                ));
             }
         }
     }
@@ -150,6 +368,7 @@ impl NativeTuiApp {
     fn open_session_list(&mut self) {
         self.current_screen = Screen::SessionList;
         self.active_session = None;
+        self.conversation_state = ConversationState::Idle;
         self.start_session_load();
     }
 
@@ -164,8 +383,10 @@ impl NativeTuiApp {
 
     fn open_conversation_shell(&mut self) {
         if let Some(session) = self.current_session().cloned() {
+            let thread_id = session.id.clone();
             self.active_session = Some(session);
             self.current_screen = Screen::ConversationShell;
+            self.start_conversation_load(thread_id);
         }
     }
 
@@ -182,6 +403,25 @@ impl NativeTuiApp {
         let current_index = self.selected_session_index as isize;
         let next_index = (current_index + delta).clamp(0, max_index);
         self.selected_session_index = next_index as usize;
+    }
+
+    fn conversation_can_accept_input(&self) -> bool {
+        matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation) if !conversation.is_turn_running
+        )
+    }
+
+    fn push_input_character(&mut self, character: char) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.input_buffer.push(character);
+        }
+    }
+
+    fn pop_input_character(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.input_buffer.pop();
+        }
     }
 }
 
@@ -238,8 +478,20 @@ fn run_event_loop(
                 _ => {}
             },
             Screen::ConversationShell => match key.code {
-                KeyCode::Char('q') => should_quit = true,
-                KeyCode::Char('b') => app.current_screen = Screen::SessionList,
+                KeyCode::Char('q') if key.modifiers.is_empty() => should_quit = true,
+                KeyCode::Char('b') if key.modifiers.is_empty() => {
+                    app.current_screen = Screen::SessionList;
+                }
+                KeyCode::Backspace => app.pop_input_character(),
+                KeyCode::Enter if app.conversation_can_accept_input() => {
+                    app.start_turn_submission()
+                }
+                KeyCode::Char(character)
+                    if key.modifiers == KeyModifiers::NONE
+                        || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    app.push_input_character(character);
+                }
                 _ => {}
             },
         }
@@ -399,7 +651,7 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     frame.render_widget(warning_widget, layout[2]);
 
     let help = Paragraph::new(vec![
-        Line::from("Up/Down or j/k: move    Enter: open shell preview"),
+        Line::from("Up/Down or j/k: move    Enter: open live shell"),
         Line::from("r: reload    b: back    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
@@ -527,64 +779,61 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         ])
         .split(area);
 
-    let selected_session = app.active_session.as_ref();
-
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-            Span::raw(" / resume preview"),
-        ]),
-        Line::from("The next milestone will stream thread and turn events here."),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Shell"));
+    let header_lines = match &app.conversation_state {
+        ConversationState::Idle => vec![
+            Line::from("Conversation shell"),
+            Line::from("Open a session first."),
+        ],
+        ConversationState::Loading => vec![
+            Line::from(vec![
+                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
+                Span::raw(" / loading thread"),
+            ]),
+            Line::from("Reading thread history from codex app-server."),
+        ],
+        ConversationState::Ready(conversation) => vec![
+            Line::from(vec![
+                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
+                Span::raw(format!(" / {}", conversation.title)),
+            ]),
+            Line::from(format!("thread: {}", conversation.thread_id)),
+        ],
+        ConversationState::Failed(message) => vec![
+            Line::from(vec![
+                Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
+                Span::raw(" / failed"),
+            ]),
+            Line::from(message.clone()),
+        ],
+    };
+    let header = Paragraph::new(header_lines)
+        .block(Block::default().borders(Borders::ALL).title("Shell"))
+        .wrap(Wrap { trim: true });
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
         .split(layout[1]);
 
-    let conversation_lines = match selected_session {
-        Some(session) => vec![
-            Line::from("Selected session preview"),
-            Line::from(""),
-            Line::from(session.preview_block()),
-        ],
-        None => vec![Line::from("No session selected.")],
-    };
-    let conversation = Paragraph::new(conversation_lines)
+    let conversation = Paragraph::new(build_conversation_lines(app))
         .block(Block::default().borders(Borders::ALL).title("Conversation"))
         .wrap(Wrap { trim: false });
     frame.render_widget(conversation, content_layout[0]);
 
-    let activity_lines = match selected_session {
-        Some(session) => vec![
-            Line::from(format!("session id: {}", session.id)),
-            Line::from(format!("workspace: {}", session.workspace_label())),
-            Line::from(format!("updated: {}", session.updated_at_label())),
-            Line::from(format!("source: {}", session.source)),
-            Line::from(format!("status: {}", session.status_type)),
-        ],
-        None => vec![Line::from("session metadata is not available")],
-    };
-    let activity = Paragraph::new(activity_lines)
+    let activity = Paragraph::new(build_conversation_activity_lines(app))
         .block(Block::default().borders(Borders::ALL).title("Activity"))
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false });
     frame.render_widget(activity, content_layout[1]);
 
-    let roadmap = Paragraph::new(vec![
-        Line::from("next step"),
-        Line::from("- thread/start or existing-thread resume action"),
-        Line::from("- turn/start input box"),
-        Line::from("- streamed notifications rendered in place"),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Roadmap"))
-    .wrap(Wrap { trim: true });
-    frame.render_widget(roadmap, layout[2]);
+    let input = Paragraph::new(build_input_lines(app))
+        .block(Block::default().borders(Borders::ALL).title("Input"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(input, layout[2]);
 
     let help = Paragraph::new(vec![
-        Line::from("b: back to recent sessions"),
-        Line::from("q: quit"),
+        Line::from("Type your prompt and press Enter to send"),
+        Line::from("Backspace: delete    b: back    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[3]);
@@ -669,6 +918,109 @@ fn build_session_list_item(session: &SessionSummary) -> ListItem<'static> {
             session.model_provider,
         )),
     ])
+}
+
+fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    let mut lines = match &app.conversation_state {
+        ConversationState::Idle => vec![Line::from("No conversation selected.")],
+        ConversationState::Loading => vec![Line::from("Loading thread history...")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => {
+            let mut entries = Vec::new();
+            for message in &conversation.messages {
+                let label = message.kind.label(message.phase.as_deref());
+                entries.push(Line::from(Span::styled(
+                    format!("{label}:"),
+                    label_style(message.kind),
+                )));
+                for text_line in message.text.lines() {
+                    entries.push(Line::from(format!("  {text_line}")));
+                }
+                entries.push(Line::from(""));
+            }
+            if entries.is_empty() {
+                entries.push(Line::from("No messages in this thread yet."));
+            }
+            entries
+        }
+    };
+
+    if lines.len() > 160 {
+        lines = lines.split_off(lines.len() - 160);
+    }
+
+    lines
+}
+
+fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Idle => vec![Line::from("No active conversation")],
+        ConversationState::Loading => vec![Line::from("Loading conversation metadata")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => {
+            let mut lines = vec![
+                Line::from(format!("title: {}", conversation.title)),
+                Line::from(format!("thread id: {}", conversation.thread_id)),
+                Line::from(format!("cwd: {}", conversation.cwd)),
+                Line::from(format!("messages: {}", conversation.messages.len())),
+                Line::from(format!(
+                    "turn running: {}",
+                    if conversation.is_turn_running {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                )),
+                Line::from(format!("status: {}", conversation.status_text)),
+            ];
+
+            if let Some(turn_id) = &conversation.active_turn_id {
+                lines.push(Line::from(format!("active turn: {turn_id}")));
+            }
+
+            if !conversation.warnings.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from("warnings"));
+                for warning in &conversation.warnings {
+                    lines.push(Line::from(warning.clone()));
+                }
+            }
+
+            lines
+        }
+    }
+}
+
+fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Idle => vec![Line::from("Select a session first.")],
+        ConversationState::Loading => vec![Line::from("Thread is still loading.")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => {
+            if conversation.is_turn_running {
+                vec![
+                    Line::from("Codex is still working on the current turn."),
+                    Line::from("Wait for completion before sending another prompt."),
+                ]
+            } else if conversation.input_buffer.is_empty() {
+                vec![
+                    Line::from("Type a prompt here."),
+                    Line::from("Press Enter to send."),
+                ]
+            } else {
+                vec![Line::from(conversation.input_buffer.clone())]
+            }
+        }
+    }
+}
+
+fn label_style(kind: ConversationMessageKind) -> Style {
+    match kind {
+        ConversationMessageKind::User => Style::default().fg(Color::Yellow),
+        ConversationMessageKind::Agent => Style::default().fg(Color::Cyan),
+        ConversationMessageKind::Tool => Style::default().fg(Color::Magenta),
+        ConversationMessageKind::Status => Style::default().fg(Color::Red),
+    }
 }
 
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {

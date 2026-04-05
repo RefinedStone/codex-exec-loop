@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
+};
+use crate::domain::conversation::{
+    ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
 };
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -68,6 +71,152 @@ impl CodexAppServerAdapter {
             initialized: false,
         })
     }
+
+    fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary {
+        SessionSummary {
+            id: thread_record.id,
+            name: thread_record.name,
+            preview: thread_record.preview,
+            cwd: thread_record.cwd,
+            source: thread_record.source,
+            model_provider: thread_record.model_provider,
+            updated_at_epoch: thread_record.updated_at,
+            status_type: thread_record.status.status_type,
+            path: thread_record.path,
+            git_branch: thread_record.git_info.and_then(|git_info| git_info.branch),
+        }
+    }
+
+    fn to_conversation_snapshot(
+        thread_record: ThreadRecord,
+        warnings: Vec<String>,
+    ) -> ConversationSnapshot {
+        let title = thread_record
+            .name
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                thread_record
+                    .preview
+                    .lines()
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("Untitled thread")
+                    .to_string()
+            });
+
+        let messages = thread_record
+            .turns
+            .into_iter()
+            .flat_map(|turn| turn.items.into_iter())
+            .filter_map(Self::to_conversation_message)
+            .collect::<Vec<_>>();
+
+        ConversationSnapshot {
+            thread_id: thread_record.id,
+            title,
+            cwd: thread_record.cwd,
+            messages,
+            warnings,
+        }
+    }
+
+    fn to_conversation_message(item: Value) -> Option<ConversationMessage> {
+        let item_type = item.get("type")?.as_str()?;
+        match item_type {
+            "userMessage" => {
+                let text = item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .map(|content| Self::extract_user_input_text(content.as_slice()))
+                    .filter(|value| !value.trim().is_empty())?;
+
+                Some(ConversationMessage::new(
+                    ConversationMessageKind::User,
+                    text,
+                    None,
+                    item.get("id").and_then(Value::as_str).map(str::to_string),
+                ))
+            }
+            "agentMessage" => Some(ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                item.get("text").and_then(Value::as_str).unwrap_or_default(),
+                item.get("phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                item.get("id").and_then(Value::as_str).map(str::to_string),
+            )),
+            "fileChange" => Some(ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                Self::format_file_change_summary(&item),
+                None,
+                item.get("id").and_then(Value::as_str).map(str::to_string),
+            )),
+            "commandExecution" => Some(ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                Self::format_command_execution_summary(&item),
+                None,
+                item.get("id").and_then(Value::as_str).map(str::to_string),
+            )),
+            _ => None,
+        }
+    }
+
+    fn extract_user_input_text(items: &[Value]) -> String {
+        items
+            .iter()
+            .filter_map(|content| {
+                if content.get("type").and_then(Value::as_str) == Some("text") {
+                    content.get("text").and_then(Value::as_str)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn format_file_change_summary(item: &Value) -> String {
+        let changes = item
+            .get("changes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if changes.is_empty() {
+            return "file change completed".to_string();
+        }
+
+        let entries = changes
+            .iter()
+            .map(|change| {
+                let path = change
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown-path");
+                let kind = change
+                    .get("kind")
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("update");
+                format!("{kind} {path}")
+            })
+            .collect::<Vec<_>>();
+
+        format!("file change: {}", entries.join(", "))
+    }
+
+    fn format_command_execution_summary(item: &Value) -> String {
+        let command = item
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("command");
+        let status = item
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("completed");
+        format!("command: {command} [{status}]")
+    }
 }
 
 impl CodexAppServerPort for CodexAppServerAdapter {
@@ -111,22 +260,44 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             next_cursor: thread_list_response.next_cursor,
         })
     }
-}
 
-impl CodexAppServerAdapter {
-    fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary {
-        SessionSummary {
-            id: thread_record.id,
-            name: thread_record.name,
-            preview: thread_record.preview,
-            cwd: thread_record.cwd,
-            source: thread_record.source,
-            model_provider: thread_record.model_provider,
-            updated_at_epoch: thread_record.updated_at,
-            status_type: thread_record.status.status_type,
-            path: thread_record.path,
-            git_branch: thread_record.git_info.and_then(|git_info| git_info.branch),
+    fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
+        let mut connection = self.open_connection()?;
+        connection.initialize()?;
+        let thread_response = connection.read_thread(thread_id, true)?;
+        let warnings = connection.finish();
+        Ok(Self::to_conversation_snapshot(
+            thread_response.thread,
+            warnings,
+        ))
+    }
+
+    fn run_turn_stream(
+        &self,
+        thread_id: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        let result = (|| {
+            let mut connection = self.open_connection()?;
+            connection.initialize()?;
+            connection.resume_thread(thread_id)?;
+            let turn_response = connection.start_turn(thread_id, prompt)?;
+
+            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
+                turn_id: turn_response.turn.id.clone(),
+            });
+
+            connection.wait_for_turn_stream(thread_id, &turn_response.turn.id, &event_sender)
+        })();
+
+        if let Err(error) = &result {
+            let _ = event_sender.send(ConversationStreamEvent::Failed {
+                message: error.to_string(),
+            });
         }
+
+        result
     }
 }
 
@@ -173,6 +344,219 @@ impl AppServerConnection {
     fn list_threads(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {
         self.ensure_initialized()?;
         self.send_request("thread/list", serde_json::to_value(params)?)
+    }
+
+    fn read_thread(&mut self, thread_id: &str, include_turns: bool) -> Result<ThreadReadResponse> {
+        self.ensure_initialized()?;
+        self.send_request(
+            "thread/read",
+            json!({
+                "threadId": thread_id,
+                "includeTurns": include_turns,
+            }),
+        )
+    }
+
+    fn resume_thread(&mut self, thread_id: &str) -> Result<ThreadResumeResponse> {
+        self.ensure_initialized()?;
+        self.send_request(
+            "thread/resume",
+            json!({
+                "threadId": thread_id,
+            }),
+        )
+    }
+
+    fn start_turn(&mut self, thread_id: &str, prompt: &str) -> Result<TurnStartResponse> {
+        self.ensure_initialized()?;
+        self.send_request(
+            "turn/start",
+            json!({
+                "threadId": thread_id,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    }
+                ],
+            }),
+        )
+    }
+
+    fn wait_for_turn_stream(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        event_sender: &Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                bail!("app-server exited before the turn completed: {status}");
+            }
+
+            match self.rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(AppServerLine::Stderr(line)) => self.warnings.push(line),
+                Ok(AppServerLine::Stdout(line)) => {
+                    let value: Value = serde_json::from_str(&line)
+                        .with_context(|| format!("invalid JSON from app-server: {line}"))?;
+
+                    if self.capture_notification_warning(&value) {
+                        continue;
+                    }
+
+                    if let Some(method) = value.get("method").and_then(Value::as_str) {
+                        if self.handle_turn_notification(
+                            method,
+                            value.get("params"),
+                            thread_id,
+                            turn_id,
+                            event_sender,
+                        )? {
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("app-server pipe closed while waiting for turn events");
+                }
+            }
+        }
+    }
+
+    fn handle_turn_notification(
+        &mut self,
+        method: &str,
+        params: Option<&Value>,
+        thread_id: &str,
+        turn_id: &str,
+        event_sender: &Sender<ConversationStreamEvent>,
+    ) -> Result<bool> {
+        let Some(params) = params else {
+            return Ok(false);
+        };
+
+        match method {
+            "thread/status/changed" => {
+                if params.get("threadId").and_then(Value::as_str) == Some(thread_id) {
+                    let status = params
+                        .get("status")
+                        .and_then(|value| value.get("type"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let _ = event_sender.send(ConversationStreamEvent::StatusUpdated {
+                        text: format!("thread status: {status}"),
+                    });
+                }
+            }
+            "turn/started" => {
+                if params.get("threadId").and_then(Value::as_str) == Some(thread_id) {
+                    let started_turn_id = params
+                        .get("turn")
+                        .and_then(|value| value.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(turn_id);
+                    let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
+                        turn_id: started_turn_id.to_string(),
+                    });
+                }
+            }
+            "item/agentMessage/delta" => {
+                if params.get("turnId").and_then(Value::as_str) == Some(turn_id) {
+                    let item_id = params
+                        .get("itemId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let delta = params
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let _ = event_sender.send(ConversationStreamEvent::AgentMessageDelta {
+                        item_id,
+                        phase: None,
+                        delta,
+                    });
+                }
+            }
+            "item/completed" => {
+                if params.get("turnId").and_then(Value::as_str) == Some(turn_id) {
+                    self.handle_completed_item(params.get("item"), event_sender);
+                }
+            }
+            "error" => {
+                let message = params
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("app-server reported an error")
+                    .to_string();
+                bail!(message);
+            }
+            "turn/completed" => {
+                let completed_thread_id = params.get("threadId").and_then(Value::as_str);
+                let completed_turn_id = params
+                    .get("turn")
+                    .and_then(|value| value.get("id"))
+                    .and_then(Value::as_str);
+
+                if completed_thread_id == Some(thread_id) && completed_turn_id == Some(turn_id) {
+                    let _ = event_sender.send(ConversationStreamEvent::TurnCompleted {
+                        turn_id: turn_id.to_string(),
+                    });
+                    return Ok(true);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(false)
+    }
+
+    fn handle_completed_item(
+        &self,
+        item: Option<&Value>,
+        event_sender: &Sender<ConversationStreamEvent>,
+    ) {
+        let Some(item) = item else {
+            return;
+        };
+
+        let item_type = item.get("type").and_then(Value::as_str);
+        match item_type {
+            Some("agentMessage") => {
+                let item_id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let phase = item
+                    .get("phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let _ = event_sender.send(ConversationStreamEvent::AgentMessageCompleted {
+                    item_id,
+                    phase,
+                    text,
+                });
+            }
+            Some("fileChange") => {
+                let _ = event_sender.send(ConversationStreamEvent::ToolMessage {
+                    text: CodexAppServerAdapter::format_file_change_summary(item),
+                });
+            }
+            Some("commandExecution") => {
+                let _ = event_sender.send(ConversationStreamEvent::ToolMessage {
+                    text: CodexAppServerAdapter::format_command_execution_summary(item),
+                });
+            }
+            _ => {}
+        }
     }
 
     fn finish(mut self) -> Vec<String> {
@@ -401,20 +785,47 @@ struct ThreadListResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct ThreadReadResponse {
+    thread: ThreadRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ThreadResumeResponse {
+    #[serde(rename = "thread")]
+    _thread: ThreadRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TurnStartResponse {
+    turn: TurnRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TurnRecord {
+    id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ThreadRecord {
     id: String,
     name: Option<String>,
     preview: String,
     cwd: String,
     source: String,
-    #[serde(rename = "modelProvider")]
     model_provider: String,
-    #[serde(rename = "updatedAt")]
     updated_at: i64,
     path: String,
     status: ThreadStatus,
-    #[serde(rename = "gitInfo")]
     git_info: Option<ThreadGitInfo>,
+    #[serde(default)]
+    turns: Vec<ThreadTurnRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ThreadTurnRecord {
+    #[serde(default)]
+    items: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -424,6 +835,7 @@ struct ThreadStatus {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ThreadGitInfo {
     branch: Option<String>,
 }

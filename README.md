@@ -103,7 +103,9 @@ codex-exec-loop \
 - startup dashboard
 - Codex binary / workspace / `initialize` / `account/read` 체크
 - `thread/list` 로 최근 세션 목록 조회
-- 선택한 세션의 resume preview 화면 진입
+- 선택한 세션의 히스토리 로드
+- 선택한 세션에 실제 prompt 전송
+- `turn/start` 스트리밍 응답 표시
 
 실행:
 
@@ -117,7 +119,8 @@ cargo run
 
 - `Enter`: 홈에서 최근 세션 목록으로 이동
 - `j` `k` 또는 `Up` `Down`: 세션 선택
-- `Enter`: 선택 세션 preview 화면
+- `Enter`: 선택 세션 live shell 화면
+- shell에서 입력 후 `Enter`: prompt 전송
 - `b`: 뒤로
 - `r`: 현재 화면 데이터 다시 읽기
 - `q`: 종료
