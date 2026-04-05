@@ -51,6 +51,10 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - open a pull request to the intended base branch unless blocked by missing permissions or user instruction
 - Verify with `cargo fmt`, `cargo build`, and `cargo test` for native changes.
 - Do not introduce unnecessary traits. Add a port trait when it improves a boundary.
+- Review handling:
+  - fix correctness, deadlock, crash, data-loss, and clear state-management issues
+  - fix low-cost maintainability improvements when they do not fight the chosen architecture
+  - if feedback pushes away from the intended Spring Boot Kotlin style or the chosen hexagonal structure, reply with the rationale and close the thread without changing direction
 
 ## Native TODO
 
