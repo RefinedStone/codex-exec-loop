@@ -504,11 +504,7 @@ impl NativeTuiApp {
 
     fn current_workspace_directory(&self) -> String {
         match &self.startup_state {
-            StartupState::Ready(diagnostics) => diagnostics
-                .workspace_detail
-                .strip_prefix("git repo: ")
-                .map(str::to_string)
-                .unwrap_or_else(|| diagnostics.cwd.clone()),
+            StartupState::Ready(diagnostics) => diagnostics.workspace_path.clone(),
             _ => std::env::current_dir()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|_| ".".to_string()),

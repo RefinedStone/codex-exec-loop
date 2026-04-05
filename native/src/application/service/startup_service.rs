@@ -25,9 +25,7 @@ impl StartupService {
             .to_string();
 
         let codex_path = which::which("codex").context("`codex` was not found on PATH")?;
-        let workspace_detail = self.detect_workspace_status();
-        let workspace_ok =
-            workspace_detail.starts_with("git repo") || workspace_detail.starts_with("directory");
+        let workspace_status = self.detect_workspace_status()?;
 
         let startup_context = self.codex_app_server_port.load_startup_context()?;
 
@@ -35,8 +33,9 @@ impl StartupService {
             cwd: current_directory,
             codex_binary_ok: true,
             codex_binary_detail: codex_path.display().to_string(),
-            workspace_ok,
-            workspace_detail,
+            workspace_ok: workspace_status.ok,
+            workspace_path: workspace_status.path,
+            workspace_detail: workspace_status.detail,
             initialize_ok: true,
             initialize_detail: startup_context.initialize_detail,
             account_ok: startup_context.account_ok,
@@ -46,7 +45,12 @@ impl StartupService {
         })
     }
 
-    fn detect_workspace_status(&self) -> String {
+    fn detect_workspace_status(&self) -> Result<WorkspaceStatus> {
+        let current_directory = std::env::current_dir()
+            .context("failed to resolve current directory for workspace status")?
+            .display()
+            .to_string();
+
         let output = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .stdout(Stdio::piped())
@@ -56,9 +60,23 @@ impl StartupService {
         match output {
             Ok(result) if result.status.success() => {
                 let root = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                format!("git repo: {root}")
+                Ok(WorkspaceStatus {
+                    ok: true,
+                    path: root.clone(),
+                    detail: format!("git repo: {root}"),
+                })
             }
-            _ => "directory only (not inside a git repo)".to_string(),
+            _ => Ok(WorkspaceStatus {
+                ok: true,
+                path: current_directory,
+                detail: "directory only (not inside a git repo)".to_string(),
+            }),
         }
     }
+}
+
+struct WorkspaceStatus {
+    ok: bool,
+    path: String,
+    detail: String,
 }

@@ -4,6 +4,7 @@ pub struct StartupDiagnostics {
     pub codex_binary_ok: bool,
     pub codex_binary_detail: String,
     pub workspace_ok: bool,
+    pub workspace_path: String,
     pub workspace_detail: String,
     pub initialize_ok: bool,
     pub initialize_detail: String,
