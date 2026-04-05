@@ -58,8 +58,6 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 
 ## Native TODO
 
-- Add real session resume and `thread/start` flow from the selected session.
-- Add input box and `turn/start` request handling.
 - Render streamed notifications, activity, and approval states in the shell.
 - Add session search, paging, and recent filter options.
 - Add `Ctrl+C` back navigation.

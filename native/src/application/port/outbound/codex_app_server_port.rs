@@ -9,6 +9,12 @@ pub trait CodexAppServerPort: Send + Sync {
     fn load_startup_context(&self) -> Result<AppServerStartupContext>;
     fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions>;
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
+    fn run_new_thread_stream(
+        &self,
+        cwd: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()>;
     fn run_turn_stream(
         &self,
         thread_id: &str,

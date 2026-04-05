@@ -99,6 +99,23 @@ struct ConversationViewModel {
 }
 
 impl ConversationViewModel {
+    fn new_draft(cwd: String) -> Self {
+        let mut view_model = Self {
+            thread_id: String::new(),
+            title: "New conversation".to_string(),
+            cwd,
+            messages: Vec::new(),
+            cached_conversation_lines: Vec::new(),
+            warnings: Vec::new(),
+            input_buffer: String::new(),
+            is_turn_running: false,
+            active_turn_id: None,
+            status_text: "new thread draft".to_string(),
+        };
+        view_model.refresh_conversation_lines();
+        view_model
+    }
+
     fn from_snapshot(snapshot: ConversationSnapshot) -> Self {
         let status_text = if snapshot.warnings.is_empty() {
             "thread loaded".to_string()
@@ -125,10 +142,15 @@ impl ConversationViewModel {
     fn refresh_conversation_lines(&mut self) {
         self.cached_conversation_lines = format_conversation_lines(&self.messages);
     }
+
+    fn has_active_thread(&self) -> bool {
+        !self.thread_id.trim().is_empty()
+    }
 }
 
 struct NativeTuiApp {
     current_screen: Screen,
+    conversation_return_screen: Screen,
     startup_state: StartupState,
     session_state: SessionState,
     conversation_state: ConversationState,
@@ -150,6 +172,7 @@ impl NativeTuiApp {
         let (tx, rx) = mpsc::channel();
         Self {
             current_screen: Screen::Home,
+            conversation_return_screen: Screen::Home,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
             conversation_state: ConversationState::Idle,
@@ -211,6 +234,8 @@ impl NativeTuiApp {
         }
 
         let thread_id = conversation.thread_id.clone();
+        let cwd = conversation.cwd.clone();
+        let is_new_thread = !conversation.has_active_thread();
         conversation.messages.push(ConversationMessage::new(
             ConversationMessageKind::User,
             prompt.clone(),
@@ -228,7 +253,12 @@ impl NativeTuiApp {
             let (event_tx, event_rx) = mpsc::channel();
 
             let service_thread = thread::spawn(move || {
-                let _ = service.run_turn_stream(&thread_id, &prompt, event_tx);
+                let result = if is_new_thread {
+                    service.run_new_thread_stream(&cwd, &prompt, event_tx)
+                } else {
+                    service.run_turn_stream(&thread_id, &prompt, event_tx)
+                };
+                let _ = result;
             });
 
             while let Ok(event) = event_rx.recv() {
@@ -287,6 +317,16 @@ impl NativeTuiApp {
         let mut should_refresh_lines = false;
 
         match event {
+            ConversationStreamEvent::ThreadPrepared {
+                thread_id,
+                title,
+                cwd,
+            } => {
+                conversation.thread_id = thread_id;
+                conversation.title = title;
+                conversation.cwd = cwd;
+                conversation.status_text = "thread started".to_string();
+            }
             ConversationStreamEvent::TurnStarted { turn_id } => {
                 conversation.active_turn_id = Some(turn_id);
                 conversation.is_turn_running = true;
@@ -390,6 +430,15 @@ impl NativeTuiApp {
         self.start_session_load();
     }
 
+    fn open_new_conversation_shell(&mut self) {
+        self.active_session = None;
+        self.conversation_return_screen = self.current_screen;
+        self.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
+            self.current_workspace_directory(),
+        ));
+        self.current_screen = Screen::ConversationShell;
+    }
+
     fn current_session(&self) -> Option<&SessionSummary> {
         match &self.session_state {
             SessionState::Ready(recent_sessions) => {
@@ -403,8 +452,19 @@ impl NativeTuiApp {
         if let Some(session) = self.current_session().cloned() {
             let thread_id = session.id.clone();
             self.active_session = Some(session);
+            self.conversation_return_screen = Screen::SessionList;
             self.current_screen = Screen::ConversationShell;
             self.start_conversation_load(thread_id);
+        }
+    }
+
+    fn leave_conversation_shell(&mut self) {
+        let return_screen = self.conversation_return_screen;
+        self.current_screen = return_screen;
+        self.conversation_state = ConversationState::Idle;
+
+        if return_screen == Screen::Home {
+            self.active_session = None;
         }
     }
 
@@ -439,6 +499,19 @@ impl NativeTuiApp {
     fn pop_input_character(&mut self) {
         if let ConversationState::Ready(conversation) = &mut self.conversation_state {
             conversation.input_buffer.pop();
+        }
+    }
+
+    fn current_workspace_directory(&self) -> String {
+        match &self.startup_state {
+            StartupState::Ready(diagnostics) => diagnostics
+                .workspace_detail
+                .strip_prefix("git repo: ")
+                .map(str::to_string)
+                .unwrap_or_else(|| diagnostics.cwd.clone()),
+            _ => std::env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
         }
     }
 }
@@ -482,6 +555,9 @@ fn run_event_loop(
         match app.current_screen {
             Screen::Home => match key.code {
                 KeyCode::Char('q') => should_quit = true,
+                KeyCode::Char('n') if key.modifiers.is_empty() && app.can_open_session_list() => {
+                    app.open_new_conversation_shell()
+                }
                 KeyCode::Char('r') => app.start_startup_check(),
                 KeyCode::Enter if app.can_open_session_list() => app.open_session_list(),
                 _ => {}
@@ -489,6 +565,7 @@ fn run_event_loop(
             Screen::SessionList => match key.code {
                 KeyCode::Char('q') => should_quit = true,
                 KeyCode::Char('b') => app.current_screen = Screen::Home,
+                KeyCode::Char('n') if key.modifiers.is_empty() => app.open_new_conversation_shell(),
                 KeyCode::Char('r') => app.start_session_load(),
                 KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
@@ -498,7 +575,7 @@ fn run_event_loop(
             Screen::ConversationShell => match key.code {
                 KeyCode::Char('q') if key.modifiers.is_empty() => should_quit = true,
                 KeyCode::Char('b') if key.modifiers.is_empty() => {
-                    app.current_screen = Screen::SessionList;
+                    app.leave_conversation_shell();
                 }
                 KeyCode::Backspace => app.pop_input_character(),
                 KeyCode::Enter if app.conversation_can_accept_input() => {
@@ -613,7 +690,7 @@ fn draw_home(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     frame.render_widget(warning_widget, layout[3]);
 
     let help = Paragraph::new(vec![
-        Line::from("Enter: open recent sessions"),
+        Line::from("Enter: open recent sessions    n: new conversation"),
         Line::from("r: rerun checks    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
@@ -670,7 +747,7 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 
     let help = Paragraph::new(vec![
         Line::from("Up/Down or j/k: move    Enter: open live shell"),
-        Line::from("r: reload    b: back    q: quit"),
+        Line::from("n: new conversation    r: reload    b: back    q: quit"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[3]);
@@ -814,7 +891,14 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" / {}", conversation.title)),
             ]),
-            Line::from(format!("thread: {}", conversation.thread_id)),
+            Line::from(format!(
+                "thread: {}",
+                if conversation.has_active_thread() {
+                    conversation.thread_id.as_str()
+                } else {
+                    "not started yet"
+                }
+            )),
         ],
         ConversationState::Failed(message) => vec![
             Line::from(vec![
@@ -981,7 +1065,14 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         ConversationState::Ready(conversation) => {
             let mut lines = vec![
                 Line::from(format!("title: {}", conversation.title)),
-                Line::from(format!("thread id: {}", conversation.thread_id)),
+                Line::from(format!(
+                    "thread id: {}",
+                    if conversation.has_active_thread() {
+                        conversation.thread_id.as_str()
+                    } else {
+                        "(new thread will be created on first send)"
+                    }
+                )),
                 Line::from(format!("cwd: {}", conversation.cwd)),
                 Line::from(format!("messages: {}", conversation.messages.len())),
                 Line::from(format!(
@@ -1022,6 +1113,11 @@ fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                 vec![
                     Line::from("Codex is still working on the current turn."),
                     Line::from("Wait for completion before sending another prompt."),
+                ]
+            } else if !conversation.has_active_thread() && conversation.input_buffer.is_empty() {
+                vec![
+                    Line::from("Type the first prompt for a new thread."),
+                    Line::from("Press Enter to create the thread and send it."),
                 ]
             } else if conversation.input_buffer.is_empty() {
                 vec![

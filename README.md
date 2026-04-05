@@ -103,7 +103,9 @@ codex-exec-loop \
 - startup dashboard
 - Codex binary / workspace / `initialize` / `account/read` 체크
 - `thread/list` 로 최근 세션 목록 조회
+- 홈 또는 세션 목록에서 새 conversation draft 열기
 - 선택한 세션의 히스토리 로드
+- 새 thread를 `thread/start` 로 만들고 첫 prompt 전송
 - 선택한 세션에 실제 prompt 전송
 - `turn/start` 스트리밍 응답 표시
 
@@ -118,9 +120,11 @@ cargo run
 조작:
 
 - `Enter`: 홈에서 최근 세션 목록으로 이동
+- `n`: 홈 또는 세션 목록에서 새 conversation draft 열기
 - `j` `k` 또는 `Up` `Down`: 세션 선택
 - `Enter`: 선택 세션 live shell 화면
 - shell에서 입력 후 `Enter`: prompt 전송
+  - draft 상태의 첫 `Enter` 는 새 thread를 만들고 첫 턴을 시작
 - `b`: 뒤로
 - `r`: 현재 화면 데이터 다시 읽기
 - `q`: 종료

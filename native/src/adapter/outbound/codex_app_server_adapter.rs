@@ -91,20 +91,7 @@ impl CodexAppServerAdapter {
         thread_record: ThreadRecord,
         warnings: Vec<String>,
     ) -> ConversationSnapshot {
-        let title = thread_record
-            .name
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                thread_record
-                    .preview
-                    .lines()
-                    .next()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("Untitled thread")
-                    .to_string()
-            });
+        let title = Self::thread_title(&thread_record);
 
         let messages = thread_record
             .turns
@@ -120,6 +107,23 @@ impl CodexAppServerAdapter {
             messages,
             warnings,
         }
+    }
+
+    fn thread_title(thread_record: &ThreadRecord) -> String {
+        thread_record
+            .name
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                thread_record
+                    .preview
+                    .lines()
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("Untitled thread")
+                    .to_string()
+            })
     }
 
     fn to_conversation_message(item: Value) -> Option<ConversationMessage> {
@@ -272,6 +276,43 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         ))
     }
 
+    fn run_new_thread_stream(
+        &self,
+        cwd: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        let result = (|| {
+            let mut connection = self.open_connection()?;
+            connection.initialize()?;
+            let thread_response = connection.start_thread(ThreadStartParams {
+                cwd: Some(cwd.to_string()),
+            })?;
+            let thread_id = thread_response.thread.id.clone();
+            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
+                thread_id: thread_id.clone(),
+                title: Self::thread_title(&thread_response.thread),
+                cwd: thread_response.thread.cwd.clone(),
+            });
+
+            let turn_response = connection.start_turn(&thread_id, prompt)?;
+
+            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
+                turn_id: turn_response.turn.id.clone(),
+            });
+
+            connection.wait_for_turn_stream(&thread_id, &turn_response.turn.id, &event_sender)
+        })();
+
+        if let Err(error) = &result {
+            let _ = event_sender.send(ConversationStreamEvent::Failed {
+                message: error.to_string(),
+            });
+        }
+
+        result
+    }
+
     fn run_turn_stream(
         &self,
         thread_id: &str,
@@ -355,6 +396,11 @@ impl AppServerConnection {
                 "includeTurns": include_turns,
             }),
         )
+    }
+
+    fn start_thread(&mut self, params: ThreadStartParams) -> Result<ThreadStartResponse> {
+        self.ensure_initialized()?;
+        self.send_request("thread/start", serde_json::to_value(params)?)
     }
 
     fn resume_thread(&mut self, thread_id: &str) -> Result<ThreadResumeResponse> {
@@ -780,6 +826,13 @@ struct ThreadListParams {
     source_kinds: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadStartParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadListResponse {
@@ -789,6 +842,11 @@ struct ThreadListResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ThreadReadResponse {
+    thread: ThreadRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ThreadStartResponse {
     thread: ThreadRecord,
 }
 

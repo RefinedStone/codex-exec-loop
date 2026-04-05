@@ -55,6 +55,11 @@ impl ConversationMessageKind {
 
 #[derive(Debug, Clone)]
 pub enum ConversationStreamEvent {
+    ThreadPrepared {
+        thread_id: String,
+        title: String,
+        cwd: String,
+    },
     TurnStarted {
         turn_id: String,
     },

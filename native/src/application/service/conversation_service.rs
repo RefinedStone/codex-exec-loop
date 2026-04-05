@@ -23,6 +23,16 @@ impl ConversationService {
             .load_conversation_snapshot(thread_id)
     }
 
+    pub fn run_new_thread_stream(
+        &self,
+        cwd: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        self.codex_app_server_port
+            .run_new_thread_stream(cwd, prompt, event_sender)
+    }
+
     pub fn run_turn_stream(
         &self,
         thread_id: &str,
