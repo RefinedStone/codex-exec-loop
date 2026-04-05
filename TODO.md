@@ -26,14 +26,15 @@
   - plan-queue
   - bugfix
   - docs
+- native auto-follow-up stop rules
+  - stop keyword: `AUTO_STOP`
+  - no-file-change stop toggle
+  - activity panel now shows stop configuration and last turn file changes
 
 ## Next
 
 - support external prompt/template files instead of builtin template only
-- add stop rules for native auto-follow-up
-  - keyword stop
-  - no-file-change stop
-  - max-auto-turns editing from UI
+- add max-auto-turns editing from UI
 - show clearer activity for auto follow-up queue / submit / stop decisions
 - add session search, paging, and recent project filters
 - add approval and tool activity panels

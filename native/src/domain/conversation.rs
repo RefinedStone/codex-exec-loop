@@ -53,6 +53,19 @@ impl ConversationMessageKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationToolActivityKind {
+    FileChange,
+    CommandExecution,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversationToolActivity {
+    pub kind: ConversationToolActivityKind,
+    pub text: String,
+    pub file_change_count: usize,
+}
+
 #[derive(Debug, Clone)]
 pub enum ConversationStreamEvent {
     ThreadPrepared {
@@ -76,8 +89,8 @@ pub enum ConversationStreamEvent {
         phase: Option<String>,
         text: String,
     },
-    ToolMessage {
-        text: String,
+    ToolActivity {
+        activity: ConversationToolActivity,
     },
     TurnCompleted {
         turn_id: String,

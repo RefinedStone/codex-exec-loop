@@ -16,6 +16,7 @@ Current milestones:
 - stream agent message deltas into the shell view
 - continue work automatically with a builtin next-task follow-up prompt
 - switch builtin follow-up strategies from the TUI
+- stop auto follow-up when the agent emits `AUTO_STOP` or when the no-file-change rule is enabled
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
 

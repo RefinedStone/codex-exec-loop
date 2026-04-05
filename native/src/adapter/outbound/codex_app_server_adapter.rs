@@ -14,6 +14,7 @@ use crate::application::port::outbound::codex_app_server_port::{
 };
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
+    ConversationToolActivity, ConversationToolActivityKind,
 };
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -179,6 +180,13 @@ impl CodexAppServerAdapter {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn count_file_changes(item: &Value) -> usize {
+        item.get("changes")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default()
     }
 
     fn format_file_change_summary(item: &Value) -> String {
@@ -595,13 +603,21 @@ impl AppServerConnection {
                 });
             }
             Some("fileChange") => {
-                let _ = event_sender.send(ConversationStreamEvent::ToolMessage {
-                    text: CodexAppServerAdapter::format_file_change_summary(item),
+                let _ = event_sender.send(ConversationStreamEvent::ToolActivity {
+                    activity: ConversationToolActivity {
+                        kind: ConversationToolActivityKind::FileChange,
+                        text: CodexAppServerAdapter::format_file_change_summary(item),
+                        file_change_count: CodexAppServerAdapter::count_file_changes(item),
+                    },
                 });
             }
             Some("commandExecution") => {
-                let _ = event_sender.send(ConversationStreamEvent::ToolMessage {
-                    text: CodexAppServerAdapter::format_command_execution_summary(item),
+                let _ = event_sender.send(ConversationStreamEvent::ToolActivity {
+                    activity: ConversationToolActivity {
+                        kind: ConversationToolActivityKind::CommandExecution,
+                        text: CodexAppServerAdapter::format_command_execution_summary(item),
+                        file_change_count: 0,
+                    },
                 });
             }
             _ => {}

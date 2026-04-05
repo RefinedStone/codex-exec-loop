@@ -90,9 +90,13 @@ cargo run
 - streamed response rendering
 - builtin auto-follow-up toggle
 - builtin follow-up strategy cycle
-  - `a`: auto-follow-up on/off
+- builtin auto-follow-up stop rules
+  - `Ctrl+a`: auto-follow-up on/off
   - `Ctrl+f`: next strategy
+  - `Ctrl+k`: toggle stop keyword
+  - `Ctrl+n`: toggle no-file-change stop
   - strategies: `next-task`, `plan-queue`, `bugfix`, `docs`
+  - builtin stop keyword: `AUTO_STOP`
 
 legacy Python CLI 예시는 아래에 남겨두지만, 새 기능 기준 설명은 native 를 우선합니다.
 

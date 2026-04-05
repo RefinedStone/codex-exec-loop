@@ -24,6 +24,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
+    ConversationToolActivityKind,
 };
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -32,10 +33,12 @@ use crate::domain::startup_diagnostics::StartupDiagnostics;
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
+const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const AUTO_FOLLOW_TEMPLATE_NEXT_TASK: &str = r#"대리인입니다.
 자동 후속 {auto_turn}/{max_auto_turns} 입니다.
 
 방금 결과를 기준으로 다음 작업 1개만 이어서 진행하세요.
+더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
 
 직전 답변:
 {last_message}"#;
@@ -44,6 +47,7 @@ const AUTO_FOLLOW_TEMPLATE_PLAN_QUEUE: &str = r#"대리인입니다.
 
 방금 결과를 바탕으로 개선점과 다음 작업 후보를 `plan_priority_queue.md` 에 정리하고,
 가장 우선순위가 높은 항목 1개를 바로 진행하세요.
+더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
 
 직전 답변:
 {last_message}"#;
@@ -52,6 +56,7 @@ const AUTO_FOLLOW_TEMPLATE_BUGFIX: &str = r#"대리인입니다.
 
 직전 결과 기준으로 아직 남아 있는 버그나 리스크 1개만 골라 수정하세요.
 수정이 끝나면 무엇을 고쳤는지 짧게 요약하세요.
+더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
 
 직전 답변:
 {last_message}"#;
@@ -59,6 +64,7 @@ const AUTO_FOLLOW_TEMPLATE_DOCS: &str = r#"대리인입니다.
 자동 후속 {auto_turn}/{max_auto_turns} 입니다.
 
 방금 작업을 기준으로 README 또는 사용자 문서에 빠진 내용 1개만 보강하세요.
+더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
 
 직전 답변:
 {last_message}"#;
@@ -154,11 +160,18 @@ enum PromptOrigin {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AutoFollowupDecision {
+    QueuePrompt(String),
+    Skip(AutoFollowupSkipReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoFollowupSkipReason {
     Disabled,
     ManualInputBuffered,
-    QueuePrompt(String),
     LimitReached,
     NoAgentReply,
+    StopKeywordMatched,
+    NoFileChanges,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +217,25 @@ struct AutoFollowState {
     completed_auto_turns: usize,
     max_auto_turns: usize,
     template_kind: AutoFollowTemplateKind,
+    stop_rules: AutoFollowStopRules,
+}
+
+#[derive(Debug, Clone)]
+struct AutoFollowStopRules {
+    stop_keyword: StopKeywordRule,
+    stop_on_no_file_changes: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StopKeywordRule {
+    enabled: bool,
+    value: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TurnActivityState {
+    current_turn_file_change_count: usize,
+    last_completed_turn_file_change_count: usize,
 }
 
 impl Default for AutoFollowState {
@@ -213,6 +245,25 @@ impl Default for AutoFollowState {
             completed_auto_turns: 0,
             max_auto_turns: DEFAULT_AUTO_FOLLOW_MAX_TURNS,
             template_kind: AutoFollowTemplateKind::NextTask,
+            stop_rules: AutoFollowStopRules::default(),
+        }
+    }
+}
+
+impl Default for AutoFollowStopRules {
+    fn default() -> Self {
+        Self {
+            stop_keyword: StopKeywordRule::default(),
+            stop_on_no_file_changes: false,
+        }
+    }
+}
+
+impl Default for StopKeywordRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            value: DEFAULT_AUTO_FOLLOW_STOP_KEYWORD.to_string(),
         }
     }
 }
@@ -228,6 +279,14 @@ impl AutoFollowState {
 
     fn template_label(&self) -> &'static str {
         self.template_kind.label()
+    }
+
+    fn stop_keyword_label(&self) -> String {
+        self.stop_rules.stop_keyword.label()
+    }
+
+    fn no_file_change_stop_label(&self) -> &'static str {
+        self.stop_rules.no_file_change_label()
     }
 
     fn next_auto_turn_index(&self) -> usize {
@@ -250,6 +309,14 @@ impl AutoFollowState {
         self.enabled = !self.enabled;
     }
 
+    fn toggle_stop_keyword(&mut self) {
+        self.stop_rules.stop_keyword.toggle();
+    }
+
+    fn toggle_no_file_change_stop(&mut self) {
+        self.stop_rules.stop_on_no_file_changes = !self.stop_rules.stop_on_no_file_changes;
+    }
+
     fn cycle_template_kind(&mut self) {
         self.template_kind = self.template_kind.next();
     }
@@ -260,7 +327,67 @@ impl AutoFollowState {
             .replace("{auto_turn}", &self.next_auto_turn_index().to_string())
             .replace("{max_auto_turns}", &self.max_auto_turns.to_string())
             .replace("{session_id}", thread_id)
+            .replace("{stop_keyword}", self.stop_rules.stop_keyword.value())
             .replace("{last_message}", last_message)
+    }
+}
+
+impl AutoFollowStopRules {
+    fn should_stop_on_no_file_changes(&self, file_change_count: usize) -> bool {
+        self.stop_on_no_file_changes && file_change_count == 0
+    }
+
+    fn no_file_change_label(&self) -> &'static str {
+        if self.stop_on_no_file_changes {
+            "on"
+        } else {
+            "off"
+        }
+    }
+}
+
+impl StopKeywordRule {
+    fn label(&self) -> String {
+        if self.enabled {
+            format!("on ({})", self.value)
+        } else {
+            format!("off ({})", self.value)
+        }
+    }
+
+    fn matches(&self, text: &str) -> bool {
+        self.enabled
+            && text.split_whitespace().any(|token| {
+                token.trim_matches(|character: char| {
+                    !character.is_ascii_alphanumeric() && character != '_'
+                }) == self.value
+            })
+    }
+
+    fn toggle(&mut self) {
+        self.enabled = !self.enabled;
+    }
+
+    fn value(&self) -> &str {
+        self.value.as_str()
+    }
+}
+
+impl TurnActivityState {
+    fn start_new_turn(&mut self) {
+        self.current_turn_file_change_count = 0;
+    }
+
+    fn register_file_change(&mut self, file_change_count: usize) {
+        self.current_turn_file_change_count += file_change_count;
+    }
+
+    fn complete_turn(&mut self) {
+        self.last_completed_turn_file_change_count = self.current_turn_file_change_count;
+    }
+
+    fn last_completed_file_change_count(&self) -> usize {
+        self.last_completed_turn_file_change_count
     }
 }
 
@@ -283,6 +410,7 @@ struct ConversationViewModel {
     active_turn_id: Option<String>,
     input_state: ConversationInputState,
     auto_follow_state: AutoFollowState,
+    turn_activity: TurnActivityState,
     status_text: String,
 }
 
@@ -299,6 +427,7 @@ impl ConversationViewModel {
             active_turn_id: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::default(),
+            turn_activity: TurnActivityState::default(),
             status_text: "new thread draft".to_string(),
         };
         view_model.refresh_conversation_lines();
@@ -323,6 +452,7 @@ impl ConversationViewModel {
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::default(),
+            turn_activity: TurnActivityState::default(),
             status_text,
         };
         view_model.refresh_conversation_lines();
@@ -360,6 +490,7 @@ impl ConversationViewModel {
     fn mark_turn_started(&mut self, turn_id: String) {
         self.active_turn_id = Some(turn_id);
         self.input_state = ConversationInputState::StreamingTurn;
+        self.turn_activity.start_new_turn();
     }
 
     fn mark_turn_finished(&mut self) {
@@ -384,14 +515,39 @@ impl ConversationViewModel {
             self.auto_follow_state.can_queue_next(),
             self.latest_agent_message_text(),
         ) {
-            (false, _, _, _) => AutoFollowupDecision::Disabled,
-            (true, false, _, _) => AutoFollowupDecision::ManualInputBuffered,
-            (true, true, false, _) => AutoFollowupDecision::LimitReached,
+            (false, _, _, _) => AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled),
+            (true, false, _, _) => {
+                AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
+            }
+            (true, true, false, _) => {
+                AutoFollowupDecision::Skip(AutoFollowupSkipReason::LimitReached)
+            }
+            (true, true, true, None) => {
+                AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoAgentReply)
+            }
+            (true, true, true, Some(last_message))
+                if self
+                    .auto_follow_state
+                    .stop_rules
+                    .stop_keyword
+                    .matches(last_message.trim()) =>
+            {
+                AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
+            }
+            (true, true, true, Some(_))
+                if self
+                    .auto_follow_state
+                    .stop_rules
+                    .should_stop_on_no_file_changes(
+                        self.turn_activity.last_completed_file_change_count(),
+                    ) =>
+            {
+                AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
+            }
             (true, true, true, Some(last_message)) => AutoFollowupDecision::QueuePrompt(
                 self.auto_follow_state
                     .render_prompt(&self.thread_id, last_message.trim()),
             ),
-            (true, true, true, None) => AutoFollowupDecision::NoAgentReply,
         }
     }
 }
@@ -652,38 +808,56 @@ impl NativeTuiApp {
                 }
                 should_refresh_lines = true;
             }
-            ConversationStreamEvent::ToolMessage { text } => {
+            ConversationStreamEvent::ToolActivity { activity } => {
+                if activity.kind == ConversationToolActivityKind::FileChange {
+                    conversation
+                        .turn_activity
+                        .register_file_change(activity.file_change_count);
+                }
                 conversation.messages.push(ConversationMessage::new(
                     ConversationMessageKind::Tool,
-                    text,
+                    activity.text,
                     None,
                     None,
                 ));
                 should_refresh_lines = true;
             }
             ConversationStreamEvent::TurnCompleted { turn_id } => {
+                conversation.turn_activity.complete_turn();
                 conversation.mark_turn_finished();
                 match conversation.decide_auto_followup() {
-                    AutoFollowupDecision::Disabled => {
-                        conversation.status_text =
-                            format!("turn completed: {turn_id} / auto follow-up off");
-                    }
-                    AutoFollowupDecision::ManualInputBuffered => {
-                        conversation.status_text =
-                            "manual prompt buffered; auto follow-up skipped".to_string();
-                    }
                     AutoFollowupDecision::QueuePrompt(prompt) => {
                         queued_auto_prompt = Some(prompt);
                     }
-                    AutoFollowupDecision::LimitReached => {
-                        conversation.status_text = format!(
-                            "turn completed: {turn_id} / auto follow-up limit reached ({})",
-                            conversation.auto_follow_state.progress_label()
-                        );
-                    }
-                    AutoFollowupDecision::NoAgentReply => {
-                        conversation.status_text =
-                            format!("turn completed: {turn_id} / no agent reply to continue from");
+                    AutoFollowupDecision::Skip(skip_reason) => {
+                        conversation.status_text = match skip_reason {
+                            AutoFollowupSkipReason::Disabled => {
+                                format!("turn completed: {turn_id} / auto follow-up off")
+                            }
+                            AutoFollowupSkipReason::ManualInputBuffered => {
+                                "manual prompt buffered; auto follow-up skipped".to_string()
+                            }
+                            AutoFollowupSkipReason::LimitReached => format!(
+                                "turn completed: {turn_id} / auto follow-up limit reached ({})",
+                                conversation.auto_follow_state.progress_label()
+                            ),
+                            AutoFollowupSkipReason::NoAgentReply => {
+                                format!(
+                                    "turn completed: {turn_id} / no agent reply to continue from"
+                                )
+                            }
+                            AutoFollowupSkipReason::StopKeywordMatched => format!(
+                                "turn completed: {turn_id} / stop keyword matched ({})",
+                                conversation
+                                    .auto_follow_state
+                                    .stop_rules
+                                    .stop_keyword
+                                    .value()
+                            ),
+                            AutoFollowupSkipReason::NoFileChanges => {
+                                format!("turn completed: {turn_id} / no file changes in last turn")
+                            }
+                        };
                     }
                 }
             }
@@ -803,6 +977,26 @@ impl NativeTuiApp {
             conversation.status_text = format!(
                 "auto follow-up {}",
                 conversation.auto_follow_state.status_label()
+            );
+        }
+    }
+
+    fn toggle_stop_keyword(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.auto_follow_state.toggle_stop_keyword();
+            conversation.status_text = format!(
+                "auto stop keyword {}",
+                conversation.auto_follow_state.stop_keyword_label()
+            );
+        }
+    }
+
+    fn toggle_no_file_change_stop(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.auto_follow_state.toggle_no_file_change_stop();
+            conversation.status_text = format!(
+                "auto stop without file changes {}",
+                conversation.auto_follow_state.no_file_change_stop_label()
             );
         }
     }
@@ -937,14 +1131,19 @@ fn run_event_loop(
                 _ => {}
             },
             Screen::ConversationShell => match key.code {
-                KeyCode::Char('q') if key.modifiers.is_empty() => should_quit = true,
-                KeyCode::Char('a') if key.modifiers.is_empty() => app.toggle_auto_followup(),
+                KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.toggle_auto_followup()
+                }
                 KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
                     app.cycle_auto_followup_template()
                 }
-                KeyCode::Char('b') if key.modifiers.is_empty() => {
-                    app.leave_conversation_shell();
+                KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.toggle_stop_keyword()
                 }
+                KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.toggle_no_file_change_stop()
+                }
+                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => should_quit = true,
                 KeyCode::Backspace => app.pop_input_character(),
                 KeyCode::Enter if app.conversation_can_accept_input() => {
                     app.start_turn_submission()
@@ -1325,7 +1524,10 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let help = Paragraph::new(vec![
         Line::from("Type your prompt and press Enter to send"),
         Line::from(
-            "a: auto on/off    Ctrl+f: next template    Backspace: delete    b/Ctrl+C: back    q: quit",
+            "Ctrl+a: auto on/off    Ctrl+f: next template    Ctrl+k: stop keyword    Ctrl+n: no-file stop",
+        ),
+        Line::from(
+            "Backspace: delete    Ctrl+C: back    Ctrl+q: quit",
         ),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
@@ -1555,6 +1757,20 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                     "auto template: {}",
                     conversation.auto_follow_state.template_label()
                 )),
+                Line::from(format!(
+                    "auto stop keyword: {}",
+                    conversation.auto_follow_state.stop_keyword_label()
+                )),
+                Line::from(format!(
+                    "auto stop no-files: {}",
+                    conversation.auto_follow_state.no_file_change_stop_label()
+                )),
+                Line::from(format!(
+                    "last turn file changes: {}",
+                    conversation
+                        .turn_activity
+                        .last_completed_file_change_count()
+                )),
                 Line::from(format!("status: {}", conversation.status_text)),
             ];
 
@@ -1692,10 +1908,10 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoFollowState, AutoFollowTemplateKind, AutoFollowupDecision, ConversationInputState,
-        ConversationMessage, ConversationMessageKind, ConversationViewModel,
-        build_conversation_scroll_offset, build_ready_input_lines,
-        count_rendered_conversation_lines, format_conversation_lines,
+        AutoFollowState, AutoFollowTemplateKind, AutoFollowupDecision, AutoFollowupSkipReason,
+        ConversationInputState, ConversationMessage, ConversationMessageKind,
+        ConversationViewModel, TurnActivityState, build_conversation_scroll_offset,
+        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
 
     fn ready_conversation() -> ConversationViewModel {
@@ -1710,6 +1926,7 @@ mod tests {
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::default(),
+            turn_activity: TurnActivityState::default(),
             status_text: "thread loaded".to_string(),
         }
     }
@@ -1814,6 +2031,7 @@ mod tests {
         assert!(prompt.contains("대리인입니다."));
         assert!(prompt.contains("자동 후속 1/3 입니다."));
         assert!(prompt.contains("latest answer"));
+        assert!(prompt.contains("AUTO_STOP"));
     }
 
     #[test]
@@ -1829,7 +2047,7 @@ mod tests {
 
         assert_eq!(
             conversation.decide_auto_followup(),
-            AutoFollowupDecision::ManualInputBuffered
+            AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
         );
     }
 
@@ -1864,6 +2082,66 @@ mod tests {
         };
 
         assert!(prompt.contains("plan_priority_queue.md"));
+        assert!(prompt.contains("latest answer"));
+    }
+
+    #[test]
+    fn auto_followup_stops_when_stop_keyword_is_present() {
+        let mut conversation = ready_conversation();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "Work is complete.\nAUTO_STOP",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        assert_eq!(
+            conversation.decide_auto_followup(),
+            AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
+        );
+    }
+
+    #[test]
+    fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
+        let mut conversation = ready_conversation();
+        conversation
+            .auto_follow_state
+            .stop_rules
+            .stop_on_no_file_changes = true;
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        assert_eq!(
+            conversation.decide_auto_followup(),
+            AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
+        );
+    }
+
+    #[test]
+    fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
+        let mut conversation = ready_conversation();
+        conversation
+            .auto_follow_state
+            .stop_rules
+            .stop_on_no_file_changes = true;
+        conversation
+            .turn_activity
+            .last_completed_turn_file_change_count = 2;
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+            panic!("auto follow-up should continue when file changes exist");
+        };
+
         assert!(prompt.contains("latest answer"));
     }
 }
