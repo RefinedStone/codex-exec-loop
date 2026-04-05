@@ -129,6 +129,15 @@ enum PromptOrigin {
     AutoFollow,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AutoFollowupDecision {
+    Disabled,
+    ManualInputBuffered,
+    QueuePrompt(String),
+    LimitReached,
+    NoAgentReply,
+}
+
 #[derive(Debug, Clone)]
 struct AutoFollowState {
     enabled: bool,
@@ -293,30 +302,32 @@ impl ConversationViewModel {
         self.input_state = self.ready_input_state();
     }
 
-    fn latest_agent_message_text(&self) -> Option<String> {
+    fn latest_agent_message_text(&self) -> Option<&str> {
         self.messages
             .iter()
             .rev()
             .find(|message| {
                 message.kind == ConversationMessageKind::Agent && !message.text.trim().is_empty()
             })
-            .map(|message| message.text.clone())
+            .map(|message| message.text.as_str())
     }
 
-    fn build_auto_followup_prompt(&self) -> Option<String> {
-        if !self.auto_follow_state.can_queue_next() {
-            return None;
+    fn decide_auto_followup(&self) -> AutoFollowupDecision {
+        match (
+            self.auto_follow_state.enabled,
+            self.input_buffer.trim().is_empty(),
+            self.auto_follow_state.can_queue_next(),
+            self.latest_agent_message_text(),
+        ) {
+            (false, _, _, _) => AutoFollowupDecision::Disabled,
+            (true, false, _, _) => AutoFollowupDecision::ManualInputBuffered,
+            (true, true, false, _) => AutoFollowupDecision::LimitReached,
+            (true, true, true, Some(last_message)) => AutoFollowupDecision::QueuePrompt(
+                self.auto_follow_state
+                    .render_prompt(&self.thread_id, last_message.trim()),
+            ),
+            (true, true, true, None) => AutoFollowupDecision::NoAgentReply,
         }
-
-        if !self.input_buffer.trim().is_empty() {
-            return None;
-        }
-
-        let last_message = self.latest_agent_message_text()?;
-        Some(
-            self.auto_follow_state
-                .render_prompt(&self.thread_id, last_message.trim()),
-        )
     }
 }
 
@@ -504,7 +515,6 @@ impl NativeTuiApp {
 
     fn apply_conversation_event(&mut self, event: ConversationStreamEvent) {
         let mut queued_auto_prompt: Option<String> = None;
-        let mut queued_auto_turn_label = String::new();
 
         let ConversationState::Ready(conversation) = &mut self.conversation_state else {
             return;
@@ -588,33 +598,28 @@ impl NativeTuiApp {
             }
             ConversationStreamEvent::TurnCompleted { turn_id } => {
                 conversation.mark_turn_finished();
-                conversation.status_text = format!("turn completed: {turn_id}");
-
-                if !conversation.auto_follow_state.enabled {
-                    conversation.status_text =
-                        format!("turn completed: {turn_id} / auto follow-up off");
-                } else if !conversation.input_buffer.trim().is_empty() {
-                    conversation.status_text =
-                        "manual prompt buffered; auto follow-up skipped".to_string();
-                } else if let Some(prompt) = conversation.build_auto_followup_prompt() {
-                    queued_auto_turn_label = format!(
-                        "{}/{}",
-                        conversation.auto_follow_state.next_auto_turn_index(),
-                        conversation.auto_follow_state.max_auto_turns
-                    );
-                    conversation.status_text =
-                        format!("auto follow-up queued ({queued_auto_turn_label})");
-                    queued_auto_prompt = Some(prompt);
-                } else if conversation.auto_follow_state.completed_auto_turns
-                    >= conversation.auto_follow_state.max_auto_turns
-                {
-                    conversation.status_text = format!(
-                        "turn completed: {turn_id} / auto follow-up limit reached ({})",
-                        conversation.auto_follow_state.progress_label()
-                    );
-                } else {
-                    conversation.status_text =
-                        format!("turn completed: {turn_id} / no agent reply to continue from");
+                match conversation.decide_auto_followup() {
+                    AutoFollowupDecision::Disabled => {
+                        conversation.status_text =
+                            format!("turn completed: {turn_id} / auto follow-up off");
+                    }
+                    AutoFollowupDecision::ManualInputBuffered => {
+                        conversation.status_text =
+                            "manual prompt buffered; auto follow-up skipped".to_string();
+                    }
+                    AutoFollowupDecision::QueuePrompt(prompt) => {
+                        queued_auto_prompt = Some(prompt);
+                    }
+                    AutoFollowupDecision::LimitReached => {
+                        conversation.status_text = format!(
+                            "turn completed: {turn_id} / auto follow-up limit reached ({})",
+                            conversation.auto_follow_state.progress_label()
+                        );
+                    }
+                    AutoFollowupDecision::NoAgentReply => {
+                        conversation.status_text =
+                            format!("turn completed: {turn_id} / no agent reply to continue from");
+                    }
                 }
             }
             ConversationStreamEvent::Failed { message } => {
@@ -636,10 +641,6 @@ impl NativeTuiApp {
 
         if let Some(prompt) = queued_auto_prompt {
             self.submit_prompt(prompt, PromptOrigin::AutoFollow);
-            if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-                conversation.status_text =
-                    format!("auto follow-up started ({queued_auto_turn_label})");
-            }
         }
     }
 
@@ -1611,9 +1612,9 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoFollowState, ConversationInputState, ConversationMessage, ConversationMessageKind,
-        ConversationViewModel, build_conversation_scroll_offset, build_ready_input_lines,
-        count_rendered_conversation_lines, format_conversation_lines,
+        AutoFollowState, AutoFollowupDecision, ConversationInputState, ConversationMessage,
+        ConversationMessageKind, ConversationViewModel, build_conversation_scroll_offset,
+        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
 
     fn ready_conversation() -> ConversationViewModel {
@@ -1725,9 +1726,9 @@ mod tests {
             Some("agent-1".to_string()),
         ));
 
-        let prompt = conversation
-            .build_auto_followup_prompt()
-            .expect("auto follow-up prompt should render");
+        let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+            panic!("auto follow-up prompt should render");
+        };
 
         assert!(prompt.contains("대리인입니다."));
         assert!(prompt.contains("자동 후속 1/3 입니다."));
@@ -1745,6 +1746,9 @@ mod tests {
         ));
         conversation.input_buffer = "manual prompt".to_string();
 
-        assert!(conversation.build_auto_followup_prompt().is_none());
+        assert_eq!(
+            conversation.decide_auto_followup(),
+            AutoFollowupDecision::ManualInputBuffered
+        );
     }
 }
