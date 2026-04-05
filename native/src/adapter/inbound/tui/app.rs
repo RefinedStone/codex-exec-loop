@@ -30,6 +30,7 @@ use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 const SESSION_PAGE_SIZE: usize = 10;
+const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
@@ -89,6 +90,7 @@ struct ConversationViewModel {
     title: String,
     cwd: String,
     messages: Vec<ConversationMessage>,
+    cached_conversation_lines: Vec<Line<'static>>,
     warnings: Vec<String>,
     input_buffer: String,
     is_turn_running: bool,
@@ -104,17 +106,24 @@ impl ConversationViewModel {
             snapshot.warnings.join(" | ")
         };
 
-        Self {
+        let mut view_model = Self {
             thread_id: snapshot.thread_id,
             title: snapshot.title,
             cwd: snapshot.cwd,
             messages: snapshot.messages,
+            cached_conversation_lines: Vec::new(),
             warnings: snapshot.warnings,
             input_buffer: String::new(),
             is_turn_running: false,
             active_turn_id: None,
             status_text,
-        }
+        };
+        view_model.refresh_conversation_lines();
+        view_model
+    }
+
+    fn refresh_conversation_lines(&mut self) {
+        self.cached_conversation_lines = format_conversation_lines(&self.messages);
     }
 }
 
@@ -208,6 +217,7 @@ impl NativeTuiApp {
             None,
             None,
         ));
+        conversation.refresh_conversation_lines();
         conversation.input_buffer.clear();
         conversation.is_turn_running = true;
         conversation.status_text = "starting turn".to_string();
@@ -217,24 +227,23 @@ impl NativeTuiApp {
         thread::spawn(move || {
             let (event_tx, event_rx) = mpsc::channel();
 
-            let forward_outer_tx = outer_tx.clone();
-            let forwarder = thread::spawn(move || {
-                while let Ok(event) = event_rx.recv() {
-                    let should_stop = matches!(
-                        event,
-                        ConversationStreamEvent::TurnCompleted { .. }
-                            | ConversationStreamEvent::Failed { .. }
-                    );
-                    let _ = forward_outer_tx.send(BackgroundMessage::ConversationStream(event));
-                    if should_stop {
-                        break;
-                    }
-                }
+            let service_thread = thread::spawn(move || {
+                let _ = service.run_turn_stream(&thread_id, &prompt, event_tx);
             });
 
-            let _ = service.run_turn_stream(&thread_id, &prompt, event_tx);
+            while let Ok(event) = event_rx.recv() {
+                let should_stop = matches!(
+                    event,
+                    ConversationStreamEvent::TurnCompleted { .. }
+                        | ConversationStreamEvent::Failed { .. }
+                );
+                let _ = outer_tx.send(BackgroundMessage::ConversationStream(event));
+                if should_stop {
+                    break;
+                }
+            }
 
-            let _ = forwarder.join();
+            let _ = service_thread.join();
         });
     }
 
@@ -275,6 +284,7 @@ impl NativeTuiApp {
         let ConversationState::Ready(conversation) = &mut self.conversation_state else {
             return;
         };
+        let mut should_refresh_lines = false;
 
         match event {
             ConversationStreamEvent::TurnStarted { turn_id } => {
@@ -297,7 +307,7 @@ impl NativeTuiApp {
                     .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
                 {
                     message.text.push_str(&delta);
-                    if message.phase.is_none() {
+                    if phase.is_some() {
                         message.phase = phase;
                     }
                 } else {
@@ -308,6 +318,7 @@ impl NativeTuiApp {
                         Some(item_id),
                     ));
                 }
+                should_refresh_lines = true;
             }
             ConversationStreamEvent::AgentMessageCompleted {
                 item_id,
@@ -330,6 +341,7 @@ impl NativeTuiApp {
                         Some(item_id),
                     ));
                 }
+                should_refresh_lines = true;
             }
             ConversationStreamEvent::ToolMessage { text } => {
                 conversation.messages.push(ConversationMessage::new(
@@ -338,6 +350,7 @@ impl NativeTuiApp {
                     None,
                     None,
                 ));
+                should_refresh_lines = true;
             }
             ConversationStreamEvent::TurnCompleted { turn_id } => {
                 conversation.active_turn_id = None;
@@ -354,7 +367,12 @@ impl NativeTuiApp {
                     None,
                     None,
                 ));
+                should_refresh_lines = true;
             }
+        }
+
+        if should_refresh_lines {
+            conversation.refresh_conversation_lines();
         }
     }
 
@@ -921,32 +939,35 @@ fn build_session_list_item(session: &SessionSummary) -> ListItem<'static> {
 }
 
 fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let mut lines = match &app.conversation_state {
+    match &app.conversation_state {
         ConversationState::Idle => vec![Line::from("No conversation selected.")],
         ConversationState::Loading => vec![Line::from("Loading thread history...")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => {
-            let mut entries = Vec::new();
-            for message in &conversation.messages {
-                let label = message.kind.label(message.phase.as_deref());
-                entries.push(Line::from(Span::styled(
-                    format!("{label}:"),
-                    label_style(message.kind),
-                )));
-                for text_line in message.text.lines() {
-                    entries.push(Line::from(format!("  {text_line}")));
-                }
-                entries.push(Line::from(""));
-            }
-            if entries.is_empty() {
-                entries.push(Line::from("No messages in this thread yet."));
-            }
-            entries
-        }
-    };
+        ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
+    }
+}
 
-    if lines.len() > 160 {
-        lines = lines.split_off(lines.len() - 160);
+fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    for message in messages {
+        let label = message.kind.label(message.phase.as_deref());
+        lines.push(Line::from(Span::styled(
+            format!("{label}:"),
+            label_style(message.kind),
+        )));
+        for text_line in message.text.lines() {
+            lines.push(Line::from(format!("  {text_line}")));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from("No messages in this thread yet."));
+    }
+
+    if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
+        lines = lines.split_off(lines.len() - MAX_CONVERSATION_HISTORY_LINES);
     }
 
     lines

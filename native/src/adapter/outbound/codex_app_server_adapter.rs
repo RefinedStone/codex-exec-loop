@@ -475,7 +475,10 @@ impl AppServerConnection {
                         .to_string();
                     let _ = event_sender.send(ConversationStreamEvent::AgentMessageDelta {
                         item_id,
-                        phase: None,
+                        phase: params
+                            .get("phase")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         delta,
                     });
                 }
