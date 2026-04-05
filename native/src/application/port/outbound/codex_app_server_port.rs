@@ -1,10 +1,20 @@
+use std::sync::mpsc::Sender;
+
 use anyhow::Result;
 
+use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 use crate::domain::recent_sessions::RecentSessions;
 
 pub trait CodexAppServerPort: Send + Sync {
     fn load_startup_context(&self) -> Result<AppServerStartupContext>;
     fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions>;
+    fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
+    fn run_turn_stream(
+        &self,
+        thread_id: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]

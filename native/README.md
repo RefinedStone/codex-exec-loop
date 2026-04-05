@@ -10,7 +10,9 @@ milestones are intentionally small and incremental:
 - check account/auth state
 - render a startup dashboard
 - load recent sessions with `thread/list`
-- open a placeholder shell screen for the selected session
+- load selected thread history with `thread/read`
+- resume a selected thread and send a prompt with `turn/start`
+- stream agent message deltas into the shell view
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
 
