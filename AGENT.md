@@ -49,6 +49,8 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - commit the change set
   - push the working branch
   - open a pull request to the intended base branch unless blocked by missing permissions or user instruction
+  - after a PR is merged or closed, do not continue on the same feature branch
+  - start the next task from the latest target base branch on a new feature branch and open a new PR
 - Verify with `cargo fmt`, `cargo build`, and `cargo test` for native changes.
 - Do not introduce unnecessary traits. Add a port trait when it improves a boundary.
 - Review handling:
