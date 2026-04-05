@@ -60,4 +60,7 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 
 - Render streamed notifications, activity, and approval states in the shell.
 - Add session search, paging, and recent filter options.
+- Add GitHub PR review/comment change detection.
+  - Start with polling.
+  - Webhook notification can come later.
 - Add Windows-focused validation and packaging.

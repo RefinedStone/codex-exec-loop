@@ -109,6 +109,10 @@ codex-exec-loop \
 - 선택한 세션에 실제 prompt 전송
 - `turn/start` 스트리밍 응답 표시
 
+계획 중인 항목:
+
+- GitHub PR review / comment 변경을 polling 또는 webhook 으로 감지해서 TUI 안에 알림으로 표시
+
 실행:
 
 ```bash
