@@ -3,6 +3,9 @@
 ## What The Latest Branch Already Does
 The `prerelease` branch is no longer just a dashboard prototype. It now supports:
 
+- shell-first startup into a new conversation draft
+- startup diagnostics available as a shell overlay
+- recent session browsing available as a shell overlay
 - startup checks and account diagnostics
 - recent session browsing from `thread/list`
 - thread history loading from `thread/read`
@@ -16,12 +19,14 @@ The `prerelease` branch is no longer just a dashboard prototype. It now supports
 ## Why The UX Still Feels Different From Codex CLI
 Even with live shell behavior, the app still feels more page-based than Codex CLI because:
 
-- startup, session list, and shell are separate screens
-- the shell is entered through navigation, not as the default home
+- startup diagnostics and recent-session browsing still open as modal overlays
+- prompt sending is still gated on startup diagnostics instead of sharing one continuous runtime state
 - each major action still opens a fresh app-server connection
 - there is no long-lived runtime that keeps one shell session attached to one transport process
 
 ## Current Strengths
+- the shell is now the default landing surface instead of a later navigation target
+- startup status and recent sessions are reachable without leaving the shell
 - the shell already renders real transcript updates
 - auto follow-up is visible and controllable from the UI
 - the codebase still follows a clear hexagonal split
@@ -29,4 +34,3 @@ Even with live shell behavior, the app still feels more page-based than Codex CL
 
 ## Immediate Documentation Goal
 All docs should assume the current branch already has streaming shell behavior and auto follow-up. Future planning should build on that baseline instead of describing the older placeholder shell.
-

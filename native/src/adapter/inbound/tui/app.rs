@@ -71,6 +71,13 @@ enum Screen {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellOverlay {
+    Hidden,
+    Startup,
+    Sessions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitConfirmationState {
     Hidden,
     Visible,
@@ -108,6 +115,13 @@ enum ConversationInputState {
     StreamingTurn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellActionAvailability {
+    Ready,
+    Pending,
+    Blocked,
+}
+
 impl ConversationInputState {
     fn label(self) -> &'static str {
         match self {
@@ -129,6 +143,20 @@ impl ConversationInputState {
 
     fn can_submit_now(self) -> bool {
         matches!(self, Self::DraftReady | Self::ReadyToContinue)
+    }
+}
+
+impl ShellActionAvailability {
+    fn allows_actions(self) -> bool {
+        self == Self::Ready
+    }
+
+    fn status_text(self) -> &'static str {
+        match self {
+            Self::Ready => "startup ready",
+            Self::Pending => "startup checks still running",
+            Self::Blocked => "startup diagnostics need attention",
+        }
     }
 }
 
@@ -463,6 +491,13 @@ impl ConversationViewModel {
         !self.thread_id.trim().is_empty()
     }
 
+    fn is_blank_draft(&self) -> bool {
+        !self.has_active_thread()
+            && self.messages.is_empty()
+            && self.input_buffer.trim().is_empty()
+            && self.active_turn_id.is_none()
+    }
+
     fn ready_input_state(&self) -> ConversationInputState {
         if self.has_active_thread() {
             ConversationInputState::ReadyToContinue
@@ -550,7 +585,7 @@ impl ConversationViewModel {
 
 struct NativeTuiApp {
     current_screen: Screen,
-    conversation_return_screen: Screen,
+    shell_overlay: ShellOverlay,
     exit_confirmation_state: ExitConfirmationState,
     startup_state: StartupState,
     session_state: SessionState,
@@ -573,13 +608,20 @@ impl NativeTuiApp {
         followup_template_service: FollowupTemplateService,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
+        let workspace_directory = std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        let initial_conversation = ConversationState::Ready(ConversationViewModel::new_draft(
+            workspace_directory.clone(),
+            followup_template_service.load_catalog(&workspace_directory),
+        ));
         Self {
-            current_screen: Screen::Home,
-            conversation_return_screen: Screen::Home,
+            current_screen: Screen::ConversationShell,
+            shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
-            conversation_state: ConversationState::Idle,
+            conversation_state: initial_conversation,
             selected_session_index: 0,
             active_session: None,
             startup_service,
@@ -626,6 +668,14 @@ impl NativeTuiApp {
     }
 
     fn start_turn_submission(&mut self) {
+        if !self.shell_action_availability().allows_actions() {
+            self.set_conversation_status(format!(
+                "{}; open diagnostics with Ctrl+d",
+                self.shell_action_availability().status_text()
+            ));
+            return;
+        }
+
         let prompt = match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation.input_buffer.trim().to_string(),
             _ => return,
@@ -704,9 +754,19 @@ impl NativeTuiApp {
         while let Ok(message) = self.rx.try_recv() {
             match message {
                 BackgroundMessage::StartupLoaded(result) => {
-                    self.startup_state = match result {
-                        Ok(diagnostics) => StartupState::Ready(diagnostics),
-                        Err(message) => StartupState::Failed(message),
+                    match result {
+                        Ok(diagnostics) => {
+                            let workspace_directory = diagnostics.workspace_path.clone();
+                            let can_continue = diagnostics.can_continue();
+                            self.startup_state = StartupState::Ready(diagnostics);
+                            self.sync_draft_shell_workspace(&workspace_directory);
+                            if can_continue && matches!(self.session_state, SessionState::Idle) {
+                                self.start_session_load();
+                            }
+                        }
+                        Err(message) => {
+                            self.startup_state = StartupState::Failed(message);
+                        }
                     };
                 }
                 BackgroundMessage::SessionsLoaded(result) => {
@@ -893,17 +953,75 @@ impl NativeTuiApp {
         )
     }
 
-    fn open_session_list(&mut self) {
+    fn shell_action_availability(&self) -> ShellActionAvailability {
+        match &self.startup_state {
+            StartupState::Ready(diagnostics) if diagnostics.can_continue() => {
+                ShellActionAvailability::Ready
+            }
+            StartupState::Idle | StartupState::Loading => ShellActionAvailability::Pending,
+            StartupState::Ready(_) | StartupState::Failed(_) => ShellActionAvailability::Blocked,
+        }
+    }
+
+    fn set_conversation_status(&mut self, status_text: String) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.status_text = status_text;
+        }
+    }
+
+    fn sync_draft_shell_workspace(&mut self, workspace_directory: &str) {
+        let should_refresh_draft = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation) if conversation.is_blank_draft()
+        );
+        if !should_refresh_draft {
+            return;
+        }
+
+        self.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
+            workspace_directory.to_string(),
+            self.load_followup_template_catalog(workspace_directory),
+        ));
+    }
+
+    fn show_startup_overlay(&mut self) {
         self.exit_confirmation_state = ExitConfirmationState::Hidden;
-        self.current_screen = Screen::SessionList;
-        self.active_session = None;
-        self.conversation_state = ConversationState::Idle;
-        self.start_session_load();
+        self.shell_overlay = ShellOverlay::Startup;
+    }
+
+    fn show_session_overlay(&mut self) {
+        self.exit_confirmation_state = ExitConfirmationState::Hidden;
+        self.shell_overlay = ShellOverlay::Sessions;
+        if self.can_open_session_list() && matches!(self.session_state, SessionState::Idle) {
+            self.start_session_load();
+        }
+    }
+
+    fn toggle_startup_overlay(&mut self) {
+        self.shell_overlay = if self.shell_overlay == ShellOverlay::Startup {
+            ShellOverlay::Hidden
+        } else {
+            ShellOverlay::Startup
+        };
+        self.exit_confirmation_state = ExitConfirmationState::Hidden;
+    }
+
+    fn toggle_session_overlay(&mut self) {
+        if self.shell_overlay == ShellOverlay::Sessions {
+            self.shell_overlay = ShellOverlay::Hidden;
+        } else {
+            self.show_session_overlay();
+        }
+    }
+
+    fn close_shell_overlay(&mut self) {
+        self.shell_overlay = ShellOverlay::Hidden;
     }
 
     fn open_new_conversation_shell(&mut self) {
         self.active_session = None;
-        self.conversation_return_screen = self.current_screen;
+        self.shell_overlay = ShellOverlay::Hidden;
+        self.exit_confirmation_state = ExitConfirmationState::Hidden;
         let workspace_directory = self.current_workspace_directory();
         self.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
             workspace_directory.clone(),
@@ -925,20 +1043,10 @@ impl NativeTuiApp {
         if let Some(session) = self.current_session().cloned() {
             let thread_id = session.id.clone();
             self.active_session = Some(session);
-            self.conversation_return_screen = Screen::SessionList;
             self.exit_confirmation_state = ExitConfirmationState::Hidden;
+            self.shell_overlay = ShellOverlay::Hidden;
             self.current_screen = Screen::ConversationShell;
             self.start_conversation_load(thread_id);
-        }
-    }
-
-    fn leave_conversation_shell(&mut self) {
-        let return_screen = self.conversation_return_screen;
-        self.current_screen = return_screen;
-        self.conversation_state = ConversationState::Idle;
-
-        if return_screen == Screen::Home {
-            self.active_session = None;
         }
     }
 
@@ -960,7 +1068,8 @@ impl NativeTuiApp {
     fn conversation_can_accept_input(&self) -> bool {
         matches!(
             &self.conversation_state,
-            ConversationState::Ready(conversation) if conversation.can_submit_prompt()
+            ConversationState::Ready(conversation)
+                if conversation.can_submit_prompt() && self.shell_action_availability().allows_actions()
         )
     }
 
@@ -1033,6 +1142,10 @@ impl NativeTuiApp {
             .load_catalog(workspace_directory)
     }
 
+    fn is_shell_overlay_visible(&self) -> bool {
+        self.shell_overlay != ShellOverlay::Hidden
+    }
+
     fn is_exit_confirmation_visible(&self) -> bool {
         self.exit_confirmation_state == ExitConfirmationState::Visible
     }
@@ -1056,19 +1169,81 @@ impl NativeTuiApp {
         }
     }
 
+    fn handle_shell_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        let overlay = self.shell_overlay;
+        if overlay == ShellOverlay::Hidden {
+            return false;
+        }
+
+        if key.code == KeyCode::Esc
+            || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'))
+        {
+            self.close_shell_overlay();
+            return true;
+        }
+
+        match overlay {
+            ShellOverlay::Hidden => false,
+            ShellOverlay::Startup => {
+                match key.code {
+                    KeyCode::Char('r') if key.modifiers.is_empty() => self.start_startup_check(),
+                    KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.show_session_overlay()
+                    }
+                    _ => {}
+                }
+                true
+            }
+            ShellOverlay::Sessions => {
+                match key.code {
+                    KeyCode::Char('r') if key.modifiers.is_empty() => {
+                        if self.can_open_session_list() {
+                            self.start_session_load();
+                        }
+                    }
+                    KeyCode::Char('n') if key.modifiers.is_empty() => {
+                        self.open_new_conversation_shell();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                        self.move_selection(-1)
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                        self.move_selection(1)
+                    }
+                    KeyCode::Enter if key.modifiers.is_empty() => self.open_conversation_shell(),
+                    KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.show_startup_overlay()
+                    }
+                    _ => {}
+                }
+                true
+            }
+        }
+    }
+
     fn handle_ctrl_c(&mut self) {
         self.exit_confirmation_state = ExitConfirmationState::Hidden;
 
-        match self.current_screen {
-            Screen::ConversationShell => {
-                self.leave_conversation_shell();
+        if self.is_shell_overlay_visible() {
+            self.close_shell_overlay();
+            return;
+        }
+
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) if conversation.has_running_turn() => {
+                self.set_conversation_status(
+                    "turn still running; wait for completion before leaving the shell view"
+                        .to_string(),
+                );
             }
-            Screen::SessionList => {
-                self.current_screen = Screen::Home;
-                self.active_session = None;
-                self.conversation_state = ConversationState::Idle;
+            ConversationState::Ready(conversation) if !conversation.is_blank_draft() => {
+                self.open_new_conversation_shell();
             }
-            Screen::Home => {
+            ConversationState::Failed(_) => {
+                self.open_new_conversation_shell();
+            }
+            ConversationState::Loading => {}
+            ConversationState::Idle | ConversationState::Ready(_) => {
                 self.exit_confirmation_state = ExitConfirmationState::Visible;
             }
         }
@@ -1118,6 +1293,15 @@ fn run_event_loop(
             continue;
         }
 
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
+            should_quit = true;
+            continue;
+        }
+
+        if app.handle_shell_overlay_key(key) {
+            continue;
+        }
+
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
             app.handle_ctrl_c();
             continue;
@@ -1130,7 +1314,7 @@ fn run_event_loop(
                     app.open_new_conversation_shell()
                 }
                 KeyCode::Char('r') => app.start_startup_check(),
-                KeyCode::Enter if app.can_open_session_list() => app.open_session_list(),
+                KeyCode::Enter if app.can_open_session_list() => app.show_session_overlay(),
                 _ => {}
             },
             Screen::SessionList => match key.code {
@@ -1156,7 +1340,18 @@ fn run_event_loop(
                 KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
                     app.toggle_no_file_change_stop()
                 }
-                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => should_quit = true,
+                KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.toggle_startup_overlay()
+                }
+                KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.toggle_session_overlay()
+                }
+                KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.start_startup_check()
+                }
+                KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.open_new_conversation_shell()
+                }
                 KeyCode::Backspace => app.pop_input_character(),
                 KeyCode::Enter if app.conversation_can_accept_input() => {
                     app.start_turn_submission()
@@ -1180,6 +1375,12 @@ fn draw(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         Screen::Home => draw_home(frame, app),
         Screen::SessionList => draw_session_list(frame, app),
         Screen::ConversationShell => draw_conversation_shell(frame, app),
+    }
+
+    match app.shell_overlay {
+        ShellOverlay::Hidden => {}
+        ShellOverlay::Startup => draw_startup_overlay(frame, app),
+        ShellOverlay::Sessions => draw_session_overlay(frame, app),
     }
 
     if app.is_exit_confirmation_visible() {
@@ -1340,7 +1541,12 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     match &app.session_state {
         SessionState::Idle => {
-            let widget = Paragraph::new("session list has not loaded yet")
+            let message = if app.can_open_session_list() {
+                "session list has not loaded yet"
+            } else {
+                "recent sessions unlock after startup diagnostics pass"
+            };
+            let widget = Paragraph::new(message)
                 .block(Block::default().borders(Borders::ALL).title("Threads"))
                 .wrap(Wrap { trim: true });
             frame.render_widget(widget, area);
@@ -1392,7 +1598,11 @@ fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp
 
 fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let lines = match &app.session_state {
-        SessionState::Idle => vec![Line::from("session details are not available yet")],
+        SessionState::Idle => vec![Line::from(if app.can_open_session_list() {
+            "session details are not available yet"
+        } else {
+            "startup diagnostics must pass before recent-session detail is available"
+        })],
         SessionState::Loading => vec![Line::from("waiting for session list response")],
         SessionState::Failed(message) => vec![Line::from(message.clone())],
         SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => {
@@ -1488,6 +1698,8 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
                     conversation.input_state.label(),
                     input_state_style(conversation.input_state),
                 ),
+                Span::raw("  |  startup: "),
+                Span::styled(shell_action_availability_label(app), startup_state_style(app)),
             ]),
         ],
         ConversationState::Failed(message) => vec![
@@ -1540,11 +1752,172 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
             "Ctrl+a: auto on/off    Ctrl+f: next template    Ctrl+k: stop keyword    Ctrl+n: no-file stop",
         ),
         Line::from(
-            "Backspace: delete    Ctrl+C: back    Ctrl+q: quit",
+            "Ctrl+o: recent sessions    Ctrl+d: diagnostics    Ctrl+t: new draft    Ctrl+r: rerun startup",
+        ),
+        Line::from(
+            "Backspace: delete    Ctrl+C: shell back    Ctrl+q: quit",
         ),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, layout[3]);
+}
+
+fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let popup_area = centered_rect(78, 72, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(7),
+            Constraint::Min(10),
+            Constraint::Length(6),
+            Constraint::Length(3),
+        ])
+        .split(popup_area);
+
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(
+                "Startup Diagnostics",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" / shell overlay"),
+        ]),
+        Line::from("Inspect readiness without leaving the live shell."),
+    ])
+    .block(Block::default().borders(Borders::ALL).title("Diagnostics"));
+    frame.render_widget(header, layout[0]);
+
+    let summary = match &app.startup_state {
+        StartupState::Idle => vec![
+            Line::from("status: idle"),
+            Line::from("startup checks have not started yet"),
+        ],
+        StartupState::Loading => vec![
+            Line::from(vec![
+                Span::styled("status: ", Style::default().fg(Color::Gray)),
+                Span::styled("running checks", Style::default().fg(Color::Yellow)),
+            ]),
+            Line::from("probing codex binary, app-server handshake, account state, and cwd"),
+        ],
+        StartupState::Ready(diagnostics) => vec![
+            Line::from(vec![
+                Span::styled("status: ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    if diagnostics.can_continue() {
+                        "ready"
+                    } else {
+                        "needs attention"
+                    },
+                    Style::default().fg(if diagnostics.can_continue() {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    }),
+                ),
+            ]),
+            Line::from(format!("cwd: {}", diagnostics.cwd)),
+        ],
+        StartupState::Failed(message) => vec![
+            Line::from(vec![
+                Span::styled("status: ", Style::default().fg(Color::Gray)),
+                Span::styled("failed", Style::default().fg(Color::Red)),
+            ]),
+            Line::from(message.clone()),
+        ],
+    };
+    frame.render_widget(
+        Paragraph::new(summary)
+            .block(Block::default().borders(Borders::ALL).title("Startup"))
+            .wrap(Wrap { trim: true }),
+        layout[1],
+    );
+
+    frame.render_widget(
+        List::new(build_check_items(app))
+            .block(Block::default().borders(Borders::ALL).title("Checks")),
+        layout[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new(build_startup_warning_lines(app))
+            .block(Block::default().borders(Borders::ALL).title("Warnings"))
+            .wrap(Wrap { trim: true }),
+        layout[3],
+    );
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from("Esc/Ctrl+C: close    r: rerun checks"),
+            Line::from("Ctrl+o: recent sessions"),
+        ])
+        .block(Block::default().borders(Borders::ALL).title("Keys")),
+        layout[4],
+    );
+}
+
+fn draw_session_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let popup_area = centered_rect(90, 78, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(12),
+            Constraint::Length(4),
+            Constraint::Length(3),
+        ])
+        .split(popup_area);
+
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(
+                "Recent Sessions",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" / shell overlay"),
+        ]),
+        Line::from("Resume a thread without leaving the shell view."),
+    ])
+    .block(Block::default().borders(Borders::ALL).title("Sessions"));
+    frame.render_widget(header, layout[0]);
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(layout[1]);
+
+    draw_session_list_panel(frame, content_layout[0], app);
+    draw_session_detail_panel(frame, content_layout[1], app);
+
+    frame.render_widget(
+        Paragraph::new(build_session_warning_lines(app))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Session Warnings"),
+            )
+            .wrap(Wrap { trim: true }),
+        layout[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from("Up/Down or j/k: move    Enter: open thread"),
+            Line::from("n: new draft    r: reload    Esc/Ctrl+C: close    Ctrl+d: diagnostics"),
+        ])
+        .block(Block::default().borders(Borders::ALL).title("Keys")),
+        layout[3],
+    );
 }
 
 fn draw_exit_confirmation(frame: &mut Frame<'_>) {
@@ -1552,7 +1925,7 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     frame.render_widget(Clear, popup_area);
 
     let popup = Paragraph::new(vec![
-        Line::from("You are already at home."),
+        Line::from("You are already at the shell home."),
         Line::from("Exit codex-exec-loop?"),
         Line::from(""),
         Line::from("y: exit    n: stay"),
@@ -1623,7 +1996,43 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         }
         SessionState::Failed(message) => vec![Line::from(message.clone())],
         SessionState::Loading => vec![Line::from("waiting for app-server response")],
+        SessionState::Idle if !app.can_open_session_list() => vec![Line::from(
+            "recent sessions remain unavailable until startup diagnostics succeed",
+        )],
         _ => vec![Line::from("no warnings")],
+    }
+}
+
+fn shell_action_availability_label(app: &NativeTuiApp) -> &'static str {
+    app.shell_action_availability().status_text()
+}
+
+fn startup_state_style(app: &NativeTuiApp) -> Style {
+    match app.shell_action_availability() {
+        ShellActionAvailability::Ready => Style::default().fg(Color::Green),
+        ShellActionAvailability::Pending => Style::default().fg(Color::Yellow),
+        ShellActionAvailability::Blocked => Style::default().fg(Color::Red),
+    }
+}
+
+fn recent_session_status_label(app: &NativeTuiApp) -> String {
+    if !app.can_open_session_list() {
+        return match &app.startup_state {
+            StartupState::Loading => "waiting for startup checks".to_string(),
+            StartupState::Ready(_) | StartupState::Failed(_) => {
+                "blocked by startup diagnostics".to_string()
+            }
+            StartupState::Idle => "not requested yet".to_string(),
+        };
+    }
+
+    match &app.session_state {
+        SessionState::Idle => "ready to load".to_string(),
+        SessionState::Loading => "loading from codex app-server".to_string(),
+        SessionState::Failed(_) => "load failed".to_string(),
+        SessionState::Ready(recent_sessions) => {
+            format!("{} loaded", recent_sessions.items.len())
+        }
     }
 }
 
@@ -1726,6 +2135,16 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => {
             let mut lines = vec![
+                Line::from(format!(
+                    "shell startup: {}",
+                    shell_action_availability_label(app)
+                )),
+                Line::from(format!(
+                    "recent sessions: {}",
+                    recent_session_status_label(app)
+                )),
+                Line::from("overlay keys: Ctrl+o sessions / Ctrl+d diagnostics"),
+                Line::from(""),
                 Line::from(format!("title: {}", conversation.title)),
                 Line::from(format!(
                     "thread id: {}",
@@ -1752,10 +2171,16 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                 )),
                 Line::from(format!(
                     "send action: {}",
-                    if conversation.can_submit_prompt() {
-                        "enabled"
-                    } else {
+                    if !conversation.can_submit_prompt() {
                         "waiting for current turn"
+                    } else {
+                        match app.shell_action_availability() {
+                            ShellActionAvailability::Ready => "enabled",
+                            ShellActionAvailability::Pending => "waiting for startup checks",
+                            ShellActionAvailability::Blocked => {
+                                "blocked by startup diagnostics"
+                            }
+                        }
                     }
                 )),
                 Line::from(format!(
@@ -1820,30 +2245,47 @@ fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             Line::from("Input becomes available when the shell reaches ready state."),
         ],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => build_ready_input_lines(conversation),
+        ConversationState::Ready(conversation) => {
+            build_ready_input_lines(conversation, app.shell_action_availability())
+        }
     }
 }
 
-fn build_ready_input_lines(conversation: &ConversationViewModel) -> Vec<Line<'static>> {
+fn build_ready_input_lines(
+    conversation: &ConversationViewModel,
+    shell_action_availability: ShellActionAvailability,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if conversation.input_buffer.is_empty() {
-        match conversation.input_state {
-            ConversationInputState::DraftReady => {
+        match (conversation.input_state, shell_action_availability) {
+            (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
+                lines.push(Line::from("Startup checks are still running."));
+                lines.push(Line::from(
+                    "Type now if you want, then send once diagnostics turn ready.",
+                ));
+            }
+            (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
+                lines.push(Line::from("Startup diagnostics need attention."));
+                lines.push(Line::from(
+                    "Open Ctrl+d, resolve the warning, then send the prompt.",
+                ));
+            }
+            (ConversationInputState::DraftReady, _) => {
                 lines.push(Line::from("Ready to start a new thread."));
                 lines.push(Line::from("Type the first prompt and press Enter."));
             }
-            ConversationInputState::ReadyToContinue => {
+            (ConversationInputState::ReadyToContinue, _) => {
                 lines.push(Line::from("Ready to continue this session."));
                 lines.push(Line::from("Type the next prompt and press Enter."));
             }
-            ConversationInputState::SubmittingTurn => {
+            (ConversationInputState::SubmittingTurn, _) => {
                 lines.push(Line::from("Sending prompt to Codex..."));
                 lines.push(Line::from(
                     "Wait for the turn to open before sending again.",
                 ));
             }
-            ConversationInputState::StreamingTurn => {
+            (ConversationInputState::StreamingTurn, _) => {
                 lines.push(Line::from("Codex is still working on the current turn."));
                 lines.push(Line::from(
                     "Type now; press Enter after the turn completes.",
@@ -1856,14 +2298,20 @@ fn build_ready_input_lines(conversation: &ConversationViewModel) -> Vec<Line<'st
 
     lines.push(Line::from(conversation.input_buffer.clone()));
 
-    match conversation.input_state {
-        ConversationInputState::DraftReady => {
+    match (conversation.input_state, shell_action_availability) {
+        (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
             lines.push(Line::from("Press Enter to create thread and send."));
         }
-        ConversationInputState::ReadyToContinue => {
+        (ConversationInputState::ReadyToContinue, ShellActionAvailability::Ready) => {
             lines.push(Line::from("Press Enter to send this prompt."));
         }
-        ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn => {
+        (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
+            lines.push(Line::from(
+                "Prompt buffered. Press Enter after startup diagnostics turn ready.",
+            ));
+        }
+        (ConversationInputState::SubmittingTurn, _)
+        | (ConversationInputState::StreamingTurn, _) => {
             lines.push(Line::from("Prompt buffered. Press Enter when turn ends."));
         }
     }
@@ -1877,7 +2325,11 @@ fn build_input_title(app: &NativeTuiApp) -> String {
         ConversationState::Loading => "Input / loading".to_string(),
         ConversationState::Failed(_) => "Input / unavailable".to_string(),
         ConversationState::Ready(conversation) => {
-            format!("Input / {}", conversation.input_state.label())
+            format!(
+                "Input / {} / {}",
+                conversation.input_state.label(),
+                shell_action_availability_label(app)
+            )
         }
     }
 }
@@ -1930,9 +2382,9 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 mod tests {
     use super::{
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
-        ConversationMessage, ConversationMessageKind, ConversationViewModel, TurnActivityState,
-        build_conversation_scroll_offset, build_ready_input_lines,
-        count_rendered_conversation_lines, format_conversation_lines,
+        ConversationMessage, ConversationMessageKind, ConversationViewModel,
+        ShellActionAvailability, TurnActivityState, build_conversation_scroll_offset,
+        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
@@ -1989,7 +2441,7 @@ mod tests {
         conversation.input_state = ConversationInputState::StreamingTurn;
         conversation.input_buffer = "Continue from the last change.".to_string();
 
-        let rendered = build_ready_input_lines(&conversation)
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -2003,7 +2455,7 @@ mod tests {
     fn empty_existing_session_prompts_for_next_message() {
         let conversation = ready_conversation();
 
-        let rendered = build_ready_input_lines(&conversation)
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -2019,7 +2471,7 @@ mod tests {
         conversation.thread_id.clear();
         conversation.input_state = ConversationInputState::DraftReady;
 
-        let rendered = build_ready_input_lines(&conversation)
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -2027,6 +2479,34 @@ mod tests {
 
         assert!(rendered.contains("Ready to start a new thread."));
         assert!(rendered.contains("Type the first prompt and press Enter."));
+    }
+
+    #[test]
+    fn startup_pending_prompts_wait_before_send() {
+        let conversation = ready_conversation();
+
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Pending)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Startup checks are still running."));
+        assert!(rendered.contains("send once diagnostics turn ready"));
+    }
+
+    #[test]
+    fn startup_blocked_prompt_guides_user_to_diagnostics_overlay() {
+        let conversation = ready_conversation();
+
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Blocked)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Startup diagnostics need attention."));
+        assert!(rendered.contains("Open Ctrl+d"));
     }
 
     #[test]

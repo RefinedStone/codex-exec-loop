@@ -16,7 +16,7 @@ References:
 - [design/01-current-product-state.md](design/01-current-product-state.md)
 
 ## 2. TUI Shell Flow
-Goal: describe how startup, session list, live shell, input, and streamed turn updates work today.
+Goal: describe how the shell-first startup flow, overlays, input, and streamed turn updates work today.
 
 References:
 - [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md)

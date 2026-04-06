@@ -1,7 +1,7 @@
 # Known Gaps And Risk Areas
 
-## 1. Screen Model Still Breaks Shell Continuity
-The shell is live, but the app still routes through `Home` and `SessionList` as full screens. That keeps startup diagnostics and browsing easy, but it reduces the "always in the shell" feeling.
+## 1. Shell Continuity Improved, But Overlays Are Still Modal
+The shell is now the default landing surface, and startup diagnostics plus recent sessions moved into overlays. That is closer to a continuous shell, but the overlays are still modal and the runtime behind them is still action-scoped.
 
 ## 2. Transport Lifecycle Is Short-Lived
 Each action opens its own app-server process. This keeps the code simple, but it makes the shell feel less like one continuous session runtime and more like repeated transport jobs.
@@ -17,4 +17,3 @@ The branch already has useful tests around auto follow-up and template loading, 
 
 ## Risk Rule
 Do not rewrite the streaming shell from scratch. Most of the missing work is around lifecycle, ergonomics, and decomposition, not missing protocol support.
-

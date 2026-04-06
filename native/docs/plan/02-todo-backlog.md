@@ -13,13 +13,13 @@ The following are intentionally not listed as TODO items because they already sh
 - explicit workspace path in startup diagnostics
 
 ## P0. Current-State Docs
-- [ ] align docs with shipped `prerelease` features before drafting new shell plans
-- [ ] remove obsolete "placeholder shell" assumptions from the current doc set
+- [x] align docs with shipped `prerelease` features before drafting new shell plans
+- [x] remove obsolete "placeholder shell" assumptions from the current doc set
 
 ## P1. UX Continuity
-- [ ] decide whether `Home` stays as a full screen or becomes an overlay/panel
-- [ ] decide whether recent sessions should become a shell drawer instead of a separate screen
-- [ ] reduce friction between session browse and live shell entry
+- [x] move `Home` responsibilities into a shell overlay/panel
+- [x] move recent sessions into a shell overlay instead of a separate screen
+- [x] reduce friction between session browse and live shell entry
 
 ## P1. Runtime
 - [ ] evaluate a persistent app-server runtime boundary
