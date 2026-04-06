@@ -358,9 +358,11 @@ impl StopKeywordRule {
     fn matches(&self, text: &str) -> bool {
         self.enabled
             && text.split_whitespace().any(|token| {
-                token.trim_matches(|character: char| {
-                    !character.is_ascii_alphanumeric() && character != '_'
-                }) == self.value
+                token
+                    .trim_matches(|character: char| {
+                        !character.is_alphanumeric() && character != '_'
+                    })
+                    .eq_ignore_ascii_case(&self.value)
             })
     }
 
@@ -2091,6 +2093,22 @@ mod tests {
         conversation.messages.push(ConversationMessage::new(
             ConversationMessageKind::Agent,
             "Work is complete.\nAUTO_STOP",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        assert_eq!(
+            conversation.decide_auto_followup(),
+            AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
+        );
+    }
+
+    #[test]
+    fn auto_followup_stops_when_stop_keyword_case_varies() {
+        let mut conversation = ready_conversation();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "Work is complete.\nauto_stop!",
             Some("final_answer".to_string()),
             Some("agent-1".to_string()),
         ));
