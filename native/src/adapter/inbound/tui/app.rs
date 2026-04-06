@@ -18,13 +18,19 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::{Frame, Terminal};
 
 use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
+use crate::adapter::outbound::filesystem_followup_template_adapter::FilesystemFollowupTemplateAdapter;
 use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
+use crate::application::port::outbound::followup_template_port::FollowupTemplatePort;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
     ConversationToolActivityKind,
+};
+use crate::domain::followup_template::{
+    FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
 };
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -34,51 +40,25 @@ const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
-const AUTO_FOLLOW_TEMPLATE_NEXT_TASK: &str = r#"대리인입니다.
-자동 후속 {auto_turn}/{max_auto_turns} 입니다.
-
-방금 결과를 기준으로 다음 작업 1개만 이어서 진행하세요.
-더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
-
-직전 답변:
-{last_message}"#;
-const AUTO_FOLLOW_TEMPLATE_PLAN_QUEUE: &str = r#"대리인입니다.
-자동 후속 {auto_turn}/{max_auto_turns} 입니다.
-
-방금 결과를 바탕으로 개선점과 다음 작업 후보를 `plan_priority_queue.md` 에 정리하고,
-가장 우선순위가 높은 항목 1개를 바로 진행하세요.
-더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
-
-직전 답변:
-{last_message}"#;
-const AUTO_FOLLOW_TEMPLATE_BUGFIX: &str = r#"대리인입니다.
-자동 후속 {auto_turn}/{max_auto_turns} 입니다.
-
-직전 결과 기준으로 아직 남아 있는 버그나 리스크 1개만 골라 수정하세요.
-수정이 끝나면 무엇을 고쳤는지 짧게 요약하세요.
-더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
-
-직전 답변:
-{last_message}"#;
-const AUTO_FOLLOW_TEMPLATE_DOCS: &str = r#"대리인입니다.
-자동 후속 {auto_turn}/{max_auto_turns} 입니다.
-
-방금 작업을 기준으로 README 또는 사용자 문서에 빠진 내용 1개만 보강하세요.
-더 이어갈 작업이 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
-
-직전 답변:
-{last_message}"#;
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
+    let followup_template_port: Arc<dyn FollowupTemplatePort> =
+        Arc::new(FilesystemFollowupTemplateAdapter::new());
     let startup_service = StartupService::new(codex_app_server_port.clone());
     let session_service = SessionService::new(codex_app_server_port.clone());
     let conversation_service = ConversationService::new(codex_app_server_port);
+    let followup_template_service = FollowupTemplateService::new(followup_template_port);
 
-    let mut app = NativeTuiApp::new(startup_service, session_service, conversation_service);
+    let mut app = NativeTuiApp::new(
+        startup_service,
+        session_service,
+        conversation_service,
+        followup_template_service,
+    );
     app.start_startup_check();
     run_tui(app)
 }
@@ -174,49 +154,12 @@ enum AutoFollowupSkipReason {
     NoFileChanges,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AutoFollowTemplateKind {
-    NextTask,
-    PlanQueue,
-    Bugfix,
-    Docs,
-}
-
-impl AutoFollowTemplateKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::NextTask => "builtin next-task",
-            Self::PlanQueue => "builtin plan-queue",
-            Self::Bugfix => "builtin bugfix",
-            Self::Docs => "builtin docs",
-        }
-    }
-
-    fn template(self) -> &'static str {
-        match self {
-            Self::NextTask => AUTO_FOLLOW_TEMPLATE_NEXT_TASK,
-            Self::PlanQueue => AUTO_FOLLOW_TEMPLATE_PLAN_QUEUE,
-            Self::Bugfix => AUTO_FOLLOW_TEMPLATE_BUGFIX,
-            Self::Docs => AUTO_FOLLOW_TEMPLATE_DOCS,
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::NextTask => Self::PlanQueue,
-            Self::PlanQueue => Self::Bugfix,
-            Self::Bugfix => Self::Docs,
-            Self::Docs => Self::NextTask,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct AutoFollowState {
     enabled: bool,
     completed_auto_turns: usize,
     max_auto_turns: usize,
-    template_kind: AutoFollowTemplateKind,
+    template_state: AutoFollowTemplateState,
     stop_rules: AutoFollowStopRules,
 }
 
@@ -232,19 +175,25 @@ struct StopKeywordRule {
     value: String,
 }
 
+#[derive(Debug, Clone)]
+struct AutoFollowTemplateState {
+    items: Vec<FollowupTemplateDefinition>,
+    selected_index: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 struct TurnActivityState {
     current_turn_file_change_count: usize,
     last_completed_turn_file_change_count: usize,
 }
 
-impl Default for AutoFollowState {
-    fn default() -> Self {
+impl AutoFollowState {
+    fn new(template_catalog: FollowupTemplateCatalog) -> Self {
         Self {
             enabled: true,
             completed_auto_turns: 0,
             max_auto_turns: DEFAULT_AUTO_FOLLOW_MAX_TURNS,
-            template_kind: AutoFollowTemplateKind::NextTask,
+            template_state: AutoFollowTemplateState::new(template_catalog),
             stop_rules: AutoFollowStopRules::default(),
         }
     }
@@ -277,8 +226,16 @@ impl AutoFollowState {
         format!("{}/{}", self.completed_auto_turns, self.max_auto_turns)
     }
 
-    fn template_label(&self) -> &'static str {
-        self.template_kind.label()
+    fn template_label(&self) -> &str {
+        self.template_state.current().label.as_str()
+    }
+
+    fn template_source_label(&self) -> String {
+        self.template_state.current().source_label()
+    }
+
+    fn template_count(&self) -> usize {
+        self.template_state.items.len()
     }
 
     fn stop_keyword_label(&self) -> String {
@@ -318,12 +275,14 @@ impl AutoFollowState {
     }
 
     fn cycle_template_kind(&mut self) {
-        self.template_kind = self.template_kind.next();
+        self.template_state.cycle();
     }
 
     fn render_prompt(&self, thread_id: &str, last_message: &str) -> String {
-        self.template_kind
-            .template()
+        self.template_state
+            .current()
+            .body
+            .as_str()
             .replace("{auto_turn}", &self.next_auto_turn_index().to_string())
             .replace("{max_auto_turns}", &self.max_auto_turns.to_string())
             .replace("{session_id}", thread_id)
@@ -375,6 +334,29 @@ impl StopKeywordRule {
     }
 }
 
+impl AutoFollowTemplateState {
+    fn new(template_catalog: FollowupTemplateCatalog) -> Self {
+        Self {
+            items: template_catalog.items,
+            selected_index: 0,
+        }
+    }
+
+    fn current(&self) -> &FollowupTemplateDefinition {
+        self.items
+            .get(self.selected_index)
+            .expect("follow-up template catalog should not be empty")
+    }
+
+    fn cycle(&mut self) {
+        if self.items.len() <= 1 {
+            return;
+        }
+
+        self.selected_index = (self.selected_index + 1) % self.items.len();
+    }
+}
+
 impl TurnActivityState {
     fn start_new_turn(&mut self) {
         self.current_turn_file_change_count = 0;
@@ -417,30 +399,42 @@ struct ConversationViewModel {
 }
 
 impl ConversationViewModel {
-    fn new_draft(cwd: String) -> Self {
+    fn new_draft(cwd: String, template_load_result: FollowupTemplateCatalogLoadResult) -> Self {
+        let status_text = format!(
+            "new thread draft / templates: {}",
+            template_load_result.catalog.items.len()
+        );
         let mut view_model = Self {
             thread_id: String::new(),
             title: "New conversation".to_string(),
             cwd,
             messages: Vec::new(),
             cached_conversation_lines: Vec::new(),
-            warnings: Vec::new(),
+            warnings: template_load_result.warnings,
             input_buffer: String::new(),
             active_turn_id: None,
             input_state: ConversationInputState::DraftReady,
-            auto_follow_state: AutoFollowState::default(),
+            auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
-            status_text: "new thread draft".to_string(),
+            status_text,
         };
         view_model.refresh_conversation_lines();
         view_model
     }
 
-    fn from_snapshot(snapshot: ConversationSnapshot) -> Self {
-        let status_text = if snapshot.warnings.is_empty() {
-            "thread loaded".to_string()
+    fn from_snapshot(
+        snapshot: ConversationSnapshot,
+        template_load_result: FollowupTemplateCatalogLoadResult,
+    ) -> Self {
+        let mut warnings = snapshot.warnings;
+        warnings.extend(template_load_result.warnings);
+        let status_text = if warnings.is_empty() {
+            format!(
+                "thread loaded / templates: {}",
+                template_load_result.catalog.items.len()
+            )
         } else {
-            snapshot.warnings.join(" | ")
+            warnings.join(" | ")
         };
 
         let mut view_model = Self {
@@ -449,11 +443,11 @@ impl ConversationViewModel {
             cwd: snapshot.cwd,
             messages: snapshot.messages,
             cached_conversation_lines: Vec::new(),
-            warnings: snapshot.warnings,
+            warnings,
             input_buffer: String::new(),
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
-            auto_follow_state: AutoFollowState::default(),
+            auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
             status_text,
         };
@@ -566,6 +560,7 @@ struct NativeTuiApp {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
+    followup_template_service: FollowupTemplateService,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
 }
@@ -575,6 +570,7 @@ impl NativeTuiApp {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
+        followup_template_service: FollowupTemplateService,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
@@ -589,6 +585,7 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
+            followup_template_service,
             tx,
             rx,
         }
@@ -724,7 +721,11 @@ impl NativeTuiApp {
                 BackgroundMessage::ConversationLoaded(result) => {
                     self.conversation_state = match result {
                         Ok(snapshot) => {
-                            ConversationState::Ready(ConversationViewModel::from_snapshot(snapshot))
+                            let workspace_directory = snapshot.cwd.clone();
+                            ConversationState::Ready(ConversationViewModel::from_snapshot(
+                                snapshot,
+                                self.load_followup_template_catalog(&workspace_directory),
+                            ))
                         }
                         Err(message) => ConversationState::Failed(message),
                     };
@@ -903,8 +904,10 @@ impl NativeTuiApp {
     fn open_new_conversation_shell(&mut self) {
         self.active_session = None;
         self.conversation_return_screen = self.current_screen;
+        let workspace_directory = self.current_workspace_directory();
         self.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
-            self.current_workspace_directory(),
+            workspace_directory.clone(),
+            self.load_followup_template_catalog(&workspace_directory),
         ));
         self.current_screen = Screen::ConversationShell;
     }
@@ -1020,6 +1023,14 @@ impl NativeTuiApp {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
         }
+    }
+
+    fn load_followup_template_catalog(
+        &self,
+        workspace_directory: &str,
+    ) -> FollowupTemplateCatalogLoadResult {
+        self.followup_template_service
+            .load_catalog(workspace_directory)
     }
 
     fn is_exit_confirmation_visible(&self) -> bool {
@@ -1760,6 +1771,14 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                     conversation.auto_follow_state.template_label()
                 )),
                 Line::from(format!(
+                    "auto template source: {}",
+                    conversation.auto_follow_state.template_source_label()
+                )),
+                Line::from(format!(
+                    "auto template count: {}",
+                    conversation.auto_follow_state.template_count()
+                )),
+                Line::from(format!(
                     "auto stop keyword: {}",
                     conversation.auto_follow_state.stop_keyword_label()
                 )),
@@ -1910,11 +1929,42 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoFollowState, AutoFollowTemplateKind, AutoFollowupDecision, AutoFollowupSkipReason,
-        ConversationInputState, ConversationMessage, ConversationMessageKind,
-        ConversationViewModel, TurnActivityState, build_conversation_scroll_offset,
-        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
+        AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
+        ConversationMessage, ConversationMessageKind, ConversationViewModel, TurnActivityState,
+        build_conversation_scroll_offset, build_ready_input_lines,
+        count_rendered_conversation_lines, format_conversation_lines,
     };
+    use crate::domain::followup_template::{
+        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
+    };
+
+    fn sample_template_catalog() -> FollowupTemplateCatalog {
+        FollowupTemplateCatalog {
+            items: vec![
+                FollowupTemplateDefinition {
+                    id: "builtin-next-task".to_string(),
+                    label: "builtin next-task".to_string(),
+                    body: "대리인입니다.\n자동 후속 {auto_turn}/{max_auto_turns} 입니다.\n\n직전 답변:\n{last_message}\n{stop_keyword}".to_string(),
+                    source: FollowupTemplateSource::Builtin,
+                },
+                FollowupTemplateDefinition {
+                    id: "builtin-plan-queue".to_string(),
+                    label: "builtin plan-queue".to_string(),
+                    body: "plan_priority_queue.md\n{last_message}\n{stop_keyword}".to_string(),
+                    source: FollowupTemplateSource::Builtin,
+                },
+                FollowupTemplateDefinition {
+                    id: "workspace-custom-review".to_string(),
+                    label: "workspace custom-review".to_string(),
+                    body: "workspace custom body\n{last_message}".to_string(),
+                    source: FollowupTemplateSource::WorkspaceFile {
+                        path: "/tmp/workspace/.codex-exec-loop/followups/custom-review.md"
+                            .to_string(),
+                    },
+                },
+            ],
+        }
+    }
 
     fn ready_conversation() -> ConversationViewModel {
         ConversationViewModel {
@@ -1927,7 +1977,7 @@ mod tests {
             input_buffer: String::new(),
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
-            auto_follow_state: AutoFollowState::default(),
+            auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
             status_text: "thread loaded".to_string(),
         }
@@ -2054,24 +2104,22 @@ mod tests {
     }
 
     #[test]
-    fn auto_followup_template_kind_cycles_in_expected_order() {
-        let mut state = AutoFollowState::default();
+    fn auto_followup_template_cycles_across_builtin_and_workspace_items() {
+        let mut state = AutoFollowState::new(sample_template_catalog());
 
-        assert_eq!(state.template_kind, AutoFollowTemplateKind::NextTask);
+        assert_eq!(state.template_label(), "builtin next-task");
         state.cycle_template_kind();
-        assert_eq!(state.template_kind, AutoFollowTemplateKind::PlanQueue);
+        assert_eq!(state.template_label(), "builtin plan-queue");
         state.cycle_template_kind();
-        assert_eq!(state.template_kind, AutoFollowTemplateKind::Bugfix);
+        assert_eq!(state.template_label(), "workspace custom-review");
         state.cycle_template_kind();
-        assert_eq!(state.template_kind, AutoFollowTemplateKind::Docs);
-        state.cycle_template_kind();
-        assert_eq!(state.template_kind, AutoFollowTemplateKind::NextTask);
+        assert_eq!(state.template_label(), "builtin next-task");
     }
 
     #[test]
-    fn auto_followup_prompt_uses_selected_template_kind() {
+    fn auto_followup_prompt_uses_selected_template_item() {
         let mut conversation = ready_conversation();
-        conversation.auto_follow_state.template_kind = AutoFollowTemplateKind::PlanQueue;
+        conversation.auto_follow_state.template_state.selected_index = 1;
         conversation.messages.push(ConversationMessage::new(
             ConversationMessageKind::Agent,
             "latest answer",
@@ -2085,6 +2133,19 @@ mod tests {
 
         assert!(prompt.contains("plan_priority_queue.md"));
         assert!(prompt.contains("latest answer"));
+    }
+
+    #[test]
+    fn auto_followup_activity_exposes_workspace_template_source() {
+        let mut state = AutoFollowState::new(sample_template_catalog());
+        state.template_state.selected_index = 2;
+
+        assert_eq!(state.template_label(), "workspace custom-review");
+        assert!(
+            state
+                .template_source_label()
+                .contains(".codex-exec-loop/followups/custom-review.md")
+        );
     }
 
     #[test]

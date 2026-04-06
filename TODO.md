@@ -26,6 +26,10 @@
   - plan-queue
   - bugfix
   - docs
+- native external follow-up template loading
+  - workspace path: `.codex-exec-loop/followups/`
+  - supported files: `.md`, `.txt`
+  - builtin templates stay first, workspace files are appended in filename order
 - native auto-follow-up stop rules
   - stop keyword: `AUTO_STOP`
   - no-file-change stop toggle
@@ -33,8 +37,8 @@
 
 ## Next
 
-- support external prompt/template files instead of builtin template only
 - add max-auto-turns editing from UI
+- add template reload from the conversation shell
 - show clearer activity for auto follow-up queue / submit / stop decisions
 - add session search, paging, and recent project filters
 - add approval and tool activity panels

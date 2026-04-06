@@ -1,1 +1,2 @@
 pub mod codex_app_server_adapter;
+pub mod filesystem_followup_template_adapter;

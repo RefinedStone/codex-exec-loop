@@ -97,8 +97,22 @@ cargo run
   - `Ctrl+n`: toggle no-file-change stop
   - strategies: `next-task`, `plan-queue`, `bugfix`, `docs`
   - builtin stop keyword: `AUTO_STOP`
+- external follow-up template files from workspace
+  - directory: `.codex-exec-loop/followups/`
+  - supported files: `.md`, `.txt`
+  - cycle order: builtin templates first, workspace files next in filename order
 
 legacy Python CLI 예시는 아래에 남겨두지만, 새 기능 기준 설명은 native 를 우선합니다.
+
+템플릿 파일에서는 아래 placeholder를 쓸 수 있습니다.
+
+- `{auto_turn}`
+- `{max_auto_turns}`
+- `{session_id}`
+- `{last_message}`
+- `{stop_keyword}`
+
+예제는 [10-review-queue.md](/home/akra/codex-exec-loop/.codex-exec-loop/followups/10-review-queue.md), [20-docs-and-verify.md](/home/akra/codex-exec-loop/.codex-exec-loop/followups/20-docs-and-verify.md) 에 들어 있습니다.
 
 대화형 입력 없이 새 세션으로 1회 자동 follow-up:
 
