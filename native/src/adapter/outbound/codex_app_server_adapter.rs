@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -21,10 +22,11 @@ use crate::domain::session_summary::SessionSummary;
 
 const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexAppServerAdapter {
     client_name: String,
     client_version: String,
+    shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
 }
 
 impl CodexAppServerAdapter {
@@ -32,6 +34,7 @@ impl CodexAppServerAdapter {
         Self {
             client_name: client_name.into(),
             client_version: client_version.into(),
+            shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
         }
     }
 
@@ -229,58 +232,108 @@ impl CodexAppServerAdapter {
             .unwrap_or("completed");
         format!("command: {command} [{status}]")
     }
+
+    fn initialize_detail(initialize_response: &InitializeResponse) -> String {
+        format!(
+            "{} / {} / {}",
+            initialize_response.platform_os,
+            initialize_response.platform_family,
+            initialize_response.user_agent,
+        )
+    }
+
+    fn with_shared_runtime<T, F>(&self, mut operation: F) -> Result<SharedRuntimeOutput<T>>
+    where
+        F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
+    {
+        let mut last_error: Option<anyhow::Error> = None;
+
+        for attempt in 0..2 {
+            let result = (|| {
+                let mut runtime = self
+                    .shared_runtime
+                    .lock()
+                    .map_err(|_| anyhow!("shared app-server runtime mutex was poisoned"))?;
+                runtime.ensure_connected(self)?;
+                let initialize_detail = runtime.initialize_detail()?.to_string();
+                let connection = runtime
+                    .connection
+                    .as_mut()
+                    .context("shared app-server runtime was not connected")?;
+                let value = operation(connection, &initialize_detail)?;
+                let warnings = connection.take_warnings();
+                Ok(SharedRuntimeOutput { value, warnings })
+            })();
+
+            match result {
+                Ok(output) => return Ok(output),
+                Err(error) if attempt == 0 => {
+                    last_error = Some(error);
+                    self.reset_shared_runtime();
+                }
+                Err(error) => {
+                    self.reset_shared_runtime();
+                    return Err(error);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("shared runtime request failed")))
+    }
+
+    fn reset_shared_runtime(&self) {
+        if let Ok(mut runtime) = self.shared_runtime.lock() {
+            runtime.reset();
+        }
+    }
 }
 
 impl CodexAppServerPort for CodexAppServerAdapter {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
-        let mut connection = self.open_connection()?;
-        let initialize_response = connection.initialize()?;
-        let account_response = connection.read_account()?;
-        let warnings = connection.finish();
+        let output = self.with_shared_runtime(|connection, initialize_detail| {
+            Ok((
+                initialize_detail.to_string(),
+                connection.read_account()?,
+            ))
+        })?;
+        let (initialize_detail, account_response) = output.value;
 
         Ok(AppServerStartupContext {
-            initialize_detail: format!(
-                "{} / {} / {}",
-                initialize_response.platform_os,
-                initialize_response.platform_family,
-                initialize_response.user_agent,
-            ),
+            initialize_detail,
             account_detail: account_response.to_summary_text(),
             account_ok: account_response.is_authenticated(),
-            warnings,
+            warnings: output.warnings,
         })
     }
 
     fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
-        let mut connection = self.open_connection()?;
-        connection.initialize()?;
-        let thread_list_response = connection.list_threads(ThreadListParams {
-            limit: Some(limit),
-            ..ThreadListParams::default()
+        let output = self.with_shared_runtime(|connection, _| {
+            connection.list_threads(ThreadListParams {
+                limit: Some(limit),
+                ..ThreadListParams::default()
+            })
         })?;
-        let warnings = connection.finish();
+        let ThreadListResponse { data, next_cursor } = output.value;
 
-        let items = thread_list_response
-            .data
+        let items = data
             .into_iter()
             .map(Self::to_session_summary)
             .collect::<Vec<_>>();
 
         Ok(RecentSessions {
             items,
-            warnings,
-            next_cursor: thread_list_response.next_cursor,
+            warnings: output.warnings,
+            next_cursor,
         })
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
-        let mut connection = self.open_connection()?;
-        connection.initialize()?;
-        let thread_response = connection.read_thread(thread_id, true)?;
-        let warnings = connection.finish();
+        let output = self.with_shared_runtime(|connection, _| {
+            connection.read_thread(thread_id, true)
+        })?;
         Ok(Self::to_conversation_snapshot(
-            thread_response.thread,
-            warnings,
+            output.value.thread,
+            output.warnings,
         ))
     }
 
@@ -350,6 +403,51 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 }
 
+#[derive(Default)]
+struct SharedAppServerRuntime {
+    connection: Option<AppServerConnection>,
+    initialize_detail: Option<String>,
+}
+
+impl SharedAppServerRuntime {
+    fn ensure_connected(&mut self, adapter: &CodexAppServerAdapter) -> Result<()> {
+        let needs_connection = match self.connection.as_mut() {
+            Some(connection) => !connection.is_alive()?,
+            None => true,
+        };
+
+        if !needs_connection {
+            return Ok(());
+        }
+
+        self.reset();
+
+        let mut connection = adapter.open_connection()?;
+        let initialize_response = connection.initialize()?;
+        self.initialize_detail = Some(CodexAppServerAdapter::initialize_detail(
+            &initialize_response,
+        ));
+        self.connection = Some(connection);
+        Ok(())
+    }
+
+    fn initialize_detail(&self) -> Result<&str> {
+        self.initialize_detail
+            .as_deref()
+            .context("shared runtime initialize detail was not available")
+    }
+
+    fn reset(&mut self) {
+        self.initialize_detail = None;
+        self.connection.take();
+    }
+}
+
+struct SharedRuntimeOutput<T> {
+    value: T,
+    warnings: Vec<String>,
+}
+
 struct AppServerConnection {
     child: Child,
     stdin: ChildStdin,
@@ -362,6 +460,10 @@ struct AppServerConnection {
 }
 
 impl AppServerConnection {
+    fn is_alive(&mut self) -> Result<bool> {
+        Ok(self.child.try_wait()?.is_none())
+    }
+
     fn initialize(&mut self) -> Result<InitializeResponse> {
         if self.initialized {
             bail!("initialize was already called");
@@ -624,11 +726,11 @@ impl AppServerConnection {
         }
     }
 
-    fn finish(mut self) -> Vec<String> {
+    fn take_warnings(&mut self) -> Vec<String> {
         self.collect_remaining_warnings();
         self.warnings.sort();
         self.warnings.dedup();
-        self.warnings.clone()
+        std::mem::take(&mut self.warnings)
     }
 
     fn ensure_initialized(&self) -> Result<()> {

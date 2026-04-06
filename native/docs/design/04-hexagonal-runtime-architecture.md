@@ -10,14 +10,14 @@ The code still follows the intended hexagonal structure:
 - `domain`: shell-neutral models for sessions, startup diagnostics, conversations, and follow-up templates
 
 ## Current Runtime Shape
-The branch already has a live shell, but the runtime is still action-scoped:
+The branch already has a live shell, and the outbound adapter now keeps a shared initialized runtime for request-style actions:
 
-- snapshot actions open an app-server process, initialize, request data, then exit
+- startup checks, recent-session loads, and thread snapshot reads can reuse one initialized app-server connection inside the adapter
 - turn execution opens an app-server process, initializes, starts a turn, streams events, then exits
 - stream events are translated into domain-level conversation events before reaching the TUI
 
 ## Why This Matters
-This is a good boundary split, but it is not yet a continuous runtime. The shell looks live because streamed events are mapped well, not because the transport lifecycle is persistent.
+This is a better lifecycle boundary than the fully action-scoped version, but it is not yet a continuous runtime. The shell looks live because streamed events are mapped well, and only the request-side transport is now reused.
 
 ## Current Strength
 The app-server adapter already owns:
@@ -32,4 +32,3 @@ That means future runtime changes should preserve the existing adapter boundary 
 
 ## Recommended Architectural Direction
 Keep the current layer ownership, but evolve the outbound runtime toward a longer-lived session-oriented transport. The main target is not a new architecture; it is a better lifecycle inside the existing architecture.
-

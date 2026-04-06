@@ -22,7 +22,7 @@ The following are intentionally not listed as TODO items because they already sh
 - [x] reduce friction between session browse and live shell entry
 
 ## P1. Runtime
-- [ ] evaluate a persistent app-server runtime boundary
+- [x] introduce a shared adapter runtime for startup, session, and snapshot requests
 - [ ] preserve current streaming event mapping while changing transport lifecycle
 - [ ] add clearer reconnect/reset behavior
 
