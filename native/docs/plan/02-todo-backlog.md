@@ -13,8 +13,8 @@ The following are intentionally not listed as TODO items because they already sh
 - explicit workspace path in startup diagnostics
 
 ## P0. Current-State Docs
-- [ ] keep docs aligned with `prerelease` features before adding new shell plans
-- [ ] avoid reintroducing obsolete "placeholder shell" assumptions
+- [ ] align docs with shipped `prerelease` features before drafting new shell plans
+- [ ] remove obsolete "placeholder shell" assumptions from the current doc set
 
 ## P1. UX Continuity
 - [ ] decide whether `Home` stays as a full screen or becomes an overlay/panel
