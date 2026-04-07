@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -247,27 +247,21 @@ impl CodexAppServerAdapter {
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
         for attempt in 0..2 {
-            let result: Result<SharedRuntimeOutput<T>> = (|| {
-                let mut runtime = self
-                    .shared_runtime
-                    .lock()
-                    .map_err(|_| anyhow!("shared app-server runtime mutex was poisoned"))?;
-                runtime.ensure_connected(self)?;
-                let initialize_detail = runtime.initialize_detail()?.to_string();
-                let (value, connection_warnings) = {
-                    let connection = runtime
-                        .connection
-                        .as_mut()
-                        .context("shared app-server runtime was not connected")?;
-                    let value = operation(connection, &initialize_detail)?;
-                    let warnings = connection.take_warnings();
-                    (value, warnings)
-                };
-                let mut warnings = runtime.take_notices();
-                warnings.extend(connection_warnings);
-                sort_and_dedup_warnings(&mut warnings);
-                Ok(SharedRuntimeOutput { value, warnings })
-            })();
+            let result = match self.shared_runtime.try_lock() {
+                Ok(mut runtime) => self.run_request_on_locked_runtime(&mut runtime, &mut operation),
+                Err(TryLockError::WouldBlock) => {
+                    return self.with_isolated_runtime(
+                        Some(
+                            "shared runtime busy with an active turn stream; request used an isolated app-server connection"
+                                .to_string(),
+                        ),
+                        &mut operation,
+                    );
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    Err(anyhow!("shared app-server runtime mutex was poisoned"))
+                }
+            };
 
             match result {
                 Ok(output) => return Ok(output),
@@ -288,6 +282,84 @@ impl CodexAppServerAdapter {
         }
 
         unreachable!("shared runtime retry loop always returns on success or final failure")
+    }
+
+    fn run_request_on_locked_runtime<T, F>(
+        &self,
+        runtime: &mut SharedAppServerRuntime,
+        operation: &mut F,
+    ) -> Result<SharedRuntimeOutput<T>>
+    where
+        F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
+    {
+        runtime.ensure_connected(self)?;
+        let initialize_detail = runtime.initialize_detail()?.to_string();
+        let (value, connection_warnings) = {
+            let connection = runtime
+                .connection
+                .as_mut()
+                .context("shared app-server runtime was not connected")?;
+            let value = operation(connection, &initialize_detail)?;
+            let warnings = connection.take_warnings();
+            (value, warnings)
+        };
+        let mut warnings = runtime.take_notices();
+        warnings.extend(connection_warnings);
+        sort_and_dedup_warnings(&mut warnings);
+        Ok(SharedRuntimeOutput { value, warnings })
+    }
+
+    fn with_isolated_runtime<T, F>(
+        &self,
+        notice: Option<String>,
+        operation: &mut F,
+    ) -> Result<SharedRuntimeOutput<T>>
+    where
+        F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
+    {
+        let mut connection = self.open_connection()?;
+        let initialize_response = connection.initialize()?;
+        let initialize_detail = Self::initialize_detail(&initialize_response);
+        let value = operation(&mut connection, &initialize_detail)?;
+        let mut warnings = connection.take_warnings();
+        if let Some(notice) = notice {
+            warnings.push(notice);
+        }
+        sort_and_dedup_warnings(&mut warnings);
+        Ok(SharedRuntimeOutput { value, warnings })
+    }
+
+    fn with_streaming_runtime<F>(&self, mut operation: F) -> Result<()>
+    where
+        F: FnMut(&mut AppServerConnection) -> Result<()>,
+    {
+        let mut runtime = self
+            .shared_runtime
+            .lock()
+            .map_err(|_| anyhow!("shared app-server runtime mutex was poisoned"))?;
+        runtime.ensure_connected(self)?;
+
+        let (result, warnings) = {
+            let connection = runtime
+                .connection
+                .as_mut()
+                .context("shared app-server runtime was not connected")?;
+            let result = operation(connection);
+            let warnings = connection.take_warnings();
+            (result, warnings)
+        };
+        runtime.push_notices(warnings);
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                runtime.reset();
+                runtime.push_notice(format!(
+                    "shared runtime reset after turn stream failure; the next request will reconnect ({error})"
+                ));
+                Err(error)
+            }
+        }
     }
 
     fn reset_shared_runtime(&self, notice: Option<String>) {
@@ -351,9 +423,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        let result = (|| {
-            let mut connection = self.open_connection()?;
-            connection.initialize()?;
+        let result = self.with_streaming_runtime(|connection| {
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(cwd.to_string()),
             })?;
@@ -371,7 +441,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             });
 
             connection.wait_for_turn_stream(&thread_id, &turn_response.turn.id, &event_sender)
-        })();
+        });
 
         if let Err(error) = &result {
             let _ = event_sender.send(ConversationStreamEvent::Failed {
@@ -388,9 +458,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        let result = (|| {
-            let mut connection = self.open_connection()?;
-            connection.initialize()?;
+        let result = self.with_streaming_runtime(|connection| {
             connection.resume_thread(thread_id)?;
             let turn_response = connection.start_turn(thread_id, prompt)?;
 
@@ -399,7 +467,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             });
 
             connection.wait_for_turn_stream(thread_id, &turn_response.turn.id, &event_sender)
-        })();
+        });
 
         if let Err(error) = &result {
             let _ = event_sender.send(ConversationStreamEvent::Failed {
@@ -463,8 +531,14 @@ impl SharedAppServerRuntime {
         self.pending_notices.push(notice);
     }
 
+    fn push_notices(&mut self, notices: Vec<String>) {
+        self.pending_notices.extend(notices);
+    }
+
     fn take_notices(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pending_notices)
+        let mut notices = std::mem::take(&mut self.pending_notices);
+        sort_and_dedup_warnings(&mut notices);
+        notices
     }
 }
 
@@ -1070,5 +1144,23 @@ mod tests {
         sort_and_dedup_warnings(&mut warnings);
 
         assert_eq!(warnings, vec!["alpha".to_string(), "zeta".to_string()]);
+    }
+
+    #[test]
+    fn take_notices_normalizes_stream_and_retry_messages() {
+        let mut runtime = SharedAppServerRuntime::default();
+        runtime.push_notice("shared runtime reset".to_string());
+        runtime.push_notices(vec![
+            "stream warning".to_string(),
+            "shared runtime reset".to_string(),
+        ]);
+
+        assert_eq!(
+            runtime.take_notices(),
+            vec![
+                "shared runtime reset".to_string(),
+                "stream warning".to_string(),
+            ]
+        );
     }
 }

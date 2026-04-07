@@ -21,8 +21,8 @@ Even with live shell behavior, the app still feels more page-based than Codex CL
 
 - startup diagnostics and recent-session browsing still open as modal overlays
 - prompt sending is still gated on startup diagnostics instead of sharing one continuous runtime state
-- each major action still opens a fresh app-server connection
-- there is no long-lived runtime that keeps one shell session attached to one transport process
+- concurrent request actions still fall back to an isolated connection while a turn stream is active
+- there is still no fully continuous runtime that keeps every shell action attached to exactly one transport process
 
 ## Current Strengths
 - the shell is now the default landing surface instead of a later navigation target

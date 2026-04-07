@@ -23,7 +23,7 @@ The following are intentionally not listed as TODO items because they already sh
 
 ## P1. Runtime
 - [x] introduce a shared adapter runtime for startup, session, and snapshot requests
-- [ ] preserve current streaming event mapping while changing transport lifecycle
+- [x] preserve current streaming event mapping while changing transport lifecycle
 - [x] add clearer reconnect/reset behavior
 
 ## P2. Shell Ergonomics
