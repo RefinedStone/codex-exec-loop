@@ -41,6 +41,7 @@ Inside the shell:
 - `Ctrl+a`: toggle auto follow-up
 - `Ctrl+f`: cycle templates
 - `Ctrl+p`: open the template preview overlay
+- `:templates`: open the template preview overlay from the composer
 - `Ctrl+g`: edit the stop keyword value
 - `Ctrl+k`: toggle stop keyword rule
 - `Ctrl+n`: toggle no-file-change stop rule

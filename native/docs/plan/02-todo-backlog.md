@@ -29,7 +29,7 @@ These are the current baseline, not the final UX target. The next phase pivots f
 - [x] replace the current panel-heavy shell layout with a single flowing transcript
 - [x] keep the composer anchored at the bottom while transcript output continues above it
 - [x] reduce dependence on alternate-screen navigation for normal conversation flow
-- [ ] decide which auxiliary surfaces still deserve overlays versus inline command entry
+- [x] decide which auxiliary surfaces still deserve overlays versus inline command entry
 
 ## P2. Stream Shell Ergonomics
 - [x] improve multiline input editing behavior

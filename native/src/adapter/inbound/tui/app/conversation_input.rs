@@ -5,6 +5,7 @@ pub(super) enum ConversationInputEvent {
     CharacterTyped { character: char },
     NewlineInserted,
     BackspacePressed,
+    InputCleared,
     StatusMessageShown { status_text: String },
 }
 
@@ -26,6 +27,9 @@ pub(super) fn reduce_conversation_input(
         }
         ConversationInputEvent::BackspacePressed => {
             state.input_buffer.pop();
+        }
+        ConversationInputEvent::InputCleared => {
+            state.input_buffer.clear();
         }
         ConversationInputEvent::StatusMessageShown { status_text } => {
             state.status_text = status_text;
@@ -96,6 +100,19 @@ mod tests {
         );
 
         assert_eq!(reduced.state.status_text, "turn still running");
+    }
+
+    #[test]
+    fn input_cleared_empties_buffer() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = ":diag".to_string();
+
+        let reduced = reduce_conversation_input(state, ConversationInputEvent::InputCleared);
+
+        assert!(reduced.state.input_buffer.is_empty());
     }
 
     fn sample_template_load_result() -> FollowupTemplateCatalogLoadResult {

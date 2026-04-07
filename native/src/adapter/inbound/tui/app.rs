@@ -201,6 +201,52 @@ enum PromptOrigin {
     AutoFollow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineShellCommand {
+    Diagnostics,
+    Sessions,
+    Templates,
+    NewDraft,
+    Help,
+}
+
+impl InlineShellCommand {
+    fn parse(input: &str) -> Option<Self> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            ":diag" | ":diagnostics" => Some(Self::Diagnostics),
+            ":session" | ":sessions" => Some(Self::Sessions),
+            ":template" | ":templates" => Some(Self::Templates),
+            ":new" => Some(Self::NewDraft),
+            ":help" => Some(Self::Help),
+            _ => None,
+        }
+    }
+
+    fn command_list() -> &'static str {
+        ":diag  :sessions  :templates  :new  :help"
+    }
+
+    fn buffered_hint(self) -> &'static str {
+        match self {
+            Self::Diagnostics => "Press Enter to open the diagnostics overlay.",
+            Self::Sessions => "Press Enter to open the recent-sessions overlay.",
+            Self::Templates => "Press Enter to open the template overlay.",
+            Self::NewDraft => "Press Enter to open a new draft in the shell.",
+            Self::Help => "Press Enter to show the available shell commands.",
+        }
+    }
+
+    fn execution_status(self) -> Option<&'static str> {
+        match self {
+            Self::Diagnostics => Some("opened diagnostics overlay from :diag"),
+            Self::Sessions => Some("opened recent sessions overlay from :sessions"),
+            Self::Templates => Some("opened template overlay from :templates"),
+            Self::NewDraft => None,
+            Self::Help => Some("shell commands: :diag  :sessions  :templates  :new  :help"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AutoFollowupDecision {
     QueuePrompt(String),
@@ -969,6 +1015,17 @@ impl NativeTuiApp {
     }
 
     fn start_turn_submission(&mut self) {
+        let inline_command = match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                InlineShellCommand::parse(&conversation.input_buffer)
+            }
+            _ => None,
+        };
+        if let Some(command) = inline_command {
+            self.execute_inline_shell_command(command);
+            return;
+        }
+
         let prompt = match &self.conversation_state {
             ConversationState::Ready(conversation) if conversation.can_submit_prompt() => {
                 conversation.input_buffer.trim().to_string()
@@ -1008,6 +1065,10 @@ impl NativeTuiApp {
 
         let reduction = reduce_conversation_input(conversation, event);
         self.conversation_state = ConversationState::Ready(reduction.state);
+    }
+
+    fn clear_input_buffer(&mut self) {
+        self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
     }
 
     fn conversation_intent_state(&self) -> ConversationIntentState {
@@ -1298,6 +1359,23 @@ impl NativeTuiApp {
 
     fn open_new_conversation_shell(&mut self) {
         self.dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
+    }
+
+    fn execute_inline_shell_command(&mut self, command: InlineShellCommand) {
+        match command {
+            InlineShellCommand::Diagnostics => self.show_startup_overlay(),
+            InlineShellCommand::Sessions => self.show_session_overlay(),
+            InlineShellCommand::Templates => self.show_followup_template_overlay(),
+            InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
+            InlineShellCommand::Help => {}
+        }
+
+        if let Some(status_text) = command.execution_status() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: status_text.to_string(),
+            });
+        }
+        self.clear_input_buffer();
     }
 
     fn current_session(&self) -> Option<&SessionSummary> {
@@ -2782,6 +2860,11 @@ fn build_ready_input_lines(
             }
         }
 
+        lines.push(Line::from(format!(
+            "Shell commands: {}",
+            InlineShellCommand::command_list()
+        )));
+
         return lines;
     }
 
@@ -2791,6 +2874,11 @@ fn build_ready_input_lines(
             .lines()
             .map(|line| Line::from(line.to_string())),
     );
+
+    if let Some(command) = InlineShellCommand::parse(&conversation.input_buffer) {
+        lines.push(Line::from(command.buffered_hint()));
+        return lines;
+    }
 
     match (conversation.input_state, shell_action_availability) {
         (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
@@ -2939,13 +3027,14 @@ mod tests {
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
         ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
-        RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
-        TuiPresentationMode, TurnActivityState, build_conversation_scroll_offset,
-        build_followup_template_preview_lines, build_followup_template_status_lines,
-        build_input_block_height, build_input_title, build_ready_input_lines,
-        build_shell_footer_height, build_shell_footer_lines, build_status_title,
-        build_transcript_title, count_rendered_conversation_lines, format_conversation_lines,
+        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
+        NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
+        ShellOverlay, StartupState, TuiPresentationMode, TurnActivityState,
+        build_conversation_scroll_offset, build_followup_template_preview_lines,
+        build_followup_template_status_lines, build_input_block_height, build_input_title,
+        build_ready_input_lines, build_shell_footer_height, build_shell_footer_lines,
+        build_status_title, build_transcript_title, count_rendered_conversation_lines,
+        format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3130,6 +3219,7 @@ mod tests {
 
         assert!(rendered.contains("Ready to continue this session."));
         assert!(rendered.contains("Ctrl+j for newline"));
+        assert!(rendered.contains("Shell commands: :diag"));
     }
 
     #[test]
@@ -3165,6 +3255,45 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Ctrl+j inserts a new line"))
         );
+    }
+
+    #[test]
+    fn inline_shell_command_recognizes_supported_aliases() {
+        assert_eq!(
+            InlineShellCommand::parse(":diag"),
+            Some(InlineShellCommand::Diagnostics)
+        );
+        assert_eq!(
+            InlineShellCommand::parse(":sessions"),
+            Some(InlineShellCommand::Sessions)
+        );
+        assert_eq!(
+            InlineShellCommand::parse(":templates"),
+            Some(InlineShellCommand::Templates)
+        );
+        assert_eq!(
+            InlineShellCommand::parse(":new"),
+            Some(InlineShellCommand::NewDraft)
+        );
+        assert_eq!(
+            InlineShellCommand::parse(":help"),
+            Some(InlineShellCommand::Help)
+        );
+    }
+
+    #[test]
+    fn inline_shell_command_buffer_shows_command_hint() {
+        let mut conversation = ready_conversation();
+        conversation.input_buffer = ":templates".to_string();
+
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(":templates"));
+        assert!(rendered.contains("Press Enter to open the template overlay."));
     }
 
     #[test]
@@ -3325,6 +3454,88 @@ mod tests {
                 .is_empty()
         );
         assert!(conversation.status_text.contains("auto follow-up paused"));
+    }
+
+    #[test]
+    fn inline_diag_command_opens_overlay_and_clears_input() {
+        let (mut app, codex_port) = make_test_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should start with a ready conversation");
+        };
+        conversation.input_buffer = ":diag".to_string();
+
+        app.start_turn_submission();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(app.shell_overlay, ShellOverlay::Startup);
+        assert!(conversation.input_buffer.is_empty());
+        assert!(
+            conversation
+                .status_text
+                .contains("opened diagnostics overlay")
+        );
+        assert!(
+            codex_port
+                .new_thread_calls
+                .lock()
+                .expect("new-thread call mutex poisoned")
+                .is_empty()
+        );
+        assert!(
+            codex_port
+                .turn_calls
+                .lock()
+                .expect("turn call mutex poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inline_templates_command_opens_overlay_while_turn_is_streaming() {
+        let (mut app, codex_port) = make_test_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should start with a ready conversation");
+        };
+        conversation.input_state = ConversationInputState::StreamingTurn;
+        conversation.input_buffer = ":templates".to_string();
+
+        app.start_turn_submission();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(app.shell_overlay, ShellOverlay::FollowupTemplates);
+        assert_eq!(
+            conversation.input_state,
+            ConversationInputState::StreamingTurn
+        );
+        assert!(conversation.input_buffer.is_empty());
+        assert!(
+            codex_port
+                .turn_calls
+                .lock()
+                .expect("turn call mutex poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inline_help_command_updates_status_and_clears_input() {
+        let (mut app, _) = make_test_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should start with a ready conversation");
+        };
+        conversation.input_buffer = ":help".to_string();
+
+        app.start_turn_submission();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert!(conversation.input_buffer.is_empty());
+        assert!(conversation.status_text.contains("shell commands: :diag"));
     }
 
     #[test]

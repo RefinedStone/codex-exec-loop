@@ -1,12 +1,13 @@
 # TUI Shell Flow
 
 ## Entry Flow
-The app now starts directly in `ConversationShell` with a new-thread draft. Startup diagnostics and recent sessions are still available, but they open as shell overlays instead of replacing the whole screen.
+The app now starts directly in `ConversationShell` with a new-thread draft. Startup diagnostics, recent sessions, and template inspection still use overlays for detailed browsing, but the composer can now open them through inline shell commands such as `:diag`, `:sessions`, and `:templates`.
 
 ## Current Screen Responsibilities
-- `ConversationShell`: single-column transcript, slim status footer, bottom-most composer, integrated title hints, startup/session summaries, and lightweight transcript navigation
+- `ConversationShell`: single-column transcript, slim status footer, bottom-most composer, integrated title hints, inline shell command entry, startup/session summaries, and lightweight transcript navigation
 - startup overlay: account checks, workspace path, schema snapshot, and warnings
 - recent sessions overlay: thread list, selected-session metadata, and resume entry point
+- follow-up template overlay: template preview, strategy selection, and stop-keyword editing
 
 ## Current Conversation Flow
 1. Startup checks run in a background thread.
@@ -24,7 +25,7 @@ The shell already tracks more than page-level loading:
 - transcript messages
 - transcript viewport state for tail-follow versus manual scroll
 - input buffer
-- overlay state for startup diagnostics and recent sessions
+- overlay state for startup diagnostics, recent sessions, and follow-up templates
 - startup readiness state for gating prompt submission
 - turn state: draft, ready, submitting, streaming
 - auto follow-up state and selected template
@@ -32,7 +33,7 @@ The shell already tracks more than page-level loading:
 - warnings and status text
 
 ## Current UX Gap
-The shell itself is now the primary frame and the transcript is no longer split by a side activity panel. The default run stays on the main terminal screen, but the app still redraws a full Ratatui viewport in raw mode and still leans on modal overlays, so it has not yet reached a truly append-only scrollback-native CLI feel.
+The shell itself is now the primary frame and the transcript is no longer split by a side activity panel. The default run stays on the main terminal screen and command-style entry can open auxiliary overlays, but the app still redraws a full Ratatui viewport in raw mode and still leans on modal overlays, so it has not yet reached a truly append-only scrollback-native CLI feel.
 
 ## Next UX Direction
 The next UX step is not "more panels" or "more routes". It is a pivot toward a stream-first shell closer to Codex CLI:
