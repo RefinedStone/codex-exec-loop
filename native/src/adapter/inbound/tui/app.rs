@@ -1321,14 +1321,16 @@ impl NativeTuiApp {
             return;
         }
 
+        if self.conversation_has_running_turn() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "turn still running; wait for completion before leaving the shell view"
+                        .to_string(),
+            });
+            return;
+        }
+
         match &self.conversation_state {
-            ConversationState::Ready(conversation) if conversation.has_running_turn() => {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text:
-                        "turn still running; wait for completion before leaving the shell view"
-                            .to_string(),
-                });
-            }
             ConversationState::Ready(conversation) if !conversation.is_blank_draft() => {
                 self.open_new_conversation_shell();
             }
