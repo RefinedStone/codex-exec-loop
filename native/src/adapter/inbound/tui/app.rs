@@ -13,7 +13,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
@@ -2413,7 +2413,7 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'_>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![
             Line::from("Thread is still loading."),
@@ -2429,7 +2429,7 @@ fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 fn build_ready_input_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
-) -> Vec<Line<'static>> {
+) -> Vec<Line<'_>> {
     let mut lines = Vec::new();
 
     if conversation.input_buffer.is_empty() {
@@ -2475,9 +2475,7 @@ fn build_ready_input_lines(
         return lines;
     }
 
-    for segment in conversation.input_buffer.split('\n') {
-        lines.push(Line::from(segment.to_string()));
-    }
+    lines.extend(Text::from(conversation.input_buffer.as_str()).lines);
 
     match (conversation.input_state, shell_action_availability) {
         (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
