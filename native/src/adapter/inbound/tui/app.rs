@@ -47,6 +47,8 @@ const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 
 #[path = "app/conversation_input.rs"]
 mod conversation_input;
+#[path = "app/conversation_intents.rs"]
+mod conversation_intents;
 #[path = "app/conversation_lifecycle.rs"]
 mod conversation_lifecycle;
 #[path = "app/conversation_runtime.rs"]
@@ -55,6 +57,10 @@ mod conversation_runtime;
 mod followup_controls;
 
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
+use conversation_intents::{
+    ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
+    ConversationIntentState, reduce_conversation_intents,
+};
 use conversation_lifecycle::{
     ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
     reduce_conversation_lifecycle,
@@ -852,6 +858,60 @@ impl NativeTuiApp {
         self.conversation_state = ConversationState::Ready(reduction.state);
     }
 
+    fn conversation_intent_state(&self) -> ConversationIntentState {
+        let mode = match &self.conversation_state {
+            ConversationState::Loading => ConversationIntentMode::Loading,
+            ConversationState::Failed(_) => ConversationIntentMode::Failed,
+            ConversationState::Ready(conversation) if conversation.is_blank_draft() => {
+                ConversationIntentMode::BlankDraft
+            }
+            ConversationState::Ready(_) => ConversationIntentMode::Ready,
+        };
+
+        ConversationIntentState {
+            has_running_turn: self.conversation_has_running_turn(),
+            mode,
+        }
+    }
+
+    fn dispatch_conversation_intent(&mut self, event: ConversationIntentEvent) {
+        let reduction = reduce_conversation_intents(self.conversation_intent_state(), event);
+        for effect in reduction.effects {
+            self.execute_conversation_intent_effect(effect);
+        }
+    }
+
+    fn execute_conversation_intent_effect(&mut self, effect: ConversationIntentEffect) {
+        match effect {
+            ConversationIntentEffect::ShowStatus { status_text } => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
+            ConversationIntentEffect::OpenNewDraft => {
+                self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
+                let workspace_directory = self.current_workspace_directory();
+                let template_load_result =
+                    self.load_followup_template_catalog(&workspace_directory);
+                self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+                    workspace_directory: workspace_directory.clone(),
+                    template_load_result,
+                });
+                self.sync_followup_template_overlay_state();
+                self.reset_followup_template_preview_scroll();
+            }
+            ConversationIntentEffect::OpenSession { session } => {
+                self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
+                self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+                    session,
+                });
+            }
+            ConversationIntentEffect::ShowExitConfirmation => {
+                self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+            }
+        }
+    }
+
     fn execute_conversation_runtime_effect(&mut self, effect: ConversationRuntimeEffect) {
         match effect {
             ConversationRuntimeEffect::StartStream {
@@ -1066,23 +1126,7 @@ impl NativeTuiApp {
     }
 
     fn open_new_conversation_shell(&mut self) {
-        if self.conversation_has_running_turn() {
-            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "turn still running; wait for completion before starting a new draft"
-                    .to_string(),
-            });
-            return;
-        }
-
-        self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-        let workspace_directory = self.current_workspace_directory();
-        let template_load_result = self.load_followup_template_catalog(&workspace_directory);
-        self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
-            workspace_directory: workspace_directory.clone(),
-            template_load_result,
-        });
-        self.sync_followup_template_overlay_state();
-        self.reset_followup_template_preview_scroll();
+        self.dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
     }
 
     fn current_session(&self) -> Option<&SessionSummary> {
@@ -1095,20 +1139,9 @@ impl NativeTuiApp {
     }
 
     fn open_conversation_shell(&mut self) {
-        if self.conversation_has_running_turn() {
-            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "turn still running; wait for completion before switching sessions"
-                    .to_string(),
-            });
-            return;
-        }
-
-        if let Some(session) = self.current_session().cloned() {
-            self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-            self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
-                session,
-            });
-        }
+        self.dispatch_conversation_intent(ConversationIntentEvent::SessionOpenRequested {
+            session: self.current_session().cloned(),
+        });
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -1321,27 +1354,7 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.conversation_has_running_turn() {
-            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text:
-                    "turn still running; wait for completion before leaving the shell view"
-                        .to_string(),
-            });
-            return;
-        }
-
-        match &self.conversation_state {
-            ConversationState::Ready(conversation) if !conversation.is_blank_draft() => {
-                self.open_new_conversation_shell();
-            }
-            ConversationState::Failed(_) => {
-                self.open_new_conversation_shell();
-            }
-            ConversationState::Loading => {}
-            ConversationState::Ready(_) => {
-                self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
-            }
-        }
+        self.dispatch_conversation_intent(ConversationIntentEvent::CtrlCPressed);
     }
 }
 
