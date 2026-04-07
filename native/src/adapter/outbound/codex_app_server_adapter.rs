@@ -246,8 +246,6 @@ impl CodexAppServerAdapter {
     where
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
-        let mut last_error: Option<anyhow::Error> = None;
-
         for attempt in 0..2 {
             let result = (|| {
                 let mut runtime = self
@@ -267,8 +265,7 @@ impl CodexAppServerAdapter {
 
             match result {
                 Ok(output) => return Ok(output),
-                Err(error) if attempt == 0 => {
-                    last_error = Some(error);
+                Err(_) if attempt == 0 => {
                     self.reset_shared_runtime();
                 }
                 Err(error) => {
@@ -278,7 +275,7 @@ impl CodexAppServerAdapter {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("shared runtime request failed")))
+        unreachable!("shared runtime retry loop always returns on success or final failure")
     }
 
     fn reset_shared_runtime(&self) {
