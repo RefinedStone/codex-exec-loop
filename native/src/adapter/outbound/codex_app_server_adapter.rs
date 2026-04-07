@@ -247,37 +247,53 @@ impl CodexAppServerAdapter {
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
         for attempt in 0..2 {
-            let result = match self.shared_runtime.try_lock() {
-                Ok(mut runtime) => self.run_request_on_locked_runtime(&mut runtime, &mut operation),
+            let (mode, result) = match self.shared_runtime.try_lock() {
+                Ok(mut runtime) => (
+                    RequestRuntimeMode::Shared,
+                    self.run_request_on_locked_runtime(&mut runtime, &mut operation),
+                ),
                 Err(TryLockError::WouldBlock) => {
-                    return self.with_isolated_runtime(
-                        Some(
-                            "shared runtime busy with an active turn stream; request used an isolated app-server connection"
-                                .to_string(),
+                    (
+                        RequestRuntimeMode::IsolatedFallback,
+                        self.with_isolated_runtime(
+                            Some(
+                                "shared runtime busy with an active turn stream; request used an isolated app-server connection"
+                                    .to_string(),
+                            ),
+                            &mut operation,
                         ),
-                        &mut operation,
-                    );
+                    )
                 }
                 Err(TryLockError::Poisoned(_)) => {
-                    Err(anyhow!("shared app-server runtime mutex was poisoned"))
+                    (
+                        RequestRuntimeMode::Shared,
+                        Err(anyhow!("shared app-server runtime mutex was poisoned")),
+                    )
                 }
             };
 
             match result {
                 Ok(output) => return Ok(output),
-                Err(error) => {
-                    if attempt == 0 {
+                Err(error) => match request_failure_outcome(mode, attempt) {
+                    RequestFailureOutcome::RetryAfterSharedReset => {
                         self.reset_shared_runtime(Some(format!(
                             "shared runtime reset after request failure; retrying with a fresh app-server connection ({error})"
                         )));
                         continue;
                     }
-
-                    self.reset_shared_runtime(None);
-                    return Err(error.context(
-                        "shared runtime retry also failed after reset; open diagnostics and rerun the request",
-                    ));
-                }
+                    RequestFailureOutcome::RetryWithoutReset => continue,
+                    RequestFailureOutcome::ReturnSharedFailure => {
+                        self.reset_shared_runtime(None);
+                        return Err(error.context(
+                            "shared runtime retry also failed after reset; open diagnostics and rerun the request",
+                        ));
+                    }
+                    RequestFailureOutcome::ReturnIsolatedFailure => {
+                        return Err(error.context(
+                            "isolated fallback retry also failed while the shared turn stream was busy; rerun the request after the active turn completes",
+                        ));
+                    }
+                },
             }
         }
 
@@ -545,6 +561,29 @@ impl SharedAppServerRuntime {
 struct SharedRuntimeOutput<T> {
     value: T,
     warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestRuntimeMode {
+    Shared,
+    IsolatedFallback,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestFailureOutcome {
+    RetryAfterSharedReset,
+    RetryWithoutReset,
+    ReturnSharedFailure,
+    ReturnIsolatedFailure,
+}
+
+fn request_failure_outcome(mode: RequestRuntimeMode, attempt: usize) -> RequestFailureOutcome {
+    match (mode, attempt) {
+        (RequestRuntimeMode::Shared, 0) => RequestFailureOutcome::RetryAfterSharedReset,
+        (RequestRuntimeMode::IsolatedFallback, 0) => RequestFailureOutcome::RetryWithoutReset,
+        (RequestRuntimeMode::Shared, _) => RequestFailureOutcome::ReturnSharedFailure,
+        (RequestRuntimeMode::IsolatedFallback, _) => RequestFailureOutcome::ReturnIsolatedFailure,
+    }
 }
 
 struct AppServerConnection {
@@ -1124,7 +1163,10 @@ struct ThreadGitInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{SharedAppServerRuntime, sort_and_dedup_warnings};
+    use super::{
+        RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, request_failure_outcome,
+        sort_and_dedup_warnings,
+    };
 
     #[test]
     fn reset_preserves_pending_runtime_notices() {
@@ -1161,6 +1203,30 @@ mod tests {
                 "shared runtime reset".to_string(),
                 "stream warning".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn shared_request_failures_retry_once_after_reset() {
+        assert_eq!(
+            request_failure_outcome(RequestRuntimeMode::Shared, 0),
+            RequestFailureOutcome::RetryAfterSharedReset
+        );
+        assert_eq!(
+            request_failure_outcome(RequestRuntimeMode::Shared, 1),
+            RequestFailureOutcome::ReturnSharedFailure
+        );
+    }
+
+    #[test]
+    fn isolated_fallback_failures_retry_without_resetting_shared_runtime() {
+        assert_eq!(
+            request_failure_outcome(RequestRuntimeMode::IsolatedFallback, 0),
+            RequestFailureOutcome::RetryWithoutReset
+        );
+        assert_eq!(
+            request_failure_outcome(RequestRuntimeMode::IsolatedFallback, 1),
+            RequestFailureOutcome::ReturnIsolatedFailure
         );
     }
 }
