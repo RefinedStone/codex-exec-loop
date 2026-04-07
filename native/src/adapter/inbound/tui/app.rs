@@ -45,9 +45,15 @@ const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 
+#[path = "app/conversation_lifecycle.rs"]
+mod conversation_lifecycle;
 #[path = "app/conversation_runtime.rs"]
 mod conversation_runtime;
 
+use conversation_lifecycle::{
+    ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
+    reduce_conversation_lifecycle,
+};
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
@@ -759,16 +765,43 @@ impl NativeTuiApp {
         }
     }
 
-    fn start_conversation_load(&mut self, thread_id: String) {
-        self.conversation_state = ConversationState::Loading;
-        let tx = self.tx.clone();
-        let service = self.conversation_service.clone();
-        thread::spawn(move || {
-            let result = service
-                .load_snapshot(&thread_id)
-                .map_err(|error| error.to_string());
-            let _ = tx.send(BackgroundMessage::ConversationLoaded(result));
-        });
+    fn take_conversation_lifecycle_state(&mut self) -> ConversationLifecycleState {
+        ConversationLifecycleState {
+            conversation_state: std::mem::replace(
+                &mut self.conversation_state,
+                ConversationState::Loading,
+            ),
+            active_session: self.active_session.take(),
+        }
+    }
+
+    fn apply_conversation_lifecycle_state(&mut self, state: ConversationLifecycleState) {
+        self.conversation_state = state.conversation_state;
+        self.active_session = state.active_session;
+    }
+
+    fn dispatch_conversation_lifecycle(&mut self, event: ConversationLifecycleEvent) {
+        let reduction =
+            reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
+        self.apply_conversation_lifecycle_state(reduction.state);
+        for effect in reduction.effects {
+            self.execute_conversation_lifecycle_effect(effect);
+        }
+    }
+
+    fn execute_conversation_lifecycle_effect(&mut self, effect: ConversationLifecycleEffect) {
+        match effect {
+            ConversationLifecycleEffect::LoadConversation { thread_id } => {
+                let tx = self.tx.clone();
+                let service = self.conversation_service.clone();
+                thread::spawn(move || {
+                    let result = service
+                        .load_snapshot(&thread_id)
+                        .map_err(|error| error.to_string());
+                    let _ = tx.send(BackgroundMessage::ConversationLoaded(result));
+                });
+            }
+        }
     }
 
     fn start_turn_submission(&mut self) {
@@ -879,16 +912,16 @@ impl NativeTuiApp {
                     self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(result));
                 }
                 BackgroundMessage::ConversationLoaded(result) => {
-                    self.conversation_state = match result {
-                        Ok(snapshot) => {
-                            let workspace_directory = snapshot.cwd.clone();
-                            ConversationState::Ready(ConversationViewModel::from_snapshot(
-                                snapshot,
-                                self.load_followup_template_catalog(&workspace_directory),
-                            ))
-                        }
-                        Err(message) => ConversationState::Failed(message),
+                    let template_load_result = match &result {
+                        Ok(snapshot) => Some(self.load_followup_template_catalog(&snapshot.cwd)),
+                        Err(_) => None,
                     };
+                    self.dispatch_conversation_lifecycle(
+                        ConversationLifecycleEvent::ConversationLoaded {
+                            result,
+                            template_load_result,
+                        },
+                    );
                     self.sync_followup_template_overlay_state();
                     self.reset_followup_template_preview_scroll();
                 }
@@ -1016,13 +1049,13 @@ impl NativeTuiApp {
             return;
         }
 
-        self.active_session = None;
         self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
         let workspace_directory = self.current_workspace_directory();
-        self.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
-            workspace_directory.clone(),
-            self.load_followup_template_catalog(&workspace_directory),
-        ));
+        let template_load_result = self.load_followup_template_catalog(&workspace_directory);
+        self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: workspace_directory.clone(),
+            template_load_result,
+        });
         self.sync_followup_template_overlay_state();
         self.reset_followup_template_preview_scroll();
     }
@@ -1045,10 +1078,10 @@ impl NativeTuiApp {
         }
 
         if let Some(session) = self.current_session().cloned() {
-            let thread_id = session.id.clone();
-            self.active_session = Some(session);
             self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-            self.start_conversation_load(thread_id);
+            self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+                session,
+            });
         }
     }
 
