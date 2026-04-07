@@ -1,17 +1,30 @@
 use ratatui::widgets::ListState;
 
 #[derive(Debug, Default)]
+pub(super) struct StopKeywordEditorState {
+    pub is_editing: bool,
+    pub buffer: String,
+}
+
+#[derive(Debug, Default)]
 pub(super) struct FollowupOverlayUiState {
     pub preview_scroll: u16,
     pub list_state: ListState,
+    pub stop_keyword_editor: StopKeywordEditorState,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum FollowupOverlayUiEvent {
-    OverlayShown,
+    OverlayShown { stop_keyword: String },
     TemplateChanged,
-    ContentReset,
+    ContentReset { stop_keyword: String },
     PreviewScrolled { delta: i32 },
+    StopKeywordValueSynced { value: String },
+    StopKeywordEditStarted { current_value: String },
+    StopKeywordEditCommitted { current_value: String },
+    StopKeywordEditCanceled { current_value: String },
+    StopKeywordCharacterTyped { character: char },
+    StopKeywordBackspacePressed,
 }
 
 pub(super) fn reduce_followup_overlay_ui(
@@ -19,9 +32,14 @@ pub(super) fn reduce_followup_overlay_ui(
     event: FollowupOverlayUiEvent,
 ) -> FollowupOverlayUiState {
     match event {
-        FollowupOverlayUiEvent::OverlayShown | FollowupOverlayUiEvent::ContentReset => {
+        FollowupOverlayUiEvent::OverlayShown { stop_keyword }
+        | FollowupOverlayUiEvent::ContentReset { stop_keyword } => {
             state.preview_scroll = 0;
             state.list_state = ListState::default();
+            state.stop_keyword_editor = StopKeywordEditorState {
+                is_editing: false,
+                buffer: stop_keyword,
+            };
         }
         FollowupOverlayUiEvent::TemplateChanged => {
             state.preview_scroll = 0;
@@ -32,6 +50,30 @@ pub(super) fn reduce_followup_overlay_ui(
                 state.preview_scroll = state.preview_scroll.saturating_sub(amount);
             } else {
                 state.preview_scroll = state.preview_scroll.saturating_add(amount);
+            }
+        }
+        FollowupOverlayUiEvent::StopKeywordValueSynced { value } => {
+            if !state.stop_keyword_editor.is_editing {
+                state.stop_keyword_editor.buffer = value;
+            }
+        }
+        FollowupOverlayUiEvent::StopKeywordEditStarted { current_value } => {
+            state.stop_keyword_editor.is_editing = true;
+            state.stop_keyword_editor.buffer = current_value;
+        }
+        FollowupOverlayUiEvent::StopKeywordEditCommitted { current_value }
+        | FollowupOverlayUiEvent::StopKeywordEditCanceled { current_value } => {
+            state.stop_keyword_editor.is_editing = false;
+            state.stop_keyword_editor.buffer = current_value;
+        }
+        FollowupOverlayUiEvent::StopKeywordCharacterTyped { character } => {
+            if state.stop_keyword_editor.is_editing {
+                state.stop_keyword_editor.buffer.push(character);
+            }
+        }
+        FollowupOverlayUiEvent::StopKeywordBackspacePressed => {
+            if state.stop_keyword_editor.is_editing {
+                state.stop_keyword_editor.buffer.pop();
             }
         }
     }
@@ -85,8 +127,77 @@ mod tests {
         let mut state = FollowupOverlayUiState::default();
         state.list_state.select(Some(3));
 
-        let reduced = reduce_followup_overlay_ui(state, FollowupOverlayUiEvent::OverlayShown);
+        let reduced = reduce_followup_overlay_ui(
+            state,
+            FollowupOverlayUiEvent::OverlayShown {
+                stop_keyword: "AUTO_STOP".to_string(),
+            },
+        );
 
         assert_eq!(reduced.list_state.selected(), None);
+        assert_eq!(reduced.stop_keyword_editor.buffer, "AUTO_STOP");
+        assert!(!reduced.stop_keyword_editor.is_editing);
+    }
+
+    #[test]
+    fn stop_keyword_editing_updates_buffer_and_backspace() {
+        let state = FollowupOverlayUiState::default();
+
+        let state = reduce_followup_overlay_ui(
+            state,
+            FollowupOverlayUiEvent::StopKeywordEditStarted {
+                current_value: "AUTO_STOP".to_string(),
+            },
+        );
+        let state = reduce_followup_overlay_ui(
+            state,
+            FollowupOverlayUiEvent::StopKeywordCharacterTyped { character: '2' },
+        );
+        let reduced =
+            reduce_followup_overlay_ui(state, FollowupOverlayUiEvent::StopKeywordBackspacePressed);
+
+        assert_eq!(reduced.stop_keyword_editor.buffer, "AUTO_STOP");
+        assert!(reduced.stop_keyword_editor.is_editing);
+    }
+
+    #[test]
+    fn stop_keyword_commit_exits_edit_mode_and_syncs_value() {
+        let state = FollowupOverlayUiState {
+            stop_keyword_editor: StopKeywordEditorState {
+                is_editing: true,
+                buffer: "AUTO_STOP_2".to_string(),
+            },
+            ..Default::default()
+        };
+
+        let reduced = reduce_followup_overlay_ui(
+            state,
+            FollowupOverlayUiEvent::StopKeywordEditCommitted {
+                current_value: "AUTO_STOP_2".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.stop_keyword_editor.buffer, "AUTO_STOP_2");
+        assert!(!reduced.stop_keyword_editor.is_editing);
+    }
+
+    #[test]
+    fn stop_keyword_sync_does_not_override_active_edit_buffer() {
+        let state = FollowupOverlayUiState {
+            stop_keyword_editor: StopKeywordEditorState {
+                is_editing: true,
+                buffer: "WORKING".to_string(),
+            },
+            ..Default::default()
+        };
+
+        let reduced = reduce_followup_overlay_ui(
+            state,
+            FollowupOverlayUiEvent::StopKeywordValueSynced {
+                value: "AUTO_STOP".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.stop_keyword_editor.buffer, "WORKING");
     }
 }

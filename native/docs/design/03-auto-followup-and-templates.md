@@ -41,16 +41,19 @@ Inside the shell:
 - `Ctrl+a`: toggle auto follow-up
 - `Ctrl+f`: cycle templates
 - `Ctrl+p`: open the template preview overlay
+- `Ctrl+g`: edit the stop keyword value
 - `Ctrl+k`: toggle stop keyword rule
 - `Ctrl+n`: toggle no-file-change stop rule
 
 Inside the template preview overlay:
 
 - `Up/Down` or `j/k`: move between templates
+- `Ctrl+g`: enter stop keyword edit mode
+- while editing, type the new keyword directly, `Enter` to save, `Esc` or `Ctrl+c` to cancel
 - `PageUp/PageDown` or `Ctrl+u/Ctrl+d`: scroll long previews
 - `Enter`, `Esc`, or `Ctrl+c`: close the overlay
 
 ## Remaining Gaps
-- no custom stop keyword editing from the TUI yet
+- stop keyword editing still assumes a single token and only supports append/backspace editing
 - template preview is read-only and still cycles through a flat list
 - no richer strategy metadata beyond label and source

@@ -8,6 +8,9 @@ pub(super) enum FollowupControlEvent {
     },
     AutoFollowToggled,
     StopKeywordToggled,
+    StopKeywordValueUpdated {
+        value: String,
+    },
     NoFileChangeStopToggled,
     TemplateCycledForward,
     TemplateCycledBackward,
@@ -16,6 +19,7 @@ pub(super) enum FollowupControlEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FollowupControlEffect {
     SyncTemplateOverlayUi,
+    SyncStopKeywordEditor { value: String },
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +70,23 @@ pub(super) fn reduce_followup_controls(
                 "auto stop keyword {}",
                 state.auto_follow_state.stop_keyword_label()
             );
+        }
+        FollowupControlEvent::StopKeywordValueUpdated { value } => {
+            let Some(value) = StopKeywordRule::normalize_candidate(&value) else {
+                state.status_text =
+                    "auto stop keyword must be a single token without whitespace".to_string();
+                return FollowupControlReduction { state, effects };
+            };
+
+            state
+                .auto_follow_state
+                .set_stop_keyword_value(value.clone());
+            state.clear_auto_followup_skip();
+            state.status_text = format!(
+                "auto stop keyword value {}",
+                state.auto_follow_state.stop_keyword_label()
+            );
+            effects.push(FollowupControlEffect::SyncStopKeywordEditor { value });
         }
         FollowupControlEvent::NoFileChangeStopToggled => {
             state.auto_follow_state.toggle_no_file_change_stop();
@@ -225,6 +246,58 @@ mod tests {
         assert_eq!(
             reduced.effects,
             vec![FollowupControlEffect::SyncTemplateOverlayUi]
+        );
+    }
+
+    #[test]
+    fn updating_stop_keyword_value_clears_skip_and_emits_editor_sync() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+        state.record_auto_followup_skip(AutoFollowupSkipReason::StopKeywordMatched);
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::StopKeywordValueUpdated {
+                value: "DONE".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE");
+        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert_eq!(
+            reduced.effects,
+            vec![FollowupControlEffect::SyncStopKeywordEditor {
+                value: "DONE".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn invalid_stop_keyword_value_keeps_existing_rule() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::StopKeywordValueUpdated {
+                value: "two words".to_string(),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.stop_keyword_value(),
+            DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+        );
+        assert!(reduced.effects.is_empty());
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("single token without whitespace")
         );
     }
 

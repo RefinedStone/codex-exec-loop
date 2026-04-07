@@ -328,6 +328,10 @@ impl AutoFollowState {
         self.stop_rules.stop_keyword.label()
     }
 
+    fn stop_keyword_value(&self) -> &str {
+        self.stop_rules.stop_keyword.value()
+    }
+
     fn no_file_change_stop_label(&self) -> &'static str {
         self.stop_rules.no_file_change_label()
     }
@@ -354,6 +358,10 @@ impl AutoFollowState {
 
     fn toggle_stop_keyword(&mut self) {
         self.stop_rules.stop_keyword.toggle();
+    }
+
+    fn set_stop_keyword_value(&mut self, value: String) {
+        self.stop_rules.stop_keyword.set_value(value);
     }
 
     fn toggle_no_file_change_stop(&mut self) {
@@ -409,6 +417,15 @@ impl AutoFollowStopRules {
 }
 
 impl StopKeywordRule {
+    fn normalize_candidate(candidate: &str) -> Option<String> {
+        let normalized = candidate.trim();
+        if normalized.is_empty() || normalized.chars().any(char::is_whitespace) {
+            None
+        } else {
+            Some(normalized.to_string())
+        }
+    }
+
     fn label(&self) -> String {
         if self.enabled {
             format!("on ({})", self.value)
@@ -430,6 +447,10 @@ impl StopKeywordRule {
 
     fn toggle(&mut self) {
         self.enabled = !self.enabled;
+    }
+
+    fn set_value(&mut self, value: String) {
+        self.value = value;
     }
 
     fn value(&self) -> &str {
@@ -904,7 +925,9 @@ impl NativeTuiApp {
                     workspace_directory: workspace_directory.clone(),
                     template_load_result,
                 });
-                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset);
+                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
+                    stop_keyword: self.current_stop_keyword_value(),
+                });
             }
             ConversationIntentEffect::OpenSession { session } => {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
@@ -968,6 +991,11 @@ impl NativeTuiApp {
 
         let reduction = reduce_followup_controls(conversation, event);
         self.conversation_state = ConversationState::Ready(reduction.state);
+        if !self.is_stop_keyword_editing() {
+            self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordValueSynced {
+                value: self.current_stop_keyword_value(),
+            });
+        }
         for effect in reduction.effects {
             self.execute_followup_control_effect(effect);
         }
@@ -977,6 +1005,13 @@ impl NativeTuiApp {
         match effect {
             FollowupControlEffect::SyncTemplateOverlayUi => {
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::TemplateChanged);
+            }
+            FollowupControlEffect::SyncStopKeywordEditor { value } => {
+                self.dispatch_followup_overlay_ui(
+                    FollowupOverlayUiEvent::StopKeywordEditCommitted {
+                        current_value: value,
+                    },
+                );
             }
         }
     }
@@ -1030,7 +1065,9 @@ impl NativeTuiApp {
                             template_load_result,
                         },
                     );
-                    self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset);
+                    self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
+                        stop_keyword: self.current_stop_keyword_value(),
+                    });
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
@@ -1107,7 +1144,9 @@ impl NativeTuiApp {
     }
 
     fn show_followup_template_overlay(&mut self) {
-        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown);
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown {
+            stop_keyword: self.current_stop_keyword_value(),
+        });
         self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayShown);
     }
 
@@ -1177,6 +1216,68 @@ impl NativeTuiApp {
 
     fn toggle_auto_followup(&mut self) {
         self.dispatch_followup_controls(FollowupControlEvent::AutoFollowToggled);
+    }
+
+    fn current_stop_keyword_value(&self) -> String {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => conversation
+                .auto_follow_state
+                .stop_keyword_value()
+                .to_string(),
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                DEFAULT_AUTO_FOLLOW_STOP_KEYWORD.to_string()
+            }
+        }
+    }
+
+    fn is_stop_keyword_editing(&self) -> bool {
+        self.followup_overlay_ui_state
+            .stop_keyword_editor
+            .is_editing
+    }
+
+    fn start_stop_keyword_edit(&mut self) {
+        if !matches!(self.conversation_state, ConversationState::Ready(_)) {
+            return;
+        }
+
+        if self.shell_overlay != ShellOverlay::FollowupTemplates {
+            self.show_followup_template_overlay();
+        }
+
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordEditStarted {
+            current_value: self.current_stop_keyword_value(),
+        });
+    }
+
+    fn save_stop_keyword_edit(&mut self) {
+        if !self.is_stop_keyword_editing() {
+            return;
+        }
+
+        self.dispatch_followup_controls(FollowupControlEvent::StopKeywordValueUpdated {
+            value: self
+                .followup_overlay_ui_state
+                .stop_keyword_editor
+                .buffer
+                .clone(),
+        });
+    }
+
+    fn cancel_stop_keyword_edit(&mut self) {
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordEditCanceled {
+            current_value: self.current_stop_keyword_value(),
+        });
+    }
+
+    fn push_stop_keyword_character(&mut self, character: char) {
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordCharacterTyped {
+            character,
+        });
+    }
+
+    fn pop_stop_keyword_character(&mut self) {
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordBackspacePressed);
     }
 
     fn toggle_stop_keyword(&mut self) {
@@ -1259,11 +1360,39 @@ impl NativeTuiApp {
         }
     }
 
+    fn handle_stop_keyword_editor_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::FollowupTemplates || !self.is_stop_keyword_editing()
+        {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => self.save_stop_keyword_edit(),
+            KeyCode::Esc => self.cancel_stop_keyword_edit(),
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                self.cancel_stop_keyword_edit()
+            }
+            KeyCode::Backspace => self.pop_stop_keyword_character(),
+            KeyCode::Char(character)
+                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.push_stop_keyword_character(character);
+            }
+            _ => {}
+        }
+
+        true
+    }
+
     fn handle_shell_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         if self.shell_overlay == ShellOverlay::Hidden {
             return false;
         }
         let is_startup_overlay = self.shell_overlay == ShellOverlay::Startup;
+
+        if self.handle_stop_keyword_editor_key(key) {
+            return true;
+        }
 
         if key.code == KeyCode::Esc
             || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'))
@@ -1298,6 +1427,9 @@ impl NativeTuiApp {
                 }
                 KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                     self.toggle_auto_followup()
+                }
+                KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.start_stop_keyword_edit()
                 }
                 KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
                     self.toggle_stop_keyword()
@@ -1419,6 +1551,9 @@ fn run_event_loop(
         match key.code {
             KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                 app.toggle_auto_followup()
+            }
+            KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
+                app.start_stop_keyword_edit()
             }
             KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
                 app.cycle_auto_followup_template()
@@ -1852,14 +1987,16 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     let popup_area = centered_rect(92, 82, frame.area());
     frame.render_widget(Clear, popup_area);
 
+    let status_lines = build_followup_template_status_lines(app);
+    let key_lines = build_followup_template_key_lines(app);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(14),
-            Constraint::Length(6),
-            Constraint::Length(3),
+            Constraint::Length(block_height_for_lines(&status_lines, 6, 9)),
+            Constraint::Length(block_height_for_lines(&key_lines, 5, 7)),
         ])
         .split(popup_area);
 
@@ -1902,7 +2039,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     );
 
     frame.render_widget(
-        Paragraph::new(build_followup_template_status_lines(app))
+        Paragraph::new(status_lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -1913,13 +2050,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     );
 
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
-            Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
-            Line::from("Ctrl+a: auto on/off    Ctrl+k: stop keyword    Ctrl+n: no-file stop"),
-            Line::from("Enter/Esc/Ctrl+C: close"),
-        ])
-        .block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
         layout[3],
     );
 }
@@ -2125,31 +2256,62 @@ fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("conversation is still loading")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => vec![
-            Line::from(format!(
-                "auto follow-up: {}",
-                conversation.auto_follow_state.status_label()
-            )),
-            Line::from(format!(
-                "progress: {}",
-                conversation.auto_follow_state.progress_label()
-            )),
-            Line::from(format!(
-                "stop keyword: {}",
-                conversation.auto_follow_state.stop_keyword_label()
-            )),
-            Line::from(format!(
-                "stop on no-file-change: {}",
-                conversation.auto_follow_state.no_file_change_stop_label()
-            )),
-            Line::from(format!(
-                "last turn file changes: {}",
-                conversation
-                    .turn_activity
-                    .last_completed_file_change_count()
-            )),
-        ],
+        ConversationState::Ready(conversation) => {
+            let mut lines = vec![
+                Line::from(format!(
+                    "auto follow-up: {}",
+                    conversation.auto_follow_state.status_label()
+                )),
+                Line::from(format!(
+                    "progress: {}",
+                    conversation.auto_follow_state.progress_label()
+                )),
+                Line::from(format!(
+                    "stop keyword: {}",
+                    conversation.auto_follow_state.stop_keyword_label()
+                )),
+                Line::from(format!(
+                    "stop on no-file-change: {}",
+                    conversation.auto_follow_state.no_file_change_stop_label()
+                )),
+                Line::from(format!(
+                    "last turn file changes: {}",
+                    conversation
+                        .turn_activity
+                        .last_completed_file_change_count()
+                )),
+            ];
+
+            if app.is_stop_keyword_editing() {
+                lines.push(Line::from(format!(
+                    "editing stop keyword: {}",
+                    app.followup_overlay_ui_state.stop_keyword_editor.buffer
+                )));
+                lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
+            } else {
+                lines.push(Line::from("stop keyword edit: press Ctrl+g"));
+            }
+
+            lines
+        }
     }
+}
+
+fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if app.is_stop_keyword_editing() {
+        return vec![
+            Line::from("Type the new stop keyword directly. Backspace deletes."),
+            Line::from("Enter: save stop keyword    Esc/Ctrl+C: cancel edit"),
+            Line::from("Use a single token without whitespace."),
+        ];
+    }
+
+    vec![
+        Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
+        Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
+        Line::from("Ctrl+a: auto on/off    Ctrl+g: edit stop keyword"),
+        Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
+    ]
 }
 
 fn clamp_scroll_offset(
@@ -2477,6 +2639,10 @@ fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
     (lines.len() as u16 + 2).clamp(MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
 }
 
+fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) -> u16 {
+    (lines.len() as u16 + 2).clamp(min_height, max_height)
+}
+
 fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
     match &app.conversation_state {
         ConversationState::Loading => Line::from("Composer / loading"),
@@ -2509,7 +2675,7 @@ fn build_shell_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             "{primary_submit_help}  |  Ctrl+j newline  |  Ctrl+t new draft  |  Ctrl+C back  |  Ctrl+q quit"
         )),
         Line::from(
-            "Ctrl+o sessions  |  Ctrl+d diagnostics  |  Ctrl+p template preview  |  Ctrl+a auto  |  Ctrl+f next template",
+            "Ctrl+o sessions  |  Ctrl+d diagnostics  |  Ctrl+p templates  |  Ctrl+a auto  |  Ctrl+g stop edit",
         ),
     ]
 }
@@ -2568,12 +2734,12 @@ mod tests {
     use super::{
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-        ConversationViewModel, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, MAX_COMPOSER_HEIGHT,
-        NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
-        ShellOverlay, StartupState, TurnActivityState, build_conversation_scroll_offset,
-        build_followup_template_preview_lines, build_input_block_height, build_ready_input_lines,
-        build_shell_footer_height, build_shell_footer_lines, count_rendered_conversation_lines,
-        format_conversation_lines,
+        ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
+        RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
+        TurnActivityState, build_conversation_scroll_offset, build_followup_template_preview_lines,
+        build_input_block_height, build_ready_input_lines, build_shell_footer_height,
+        build_shell_footer_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3140,6 +3306,92 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_g_starts_stop_keyword_edit_in_followup_overlay() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        app.start_stop_keyword_edit();
+
+        assert_eq!(app.shell_overlay, ShellOverlay::FollowupTemplates);
+        assert!(app.is_stop_keyword_editing());
+        assert_eq!(
+            app.followup_overlay_ui_state.stop_keyword_editor.buffer,
+            DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+        );
+    }
+
+    #[test]
+    fn stop_keyword_edit_commit_updates_saved_value_and_preview() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        app.conversation_state = ConversationState::Ready(conversation);
+        app.start_stop_keyword_edit();
+        app.followup_overlay_ui_state.stop_keyword_editor.buffer = "DONE".to_string();
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(conversation.auto_follow_state.stop_keyword_value(), "DONE");
+        assert!(!app.is_stop_keyword_editing());
+
+        let rendered = build_followup_template_preview_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("DONE"));
+    }
+
+    #[test]
+    fn invalid_stop_keyword_edit_keeps_editor_open() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.start_stop_keyword_edit();
+        app.followup_overlay_ui_state.stop_keyword_editor.buffer = "two words".to_string();
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(
+            conversation.auto_follow_state.stop_keyword_value(),
+            DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+        );
+        assert!(app.is_stop_keyword_editing());
+        assert!(
+            conversation
+                .status_text
+                .contains("single token without whitespace")
+        );
+    }
+
+    #[test]
+    fn stop_keyword_edit_cancel_restores_saved_value() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.start_stop_keyword_edit();
+        app.followup_overlay_ui_state.stop_keyword_editor.buffer = "DONE".to_string();
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+
+        assert!(!app.is_stop_keyword_editing());
+        assert_eq!(
+            app.followup_overlay_ui_state.stop_keyword_editor.buffer,
+            DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+        );
+    }
+
+    #[test]
     fn auto_followup_stops_when_stop_keyword_is_present() {
         let mut conversation = ready_conversation();
         conversation.messages.push(ConversationMessage::new(
@@ -3161,6 +3413,25 @@ mod tests {
         conversation.messages.push(ConversationMessage::new(
             ConversationMessageKind::Agent,
             "Work is complete.\nauto_stop!",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        assert_eq!(
+            conversation.decide_auto_followup(),
+            AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
+        );
+    }
+
+    #[test]
+    fn auto_followup_stops_when_custom_stop_keyword_is_present() {
+        let mut conversation = ready_conversation();
+        conversation
+            .auto_follow_state
+            .set_stop_keyword_value("DONE".to_string());
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "Work is complete.\ndone!",
             Some("final_answer".to_string()),
             Some("agent-1".to_string()),
         ));

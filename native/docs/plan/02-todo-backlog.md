@@ -38,7 +38,7 @@ These are the current baseline, not the final UX target. The next phase pivots f
 - [ ] review whether any transcript viewport controls are needed beyond terminal scrollback and lightweight in-app navigation
 
 ## P2. Auto Follow-Up
-- [ ] consider editable stop keyword value from the shell
+- [x] consider editable stop keyword value from the shell
 
 ## P3. Code Health
 - [ ] split large shell state and reducer code into smaller units after the stream-first model settles
