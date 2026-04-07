@@ -12,6 +12,7 @@ The `prerelease` branch is no longer just a dashboard prototype. It now supports
 - new thread start and existing thread resume
 - prompt submission through `turn/start`
 - streamed agent deltas and completed items rendered in the shell
+- lightweight transcript viewport navigation with `PageUp`, `PageDown`, `Home`, and `End`
 - builtin auto follow-up strategies
 - workspace follow-up templates loaded from `.codex-exec-loop/followups/`
 - auto-stop rules for `AUTO_STOP` and no-file-change turns

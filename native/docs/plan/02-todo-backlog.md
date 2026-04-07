@@ -35,7 +35,7 @@ These are the current baseline, not the final UX target. The next phase pivots f
 - [x] improve multiline input editing behavior
 - [x] redesign focus and status affordances for a single-column transcript plus fixed composer
 - [x] decide whether status and tool activity stay inline, move to a slim footer, or remain optional overlays
-- [ ] review whether any transcript viewport controls are needed beyond terminal scrollback and lightweight in-app navigation
+- [x] review whether any transcript viewport controls are needed beyond terminal scrollback and lightweight in-app navigation
 
 ## P2. Auto Follow-Up
 - [x] consider editable stop keyword value from the shell

@@ -44,11 +44,12 @@ const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
-const SHELL_KEY_HINT_HEIGHT: u16 = 4;
+const SHELL_KEY_HINT_HEIGHT: u16 = 5;
 const MIN_SHELL_STATUS_HEIGHT: u16 = 5;
 const MAX_SHELL_STATUS_HEIGHT: u16 = 8;
 const MIN_COMPOSER_HEIGHT: u16 = 4;
 const MAX_COMPOSER_HEIGHT: u16 = 8;
+const DEFAULT_TRANSCRIPT_PAGE_STEP: u16 = 6;
 
 #[path = "app/conversation_input.rs"]
 mod conversation_input;
@@ -263,6 +264,13 @@ struct AutoFollowTemplateState {
 struct TurnActivityState {
     current_turn_file_change_count: usize,
     last_completed_turn_file_change_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptViewportState {
+    manual_scroll_offset: Option<u16>,
+    page_step: u16,
+    last_max_scroll_offset: u16,
 }
 
 impl AutoFollowState {
@@ -515,6 +523,85 @@ impl TurnActivityState {
     }
 }
 
+impl Default for TranscriptViewportState {
+    fn default() -> Self {
+        Self {
+            manual_scroll_offset: None,
+            page_step: DEFAULT_TRANSCRIPT_PAGE_STEP,
+            last_max_scroll_offset: 0,
+        }
+    }
+}
+
+impl TranscriptViewportState {
+    fn sync_metrics(&mut self, max_scroll_offset: u16, visible_height: u16) {
+        self.last_max_scroll_offset = max_scroll_offset;
+        self.page_step = visible_height.saturating_sub(1).max(1);
+
+        if let Some(offset) = self.manual_scroll_offset {
+            if max_scroll_offset == 0 || offset >= max_scroll_offset {
+                self.manual_scroll_offset = None;
+            } else {
+                self.manual_scroll_offset = Some(offset.min(max_scroll_offset));
+            }
+        }
+    }
+
+    fn current_scroll_offset(&self) -> u16 {
+        self.manual_scroll_offset
+            .unwrap_or(self.last_max_scroll_offset)
+    }
+
+    fn status_label(&self) -> String {
+        match self.manual_scroll_offset {
+            Some(offset) => format!("manual {offset}/{}", self.last_max_scroll_offset),
+            None => "tail".to_string(),
+        }
+    }
+
+    fn scroll_page_up(&mut self) {
+        self.scroll_by(-(self.page_step as i32));
+    }
+
+    fn scroll_page_down(&mut self) {
+        self.scroll_by(self.page_step as i32);
+    }
+
+    fn scroll_to_top(&mut self) {
+        if self.last_max_scroll_offset == 0 {
+            self.manual_scroll_offset = None;
+        } else {
+            self.manual_scroll_offset = Some(0);
+        }
+    }
+
+    fn scroll_to_tail(&mut self) {
+        self.manual_scroll_offset = None;
+    }
+
+    fn scroll_by(&mut self, delta: i32) {
+        if self.last_max_scroll_offset == 0 {
+            self.manual_scroll_offset = None;
+            return;
+        }
+
+        let amount = delta.unsigned_abs().min(u16::MAX as u32) as u16;
+        let next_offset = if delta.is_negative() {
+            self.current_scroll_offset().saturating_sub(amount)
+        } else {
+            self.current_scroll_offset()
+                .saturating_add(amount)
+                .min(self.last_max_scroll_offset)
+        };
+
+        if next_offset >= self.last_max_scroll_offset {
+            self.manual_scroll_offset = None;
+        } else {
+            self.manual_scroll_offset = Some(next_offset);
+        }
+    }
+}
+
 enum BackgroundMessage {
     StartupLoaded(Result<StartupDiagnostics, String>),
     SessionsLoaded(Result<RecentSessions, String>),
@@ -717,6 +804,7 @@ struct NativeTuiApp {
     conversation_state: ConversationState,
     selected_session_index: usize,
     followup_overlay_ui_state: FollowupOverlayUiState,
+    transcript_viewport_state: TranscriptViewportState,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,
     session_service: SessionService,
@@ -749,6 +837,7 @@ impl NativeTuiApp {
             conversation_state: initial_conversation,
             selected_session_index: 0,
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
+            transcript_viewport_state: TranscriptViewportState::default(),
             active_session: None,
             startup_service,
             session_service,
@@ -828,6 +917,7 @@ impl NativeTuiApp {
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
         self.apply_conversation_lifecycle_state(reduction.state);
+        self.reset_transcript_viewport();
         for effect in reduction.effects {
             self.execute_conversation_lifecycle_effect(effect);
         }
@@ -1292,6 +1382,40 @@ impl NativeTuiApp {
         self.dispatch_followup_controls(FollowupControlEvent::NoFileChangeStopToggled);
     }
 
+    fn reset_transcript_viewport(&mut self) {
+        self.transcript_viewport_state = TranscriptViewportState::default();
+    }
+
+    fn sync_transcript_viewport_metrics(
+        &mut self,
+        max_scroll_offset: u16,
+        visible_height: u16,
+    ) -> u16 {
+        self.transcript_viewport_state
+            .sync_metrics(max_scroll_offset, visible_height);
+        self.transcript_viewport_state.current_scroll_offset()
+    }
+
+    fn transcript_viewport_status_label(&self) -> String {
+        self.transcript_viewport_state.status_label()
+    }
+
+    fn scroll_transcript_page_up(&mut self) {
+        self.transcript_viewport_state.scroll_page_up();
+    }
+
+    fn scroll_transcript_page_down(&mut self) {
+        self.transcript_viewport_state.scroll_page_down();
+    }
+
+    fn scroll_transcript_to_top(&mut self) {
+        self.transcript_viewport_state.scroll_to_top();
+    }
+
+    fn scroll_transcript_to_tail(&mut self) {
+        self.transcript_viewport_state.scroll_to_tail();
+    }
+
     fn cycle_auto_followup_template(&mut self) {
         self.dispatch_followup_controls(FollowupControlEvent::TemplateCycledForward);
     }
@@ -1553,6 +1677,10 @@ fn run_event_loop(
         }
 
         match key.code {
+            KeyCode::PageUp if key.modifiers.is_empty() => app.scroll_transcript_page_up(),
+            KeyCode::PageDown if key.modifiers.is_empty() => app.scroll_transcript_page_down(),
+            KeyCode::Home if key.modifiers.is_empty() => app.scroll_transcript_to_top(),
+            KeyCode::End if key.modifiers.is_empty() => app.scroll_transcript_to_tail(),
             KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                 app.toggle_auto_followup()
             }
@@ -1731,7 +1859,7 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiA
     frame.render_widget(detail, area);
 }
 
-fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let area = frame.area();
     frame.render_widget(Clear, area);
     let footer_lines = build_shell_footer_lines(app);
@@ -1798,9 +1926,13 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     frame.render_widget(header, layout[0]);
 
     let conversation_lines = build_conversation_lines(app);
-    let conversation_scroll = build_conversation_scroll_offset(
+    let conversation_max_scroll = build_conversation_scroll_offset(
         &conversation_lines,
         layout[1].width.saturating_sub(2),
+        layout[1].height.saturating_sub(2),
+    );
+    let conversation_scroll = app.sync_transcript_viewport_metrics(
+        conversation_max_scroll,
         layout[1].height.saturating_sub(2),
     );
     let conversation = Paragraph::new(conversation_lines)
@@ -2538,6 +2670,10 @@ fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                     conversation.auto_follow_state.template_count(),
                 )),
                 Line::from(format!(
+                    "transcript: {}",
+                    app.transcript_viewport_status_label()
+                )),
+                Line::from(format!(
                     "template source: {}  |  last skip: {}  |  detail: {}",
                     conversation.auto_follow_state.template_source_label(),
                     skip_summary,
@@ -2548,7 +2684,7 @@ fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'_>> {
+fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![
             Line::from("Thread is still loading."),
@@ -2564,7 +2700,7 @@ fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'_>> {
 fn build_ready_input_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
-) -> Vec<Line<'_>> {
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if conversation.input_buffer.is_empty() {
@@ -2610,7 +2746,12 @@ fn build_ready_input_lines(
         return lines;
     }
 
-    lines.extend(Text::from(conversation.input_buffer.as_str()).lines);
+    lines.extend(
+        Text::from(conversation.input_buffer.as_str())
+            .lines
+            .into_iter()
+            .map(|line| Line::from(line.to_string())),
+    );
 
     match (conversation.input_state, shell_action_availability) {
         (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
@@ -2682,6 +2823,7 @@ fn build_shell_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         Line::from(format!(
             "{primary_submit_help}  |  Ctrl+j newline  |  Ctrl+t new draft  |  Ctrl+C back  |  Ctrl+q quit"
         )),
+        Line::from("PageUp/PageDown transcript  |  Home top  |  End tail"),
         Line::from(
             "Ctrl+o sessions  |  Ctrl+d diagnostics  |  Ctrl+p templates  |  Ctrl+a auto  |  Ctrl+g stop edit",
         ),
@@ -2987,7 +3129,7 @@ mod tests {
 
         let rendered = build_shell_footer_lines(&app);
 
-        assert_eq!(build_shell_footer_height(&rendered), 7);
+        assert_eq!(build_shell_footer_height(&rendered), 8);
     }
 
     #[test]
@@ -3125,6 +3267,54 @@ mod tests {
         let scroll_offset = build_conversation_scroll_offset(&lines, 10, 0);
 
         assert_eq!(scroll_offset, 0);
+    }
+
+    #[test]
+    fn transcript_page_navigation_switches_between_tail_and_manual() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(24, 6);
+
+        app.scroll_transcript_page_up();
+
+        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, Some(19));
+        assert_eq!(app.transcript_viewport_status_label(), "manual 19/24");
+
+        app.scroll_transcript_page_down();
+
+        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, None);
+        assert_eq!(app.transcript_viewport_status_label(), "tail");
+    }
+
+    #[test]
+    fn transcript_home_and_end_jump_between_top_and_tail() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(30, 8);
+
+        app.scroll_transcript_to_top();
+        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, Some(0));
+        assert_eq!(app.transcript_viewport_status_label(), "manual 0/30");
+
+        app.scroll_transcript_to_tail();
+        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, None);
+        assert_eq!(app.transcript_viewport_status_label(), "tail");
+    }
+
+    #[test]
+    fn shell_footer_includes_transcript_viewport_status() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(18, 6);
+        app.scroll_transcript_page_up();
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("transcript: manual 13/18"));
     }
 
     #[test]
