@@ -14,7 +14,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
@@ -574,8 +574,6 @@ impl TranscriptViewportState {
         if let Some(offset) = self.manual_scroll_offset {
             if max_scroll_offset == 0 || offset >= max_scroll_offset {
                 self.manual_scroll_offset = None;
-            } else {
-                self.manual_scroll_offset = Some(offset.min(max_scroll_offset));
             }
         }
     }
@@ -2787,9 +2785,9 @@ fn build_ready_input_lines(
     }
 
     lines.extend(
-        Text::from(conversation.input_buffer.as_str())
-            .lines
-            .into_iter()
+        conversation
+            .input_buffer
+            .lines()
             .map(|line| Line::from(line.to_string())),
     );
 
