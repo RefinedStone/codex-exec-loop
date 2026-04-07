@@ -1,0 +1,44 @@
+# Repository Guidelines
+
+## Scope
+This file refines the root [`AGENT.md`](../AGENT.md) for `native/`. The current product direction is the Rust client, so optimize for the TUI and `codex app-server` flow first. Keep guidance here Rust-specific; do not add Python workflow notes.
+
+## Project Structure & Module Organization
+`native/` is a Rust crate rooted at `Cargo.toml`.
+
+- `src/domain/`: pure models such as session summaries and startup diagnostics
+- `src/application/service/`: use-case orchestration like `StartupService` and `ConversationService`
+- `src/application/port/`: interfaces owned by the application layer
+- `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
+- `src/adapter/outbound/`: `codex app-server` integration and filesystem adapters
+- `schema/`: checked-in protocol snapshot used to pin app-server shapes
+- `docs/`: current native design notes, roadmap, and backlog
+
+Keep mapping logic in adapters, not domain models.
+
+## Hexagonal Architecture
+Dependency flow should point inward: `adapter -> application -> domain`. Inbound adapters translate user events into service calls. Application services orchestrate use cases and depend on ports defined in `src/application/port/`. Outbound adapters implement those ports and own process, stdio, JSON, and filesystem details. `domain/` stays free of TUI types, transport formats, and external I/O. When adding a new external capability, define the boundary as a port first, then implement it in an adapter.
+
+## Build, Test, and Development Commands
+- `cd native && . "$HOME/.cargo/env" && cargo run`: launch the TUI
+- `cd native && . "$HOME/.cargo/env" && cargo build`: compile the crate
+- `cd native && . "$HOME/.cargo/env" && cargo test`: run tests
+- `cd native && . "$HOME/.cargo/env" && cargo fmt`: format source
+
+Run these before opening a PR. Add `cargo clippy --all-targets --all-features -D warnings` when touching lint-sensitive code.
+
+## Coding Style & Naming Conventions
+Write Rust so a Spring Boot Kotlin developer can read it quickly. Use 4-space indentation, `snake_case` for functions/modules, and `PascalCase` for types. Prefer explicit names and straightforward structs over clever abstractions. Keep functions small and single-purpose. Use names such as `Service`, `Port`, `Adapter`, `Request`, `Response`, and `State` consistently.
+
+## Testing Guidelines
+Place unit tests next to the module with `#[cfg(test)] mod tests`. Add integration tests under `native/tests/` when a flow spans multiple layers. Prioritize startup checks, app-server response parsing, stream reduction, and session list mapping. New adapter or service logic should usually ship with tests.
+
+## GitHub PR Auth
+Use the repo-local RefinedStone identity for PR operations.
+
+- use `bash ../scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies
+- do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
+- if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
+
+## Working Rules
+Use official Codex interfaces first: `codex app-server`, `codex exec`, and `codex exec resume`. Keep commits small and milestone-based. Do not introduce unnecessary traits; add a port only when it improves a real boundary. For TUI changes, include a screenshot or short terminal capture in the PR when practical.

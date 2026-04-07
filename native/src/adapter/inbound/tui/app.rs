@@ -68,6 +68,7 @@ enum ShellOverlay {
     Hidden,
     Startup,
     Sessions,
+    FollowupTemplates,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,6 +251,14 @@ impl AutoFollowState {
         self.template_state.current().label.as_str()
     }
 
+    fn selected_template(&self) -> &FollowupTemplateDefinition {
+        self.template_state.current()
+    }
+
+    fn selected_template_index(&self) -> usize {
+        self.template_state.selected_index
+    }
+
     fn template_source_label(&self) -> String {
         self.template_state.current().source_label()
     }
@@ -298,6 +307,10 @@ impl AutoFollowState {
         self.template_state.cycle();
     }
 
+    fn cycle_template_kind_backward(&mut self) {
+        self.template_state.cycle_previous();
+    }
+
     fn render_prompt(&self, thread_id: &str, last_message: &str) -> String {
         self.template_state
             .current()
@@ -308,6 +321,19 @@ impl AutoFollowState {
             .replace("{session_id}", thread_id)
             .replace("{stop_keyword}", self.stop_rules.stop_keyword.value())
             .replace("{last_message}", last_message)
+    }
+
+    fn render_prompt_preview(&self, thread_id: &str, last_message: Option<&str>) -> String {
+        let preview_thread_id = if thread_id.trim().is_empty() {
+            "draft-thread"
+        } else {
+            thread_id
+        };
+        let preview_last_message = last_message
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("(waiting for next agent reply)");
+        self.render_prompt(preview_thread_id, preview_last_message)
     }
 }
 
@@ -374,6 +400,18 @@ impl AutoFollowTemplateState {
         }
 
         self.selected_index = (self.selected_index + 1) % self.items.len();
+    }
+
+    fn cycle_previous(&mut self) {
+        if self.items.len() <= 1 {
+            return;
+        }
+
+        if self.selected_index == 0 {
+            self.selected_index = self.items.len() - 1;
+        } else {
+            self.selected_index -= 1;
+        }
     }
 }
 
@@ -1014,6 +1052,11 @@ impl NativeTuiApp {
         }
     }
 
+    fn show_followup_template_overlay(&mut self) {
+        self.exit_confirmation_state = ExitConfirmationState::Hidden;
+        self.shell_overlay = ShellOverlay::FollowupTemplates;
+    }
+
     fn toggle_startup_overlay(&mut self) {
         self.shell_overlay = if self.shell_overlay == ShellOverlay::Startup {
             ShellOverlay::Hidden
@@ -1028,6 +1071,14 @@ impl NativeTuiApp {
             self.shell_overlay = ShellOverlay::Hidden;
         } else {
             self.show_session_overlay();
+        }
+    }
+
+    fn toggle_followup_template_overlay(&mut self) {
+        if self.shell_overlay == ShellOverlay::FollowupTemplates {
+            self.shell_overlay = ShellOverlay::Hidden;
+        } else {
+            self.show_followup_template_overlay();
         }
     }
 
@@ -1153,6 +1204,16 @@ impl NativeTuiApp {
         }
     }
 
+    fn cycle_auto_followup_template_backward(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.auto_follow_state.cycle_template_kind_backward();
+            conversation.status_text = format!(
+                "auto follow-up template: {}",
+                conversation.auto_follow_state.template_label()
+            );
+        }
+    }
+
     fn current_workspace_directory(&self) -> String {
         match &self.startup_state {
             StartupState::Ready(diagnostics) => diagnostics.workspace_path.clone(),
@@ -1215,6 +1276,31 @@ impl NativeTuiApp {
                 KeyCode::Char('r') if key.modifiers.is_empty() => self.start_startup_check(),
                 KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
                     self.show_session_overlay()
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        if self.shell_overlay == ShellOverlay::FollowupTemplates {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                    self.cycle_auto_followup_template_backward()
+                }
+                KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                    self.cycle_auto_followup_template()
+                }
+                KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.cycle_auto_followup_template()
+                }
+                KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.toggle_auto_followup()
+                }
+                KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.toggle_stop_keyword()
+                }
+                KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.toggle_no_file_change_stop()
                 }
                 _ => {}
             }
@@ -1350,6 +1436,9 @@ fn run_event_loop(
             KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
                 app.toggle_session_overlay()
             }
+            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                app.toggle_followup_template_overlay()
+            }
             KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
                 app.start_startup_check()
             }
@@ -1381,6 +1470,7 @@ fn draw(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         ShellOverlay::Hidden => {}
         ShellOverlay::Startup => draw_startup_overlay(frame, app),
         ShellOverlay::Sessions => draw_session_overlay(frame, app),
+        ShellOverlay::FollowupTemplates => draw_followup_template_overlay(frame, app),
     }
 
     if app.is_exit_confirmation_visible() {
@@ -1598,10 +1688,10 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
             "Ctrl+a: auto on/off    Ctrl+f: next template    Ctrl+k: stop keyword    Ctrl+n: no-file stop",
         ),
         Line::from(
-            "Ctrl+o: recent sessions    Ctrl+d: diagnostics    Ctrl+t: new draft    Ctrl+r: rerun startup",
+            "Ctrl+p: template preview    Ctrl+o: recent sessions    Ctrl+d: diagnostics",
         ),
         Line::from(
-            "Backspace: delete    Ctrl+C: shell back    Ctrl+q: quit",
+            "Ctrl+t: new draft    Ctrl+r: rerun startup    Backspace: delete    Ctrl+C: shell back    Ctrl+q: quit",
         ),
     ])
     .block(Block::default().borders(Borders::ALL).title("Keys"));
@@ -1766,6 +1856,67 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
+fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let popup_area = centered_rect(92, 82, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(14),
+            Constraint::Length(6),
+            Constraint::Length(3),
+        ])
+        .split(popup_area);
+
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(
+                "Follow-Up Templates",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" / shell overlay"),
+        ]),
+        Line::from("Inspect the selected strategy before the next auto follow-up turn."),
+    ])
+    .block(Block::default().borders(Borders::ALL).title("Templates"));
+    frame.render_widget(header, layout[0]);
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
+        .split(layout[1]);
+
+    draw_followup_template_list_panel(frame, content_layout[0], app);
+    frame.render_widget(
+        Paragraph::new(build_followup_template_preview_lines(app))
+            .block(Block::default().borders(Borders::ALL).title("Preview"))
+            .wrap(Wrap { trim: false }),
+        content_layout[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new(build_followup_template_status_lines(app))
+            .block(Block::default().borders(Borders::ALL).title("Auto Follow-Up State"))
+            .wrap(Wrap { trim: false }),
+        layout[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
+            Line::from("Ctrl+a: auto on/off    Ctrl+k: stop keyword    Ctrl+n: no-file stop"),
+            Line::from("Esc/Ctrl+C: close"),
+        ])
+        .block(Block::default().borders(Borders::ALL).title("Keys")),
+        layout[3],
+    );
+}
+
 fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     let popup_area = centered_rect(42, 22, frame.area());
     frame.render_widget(Clear, popup_area);
@@ -1846,6 +1997,135 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             "recent sessions remain unavailable until startup diagnostics succeed",
         )],
         _ => vec![Line::from("no warnings")],
+    }
+}
+
+fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    match &app.conversation_state {
+        ConversationState::Loading => {
+            let widget = Paragraph::new("conversation is still loading")
+                .block(Block::default().borders(Borders::ALL).title("Template List"))
+                .wrap(Wrap { trim: true });
+            frame.render_widget(widget, area);
+        }
+        ConversationState::Failed(message) => {
+            let widget = Paragraph::new(message.as_str())
+                .block(Block::default().borders(Borders::ALL).title("Template List"))
+                .wrap(Wrap { trim: true });
+            frame.render_widget(widget, area);
+        }
+        ConversationState::Ready(conversation) => {
+            let items = conversation
+                .auto_follow_state
+                .template_state
+                .items
+                .iter()
+                .enumerate()
+                .map(|(index, template)| {
+                    ListItem::new(vec![
+                        Line::from(format!("{}. {}", index + 1, template.label)),
+                        Line::from(format!("   {}", template.source_label())),
+                    ])
+                })
+                .collect::<Vec<_>>();
+
+            let mut list_state = ListState::default();
+            list_state.select(Some(
+                conversation.auto_follow_state.selected_template_index(),
+            ));
+
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title("Template List"))
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol(">> ");
+
+            frame.render_stateful_widget(list, area, &mut list_state);
+        }
+    }
+}
+
+fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Loading => vec![Line::from("conversation is still loading")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => {
+            let template = conversation.auto_follow_state.selected_template();
+            let preview_thread_id = if conversation.thread_id.trim().is_empty() {
+                "draft-thread"
+            } else {
+                conversation.thread_id.as_str()
+            };
+            let latest_agent_message = conversation.latest_agent_message_text();
+            let rendered_preview = conversation
+                .auto_follow_state
+                .render_prompt_preview(&conversation.thread_id, latest_agent_message);
+
+            let mut lines = vec![
+                Line::from(format!("selected: {}", template.label)),
+                Line::from(format!("source: {}", template.source_label())),
+                Line::from(format!("preview thread id: {preview_thread_id}")),
+            ];
+
+            if latest_agent_message.is_some() {
+                lines.push(Line::from(
+                    "preview last_message: using the latest non-empty agent reply",
+                ));
+            } else {
+                lines.push(Line::from(
+                    "preview last_message: placeholder until an agent reply exists",
+                ));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from("Raw Template"));
+            for body_line in template.body.lines() {
+                lines.push(Line::from(body_line.to_string()));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from("Rendered Preview"));
+            for preview_line in rendered_preview.lines() {
+                lines.push(Line::from(preview_line.to_string()));
+            }
+
+            lines
+        }
+    }
+}
+
+fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Loading => vec![Line::from("conversation is still loading")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => vec![
+            Line::from(format!(
+                "auto follow-up: {}",
+                conversation.auto_follow_state.status_label()
+            )),
+            Line::from(format!(
+                "progress: {}",
+                conversation.auto_follow_state.progress_label()
+            )),
+            Line::from(format!(
+                "stop keyword: {}",
+                conversation.auto_follow_state.stop_keyword_label()
+            )),
+            Line::from(format!(
+                "stop on no-file-change: {}",
+                conversation.auto_follow_state.no_file_change_stop_label()
+            )),
+            Line::from(format!(
+                "last turn file changes: {}",
+                conversation
+                    .turn_activity
+                    .last_completed_file_change_count()
+            )),
+        ],
     }
 }
 
@@ -2047,6 +2327,7 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                     "auto template count: {}",
                     conversation.auto_follow_state.template_count()
                 )),
+                Line::from("auto template preview: open Ctrl+p"),
                 Line::from(format!(
                     "auto stop keyword: {}",
                     conversation.auto_follow_state.stop_keyword_label()
@@ -2225,12 +2506,14 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::{
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewModel,
-        NativeTuiApp, PromptOrigin, ShellActionAvailability, StartupState, TurnActivityState,
-        build_conversation_scroll_offset, build_ready_input_lines,
+        NativeTuiApp, PromptOrigin, ShellActionAvailability, ShellOverlay, StartupState,
+        TurnActivityState, build_conversation_scroll_offset,
+        build_followup_template_preview_lines, build_ready_input_lines,
         count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
@@ -2647,6 +2930,66 @@ mod tests {
                 .template_source_label()
                 .contains(".codex-exec-loop/followups/custom-review.md")
         );
+    }
+
+    #[test]
+    fn followup_template_preview_renders_selected_template_and_runtime_values() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_followup_template_preview_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("selected: builtin next-task"));
+        assert!(rendered.contains("preview thread id: thread-1"));
+        assert!(rendered.contains("latest answer"));
+        assert!(rendered.contains("AUTO_STOP"));
+        assert!(rendered.contains("Rendered Preview"));
+    }
+
+    #[test]
+    fn followup_template_preview_uses_placeholder_without_agent_reply() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let rendered = build_followup_template_preview_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("preview last_message: placeholder"));
+        assert!(rendered.contains("(waiting for next agent reply)"));
+    }
+
+    #[test]
+    fn followup_template_overlay_navigation_updates_selection() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.show_followup_template_overlay();
+
+        assert_eq!(app.shell_overlay, ShellOverlay::FollowupTemplates);
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        )));
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(conversation.auto_follow_state.template_label(), "builtin plan-queue");
+        assert!(conversation.status_text.contains("auto follow-up template"));
     }
 
     #[test]

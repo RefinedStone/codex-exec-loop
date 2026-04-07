@@ -32,7 +32,7 @@ The following are intentionally not listed as TODO items because they already sh
 - [ ] review whether activity and transcript panel sizes should become configurable
 
 ## P2. Auto Follow-Up
-- [ ] support richer template inspection and preview in the UI
+- [x] support richer template inspection and preview in the UI
 - [ ] consider editable stop keyword value from the shell
 - [ ] make skip reasons more operator-visible when auto follow-up does not continue
 

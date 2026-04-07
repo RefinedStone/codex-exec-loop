@@ -43,17 +43,21 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 - Use official Codex interfaces first.
   - `codex app-server`
   - keep `codex exec` / `codex exec resume` only for legacy compatibility work
+- Use the repo-local RefinedStone GitHub path for PR operations.
+  - PR creation, PR edits, and review replies must run through `bash scripts/gh-refinedstone.sh`
+  - do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
+  - if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
 - Keep commits small and milestone-based.
 - After finishing a meaningful feature or refactor:
   - commit the change set
   - push the working branch
-  - open a pull request to the intended base branch unless blocked by missing permissions or user instruction
+  - open a pull request to the intended base branch with `bash scripts/gh-refinedstone.sh pr create` unless blocked by missing permissions or user instruction
   - after a PR is merged or closed, do not continue on the same feature branch
   - start the next task from the latest target base branch on a new feature branch and open a new PR
 - After PR review arrives:
   - inspect every new review comment and thread before changing code
   - fix correctness and low-cost maintainability issues that align with the chosen architecture
-  - reply on each review thread with the applied fix or the rationale for not changing direction
+  - reply on each review thread with the applied fix or the rationale for not changing direction only when `bash scripts/gh-refinedstone.sh` can authenticate as `RefinedStone`
   - commit and push the review response separately from the original milestone commit when practical
   - rebase the feature branch onto the latest target base branch before merge
   - merge by updating the base branch fast-forward to the reviewed feature head when possible
