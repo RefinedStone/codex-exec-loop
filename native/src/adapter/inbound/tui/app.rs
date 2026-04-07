@@ -211,6 +211,8 @@ enum InlineShellCommand {
 }
 
 impl InlineShellCommand {
+    const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :templates  :new  :help";
+
     fn parse(input: &str) -> Option<Self> {
         match input.trim().to_ascii_lowercase().as_str() {
             ":diag" | ":diagnostics" => Some(Self::Diagnostics),
@@ -222,8 +224,8 @@ impl InlineShellCommand {
         }
     }
 
-    fn command_list() -> &'static str {
-        ":diag  :sessions  :templates  :new  :help"
+    fn command_list_line() -> &'static str {
+        Self::COMMAND_LIST_LINE
     }
 
     fn buffered_hint(self) -> &'static str {
@@ -242,7 +244,7 @@ impl InlineShellCommand {
             Self::Sessions => Some("opened recent sessions overlay from :sessions"),
             Self::Templates => Some("opened template overlay from :templates"),
             Self::NewDraft => None,
-            Self::Help => Some("shell commands: :diag  :sessions  :templates  :new  :help"),
+            Self::Help => Some(Self::command_list_line()),
         }
     }
 }
@@ -2860,10 +2862,7 @@ fn build_ready_input_lines(
             }
         }
 
-        lines.push(Line::from(format!(
-            "Shell commands: {}",
-            InlineShellCommand::command_list()
-        )));
+        lines.push(Line::from(InlineShellCommand::command_list_line()));
 
         return lines;
     }
@@ -3535,7 +3534,11 @@ mod tests {
             panic!("conversation should remain ready");
         };
         assert!(conversation.input_buffer.is_empty());
-        assert!(conversation.status_text.contains("shell commands: :diag"));
+        assert!(
+            conversation
+                .status_text
+                .contains(InlineShellCommand::command_list_line())
+        );
     }
 
     #[test]
