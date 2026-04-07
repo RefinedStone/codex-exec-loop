@@ -977,8 +977,8 @@ impl NativeTuiApp {
     }
 
     fn dispatch_followup_overlay_ui(&mut self, event: FollowupOverlayUiEvent) {
-        self.followup_overlay_ui_state =
-            reduce_followup_overlay_ui(self.followup_overlay_ui_state, event);
+        let state = std::mem::take(&mut self.followup_overlay_ui_state);
+        self.followup_overlay_ui_state = reduce_followup_overlay_ui(state, event);
     }
 
     fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
@@ -1450,7 +1450,7 @@ fn run_event_loop(
     Ok(())
 }
 
-fn draw(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     draw_conversation_shell(frame, app);
 
     match app.shell_overlay {
@@ -1846,7 +1846,7 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
-fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let popup_area = centered_rect(92, 82, frame.area());
     frame.render_widget(Clear, popup_area);
 
@@ -1888,6 +1888,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         content_layout[1].width.saturating_sub(2),
         content_layout[1].height.saturating_sub(2),
     );
+    app.followup_overlay_ui_state.preview_scroll = preview_scroll;
 
     draw_followup_template_list_panel(frame, content_layout[0], app);
     frame.render_widget(
@@ -2004,7 +2005,7 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let ready_list = match &app.conversation_state {
         ConversationState::Loading => {
             let widget = Paragraph::new("conversation is still loading")
@@ -2063,9 +2064,10 @@ fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &Na
         )
         .highlight_symbol(">> ");
 
-    let mut list_state = ListState::default();
-    list_state.select(Some(ready_list.1));
-    frame.render_stateful_widget(list, area, &mut list_state);
+    app.followup_overlay_ui_state
+        .list_state
+        .select(Some(ready_list.1));
+    frame.render_stateful_widget(list, area, &mut app.followup_overlay_ui_state.list_state);
 }
 
 fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
