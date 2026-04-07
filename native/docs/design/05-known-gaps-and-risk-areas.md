@@ -4,7 +4,7 @@
 The shell is now the default landing surface, and startup diagnostics plus recent sessions moved into overlays. That is closer to a continuous shell, but the overlays are still modal and the runtime behind them is still action-scoped.
 
 ## 2. Transport Lifecycle Is Short-Lived
-The adapter now reuses a shared initialized connection for startup, recent-session, and snapshot requests, but turn execution still opens its own app-server process. That means the transport is less wasteful than before, yet it still does not behave like one continuous session runtime.
+The adapter now reuses a shared initialized connection for startup, recent-session, and snapshot requests, and request-side reconnect/reset events are surfaced as shell-visible warnings. Turn execution still opens its own app-server process, though, so the transport is less wasteful and more observable than before, but it still does not behave like one continuous session runtime.
 
 ## 3. Large TUI Module
 `src/adapter/inbound/tui/app.rs` owns a lot of state, rendering, key handling, and shell flow logic. The branch is still understandable, but future work should avoid turning it into the permanent home for all shell behavior.

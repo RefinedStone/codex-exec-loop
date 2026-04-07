@@ -247,30 +247,42 @@ impl CodexAppServerAdapter {
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
         for attempt in 0..2 {
-            let result = (|| {
+            let result: Result<SharedRuntimeOutput<T>> = (|| {
                 let mut runtime = self
                     .shared_runtime
                     .lock()
                     .map_err(|_| anyhow!("shared app-server runtime mutex was poisoned"))?;
                 runtime.ensure_connected(self)?;
                 let initialize_detail = runtime.initialize_detail()?.to_string();
-                let connection = runtime
-                    .connection
-                    .as_mut()
-                    .context("shared app-server runtime was not connected")?;
-                let value = operation(connection, &initialize_detail)?;
-                let warnings = connection.take_warnings();
+                let (value, connection_warnings) = {
+                    let connection = runtime
+                        .connection
+                        .as_mut()
+                        .context("shared app-server runtime was not connected")?;
+                    let value = operation(connection, &initialize_detail)?;
+                    let warnings = connection.take_warnings();
+                    (value, warnings)
+                };
+                let mut warnings = runtime.take_notices();
+                warnings.extend(connection_warnings);
+                sort_and_dedup_warnings(&mut warnings);
                 Ok(SharedRuntimeOutput { value, warnings })
             })();
 
             match result {
                 Ok(output) => return Ok(output),
-                Err(_) if attempt == 0 => {
-                    self.reset_shared_runtime();
-                }
                 Err(error) => {
-                    self.reset_shared_runtime();
-                    return Err(error);
+                    if attempt == 0 {
+                        self.reset_shared_runtime(Some(format!(
+                            "shared runtime reset after request failure; retrying with a fresh app-server connection ({error})"
+                        )));
+                        continue;
+                    }
+
+                    self.reset_shared_runtime(None);
+                    return Err(error.context(
+                        "shared runtime retry also failed after reset; open diagnostics and rerun the request",
+                    ));
                 }
             }
         }
@@ -278,9 +290,12 @@ impl CodexAppServerAdapter {
         unreachable!("shared runtime retry loop always returns on success or final failure")
     }
 
-    fn reset_shared_runtime(&self) {
+    fn reset_shared_runtime(&self, notice: Option<String>) {
         if let Ok(mut runtime) = self.shared_runtime.lock() {
             runtime.reset();
+            if let Some(notice) = notice {
+                runtime.push_notice(notice);
+            }
         }
     }
 }
@@ -288,10 +303,7 @@ impl CodexAppServerAdapter {
 impl CodexAppServerPort for CodexAppServerAdapter {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         let output = self.with_shared_runtime(|connection, initialize_detail| {
-            Ok((
-                initialize_detail.to_string(),
-                connection.read_account()?,
-            ))
+            Ok((initialize_detail.to_string(), connection.read_account()?))
         })?;
         let (initialize_detail, account_response) = output.value;
 
@@ -325,9 +337,8 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
-        let output = self.with_shared_runtime(|connection, _| {
-            connection.read_thread(thread_id, true)
-        })?;
+        let output =
+            self.with_shared_runtime(|connection, _| connection.read_thread(thread_id, true))?;
         Ok(Self::to_conversation_snapshot(
             output.value.thread,
             output.warnings,
@@ -404,18 +415,24 @@ impl CodexAppServerPort for CodexAppServerAdapter {
 struct SharedAppServerRuntime {
     connection: Option<AppServerConnection>,
     initialize_detail: Option<String>,
+    pending_notices: Vec<String>,
 }
 
 impl SharedAppServerRuntime {
     fn ensure_connected(&mut self, adapter: &CodexAppServerAdapter) -> Result<()> {
-        let needs_connection = match self.connection.as_mut() {
-            Some(connection) => !connection.is_alive()?,
-            None => true,
-        };
+        let reconnect_notice = match self.connection.as_mut() {
+            Some(connection) => {
+                if connection.is_alive()? {
+                    return Ok(());
+                }
 
-        if !needs_connection {
-            return Ok(());
-        }
+                Some(
+                    "shared runtime reconnected after the previous app-server process exited"
+                        .to_string(),
+                )
+            }
+            None => None,
+        };
 
         self.reset();
 
@@ -425,6 +442,9 @@ impl SharedAppServerRuntime {
             &initialize_response,
         ));
         self.connection = Some(connection);
+        if let Some(notice) = reconnect_notice {
+            self.push_notice(notice);
+        }
         Ok(())
     }
 
@@ -437,6 +457,14 @@ impl SharedAppServerRuntime {
     fn reset(&mut self) {
         self.initialize_detail = None;
         self.connection.take();
+    }
+
+    fn push_notice(&mut self, notice: String) {
+        self.pending_notices.push(notice);
+    }
+
+    fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_notices)
     }
 }
 
@@ -725,8 +753,7 @@ impl AppServerConnection {
 
     fn take_warnings(&mut self) -> Vec<String> {
         self.collect_remaining_warnings();
-        self.warnings.sort();
-        self.warnings.dedup();
+        sort_and_dedup_warnings(&mut self.warnings);
         std::mem::take(&mut self.warnings)
     }
 
@@ -860,6 +887,11 @@ impl Drop for AppServerConnection {
 enum AppServerLine {
     Stdout(String),
     Stderr(String),
+}
+
+fn sort_and_dedup_warnings(warnings: &mut Vec<String>) {
+    warnings.sort();
+    warnings.dedup();
 }
 
 fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
@@ -1014,4 +1046,29 @@ struct ThreadStatus {
 #[serde(rename_all = "camelCase")]
 struct ThreadGitInfo {
     branch: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SharedAppServerRuntime, sort_and_dedup_warnings};
+
+    #[test]
+    fn reset_preserves_pending_runtime_notices() {
+        let mut runtime = SharedAppServerRuntime::default();
+        runtime.push_notice("runtime retried".to_string());
+
+        runtime.reset();
+
+        assert_eq!(runtime.take_notices(), vec!["runtime retried".to_string()]);
+        assert!(runtime.take_notices().is_empty());
+    }
+
+    #[test]
+    fn warning_lists_are_sorted_and_deduplicated() {
+        let mut warnings = vec!["zeta".to_string(), "alpha".to_string(), "alpha".to_string()];
+
+        sort_and_dedup_warnings(&mut warnings);
+
+        assert_eq!(warnings, vec!["alpha".to_string(), "zeta".to_string()]);
+    }
 }

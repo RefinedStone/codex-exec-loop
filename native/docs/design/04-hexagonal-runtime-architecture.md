@@ -13,6 +13,7 @@ The code still follows the intended hexagonal structure:
 The branch already has a live shell, and the outbound adapter now keeps a shared initialized runtime for request-style actions:
 
 - startup checks, recent-session loads, and thread snapshot reads can reuse one initialized app-server connection inside the adapter
+- request-side reconnects and reset-after-failure retries are surfaced back to the shell as warnings instead of staying implicit inside the adapter
 - turn execution opens an app-server process, initializes, starts a turn, streams events, then exits
 - stream events are translated into domain-level conversation events before reaching the TUI
 
