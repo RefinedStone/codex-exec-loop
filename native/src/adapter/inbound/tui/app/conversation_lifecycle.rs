@@ -79,7 +79,9 @@ pub(super) fn reduce_conversation_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::followup_template::{FollowupTemplateCatalog, FollowupTemplateSource};
+    use crate::domain::followup_template::{
+        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
+    };
 
     #[test]
     fn choosing_session_marks_state_loading_and_emits_load_effect() {

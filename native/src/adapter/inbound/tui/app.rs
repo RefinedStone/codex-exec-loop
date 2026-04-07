@@ -33,9 +33,7 @@ use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
 };
-use crate::domain::followup_template::{
-    FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
-};
+use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;

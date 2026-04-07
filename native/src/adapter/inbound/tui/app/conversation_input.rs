@@ -42,7 +42,9 @@ pub(super) fn reduce_conversation_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::followup_template::{FollowupTemplateCatalog, FollowupTemplateSource};
+    use crate::domain::followup_template::{
+        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
+    };
 
     #[test]
     fn character_typed_appends_to_input_buffer() {

@@ -1,4 +1,15 @@
-use super::*;
+use ratatui::text::Line;
+
+use crate::domain::conversation::{
+    ConversationMessage, ConversationMessageKind, ConversationSnapshot,
+};
+use crate::domain::followup_template::{
+    FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
+};
+
+use super::{
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, format_conversation_lines,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConversationState {
@@ -537,55 +548,55 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn decide_auto_followup(&self) -> AutoFollowupDecision {
-        match (
-            self.auto_follow_state.enabled,
-            self.input_buffer.trim().is_empty(),
-            self.auto_follow_state.can_queue_next(),
-            self.latest_agent_message_text(),
-        ) {
-            (false, _, _, _) => AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled),
-            (true, false, _, _) => {
-                AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
-            }
-            (true, true, false, _) => {
-                AutoFollowupDecision::Skip(AutoFollowupSkipReason::LimitReached)
-            }
-            (true, true, true, None) => {
-                AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoAgentReply)
-            }
-            (true, true, true, Some(last_message))
-                if self
-                    .auto_follow_state
-                    .stop_rules
-                    .stop_keyword
-                    .matches(last_message.trim()) =>
-            {
-                AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
-            }
-            (true, true, true, Some(_))
-                if self
-                    .auto_follow_state
-                    .stop_rules
-                    .should_stop_on_no_file_changes(
-                        self.turn_activity.last_completed_file_change_count(),
-                    ) =>
-            {
-                AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
-            }
-            (true, true, true, Some(last_message)) => AutoFollowupDecision::QueuePrompt(
-                self.auto_follow_state
-                    .render_prompt(&self.thread_id, last_message.trim()),
-            ),
+        if !self.auto_follow_state.enabled {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
         }
+
+        if !self.input_buffer.trim().is_empty() {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered);
+        }
+
+        if !self.auto_follow_state.can_queue_next() {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::LimitReached);
+        }
+
+        let Some(last_message) = self.latest_agent_message_text() else {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoAgentReply);
+        };
+
+        if self
+            .auto_follow_state
+            .stop_rules
+            .stop_keyword
+            .matches(last_message)
+        {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched);
+        }
+
+        if self
+            .auto_follow_state
+            .stop_rules
+            .should_stop_on_no_file_changes(self.turn_activity.last_completed_file_change_count())
+        {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
+        }
+
+        AutoFollowupDecision::QueuePrompt(
+            self.auto_follow_state
+                .render_prompt(&self.thread_id, last_message.trim()),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::domain::followup_template::{
-        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
+    use super::{
+        AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
+        ConversationMessage, ConversationMessageKind, ConversationViewModel,
+        FollowupTemplateCatalog, FollowupTemplateDefinition, StopKeywordRule, TurnActivityState,
+        format_conversation_lines,
     };
+    use crate::domain::followup_template::FollowupTemplateSource;
 
     fn sample_template_catalog() -> FollowupTemplateCatalog {
         FollowupTemplateCatalog {
