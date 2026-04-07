@@ -28,7 +28,7 @@ pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec
     }
 
     if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
-        lines = lines.split_off(lines.len() - MAX_CONVERSATION_HISTORY_LINES);
+        lines.drain(0..lines.len() - MAX_CONVERSATION_HISTORY_LINES);
     }
 
     lines
