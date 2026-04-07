@@ -42,6 +42,12 @@ Inside the shell:
 - `Ctrl+k`: toggle stop keyword rule
 - `Ctrl+n`: toggle no-file-change stop rule
 
+Inside the template preview overlay:
+
+- `Up/Down` or `j/k`: move between templates
+- `PageUp/PageDown` or `Ctrl+u/Ctrl+d`: scroll long previews
+- `Enter`, `Esc`, or `Ctrl+c`: close the overlay
+
 ## Remaining Gaps
 - no custom stop keyword editing from the TUI yet
 - template preview is read-only and still cycles through a flat list
