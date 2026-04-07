@@ -16,6 +16,7 @@ fi
 credential_line="$(head -n 1 "${credential_file}")"
 token="${credential_line#https://RefinedStone:}"
 token="${token%@github.com/*}"
+token="${token%@github.com}"
 
 if [[ -z "${token}" || "${token}" == "${credential_line}" ]]; then
   echo "gh-refinedstone: failed to parse RefinedStone token from ${credential_file}" >&2
