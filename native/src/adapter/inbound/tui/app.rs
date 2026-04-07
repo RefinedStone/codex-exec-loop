@@ -1162,6 +1162,10 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
     }
 
+    fn insert_input_newline(&mut self) {
+        self.dispatch_conversation_input(ConversationInputEvent::NewlineInserted);
+    }
+
     fn pop_input_character(&mut self) {
         self.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
     }
@@ -1435,6 +1439,9 @@ fn run_event_loop(
             KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => {
                 app.open_new_conversation_shell()
             }
+            KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => {
+                app.insert_input_newline()
+            }
             KeyCode::Backspace => app.pop_input_character(),
             KeyCode::Enter if app.conversation_can_accept_input() => app.start_turn_submission(),
             KeyCode::Enter => app.start_turn_submission(),
@@ -1673,7 +1680,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     frame.render_widget(input, layout[2]);
 
     let help = Paragraph::new(vec![
-        Line::from("Type your prompt and press Enter to send"),
+        Line::from("Type your prompt, Ctrl+j inserts a new line, Enter sends"),
         Line::from(
             "Ctrl+a: auto on/off    Ctrl+f: next template    Ctrl+k: stop keyword    Ctrl+n: no-file stop",
         ),
@@ -2441,11 +2448,15 @@ fn build_ready_input_lines(
             }
             (ConversationInputState::DraftReady, _) => {
                 lines.push(Line::from("Ready to start a new thread."));
-                lines.push(Line::from("Type the first prompt and press Enter."));
+                lines.push(Line::from(
+                    "Type the first prompt, Ctrl+j for newline, Enter to send.",
+                ));
             }
             (ConversationInputState::ReadyToContinue, _) => {
                 lines.push(Line::from("Ready to continue this session."));
-                lines.push(Line::from("Type the next prompt and press Enter."));
+                lines.push(Line::from(
+                    "Type the next prompt, Ctrl+j for newline, Enter to send.",
+                ));
             }
             (ConversationInputState::SubmittingTurn, _) => {
                 lines.push(Line::from("Sending prompt to Codex..."));
@@ -2464,23 +2475,31 @@ fn build_ready_input_lines(
         return lines;
     }
 
-    lines.push(Line::from(conversation.input_buffer.clone()));
+    for segment in conversation.input_buffer.split('\n') {
+        lines.push(Line::from(segment.to_string()));
+    }
 
     match (conversation.input_state, shell_action_availability) {
         (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
-            lines.push(Line::from("Press Enter to create thread and send."));
+            lines.push(Line::from(
+                "Press Enter to create thread and send. Ctrl+j inserts a new line.",
+            ));
         }
         (ConversationInputState::ReadyToContinue, ShellActionAvailability::Ready) => {
-            lines.push(Line::from("Press Enter to send this prompt."));
+            lines.push(Line::from(
+                "Press Enter to send this prompt. Ctrl+j inserts a new line.",
+            ));
         }
         (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
             lines.push(Line::from(
-                "Prompt buffered. Press Enter after startup diagnostics turn ready.",
+                "Prompt buffered. Ctrl+j inserts a new line. Press Enter after startup diagnostics turn ready.",
             ));
         }
         (ConversationInputState::SubmittingTurn, _)
         | (ConversationInputState::StreamingTurn, _) => {
-            lines.push(Line::from("Prompt buffered. Press Enter when turn ends."));
+            lines.push(Line::from(
+                "Prompt buffered. Ctrl+j inserts a new line. Press Enter when turn ends.",
+            ));
         }
     }
 
@@ -2729,7 +2748,7 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("Continue from the last change."));
-        assert!(rendered.contains("Prompt buffered. Press Enter when turn ends."));
+        assert!(rendered.contains("Ctrl+j inserts a new line"));
     }
 
     #[test]
@@ -2743,7 +2762,7 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("Ready to continue this session."));
-        assert!(rendered.contains("Type the next prompt and press Enter."));
+        assert!(rendered.contains("Ctrl+j for newline"));
     }
 
     #[test]
@@ -2759,7 +2778,26 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("Ready to start a new thread."));
-        assert!(rendered.contains("Type the first prompt and press Enter."));
+        assert!(rendered.contains("Ctrl+j for newline"));
+    }
+
+    #[test]
+    fn multiline_buffer_renders_as_multiple_input_lines() {
+        let mut conversation = ready_conversation();
+        conversation.input_buffer = "first line\nsecond line".to_string();
+
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line == "first line"));
+        assert!(rendered.iter().any(|line| line == "second line"));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Ctrl+j inserts a new line"))
+        );
     }
 
     #[test]

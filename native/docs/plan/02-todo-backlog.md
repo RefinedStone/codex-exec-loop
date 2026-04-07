@@ -32,7 +32,7 @@ These are the current baseline, not the final UX target. The next phase pivots f
 - [ ] decide which auxiliary surfaces still deserve overlays versus inline command entry
 
 ## P2. Stream Shell Ergonomics
-- [ ] improve multiline input editing behavior
+- [x] improve multiline input editing behavior
 - [ ] redesign focus and status affordances for a single-column transcript plus fixed composer
 - [ ] decide whether status and tool activity stay inline, move to a slim footer, or remain optional overlays
 - [ ] review whether any transcript viewport controls are needed beyond terminal scrollback and lightweight in-app navigation

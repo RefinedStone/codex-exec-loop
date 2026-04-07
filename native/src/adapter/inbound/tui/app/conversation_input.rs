@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationInputEvent {
     CharacterTyped { character: char },
+    NewlineInserted,
     BackspacePressed,
     StatusMessageShown { status_text: String },
 }
@@ -19,6 +20,9 @@ pub(super) fn reduce_conversation_input(
     match event {
         ConversationInputEvent::CharacterTyped { character } => {
             state.input_buffer.push(character);
+        }
+        ConversationInputEvent::NewlineInserted => {
+            state.input_buffer.push('\n');
         }
         ConversationInputEvent::BackspacePressed => {
             state.input_buffer.pop();
@@ -62,6 +66,19 @@ mod tests {
         let reduced = reduce_conversation_input(state, ConversationInputEvent::BackspacePressed);
 
         assert_eq!(reduced.state.input_buffer, "draf");
+    }
+
+    #[test]
+    fn newline_inserted_adds_line_break() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = "draft".to_string();
+
+        let reduced = reduce_conversation_input(state, ConversationInputEvent::NewlineInserted);
+
+        assert_eq!(reduced.state.input_buffer, "draft\n");
     }
 
     #[test]
