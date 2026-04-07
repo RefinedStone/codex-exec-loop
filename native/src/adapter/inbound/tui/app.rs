@@ -31,7 +31,6 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
-    ConversationToolActivityKind,
 };
 use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
@@ -45,6 +44,13 @@ const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
+
+#[path = "app/conversation_runtime.rs"]
+mod conversation_runtime;
+
+use conversation_runtime::{
+    ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
+};
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
@@ -775,78 +781,81 @@ impl NativeTuiApp {
         self.submit_prompt(prompt, PromptOrigin::Manual);
     }
 
+    fn take_ready_conversation_state(&mut self) -> Option<ConversationViewModel> {
+        let state = std::mem::replace(&mut self.conversation_state, ConversationState::Loading);
+        match state {
+            ConversationState::Ready(conversation) => Some(conversation),
+            other => {
+                self.conversation_state = other;
+                None
+            }
+        }
+    }
+
+    fn dispatch_conversation_runtime(&mut self, event: ConversationRuntimeEvent) {
+        let Some(conversation) = self.take_ready_conversation_state() else {
+            return;
+        };
+
+        let reduction = reduce_conversation_runtime(conversation, event);
+        self.conversation_state = ConversationState::Ready(reduction.state);
+        for effect in reduction.effects {
+            self.execute_conversation_runtime_effect(effect);
+        }
+    }
+
+    fn execute_conversation_runtime_effect(&mut self, effect: ConversationRuntimeEffect) {
+        match effect {
+            ConversationRuntimeEffect::StartStream {
+                cwd,
+                thread_id,
+                prompt,
+            } => {
+                let outer_tx = self.tx.clone();
+                let service = self.conversation_service.clone();
+                thread::spawn(move || {
+                    let (event_tx, event_rx) = mpsc::channel();
+
+                    let service_thread = thread::spawn(move || {
+                        let result = match thread_id {
+                            Some(thread_id) => {
+                                service.run_turn_stream(&thread_id, &prompt, event_tx)
+                            }
+                            None => service.run_new_thread_stream(&cwd, &prompt, event_tx),
+                        };
+                        let _ = result;
+                    });
+
+                    while let Ok(event) = event_rx.recv() {
+                        let should_stop = matches!(
+                            event,
+                            ConversationStreamEvent::TurnCompleted { .. }
+                                | ConversationStreamEvent::Failed { .. }
+                        );
+                        let _ = outer_tx.send(BackgroundMessage::ConversationStream(event));
+                        if should_stop {
+                            break;
+                        }
+                    }
+
+                    let _ = service_thread.join();
+                });
+            }
+            ConversationRuntimeEffect::QueueAutoPrompt { prompt } => {
+                self.submit_prompt(prompt, PromptOrigin::AutoFollow);
+            }
+        }
+    }
+
     fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
         if !self.shell_action_availability().allows_actions() {
             self.set_conversation_status(self.submission_blocked_status(prompt_origin));
             return;
         }
 
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
-            return;
-        };
-        if conversation.has_running_turn() {
-            return;
-        }
-
-        let prompt = prompt.trim().to_string();
-        if prompt.is_empty() {
-            return;
-        }
-
-        let thread_id = conversation.thread_id.clone();
-        let cwd = conversation.cwd.clone();
-        let is_new_thread = !conversation.has_active_thread();
-        match prompt_origin {
-            PromptOrigin::Manual => {
-                conversation.auto_follow_state.reset_for_manual_turn();
-                conversation.clear_auto_followup_skip();
-            }
-            PromptOrigin::AutoFollow => conversation.auto_follow_state.mark_auto_turn_submitted(),
-        }
-        let auto_follow_progress = conversation.auto_follow_state.progress_label();
-        conversation.messages.push(ConversationMessage::new(
-            ConversationMessageKind::User,
-            prompt.clone(),
-            None,
-            None,
-        ));
-        conversation.refresh_conversation_lines();
-        conversation.input_buffer.clear();
-        conversation.mark_turn_submitting();
-        conversation.status_text = match prompt_origin {
-            PromptOrigin::Manual => "starting turn".to_string(),
-            PromptOrigin::AutoFollow => {
-                format!("auto follow-up submitted ({auto_follow_progress})")
-            }
-        };
-
-        let outer_tx = self.tx.clone();
-        let service = self.conversation_service.clone();
-        thread::spawn(move || {
-            let (event_tx, event_rx) = mpsc::channel();
-
-            let service_thread = thread::spawn(move || {
-                let result = if is_new_thread {
-                    service.run_new_thread_stream(&cwd, &prompt, event_tx)
-                } else {
-                    service.run_turn_stream(&thread_id, &prompt, event_tx)
-                };
-                let _ = result;
-            });
-
-            while let Ok(event) = event_rx.recv() {
-                let should_stop = matches!(
-                    event,
-                    ConversationStreamEvent::TurnCompleted { .. }
-                        | ConversationStreamEvent::Failed { .. }
-                );
-                let _ = outer_tx.send(BackgroundMessage::ConversationStream(event));
-                if should_stop {
-                    break;
-                }
-            }
-
-            let _ = service_thread.join();
+        self.dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
+            prompt,
+            origin: prompt_origin,
         });
     }
 
@@ -884,160 +893,11 @@ impl NativeTuiApp {
                     self.reset_followup_template_preview_scroll();
                 }
                 BackgroundMessage::ConversationStream(event) => {
-                    self.apply_conversation_event(event);
-                }
-            }
-        }
-    }
-
-    fn apply_conversation_event(&mut self, event: ConversationStreamEvent) {
-        let mut queued_auto_prompt: Option<String> = None;
-
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
-            return;
-        };
-        let mut should_refresh_lines = false;
-
-        match event {
-            ConversationStreamEvent::ThreadPrepared {
-                thread_id,
-                title,
-                cwd,
-            } => {
-                conversation.thread_id = thread_id;
-                conversation.title = title;
-                conversation.cwd = cwd;
-                conversation.status_text = "thread started".to_string();
-            }
-            ConversationStreamEvent::TurnStarted { turn_id } => {
-                conversation.mark_turn_started(turn_id);
-                conversation.status_text = "turn started".to_string();
-            }
-            ConversationStreamEvent::StatusUpdated { text } => {
-                conversation.status_text = text;
-            }
-            ConversationStreamEvent::AgentMessageDelta {
-                item_id,
-                phase,
-                delta,
-            } => {
-                if let Some(message) = conversation
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
-                {
-                    message.text.push_str(&delta);
-                    if phase.is_some() {
-                        message.phase = phase;
-                    }
-                } else {
-                    conversation.messages.push(ConversationMessage::new(
-                        ConversationMessageKind::Agent,
-                        delta,
-                        phase,
-                        Some(item_id),
+                    self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+                        event,
                     ));
                 }
-                should_refresh_lines = true;
             }
-            ConversationStreamEvent::AgentMessageCompleted {
-                item_id,
-                phase,
-                text,
-            } => {
-                if let Some(message) = conversation
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
-                {
-                    message.text = text;
-                    message.phase = phase;
-                } else {
-                    conversation.messages.push(ConversationMessage::new(
-                        ConversationMessageKind::Agent,
-                        text,
-                        phase,
-                        Some(item_id),
-                    ));
-                }
-                should_refresh_lines = true;
-            }
-            ConversationStreamEvent::ToolActivity { activity } => {
-                if activity.kind == ConversationToolActivityKind::FileChange {
-                    conversation
-                        .turn_activity
-                        .register_file_change(activity.file_change_count);
-                }
-                conversation.messages.push(ConversationMessage::new(
-                    ConversationMessageKind::Tool,
-                    activity.text,
-                    None,
-                    None,
-                ));
-                should_refresh_lines = true;
-            }
-            ConversationStreamEvent::TurnCompleted { turn_id } => {
-                conversation.turn_activity.complete_turn();
-                conversation.mark_turn_finished();
-                match conversation.decide_auto_followup() {
-                    AutoFollowupDecision::QueuePrompt(prompt) => {
-                        conversation.clear_auto_followup_skip();
-                        queued_auto_prompt = Some(prompt);
-                    }
-                    AutoFollowupDecision::Skip(skip_reason) => {
-                        conversation.record_auto_followup_skip(skip_reason);
-                        conversation.status_text = match skip_reason {
-                            AutoFollowupSkipReason::Disabled => {
-                                format!("turn completed: {turn_id} / auto follow-up off")
-                            }
-                            AutoFollowupSkipReason::ManualInputBuffered => {
-                                "manual prompt buffered; auto follow-up skipped".to_string()
-                            }
-                            AutoFollowupSkipReason::LimitReached => format!(
-                                "turn completed: {turn_id} / auto follow-up limit reached ({})",
-                                conversation.auto_follow_state.progress_label()
-                            ),
-                            AutoFollowupSkipReason::NoAgentReply => {
-                                format!(
-                                    "turn completed: {turn_id} / no agent reply to continue from"
-                                )
-                            }
-                            AutoFollowupSkipReason::StopKeywordMatched => format!(
-                                "turn completed: {turn_id} / stop keyword matched ({})",
-                                conversation
-                                    .auto_follow_state
-                                    .stop_rules
-                                    .stop_keyword
-                                    .value()
-                            ),
-                            AutoFollowupSkipReason::NoFileChanges => {
-                                format!("turn completed: {turn_id} / no file changes in last turn")
-                            }
-                        };
-                    }
-                }
-            }
-            ConversationStreamEvent::Failed { message } => {
-                conversation.mark_turn_finished();
-                conversation.status_text = "turn failed".to_string();
-                conversation.messages.push(ConversationMessage::new(
-                    ConversationMessageKind::Status,
-                    message,
-                    None,
-                    None,
-                ));
-                should_refresh_lines = true;
-            }
-        }
-
-        if should_refresh_lines {
-            conversation.refresh_conversation_lines();
-        }
-
-        if let Some(prompt) = queued_auto_prompt {
-            self.submit_prompt(prompt, PromptOrigin::AutoFollow);
         }
     }
 
@@ -2670,8 +2530,8 @@ mod tests {
 
     use super::{
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
-        ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewModel,
-        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, NativeTuiApp, PromptOrigin,
+        ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
+        ConversationViewModel, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, NativeTuiApp, PromptOrigin,
         RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
         TurnActivityState, build_conversation_activity_lines, build_conversation_scroll_offset,
         build_followup_template_preview_lines, build_ready_input_lines,
@@ -3294,9 +3154,11 @@ mod tests {
         ));
         app.conversation_state = ConversationState::Ready(conversation);
 
-        app.apply_conversation_event(ConversationStreamEvent::TurnCompleted {
-            turn_id: "turn-1".to_string(),
-        });
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+            ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+            },
+        ));
 
         let rendered = build_conversation_activity_lines(&app)
             .iter()
@@ -3327,9 +3189,11 @@ mod tests {
         ));
         app.conversation_state = ConversationState::Ready(conversation);
 
-        app.apply_conversation_event(ConversationStreamEvent::TurnCompleted {
-            turn_id: "turn-2".to_string(),
-        });
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+            ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-2".to_string(),
+            },
+        ));
 
         let rendered = build_conversation_activity_lines(&app)
             .iter()
@@ -3355,9 +3219,11 @@ mod tests {
         ));
         app.conversation_state = ConversationState::Ready(conversation);
 
-        app.apply_conversation_event(ConversationStreamEvent::TurnCompleted {
-            turn_id: "turn-limit".to_string(),
-        });
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+            ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-limit".to_string(),
+            },
+        ));
 
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("conversation should remain ready");
