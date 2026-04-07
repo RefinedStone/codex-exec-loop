@@ -45,6 +45,8 @@ const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 
+#[path = "app/conversation_input.rs"]
+mod conversation_input;
 #[path = "app/conversation_lifecycle.rs"]
 mod conversation_lifecycle;
 #[path = "app/conversation_runtime.rs"]
@@ -52,6 +54,7 @@ mod conversation_runtime;
 #[path = "app/followup_controls.rs"]
 mod followup_controls;
 
+use conversation_input::{ConversationInputEvent, reduce_conversation_input};
 use conversation_lifecycle::{
     ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
     reduce_conversation_lifecycle,
@@ -840,6 +843,15 @@ impl NativeTuiApp {
         }
     }
 
+    fn dispatch_conversation_input(&mut self, event: ConversationInputEvent) {
+        let Some(conversation) = self.take_ready_conversation_state() else {
+            return;
+        };
+
+        let reduction = reduce_conversation_input(conversation, event);
+        self.conversation_state = ConversationState::Ready(reduction.state);
+    }
+
     fn execute_conversation_runtime_effect(&mut self, effect: ConversationRuntimeEffect) {
         match effect {
             ConversationRuntimeEffect::StartStream {
@@ -906,7 +918,9 @@ impl NativeTuiApp {
 
     fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
         if !self.shell_action_availability().allows_actions() {
-            self.set_conversation_status(self.submission_blocked_status(prompt_origin));
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self.submission_blocked_status(prompt_origin),
+            });
             return;
         }
 
@@ -997,12 +1011,6 @@ impl NativeTuiApp {
         )
     }
 
-    fn set_conversation_status(&mut self, status_text: String) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.status_text = status_text;
-        }
-    }
-
     fn sync_draft_shell_workspace(&mut self, workspace_directory: &str) {
         let should_refresh_draft = matches!(
             &self.conversation_state,
@@ -1059,9 +1067,10 @@ impl NativeTuiApp {
 
     fn open_new_conversation_shell(&mut self) {
         if self.conversation_has_running_turn() {
-            self.set_conversation_status(
-                "turn still running; wait for completion before starting a new draft".to_string(),
-            );
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "turn still running; wait for completion before starting a new draft"
+                    .to_string(),
+            });
             return;
         }
 
@@ -1087,9 +1096,10 @@ impl NativeTuiApp {
 
     fn open_conversation_shell(&mut self) {
         if self.conversation_has_running_turn() {
-            self.set_conversation_status(
-                "turn still running; wait for completion before switching sessions".to_string(),
-            );
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "turn still running; wait for completion before switching sessions"
+                    .to_string(),
+            });
             return;
         }
 
@@ -1113,15 +1123,11 @@ impl NativeTuiApp {
     }
 
     fn push_input_character(&mut self, character: char) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.input_buffer.push(character);
-        }
+        self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
     }
 
     fn pop_input_character(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.input_buffer.pop();
-        }
+        self.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
     }
 
     fn toggle_auto_followup(&mut self) {
@@ -1317,10 +1323,11 @@ impl NativeTuiApp {
 
         match &self.conversation_state {
             ConversationState::Ready(conversation) if conversation.has_running_turn() => {
-                self.set_conversation_status(
-                    "turn still running; wait for completion before leaving the shell view"
-                        .to_string(),
-                );
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text:
+                        "turn still running; wait for completion before leaving the shell view"
+                            .to_string(),
+                });
             }
             ConversationState::Ready(conversation) if !conversation.is_blank_draft() => {
                 self.open_new_conversation_shell();
