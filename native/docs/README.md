@@ -1,6 +1,6 @@
 # Native Docs
 
-This folder documents the `prerelease` state of the Rust native client and the remaining work needed to make it feel closer to Codex CLI or Claude Code.
+This folder documents the `prerelease` state of the Rust native client and the remaining work needed to move it toward a scrollback-native CLI experience closer to Codex CLI or Claude Code.
 
 ## Reading Order
 1. Read the current product state first.
@@ -16,7 +16,7 @@ References:
 - [design/01-current-product-state.md](design/01-current-product-state.md)
 
 ## 2. TUI Shell Flow
-Goal: describe how the shell-first startup flow, overlays, input, and streamed turn updates work today.
+Goal: describe the current full-screen shell flow, then frame the next pivot toward a single flowing transcript with a fixed bottom composer.
 
 References:
 - [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md)
@@ -35,7 +35,7 @@ References:
 - [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md)
 
 ## 5. Roadmap And TODO
-Goal: turn the current `prerelease` implementation into a more seamless shell without losing the recent streaming and auto follow-up work.
+Goal: turn the current `prerelease` implementation into a stream-first shell without losing the recent streaming and auto follow-up work.
 
 References:
 - [plan/01-roadmap.md](plan/01-roadmap.md)
