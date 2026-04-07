@@ -97,7 +97,7 @@ use followup_overlay_ui::{
 };
 use inline_shell_commands::InlineShellCommand;
 use session_overlay_ui::SessionOverlayUiState;
-use shell_controller::ShellActionAvailability;
+pub(super) use shell_controller::ShellActionAvailability;
 use shell_layout::{
     block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
     build_shell_footer_height,

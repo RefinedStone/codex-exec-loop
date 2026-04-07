@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ShellActionAvailability {
+pub(crate) enum ShellActionAvailability {
     Ready,
     Pending,
     Blocked,
