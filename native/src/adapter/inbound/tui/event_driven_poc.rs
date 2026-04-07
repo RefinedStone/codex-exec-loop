@@ -294,33 +294,47 @@ impl StreamShellEffectHandler {
                         None => service.run_new_thread_stream(&cwd, &prompt, stream_tx),
                     });
 
+                    let mut saw_terminal_event = false;
+                    let mut ui_connected = true;
                     while let Ok(event) = stream_rx.recv() {
                         let terminal = matches!(
                             event,
                             ConversationStreamEvent::TurnCompleted { .. }
                                 | ConversationStreamEvent::Failed { .. }
                         );
-                        let _ = event_sender.send(StreamShellEvent::StreamUpdate(event));
+                        if event_sender
+                            .send(StreamShellEvent::StreamUpdate(event))
+                            .is_err()
+                        {
+                            ui_connected = false;
+                            break;
+                        }
                         if terminal {
+                            saw_terminal_event = true;
                             break;
                         }
                     }
+                    drop(stream_rx);
 
                     match runner.join() {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
-                            let _ = event_sender.send(StreamShellEvent::StreamUpdate(
-                                ConversationStreamEvent::Failed {
-                                    message: error.to_string(),
-                                },
-                            ));
+                            if ui_connected && !saw_terminal_event {
+                                let _ = event_sender.send(StreamShellEvent::StreamUpdate(
+                                    ConversationStreamEvent::Failed {
+                                        message: error.to_string(),
+                                    },
+                                ));
+                            }
                         }
                         Err(_) => {
-                            let _ = event_sender.send(StreamShellEvent::StreamUpdate(
-                                ConversationStreamEvent::Failed {
-                                    message: "stream worker panicked".to_string(),
-                                },
-                            ));
+                            if ui_connected && !saw_terminal_event {
+                                let _ = event_sender.send(StreamShellEvent::StreamUpdate(
+                                    ConversationStreamEvent::Failed {
+                                        message: "stream worker panicked".to_string(),
+                                    },
+                                ));
+                            }
                         }
                     }
                 });
@@ -424,11 +438,7 @@ fn push_agent_delta(
     phase: Option<String>,
     delta: String,
 ) {
-    if let Some(message) = transcript
-        .iter_mut()
-        .rev()
-        .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
-    {
+    if let Some(message) = find_message_by_item_id_mut(transcript, &item_id) {
         message.text.push_str(&delta);
         if phase.is_some() {
             message.phase = phase;
@@ -450,11 +460,7 @@ fn complete_agent_message(
     phase: Option<String>,
     text: String,
 ) {
-    if let Some(message) = transcript
-        .iter_mut()
-        .rev()
-        .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
-    {
+    if let Some(message) = find_message_by_item_id_mut(transcript, &item_id) {
         message.text = text;
         message.phase = phase;
         return;
@@ -466,6 +472,16 @@ fn complete_agent_message(
         phase,
         Some(item_id),
     ));
+}
+
+fn find_message_by_item_id_mut<'a>(
+    transcript: &'a mut [ConversationMessage],
+    item_id: &str,
+) -> Option<&'a mut ConversationMessage> {
+    transcript
+        .iter_mut()
+        .rev()
+        .find(|message| message.item_id.as_deref() == Some(item_id))
 }
 
 fn push_tool_activity(
@@ -494,17 +510,113 @@ fn render_message(message: &ConversationMessage) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    use anyhow::{Result, anyhow};
+
     use super::{
-        POC_SESSION_PAGE_SIZE, StreamShellEffect, StreamShellEvent, StreamShellOverlay,
-        StreamShellSessionsState, StreamShellStartupState, StreamTurnPhase, present_stream_shell,
-        reduce_stream_shell,
+        POC_SESSION_PAGE_SIZE, StreamShellEffect, StreamShellEffectHandler, StreamShellEvent,
+        StreamShellOverlay, StreamShellSessionsState, StreamShellStartupState, StreamTurnPhase,
+        present_stream_shell, reduce_stream_shell,
     };
+    use crate::application::port::outbound::codex_app_server_port::{
+        AppServerStartupContext, CodexAppServerPort,
+    };
+    use crate::application::service::conversation_service::ConversationService;
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{
         ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
     };
     use crate::domain::recent_sessions::RecentSessions;
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
+
+    #[derive(Clone, Copy)]
+    enum FakeStreamMode {
+        Succeed,
+        FailAfterTerminalEvent,
+    }
+
+    struct FakeCodexAppServerPort {
+        stream_mode: Mutex<FakeStreamMode>,
+    }
+
+    impl FakeCodexAppServerPort {
+        fn with_stream_mode(stream_mode: FakeStreamMode) -> Self {
+            Self {
+                stream_mode: Mutex::new(stream_mode),
+            }
+        }
+    }
+
+    impl CodexAppServerPort for FakeCodexAppServerPort {
+        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+            Ok(AppServerStartupContext {
+                initialize_detail: "ok".to_string(),
+                account_detail: "ok".to_string(),
+                account_ok: true,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
+            Ok(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+            })
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            event_sender: mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            self.emit_stream(event_sender)
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            event_sender: mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            self.emit_stream(event_sender)
+        }
+    }
+
+    impl FakeCodexAppServerPort {
+        fn emit_stream(&self, event_sender: mpsc::Sender<ConversationStreamEvent>) -> Result<()> {
+            match *self.stream_mode.lock().expect("stream mode mutex poisoned") {
+                FakeStreamMode::Succeed => {
+                    event_sender.send(ConversationStreamEvent::TurnCompleted {
+                        turn_id: "turn-1".to_string(),
+                    })?;
+                    Ok(())
+                }
+                FakeStreamMode::FailAfterTerminalEvent => {
+                    let message = "adapter failed".to_string();
+                    event_sender.send(ConversationStreamEvent::Failed {
+                        message: message.clone(),
+                    })?;
+                    Err(anyhow!(message))
+                }
+            }
+        }
+    }
 
     #[test]
     fn app_started_requests_startup_checks() {
@@ -643,6 +755,93 @@ mod tests {
             StreamShellSessionsState::Ready(_)
         ));
         assert_eq!(reduced.state.status_line, "1 recent sessions loaded");
+    }
+
+    #[test]
+    fn submit_prompt_effect_does_not_emit_duplicate_failed_events() {
+        let port = Arc::new(FakeCodexAppServerPort::with_stream_mode(
+            FakeStreamMode::FailAfterTerminalEvent,
+        ));
+        let handler = StreamShellEffectHandler::new(
+            StartupService::new(port.clone()),
+            SessionService::new(port.clone()),
+            ConversationService::new(port),
+        );
+        let (event_tx, event_rx) = mpsc::channel();
+
+        handler.execute(
+            StreamShellEffect::SubmitPrompt {
+                cwd: "/tmp/root".to_string(),
+                thread_id: None,
+                prompt: "ship it".to_string(),
+            },
+            event_tx,
+        );
+
+        let events = collect_stream_events(&event_rx);
+        let failed_count = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StreamShellEvent::StreamUpdate(ConversationStreamEvent::Failed { .. })
+                )
+            })
+            .count();
+
+        assert_eq!(failed_count, 1);
+    }
+
+    #[test]
+    fn submit_prompt_effect_emits_completion_when_stream_succeeds() {
+        let port = Arc::new(FakeCodexAppServerPort::with_stream_mode(
+            FakeStreamMode::Succeed,
+        ));
+        let handler = StreamShellEffectHandler::new(
+            StartupService::new(port.clone()),
+            SessionService::new(port.clone()),
+            ConversationService::new(port),
+        );
+        let (event_tx, event_rx) = mpsc::channel();
+
+        handler.execute(
+            StreamShellEffect::SubmitPrompt {
+                cwd: "/tmp/root".to_string(),
+                thread_id: None,
+                prompt: "ship it".to_string(),
+            },
+            event_tx,
+        );
+
+        let events = collect_stream_events(&event_rx);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.first(),
+            Some(StreamShellEvent::StreamUpdate(
+                ConversationStreamEvent::TurnCompleted { turn_id }
+            )) if turn_id == "turn-1"
+        ));
+    }
+
+    fn collect_stream_events(event_rx: &mpsc::Receiver<StreamShellEvent>) -> Vec<StreamShellEvent> {
+        let mut events = Vec::new();
+
+        while let Ok(event) = event_rx.recv_timeout(Duration::from_millis(200)) {
+            let terminal = matches!(
+                &event,
+                StreamShellEvent::StreamUpdate(
+                    ConversationStreamEvent::TurnCompleted { .. }
+                        | ConversationStreamEvent::Failed { .. }
+                )
+            );
+            events.push(event);
+            if terminal {
+                break;
+            }
+        }
+
+        events
     }
 
     fn sample_startup_diagnostics() -> StartupDiagnostics {
