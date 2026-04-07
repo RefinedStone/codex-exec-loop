@@ -4,7 +4,7 @@
 The app now starts directly in `ConversationShell` with a new-thread draft. Startup diagnostics and recent sessions are still available, but they open as shell overlays instead of replacing the whole screen.
 
 ## Current Screen Responsibilities
-- `ConversationShell`: transcript, activity panel, input area, shell key hints, and startup/session summaries
+- `ConversationShell`: single-column transcript, slim status footer, bottom composer, shell key hints, and startup/session summaries
 - startup overlay: account checks, workspace path, schema snapshot, and warnings
 - recent sessions overlay: thread list, selected-session metadata, and resume entry point
 
@@ -15,7 +15,7 @@ The app now starts directly in `ConversationShell` with a new-thread draft. Star
 4. Opening a recent session overlay entry loads the snapshot with `thread/read`.
 5. Sending a prompt starts a background stream worker.
 6. Stream events are sent back into the UI via typed background messages.
-7. The shell updates transcript, activity, status, and auto follow-up state.
+7. The shell updates transcript, footer status, composer state, and auto follow-up state.
 
 ## Important UI State
 The shell already tracks more than page-level loading:
@@ -31,7 +31,7 @@ The shell already tracks more than page-level loading:
 - warnings and status text
 
 ## Current UX Gap
-The shell itself is now the primary frame, but the experience is still not fully continuous. The current layout is still a full-screen Ratatui application with a header, panel split, and alternate-screen assumptions.
+The shell itself is now the primary frame and the transcript is no longer split by a side activity panel. The remaining gap is that the app is still a full-screen Ratatui surface with alternate-screen assumptions, so it has not yet reached a scrollback-native CLI feel.
 
 ## Next UX Direction
 The next UX step is not "more panels" or "more routes". It is a pivot toward a stream-first shell closer to Codex CLI:
