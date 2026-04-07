@@ -44,8 +44,9 @@ const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
-const SHELL_STATUS_HEIGHT: u16 = 6;
 const SHELL_KEY_HINT_HEIGHT: u16 = 4;
+const MIN_SHELL_STATUS_HEIGHT: u16 = 5;
+const MAX_SHELL_STATUS_HEIGHT: u16 = 8;
 const MIN_COMPOSER_HEIGHT: u16 = 4;
 const MAX_COMPOSER_HEIGHT: u16 = 8;
 
@@ -1594,6 +1595,8 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiA
 fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let area = frame.area();
     frame.render_widget(Clear, area);
+    let footer_lines = build_shell_footer_lines(app);
+    let footer_height = build_shell_footer_height(&footer_lines);
     let input_lines = build_input_lines(app);
     let input_height = build_input_block_height(&input_lines);
 
@@ -1603,7 +1606,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(12),
-            Constraint::Length(SHELL_STATUS_HEIGHT),
+            Constraint::Length(footer_height),
             Constraint::Length(input_height),
             Constraint::Length(SHELL_KEY_HINT_HEIGHT),
         ])
@@ -1667,7 +1670,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .wrap(Wrap { trim: false });
     frame.render_widget(conversation, layout[1]);
 
-    let footer = Paragraph::new(build_shell_footer_lines(app))
+    let footer = Paragraph::new(footer_lines)
         .block(Block::default().borders(Borders::ALL).title("Status"))
         .wrap(Wrap { trim: true });
     frame.render_widget(footer, layout[2]);
@@ -2470,6 +2473,10 @@ fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
     (lines.len() as u16 + 2).clamp(MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
 }
 
+fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
+    (lines.len() as u16 + 2).clamp(MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
+}
+
 fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
     match &app.conversation_state {
         ConversationState::Loading => Line::from("Composer / loading"),
@@ -2565,7 +2572,8 @@ mod tests {
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
         ShellOverlay, StartupState, TurnActivityState, build_conversation_scroll_offset,
         build_followup_template_preview_lines, build_input_block_height, build_ready_input_lines,
-        build_shell_footer_lines, count_rendered_conversation_lines, format_conversation_lines,
+        build_shell_footer_height, build_shell_footer_lines, count_rendered_conversation_lines,
+        format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -2795,6 +2803,16 @@ mod tests {
         let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready);
 
         assert_eq!(build_input_block_height(&rendered), MAX_COMPOSER_HEIGHT);
+    }
+
+    #[test]
+    fn status_footer_height_expands_for_ready_shell_summary() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let rendered = build_shell_footer_lines(&app);
+
+        assert_eq!(build_shell_footer_height(&rendered), 7);
     }
 
     #[test]
