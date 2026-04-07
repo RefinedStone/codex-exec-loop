@@ -60,15 +60,14 @@ pub(super) fn reduce_conversation_lifecycle(
             template_load_result,
         } => {
             state.conversation_state = match result {
-                Ok(snapshot) => {
-                    let Some(template_load_result) = template_load_result else {
-                        panic!("loaded snapshot should include follow-up template data");
-                    };
-                    ConversationState::Ready(ConversationViewModel::from_snapshot(
-                        snapshot,
-                        template_load_result,
-                    ))
-                }
+                Ok(snapshot) => match template_load_result {
+                    Some(template_load_result) => ConversationState::Ready(
+                        ConversationViewModel::from_snapshot(snapshot, template_load_result),
+                    ),
+                    None => ConversationState::Failed(
+                        "loaded snapshot missing follow-up template data".to_string(),
+                    ),
+                },
                 Err(message) => ConversationState::Failed(message),
             };
         }
