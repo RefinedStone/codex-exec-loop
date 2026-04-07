@@ -41,6 +41,7 @@ Use the repo-local RefinedStone identity for PR operations.
 - if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
 - once a change reaches a reviewable milestone, the default is `commit -> push -> PR`; do not stop at a local commit unless the user explicitly says to hold
 - after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
+- for final integration, do not use GitHub merge-commit flow; rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits
 
 ## Working Rules
 Use official Codex interfaces first: `codex app-server`, `codex exec`, and `codex exec resume`. Keep commits small and milestone-based. Do not introduce unnecessary traits; add a port only when it improves a real boundary. For TUI changes, include a screenshot or short terminal capture in the PR when practical.

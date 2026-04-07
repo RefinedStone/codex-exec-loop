@@ -64,7 +64,9 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - reply on each review thread with the applied fix or the rationale for not changing direction only when `bash scripts/gh-refinedstone.sh` can authenticate as `RefinedStone`
   - commit and push the review response separately from the original milestone commit when practical
   - rebase the feature branch onto the latest target base branch before merge
-  - merge by updating the base branch fast-forward to the reviewed feature head when possible
+  - never use GitHub's merge-commit flow for this repo
+  - merge by rebasing locally and then updating the base branch to the reviewed feature head with linear history
+  - after the base branch already contains the reviewed commits, close the PR instead of pressing GitHub merge
 - Verify with `cargo fmt`, `cargo build`, and `cargo test` for native changes.
 - Do not introduce unnecessary traits. Add a port trait when it improves a boundary.
 - Review handling:
