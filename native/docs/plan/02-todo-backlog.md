@@ -34,7 +34,7 @@ The following are intentionally not listed as TODO items because they already sh
 ## P2. Auto Follow-Up
 - [x] support richer template inspection and preview in the UI
 - [ ] consider editable stop keyword value from the shell
-- [ ] make skip reasons more operator-visible when auto follow-up does not continue
+- [x] make skip reasons more operator-visible when auto follow-up does not continue
 
 ## P3. Code Health
 - [ ] split large TUI state and reducer code into smaller units

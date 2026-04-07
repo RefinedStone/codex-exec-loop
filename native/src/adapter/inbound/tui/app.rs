@@ -176,6 +176,48 @@ enum AutoFollowupSkipReason {
     NoFileChanges,
 }
 
+impl AutoFollowupSkipReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::ManualInputBuffered => "manual input buffered",
+            Self::LimitReached => "turn limit reached",
+            Self::NoAgentReply => "no agent reply",
+            Self::StopKeywordMatched => "stop keyword matched",
+            Self::NoFileChanges => "no file changes",
+        }
+    }
+
+    fn detail(
+        self,
+        auto_follow_state: &AutoFollowState,
+        turn_activity: &TurnActivityState,
+    ) -> String {
+        match self {
+            Self::Disabled => "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
+            Self::ManualInputBuffered => {
+                "the input panel already has a manual prompt buffered".to_string()
+            }
+            Self::LimitReached => format!(
+                "reached the configured auto-turn budget ({})",
+                auto_follow_state.progress_label()
+            ),
+            Self::NoAgentReply => {
+                "a non-empty agent reply is required before the next auto turn can be queued"
+                    .to_string()
+            }
+            Self::StopKeywordMatched => format!(
+                "the latest agent reply matched the stop keyword {}",
+                auto_follow_state.stop_rules.stop_keyword.value()
+            ),
+            Self::NoFileChanges => format!(
+                "the last completed turn changed {} files while the no-file stop rule is on",
+                turn_activity.last_completed_file_change_count()
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct AutoFollowState {
     enabled: bool,
@@ -454,6 +496,7 @@ struct ConversationViewModel {
     input_state: ConversationInputState,
     auto_follow_state: AutoFollowState,
     turn_activity: TurnActivityState,
+    last_auto_followup_skip_reason: Option<AutoFollowupSkipReason>,
     status_text: String,
 }
 
@@ -475,6 +518,7 @@ impl ConversationViewModel {
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_skip_reason: None,
             status_text,
         };
         view_model.refresh_conversation_lines();
@@ -508,6 +552,7 @@ impl ConversationViewModel {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_skip_reason: None,
             status_text,
         };
         view_model.refresh_conversation_lines();
@@ -558,6 +603,14 @@ impl ConversationViewModel {
     fn mark_turn_finished(&mut self) {
         self.active_turn_id = None;
         self.input_state = self.ready_input_state();
+    }
+
+    fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
+        self.last_auto_followup_skip_reason = Some(reason);
+    }
+
+    fn clear_auto_followup_skip(&mut self) {
+        self.last_auto_followup_skip_reason = None;
     }
 
     fn latest_agent_message_text(&self) -> Option<&str> {
@@ -926,9 +979,11 @@ impl NativeTuiApp {
                 conversation.mark_turn_finished();
                 match conversation.decide_auto_followup() {
                     AutoFollowupDecision::QueuePrompt(prompt) => {
+                        conversation.clear_auto_followup_skip();
                         queued_auto_prompt = Some(prompt);
                     }
                     AutoFollowupDecision::Skip(skip_reason) => {
+                        conversation.record_auto_followup_skip(skip_reason);
                         conversation.status_text = match skip_reason {
                             AutoFollowupSkipReason::Disabled => {
                                 format!("turn completed: {turn_id} / auto follow-up off")
@@ -2446,8 +2501,23 @@ fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                         .turn_activity
                         .last_completed_file_change_count()
                 )),
+                Line::from(format!(
+                    "auto last skip: {}",
+                    conversation
+                        .last_auto_followup_skip_reason
+                        .map(AutoFollowupSkipReason::label)
+                        .unwrap_or("none")
+                )),
                 Line::from(format!("status: {}", conversation.status_text)),
             ];
+
+            if let Some(skip_reason) = conversation.last_auto_followup_skip_reason {
+                lines.push(Line::from(format!(
+                    "auto skip detail: {}",
+                    skip_reason
+                        .detail(&conversation.auto_follow_state, &conversation.turn_activity)
+                )));
+            }
 
             if let Some(turn_id) = &conversation.active_turn_id {
                 lines.push(Line::from(format!("active turn: {turn_id}")));
@@ -2616,9 +2686,9 @@ mod tests {
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewModel,
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, NativeTuiApp, PromptOrigin, ShellActionAvailability,
-        ShellOverlay, StartupState, TurnActivityState, build_conversation_scroll_offset,
-        build_followup_template_preview_lines, build_ready_input_lines,
-        count_rendered_conversation_lines, format_conversation_lines,
+        ShellOverlay, StartupState, TurnActivityState, build_conversation_activity_lines,
+        build_conversation_scroll_offset, build_followup_template_preview_lines,
+        build_ready_input_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -2770,6 +2840,7 @@ mod tests {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_skip_reason: None,
             status_text: "thread loaded".to_string(),
         }
     }
@@ -3218,5 +3289,65 @@ mod tests {
         };
 
         assert!(prompt.contains("latest answer"));
+    }
+
+    #[test]
+    fn auto_followup_skip_reason_is_visible_in_activity_panel() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation
+            .auto_follow_state
+            .stop_rules
+            .stop_on_no_file_changes = true;
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        app.apply_conversation_event(ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-1".to_string(),
+        });
+
+        let rendered = build_conversation_activity_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("auto last skip: no file changes"));
+        assert!(rendered.contains("auto skip detail: the last completed turn changed 0 files"));
+    }
+
+    #[test]
+    fn auto_followup_queue_clears_previous_skip_reason_from_activity_panel() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.last_auto_followup_skip_reason = Some(AutoFollowupSkipReason::Disabled);
+        conversation
+            .turn_activity
+            .last_completed_turn_file_change_count = 2;
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        app.apply_conversation_event(ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-2".to_string(),
+        });
+
+        let rendered = build_conversation_activity_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("auto last skip: none"));
+        assert!(!rendered.contains("auto skip detail:"));
     }
 }
