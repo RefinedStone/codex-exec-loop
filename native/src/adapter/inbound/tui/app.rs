@@ -66,6 +66,8 @@ mod followup_controls;
 mod followup_overlay_ui;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/transcript_viewport.rs"]
+mod transcript_viewport;
 
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
 use conversation_intents::{
@@ -84,6 +86,7 @@ use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
 use inline_shell_commands::InlineShellCommand;
+use transcript_viewport::TranscriptViewportState;
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
@@ -299,13 +302,6 @@ struct AutoFollowTemplateState {
 struct TurnActivityState {
     current_turn_file_change_count: usize,
     last_completed_turn_file_change_count: usize,
-}
-
-#[derive(Debug, Clone)]
-struct TranscriptViewportState {
-    manual_scroll_offset: Option<u16>,
-    page_step: u16,
-    last_max_scroll_offset: u16,
 }
 
 impl AutoFollowState {
@@ -555,83 +551,6 @@ impl TurnActivityState {
 
     fn last_completed_file_change_count(&self) -> usize {
         self.last_completed_turn_file_change_count
-    }
-}
-
-impl Default for TranscriptViewportState {
-    fn default() -> Self {
-        Self {
-            manual_scroll_offset: None,
-            page_step: DEFAULT_TRANSCRIPT_PAGE_STEP,
-            last_max_scroll_offset: 0,
-        }
-    }
-}
-
-impl TranscriptViewportState {
-    fn sync_metrics(&mut self, max_scroll_offset: u16, visible_height: u16) {
-        self.last_max_scroll_offset = max_scroll_offset;
-        self.page_step = visible_height.saturating_sub(1).max(1);
-
-        if let Some(offset) = self.manual_scroll_offset {
-            if max_scroll_offset == 0 || offset >= max_scroll_offset {
-                self.manual_scroll_offset = None;
-            }
-        }
-    }
-
-    fn current_scroll_offset(&self) -> u16 {
-        self.manual_scroll_offset
-            .unwrap_or(self.last_max_scroll_offset)
-    }
-
-    fn status_label(&self) -> String {
-        match self.manual_scroll_offset {
-            Some(offset) => format!("manual {offset}/{}", self.last_max_scroll_offset),
-            None => "tail".to_string(),
-        }
-    }
-
-    fn scroll_page_up(&mut self) {
-        self.scroll_by(-(self.page_step as i32));
-    }
-
-    fn scroll_page_down(&mut self) {
-        self.scroll_by(self.page_step as i32);
-    }
-
-    fn scroll_to_top(&mut self) {
-        if self.last_max_scroll_offset == 0 {
-            self.manual_scroll_offset = None;
-        } else {
-            self.manual_scroll_offset = Some(0);
-        }
-    }
-
-    fn scroll_to_tail(&mut self) {
-        self.manual_scroll_offset = None;
-    }
-
-    fn scroll_by(&mut self, delta: i32) {
-        if self.last_max_scroll_offset == 0 {
-            self.manual_scroll_offset = None;
-            return;
-        }
-
-        let amount = delta.unsigned_abs().min(u16::MAX as u32) as u16;
-        let next_offset = if delta.is_negative() {
-            self.current_scroll_offset().saturating_sub(amount)
-        } else {
-            self.current_scroll_offset()
-                .saturating_add(amount)
-                .min(self.last_max_scroll_offset)
-        };
-
-        if next_offset >= self.last_max_scroll_offset {
-            self.manual_scroll_offset = None;
-        } else {
-            self.manual_scroll_offset = Some(next_offset);
-        }
     }
 }
 
@@ -3507,38 +3426,6 @@ mod tests {
         let scroll_offset = build_conversation_scroll_offset(&lines, 10, 0);
 
         assert_eq!(scroll_offset, 0);
-    }
-
-    #[test]
-    fn transcript_page_navigation_switches_between_tail_and_manual() {
-        let (mut app, _) = make_test_app();
-        app.conversation_state = ConversationState::Ready(ready_conversation());
-        app.sync_transcript_viewport_metrics(24, 6);
-
-        app.scroll_transcript_page_up();
-
-        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, Some(19));
-        assert_eq!(app.transcript_viewport_status_label(), "manual 19/24");
-
-        app.scroll_transcript_page_down();
-
-        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, None);
-        assert_eq!(app.transcript_viewport_status_label(), "tail");
-    }
-
-    #[test]
-    fn transcript_home_and_end_jump_between_top_and_tail() {
-        let (mut app, _) = make_test_app();
-        app.conversation_state = ConversationState::Ready(ready_conversation());
-        app.sync_transcript_viewport_metrics(30, 8);
-
-        app.scroll_transcript_to_top();
-        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, Some(0));
-        assert_eq!(app.transcript_viewport_status_label(), "manual 0/30");
-
-        app.scroll_transcript_to_tail();
-        assert_eq!(app.transcript_viewport_state.manual_scroll_offset, None);
-        assert_eq!(app.transcript_viewport_status_label(), "tail");
     }
 
     #[test]
