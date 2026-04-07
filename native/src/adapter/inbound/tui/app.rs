@@ -419,7 +419,11 @@ impl AutoFollowStopRules {
 impl StopKeywordRule {
     fn normalize_candidate(candidate: &str) -> Option<String> {
         let normalized = candidate.trim();
-        if normalized.is_empty() || normalized.chars().any(char::is_whitespace) {
+        if normalized.is_empty()
+            || !normalized
+                .chars()
+                .all(|character| character.is_alphanumeric() || character == '_')
+        {
             None
         } else {
             Some(normalized.to_string())
@@ -1995,7 +1999,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
         .constraints([
             Constraint::Length(4),
             Constraint::Min(14),
-            Constraint::Length(block_height_for_lines(&status_lines, 6, 9)),
+            Constraint::Length(block_height_for_lines(&status_lines, 6, 11)),
             Constraint::Length(block_height_for_lines(&key_lines, 5, 7)),
         ])
         .split(popup_area);
@@ -2291,6 +2295,10 @@ fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>
             } else {
                 lines.push(Line::from("stop keyword edit: press Ctrl+g"));
             }
+            lines.push(Line::from(Span::styled(
+                format!("status: {}", conversation.status_text),
+                Style::default().fg(Color::Yellow),
+            )));
 
             lines
         }
@@ -2302,7 +2310,7 @@ fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         return vec![
             Line::from("Type the new stop keyword directly. Backspace deletes."),
             Line::from("Enter: save stop keyword    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use a single token without whitespace."),
+            Line::from("Use letters, numbers, or underscores only."),
         ];
     }
 
@@ -2738,8 +2746,9 @@ mod tests {
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
         RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
         TurnActivityState, build_conversation_scroll_offset, build_followup_template_preview_lines,
-        build_input_block_height, build_ready_input_lines, build_shell_footer_height,
-        build_shell_footer_lines, count_rendered_conversation_lines, format_conversation_lines,
+        build_followup_template_status_lines, build_input_block_height, build_ready_input_lines,
+        build_shell_footer_height, build_shell_footer_lines, count_rendered_conversation_lines,
+        format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3371,7 +3380,28 @@ mod tests {
         assert!(
             conversation
                 .status_text
-                .contains("single token without whitespace")
+                .contains("letters, numbers, or underscores")
+        );
+    }
+
+    #[test]
+    fn followup_template_status_lines_include_latest_status_text() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.status_text =
+            "auto stop keyword must use only letters, numbers, or underscores".to_string();
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_followup_template_status_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains(
+                "status: auto stop keyword must use only letters, numbers, or underscores"
+            )
         );
     }
 

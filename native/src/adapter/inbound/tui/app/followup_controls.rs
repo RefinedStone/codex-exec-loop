@@ -74,7 +74,7 @@ pub(super) fn reduce_followup_controls(
         FollowupControlEvent::StopKeywordValueUpdated { value } => {
             let Some(value) = StopKeywordRule::normalize_candidate(&value) else {
                 state.status_text =
-                    "auto stop keyword must be a single token without whitespace".to_string();
+                    "auto stop keyword must use only letters, numbers, or underscores".to_string();
                 return FollowupControlReduction { state, effects };
             };
 
@@ -297,7 +297,34 @@ mod tests {
             reduced
                 .state
                 .status_text
-                .contains("single token without whitespace")
+                .contains("letters, numbers, or underscores")
+        );
+    }
+
+    #[test]
+    fn punctuated_stop_keyword_value_keeps_existing_rule() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::StopKeywordValueUpdated {
+                value: "done!".to_string(),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.stop_keyword_value(),
+            DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+        );
+        assert!(reduced.effects.is_empty());
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("letters, numbers, or underscores")
         );
     }
 
