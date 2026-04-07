@@ -1,6 +1,9 @@
-#[derive(Debug, Clone, Copy, Default)]
+use ratatui::widgets::ListState;
+
+#[derive(Debug, Default)]
 pub(super) struct FollowupOverlayUiState {
     pub preview_scroll: u16,
+    pub list_state: ListState,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -16,9 +19,11 @@ pub(super) fn reduce_followup_overlay_ui(
     event: FollowupOverlayUiEvent,
 ) -> FollowupOverlayUiState {
     match event {
-        FollowupOverlayUiEvent::OverlayShown
-        | FollowupOverlayUiEvent::TemplateChanged
-        | FollowupOverlayUiEvent::ContentReset => {
+        FollowupOverlayUiEvent::OverlayShown | FollowupOverlayUiEvent::ContentReset => {
+            state.preview_scroll = 0;
+            state.list_state = ListState::default();
+        }
+        FollowupOverlayUiEvent::TemplateChanged => {
             state.preview_scroll = 0;
         }
         FollowupOverlayUiEvent::PreviewScrolled { delta } => {
@@ -40,7 +45,10 @@ mod tests {
 
     #[test]
     fn template_changed_resets_preview_scroll() {
-        let state = FollowupOverlayUiState { preview_scroll: 12 };
+        let state = FollowupOverlayUiState {
+            preview_scroll: 12,
+            ..Default::default()
+        };
 
         let reduced = reduce_followup_overlay_ui(state, FollowupOverlayUiEvent::TemplateChanged);
 
@@ -49,7 +57,10 @@ mod tests {
 
     #[test]
     fn preview_scrolled_saturates_at_zero() {
-        let state = FollowupOverlayUiState { preview_scroll: 3 };
+        let state = FollowupOverlayUiState {
+            preview_scroll: 3,
+            ..Default::default()
+        };
 
         let reduced = reduce_followup_overlay_ui(
             state,
@@ -61,11 +72,21 @@ mod tests {
 
     #[test]
     fn preview_scrolled_moves_forward() {
-        let state = FollowupOverlayUiState { preview_scroll: 0 };
+        let state = FollowupOverlayUiState::default();
 
         let reduced =
             reduce_followup_overlay_ui(state, FollowupOverlayUiEvent::PreviewScrolled { delta: 6 });
 
         assert_eq!(reduced.preview_scroll, 6);
+    }
+
+    #[test]
+    fn overlay_shown_resets_list_state() {
+        let mut state = FollowupOverlayUiState::default();
+        state.list_state.select(Some(3));
+
+        let reduced = reduce_followup_overlay_ui(state, FollowupOverlayUiEvent::OverlayShown);
+
+        assert_eq!(reduced.list_state.selected(), None);
     }
 }
