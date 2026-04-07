@@ -285,7 +285,7 @@ impl CodexAppServerAdapter {
                     RequestFailureOutcome::ReturnSharedFailure => {
                         self.reset_shared_runtime(None);
                         return Err(error.context(
-                            "shared runtime retry also failed after reset; open diagnostics and rerun the request",
+                            "shared runtime retry also failed; open diagnostics and rerun the request",
                         ));
                     }
                     RequestFailureOutcome::ReturnIsolatedFailure => {
