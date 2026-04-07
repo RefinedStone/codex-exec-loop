@@ -36,5 +36,13 @@ Even with live shell behavior, the app still feels more page-based than Codex CL
 - the codebase still follows a clear hexagonal split
 - the app-server protocol work is kept behind one outbound adapter
 
+## Current Refactor Stage
+The product-facing UX pivot is largely complete. The active work is now in P3 code health, not in another shell UX redesign.
+
+- the main shell behavior is already on `prerelease`
+- the current effort is reducing the size and mixed responsibilities of `app.rs`
+- recent refactors already pulled rendering, presentation, layout, viewport, runtime, shell-controller, and conversation-model state into dedicated modules
+- the next meaningful slice should stay large enough to remove the remaining TUI runtime and background event-loop wiring in one pass instead of another helper-by-helper move
+
 ## Immediate Documentation Goal
 All docs should assume the current branch already has streaming shell behavior and auto follow-up. Future planning should build on that baseline instead of describing the older placeholder shell.
