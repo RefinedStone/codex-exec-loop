@@ -32,7 +32,7 @@ The shell already tracks more than page-level loading:
 - warnings and status text
 
 ## Current UX Gap
-The shell itself is now the primary frame and the transcript is no longer split by a side activity panel. The remaining gap is that the app is still a full-screen Ratatui surface with alternate-screen assumptions, so it has not yet reached a scrollback-native CLI feel.
+The shell itself is now the primary frame and the transcript is no longer split by a side activity panel. The default run stays on the main terminal screen, but the app still redraws a full Ratatui viewport in raw mode and still leans on modal overlays, so it has not yet reached a truly append-only scrollback-native CLI feel.
 
 ## Next UX Direction
 The next UX step is not "more panels" or "more routes". It is a pivot toward a stream-first shell closer to Codex CLI:

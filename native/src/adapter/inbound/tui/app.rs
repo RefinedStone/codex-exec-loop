@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
+use crossterm::cursor::MoveToNextLine;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -50,6 +51,7 @@ const MAX_SHELL_STATUS_HEIGHT: u16 = 8;
 const MIN_COMPOSER_HEIGHT: u16 = 4;
 const MAX_COMPOSER_HEIGHT: u16 = 8;
 const DEFAULT_TRANSCRIPT_PAGE_STEP: u16 = 6;
+const ALT_SCREEN_ENV_VAR: &str = "CODEX_EXEC_LOOP_ALT_SCREEN";
 
 #[path = "app/conversation_input.rs"]
 mod conversation_input;
@@ -101,6 +103,37 @@ pub fn run() -> Result<()> {
     );
     app.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested);
     run_tui(app)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiPresentationMode {
+    MainScreen,
+    AlternateScreen,
+}
+
+impl TuiPresentationMode {
+    fn from_environment() -> Self {
+        Self::from_env_value(std::env::var(ALT_SCREEN_ENV_VAR).ok().as_deref())
+    }
+
+    fn from_env_value(value: Option<&str>) -> Self {
+        if value.is_some_and(env_flag_is_truthy) {
+            Self::AlternateScreen
+        } else {
+            Self::MainScreen
+        }
+    }
+
+    fn uses_alternate_screen(self) -> bool {
+        self == Self::AlternateScreen
+    }
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1620,16 +1653,23 @@ impl NativeTuiApp {
 }
 
 fn run_tui(mut app: NativeTuiApp) -> Result<()> {
+    let presentation_mode = TuiPresentationMode::from_environment();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    if presentation_mode.uses_alternate_screen() {
+        execute!(stdout, EnterAlternateScreen)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_event_loop(&mut terminal, &mut app);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    if presentation_mode.uses_alternate_screen() {
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    } else {
+        execute!(terminal.backend_mut(), MoveToNextLine(1))?;
+    }
     terminal.show_cursor()?;
     result
 }
@@ -2887,10 +2927,10 @@ mod tests {
         ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
         RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
-        TurnActivityState, build_conversation_scroll_offset, build_followup_template_preview_lines,
-        build_followup_template_status_lines, build_input_block_height, build_ready_input_lines,
-        build_shell_footer_height, build_shell_footer_lines, count_rendered_conversation_lines,
-        format_conversation_lines,
+        TuiPresentationMode, TurnActivityState, build_conversation_scroll_offset,
+        build_followup_template_preview_lines, build_followup_template_status_lines,
+        build_input_block_height, build_ready_input_lines, build_shell_footer_height,
+        build_shell_footer_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3109,6 +3149,46 @@ mod tests {
             rendered
                 .iter()
                 .any(|line| line.contains("Ctrl+j inserts a new line"))
+        );
+    }
+
+    #[test]
+    fn tui_presentation_mode_defaults_to_main_screen() {
+        assert_eq!(
+            TuiPresentationMode::from_env_value(None),
+            TuiPresentationMode::MainScreen
+        );
+        assert_eq!(
+            TuiPresentationMode::from_env_value(Some("0")),
+            TuiPresentationMode::MainScreen
+        );
+        assert_eq!(
+            TuiPresentationMode::from_env_value(Some("no")),
+            TuiPresentationMode::MainScreen
+        );
+    }
+
+    #[test]
+    fn tui_presentation_mode_accepts_truthy_alt_screen_flag() {
+        assert_eq!(
+            TuiPresentationMode::from_env_value(Some("1")),
+            TuiPresentationMode::AlternateScreen
+        );
+        assert_eq!(
+            TuiPresentationMode::from_env_value(Some(" true ")),
+            TuiPresentationMode::AlternateScreen
+        );
+        assert_eq!(
+            TuiPresentationMode::from_env_value(Some("ON")),
+            TuiPresentationMode::AlternateScreen
+        );
+    }
+
+    #[test]
+    fn tui_presentation_mode_ignores_unrecognized_flag_values() {
+        assert_eq!(
+            TuiPresentationMode::from_env_value(Some("maybe")),
+            TuiPresentationMode::MainScreen
         );
     }
 
