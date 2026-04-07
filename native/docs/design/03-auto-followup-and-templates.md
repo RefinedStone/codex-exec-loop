@@ -38,11 +38,11 @@ Inside the shell:
 
 - `Ctrl+a`: toggle auto follow-up
 - `Ctrl+f`: cycle templates
+- `Ctrl+p`: open the template preview overlay
 - `Ctrl+k`: toggle stop keyword rule
 - `Ctrl+n`: toggle no-file-change stop rule
 
 ## Remaining Gaps
 - no custom stop keyword editing from the TUI yet
-- no dedicated overlay for template browsing or preview
+- template preview is read-only and still cycles through a flat list
 - no richer strategy metadata beyond label and source
-
