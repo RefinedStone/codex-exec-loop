@@ -15,7 +15,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
 use crate::adapter::inbound::tui::shell_chrome::{
@@ -66,6 +66,8 @@ mod followup_controls;
 mod followup_overlay_ui;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/session_overlay_ui.rs"]
+mod session_overlay_ui;
 #[path = "app/shell_layout.rs"]
 mod shell_layout;
 #[path = "app/shell_presentation.rs"]
@@ -92,6 +94,7 @@ use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
 use inline_shell_commands::InlineShellCommand;
+use session_overlay_ui::SessionOverlayUiState;
 use shell_layout::{
     block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
     build_shell_footer_height,
@@ -773,6 +776,7 @@ struct NativeTuiApp {
     session_state: SessionState,
     conversation_state: ConversationState,
     selected_session_index: usize,
+    session_overlay_ui_state: SessionOverlayUiState,
     followup_overlay_ui_state: FollowupOverlayUiState,
     transcript_viewport_state: TranscriptViewportState,
     active_session: Option<SessionSummary>,
@@ -806,6 +810,7 @@ impl NativeTuiApp {
             session_state: SessionState::Idle,
             conversation_state: initial_conversation,
             selected_session_index: 0,
+            session_overlay_ui_state: SessionOverlayUiState::default(),
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
             transcript_viewport_state: TranscriptViewportState::default(),
             active_session: None,
@@ -1132,6 +1137,7 @@ impl NativeTuiApp {
                 }
                 BackgroundMessage::SessionsLoaded(result) => {
                     self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(result));
+                    self.session_overlay_ui_state.reset();
                 }
                 BackgroundMessage::ConversationLoaded(result) => {
                     let template_load_result = match &result {

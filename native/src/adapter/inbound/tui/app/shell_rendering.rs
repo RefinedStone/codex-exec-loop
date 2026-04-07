@@ -15,8 +15,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     }
 }
 
-fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    match &app.session_state {
+fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
+    let ready_list = match &app.session_state {
         SessionState::Idle => {
             let message = if app.can_open_session_list() {
                 "session list has not loaded yet"
@@ -27,18 +27,21 @@ fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp
                 .block(Block::default().borders(Borders::ALL).title("Threads"))
                 .wrap(Wrap { trim: true });
             frame.render_widget(widget, area);
+            return;
         }
         SessionState::Loading => {
             let widget = Paragraph::new("loading recent sessions from codex app-server")
                 .block(Block::default().borders(Borders::ALL).title("Threads"))
                 .wrap(Wrap { trim: true });
             frame.render_widget(widget, area);
+            return;
         }
         SessionState::Failed(message) => {
             let widget = Paragraph::new(message.as_str())
                 .block(Block::default().borders(Borders::ALL).title("Threads"))
                 .wrap(Wrap { trim: true });
             frame.render_widget(widget, area);
+            return;
         }
         SessionState::Ready(recent_sessions) => {
             let items = if recent_sessions.items.is_empty() {
@@ -50,27 +53,25 @@ fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp
                     .map(build_session_list_item)
                     .collect::<Vec<_>>()
             };
-
-            let mut list_state = ListState::default();
-            if recent_sessions.items.is_empty() {
-                list_state.select(None);
-            } else {
-                list_state.select(Some(app.selected_session_index));
-            }
-
-            let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Threads"))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(">> ");
-
-            frame.render_stateful_widget(list, area, &mut list_state);
+            let selected_session_index =
+                (!recent_sessions.items.is_empty()).then_some(app.selected_session_index);
+            (items, selected_session_index)
         }
-    }
+    };
+
+    let list = List::new(ready_list.0)
+        .block(Block::default().borders(Borders::ALL).title("Threads"))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    app.session_overlay_ui_state
+        .sync_selected_session(ready_list.1);
+    frame.render_stateful_widget(list, area, &mut app.session_overlay_ui_state.list_state);
 }
 
 fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
@@ -337,7 +338,7 @@ fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
-fn draw_session_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let popup_area = centered_rect(90, 78, frame.area());
     frame.render_widget(Clear, popup_area);
 
@@ -652,21 +653,35 @@ fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {
 }
 
 fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
+    let horizontal_percent = horizontal_percent.min(100);
+    let vertical_percent = vertical_percent.min(100);
     let vertical_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - vertical_percent) / 2),
+            Constraint::Percentage((100u16.saturating_sub(vertical_percent)) / 2),
             Constraint::Percentage(vertical_percent),
-            Constraint::Percentage((100 - vertical_percent) / 2),
+            Constraint::Percentage((100u16.saturating_sub(vertical_percent)) / 2),
         ])
         .split(area);
 
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - horizontal_percent) / 2),
+            Constraint::Percentage((100u16.saturating_sub(horizontal_percent)) / 2),
             Constraint::Percentage(horizontal_percent),
-            Constraint::Percentage((100 - horizontal_percent) / 2),
+            Constraint::Percentage((100u16.saturating_sub(horizontal_percent)) / 2),
         ])
         .split(vertical_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn centered_rect_clamps_percentages_above_hundred() {
+        let area = Rect::new(4, 2, 80, 24);
+
+        assert_eq!(centered_rect(140, 120, area), area);
+    }
 }
