@@ -55,6 +55,8 @@ mod conversation_lifecycle;
 mod conversation_runtime;
 #[path = "app/followup_controls.rs"]
 mod followup_controls;
+#[path = "app/followup_overlay_ui.rs"]
+mod followup_overlay_ui;
 
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
 use conversation_intents::{
@@ -69,6 +71,9 @@ use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
 use followup_controls::{FollowupControlEffect, FollowupControlEvent, reduce_followup_controls};
+use followup_overlay_ui::{
+    FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
+};
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
@@ -681,8 +686,7 @@ struct NativeTuiApp {
     session_state: SessionState,
     conversation_state: ConversationState,
     selected_session_index: usize,
-    followup_template_list_state: ListState,
-    followup_template_preview_scroll: u16,
+    followup_overlay_ui_state: FollowupOverlayUiState,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,
     session_service: SessionService,
@@ -707,15 +711,14 @@ impl NativeTuiApp {
             workspace_directory.clone(),
             followup_template_service.load_catalog(&workspace_directory),
         ));
-        let mut app = Self {
+        let app = Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
             conversation_state: initial_conversation,
             selected_session_index: 0,
-            followup_template_list_state: ListState::default(),
-            followup_template_preview_scroll: 0,
+            followup_overlay_ui_state: FollowupOverlayUiState::default(),
             active_session: None,
             startup_service,
             session_service,
@@ -724,7 +727,6 @@ impl NativeTuiApp {
             tx,
             rx,
         };
-        app.sync_followup_template_overlay_state();
         app
     }
 
@@ -897,8 +899,7 @@ impl NativeTuiApp {
                     workspace_directory: workspace_directory.clone(),
                     template_load_result,
                 });
-                self.sync_followup_template_overlay_state();
-                self.reset_followup_template_preview_scroll();
+                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset);
             }
             ConversationIntentEffect::OpenSession { session } => {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
@@ -970,10 +971,14 @@ impl NativeTuiApp {
     fn execute_followup_control_effect(&mut self, effect: FollowupControlEffect) {
         match effect {
             FollowupControlEffect::SyncTemplateOverlayUi => {
-                self.sync_followup_template_overlay_state();
-                self.reset_followup_template_preview_scroll();
+                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::TemplateChanged);
             }
         }
+    }
+
+    fn dispatch_followup_overlay_ui(&mut self, event: FollowupOverlayUiEvent) {
+        self.followup_overlay_ui_state =
+            reduce_followup_overlay_ui(self.followup_overlay_ui_state, event);
     }
 
     fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
@@ -1020,8 +1025,7 @@ impl NativeTuiApp {
                             template_load_result,
                         },
                     );
-                    self.sync_followup_template_overlay_state();
-                    self.reset_followup_template_preview_scroll();
+                    self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset);
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
@@ -1098,8 +1102,7 @@ impl NativeTuiApp {
     }
 
     fn show_followup_template_overlay(&mut self) {
-        self.sync_followup_template_overlay_state();
-        self.reset_followup_template_preview_scroll();
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown);
         self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayShown);
     }
 
@@ -1183,8 +1186,9 @@ impl NativeTuiApp {
         self.dispatch_followup_controls(FollowupControlEvent::TemplateCycledBackward);
     }
 
-    fn sync_followup_template_overlay_state(&mut self) {
-        let selection = match &self.conversation_state {
+    #[cfg(test)]
+    fn followup_template_selection(&self) -> Option<usize> {
+        match &self.conversation_state {
             ConversationState::Ready(conversation)
                 if !conversation
                     .auto_follow_state
@@ -1195,23 +1199,11 @@ impl NativeTuiApp {
                 Some(conversation.auto_follow_state.selected_template_index())
             }
             _ => None,
-        };
-        self.followup_template_list_state.select(selection);
-    }
-
-    fn reset_followup_template_preview_scroll(&mut self) {
-        self.followup_template_preview_scroll = 0;
+        }
     }
 
     fn scroll_followup_template_preview(&mut self, delta: i32) {
-        let amount = delta.unsigned_abs().min(u16::MAX as u32) as u16;
-        if delta.is_negative() {
-            self.followup_template_preview_scroll =
-                self.followup_template_preview_scroll.saturating_sub(amount);
-        } else {
-            self.followup_template_preview_scroll =
-                self.followup_template_preview_scroll.saturating_add(amount);
-        }
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::PreviewScrolled { delta });
     }
 
     fn current_workspace_directory(&self) -> String {
@@ -1458,7 +1450,7 @@ fn run_event_loop(
     Ok(())
 }
 
-fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+fn draw(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     draw_conversation_shell(frame, app);
 
     match app.shell_overlay {
@@ -1854,7 +1846,7 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
-fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let popup_area = centered_rect(92, 82, frame.area());
     frame.render_widget(Clear, popup_area);
 
@@ -1891,12 +1883,11 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
 
     let preview_lines = build_followup_template_preview_lines(app);
     let preview_scroll = clamp_scroll_offset(
-        app.followup_template_preview_scroll,
+        app.followup_overlay_ui_state.preview_scroll,
         &preview_lines,
         content_layout[1].width.saturating_sub(2),
         content_layout[1].height.saturating_sub(2),
     );
-    app.followup_template_preview_scroll = preview_scroll;
 
     draw_followup_template_list_panel(frame, content_layout[0], app);
     frame.render_widget(
@@ -2013,7 +2004,7 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
+fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let ready_list = match &app.conversation_state {
         ConversationState::Loading => {
             let widget = Paragraph::new("conversation is still loading")
@@ -2072,8 +2063,9 @@ fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mu
         )
         .highlight_symbol(">> ");
 
-    app.followup_template_list_state.select(Some(ready_list.1));
-    frame.render_stateful_widget(list, area, &mut app.followup_template_list_state);
+    let mut list_state = ListState::default();
+    list_state.select(Some(ready_list.1));
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -3034,7 +3026,7 @@ mod tests {
         app.show_followup_template_overlay();
 
         assert_eq!(app.shell_overlay, ShellOverlay::FollowupTemplates);
-        assert_eq!(app.followup_template_list_state.selected(), Some(0));
+        assert_eq!(app.followup_template_selection(), Some(0));
 
         assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE,)));
 
@@ -3046,8 +3038,8 @@ mod tests {
             "builtin plan-queue"
         );
         assert!(conversation.status_text.contains("auto follow-up template"));
-        assert_eq!(app.followup_template_list_state.selected(), Some(1));
-        assert_eq!(app.followup_template_preview_scroll, 0);
+        assert_eq!(app.followup_template_selection(), Some(1));
+        assert_eq!(app.followup_overlay_ui_state.preview_scroll, 0);
     }
 
     #[test]
@@ -3071,7 +3063,7 @@ mod tests {
             app.handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,))
         );
         assert_eq!(
-            app.followup_template_preview_scroll,
+            app.followup_overlay_ui_state.preview_scroll,
             FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP
         );
 
@@ -3079,7 +3071,7 @@ mod tests {
             app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL,))
         );
         assert_eq!(
-            app.followup_template_preview_scroll,
+            app.followup_overlay_ui_state.preview_scroll,
             FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP.saturating_mul(2)
         );
 
@@ -3087,7 +3079,7 @@ mod tests {
             app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL,))
         );
         assert_eq!(
-            app.followup_template_preview_scroll,
+            app.followup_overlay_ui_state.preview_scroll,
             FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP
         );
     }
