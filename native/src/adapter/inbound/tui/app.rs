@@ -64,6 +64,8 @@ mod conversation_runtime;
 mod followup_controls;
 #[path = "app/followup_overlay_ui.rs"]
 mod followup_overlay_ui;
+#[path = "app/inline_shell_commands.rs"]
+mod inline_shell_commands;
 
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
 use conversation_intents::{
@@ -81,6 +83,7 @@ use followup_controls::{FollowupControlEffect, FollowupControlEvent, reduce_foll
 use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
+use inline_shell_commands::InlineShellCommand;
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
@@ -199,54 +202,6 @@ impl ShellActionAvailability {
 enum PromptOrigin {
     Manual,
     AutoFollow,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InlineShellCommand {
-    Diagnostics,
-    Sessions,
-    Templates,
-    NewDraft,
-    Help,
-}
-
-impl InlineShellCommand {
-    const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :templates  :new  :help";
-
-    fn parse(input: &str) -> Option<Self> {
-        match input.trim().to_ascii_lowercase().as_str() {
-            ":diag" | ":diagnostics" => Some(Self::Diagnostics),
-            ":session" | ":sessions" => Some(Self::Sessions),
-            ":template" | ":templates" => Some(Self::Templates),
-            ":new" => Some(Self::NewDraft),
-            ":help" => Some(Self::Help),
-            _ => None,
-        }
-    }
-
-    fn command_list_line() -> &'static str {
-        Self::COMMAND_LIST_LINE
-    }
-
-    fn buffered_hint(self) -> &'static str {
-        match self {
-            Self::Diagnostics => "Press Enter to open the diagnostics overlay.",
-            Self::Sessions => "Press Enter to open the recent-sessions overlay.",
-            Self::Templates => "Press Enter to open the template overlay.",
-            Self::NewDraft => "Press Enter to open a new draft in the shell.",
-            Self::Help => "Press Enter to show the available shell commands.",
-        }
-    }
-
-    fn execution_status(self) -> Option<&'static str> {
-        match self {
-            Self::Diagnostics => Some("opened diagnostics overlay from :diag"),
-            Self::Sessions => Some("opened recent sessions overlay from :sessions"),
-            Self::Templates => Some("opened template overlay from :templates"),
-            Self::NewDraft => None,
-            Self::Help => Some(Self::command_list_line()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3253,30 +3208,6 @@ mod tests {
             rendered
                 .iter()
                 .any(|line| line.contains("Ctrl+j inserts a new line"))
-        );
-    }
-
-    #[test]
-    fn inline_shell_command_recognizes_supported_aliases() {
-        assert_eq!(
-            InlineShellCommand::parse(":diag"),
-            Some(InlineShellCommand::Diagnostics)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":sessions"),
-            Some(InlineShellCommand::Sessions)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":templates"),
-            Some(InlineShellCommand::Templates)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":new"),
-            Some(InlineShellCommand::NewDraft)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":help"),
-            Some(InlineShellCommand::Help)
         );
     }
 
