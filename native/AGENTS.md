@@ -39,6 +39,8 @@ Use the repo-local RefinedStone identity for PR operations.
 - use `bash ../scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies
 - do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
 - if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
+- once a change reaches a reviewable milestone, the default is `commit -> push -> PR`; do not stop at a local commit unless the user explicitly says to hold
+- after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
 
 ## Working Rules
 Use official Codex interfaces first: `codex app-server`, `codex exec`, and `codex exec resume`. Keep commits small and milestone-based. Do not introduce unnecessary traits; add a port only when it improves a real boundary. For TUI changes, include a screenshot or short terminal capture in the PR when practical.

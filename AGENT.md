@@ -48,6 +48,10 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
   - if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
 - Keep commits small and milestone-based.
+- Default delivery rule:
+  - once a task reaches a reviewable milestone, do not stop at a local commit
+  - commit the change set, push the branch, and open a PR by default unless the user explicitly asks to hold locally
+  - treat "commit, push, PR" as the standard finish line for a meaningful slice of work in this repo
 - After finishing a meaningful feature or refactor:
   - commit the change set
   - push the working branch
