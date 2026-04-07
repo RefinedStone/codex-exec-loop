@@ -37,10 +37,19 @@ pub(super) fn reduce_followup_controls(
         } => {
             if !state.has_active_thread() && state.cwd != workspace_directory {
                 let template_count = template_load_result.catalog.items.len();
+                let warnings = template_load_result.warnings;
                 state.cwd = workspace_directory;
                 state.auto_follow_state = AutoFollowState::new(template_load_result.catalog);
-                state.warnings = template_load_result.warnings;
-                state.status_text = format!("draft workspace synced / templates: {template_count}");
+                state.warnings = warnings;
+                state.clear_auto_followup_skip();
+                state.status_text = if state.warnings.is_empty() {
+                    format!("draft workspace synced / templates: {template_count}")
+                } else {
+                    format!(
+                        "draft workspace synced / templates: {template_count} / {}",
+                        state.warnings.join(" | ")
+                    )
+                };
                 effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
             }
         }
@@ -120,6 +129,43 @@ mod tests {
         assert_eq!(
             reduced.effects,
             vec![FollowupControlEffect::SyncTemplateOverlayUi]
+        );
+    }
+
+    #[test]
+    fn draft_workspace_sync_clears_skip_and_surfaces_warnings_in_status() {
+        let mut draft = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+        draft.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
+
+        let reduced = reduce_followup_controls(
+            draft,
+            FollowupControlEvent::DraftWorkspaceSynced {
+                workspace_directory: "/tmp/alt".to_string(),
+                template_load_result: FollowupTemplateCatalogLoadResult {
+                    catalog: FollowupTemplateCatalog {
+                        items: vec![FollowupTemplateDefinition {
+                            id: "workspace review".to_string(),
+                            label: "workspace review".to_string(),
+                            body: "review".to_string(),
+                            source: FollowupTemplateSource::WorkspaceFile {
+                                path: "/tmp/root/.codex-exec-loop/followups/review.md".to_string(),
+                            },
+                        }],
+                    },
+                    warnings: vec!["workspace template parse warning".to_string()],
+                },
+            },
+        );
+
+        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("workspace template parse warning")
         );
     }
 
