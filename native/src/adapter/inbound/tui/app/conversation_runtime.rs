@@ -305,6 +305,143 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn submit_prompt_ignores_blank_prompt_after_trim() {
+        let state = sample_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "   \n\t  ".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::ReadyToContinue
+        );
+        assert_eq!(reduced.state.input_buffer, "ship it");
+        assert!(reduced.state.messages.is_empty());
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn submit_prompt_ignores_requests_while_turn_is_running() {
+        let mut state = sample_conversation();
+        state.input_state = ConversationInputState::StreamingTurn;
+        state.active_turn_id = Some("turn-1".to_string());
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "ship it".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::StreamingTurn
+        );
+        assert_eq!(reduced.state.active_turn_id.as_deref(), Some("turn-1"));
+        assert!(reduced.state.messages.is_empty());
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn turn_completed_records_no_agent_reply_skip_when_auto_followup_cannot_continue() {
+        let state = sample_active_turn_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::ReadyToContinue
+        );
+        assert_eq!(
+            reduced.state.status_text,
+            "turn completed: turn-1 / no agent reply to continue from"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_skip
+                .as_ref()
+                .map(|skip| skip.reason),
+            Some(AutoFollowupSkipReason::NoAgentReply)
+        );
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn turn_completed_records_no_file_change_skip_when_rule_is_enabled() {
+        let mut state = sample_active_turn_conversation();
+        state.auto_follow_state.stop_rules.stop_on_no_file_changes = true;
+        state.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::ReadyToContinue
+        );
+        assert_eq!(
+            reduced.state.status_text,
+            "turn completed: turn-1 / no file changes in last turn"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_skip
+                .as_ref()
+                .map(|skip| skip.reason),
+            Some(AutoFollowupSkipReason::NoFileChanges)
+        );
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn stream_failure_marks_turn_finished_and_appends_status_message() {
+        let state = sample_active_turn_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed {
+                message: "stream exploded".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::ReadyToContinue
+        );
+        assert!(reduced.state.active_turn_id.is_none());
+        assert_eq!(reduced.state.status_text, "turn failed");
+        assert_eq!(reduced.state.messages.len(), 1);
+        assert_eq!(
+            reduced.state.messages[0].kind,
+            ConversationMessageKind::Status
+        );
+        assert_eq!(reduced.state.messages[0].text, "stream exploded");
+        assert!(reduced.effects.is_empty());
+    }
+
     fn sample_conversation() -> ConversationViewModel {
         ConversationViewModel {
             thread_id: "thread-1".to_string(),
@@ -328,5 +465,13 @@ mod tests {
             last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }
+    }
+
+    fn sample_active_turn_conversation() -> ConversationViewModel {
+        let mut state = sample_conversation();
+        state.input_buffer.clear();
+        state.input_state = ConversationInputState::StreamingTurn;
+        state.active_turn_id = Some("turn-1".to_string());
+        state
     }
 }
