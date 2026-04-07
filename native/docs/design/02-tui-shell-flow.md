@@ -4,7 +4,7 @@
 The app now starts directly in `ConversationShell` with a new-thread draft. Startup diagnostics and recent sessions are still available, but they open as shell overlays instead of replacing the whole screen.
 
 ## Current Screen Responsibilities
-- `ConversationShell`: single-column transcript, slim status footer, bottom composer, shell key hints, startup/session summaries, and lightweight transcript navigation
+- `ConversationShell`: single-column transcript, slim status footer, bottom-most composer, integrated title hints, startup/session summaries, and lightweight transcript navigation
 - startup overlay: account checks, workspace path, schema snapshot, and warnings
 - recent sessions overlay: thread list, selected-session metadata, and resume entry point
 
@@ -38,6 +38,6 @@ The shell itself is now the primary frame and the transcript is no longer split 
 The next UX step is not "more panels" or "more routes". It is a pivot toward a stream-first shell closer to Codex CLI:
 
 - the transcript should feel like one vertical flow rather than a dashboard
-- the prompt composer should stay anchored at the bottom
+- keep the prompt composer anchored at the bottom as the shell gets lighter
 - previous conversation should be readable through terminal scrollback first, with lightweight in-app scrolling only where it still adds value
 - diagnostics, session browse, and template inspection should become secondary surfaces instead of competing primary panes

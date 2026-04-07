@@ -27,7 +27,7 @@ These are the current baseline, not the final UX target. The next phase pivots f
 
 ## P1. UX Pivot
 - [x] replace the current panel-heavy shell layout with a single flowing transcript
-- [ ] keep the composer anchored at the bottom while transcript output continues above it
+- [x] keep the composer anchored at the bottom while transcript output continues above it
 - [x] reduce dependence on alternate-screen navigation for normal conversation flow
 - [ ] decide which auxiliary surfaces still deserve overlays versus inline command entry
 

@@ -45,7 +45,6 @@ const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
-const SHELL_KEY_HINT_HEIGHT: u16 = 5;
 const MIN_SHELL_STATUS_HEIGHT: u16 = 5;
 const MAX_SHELL_STATUS_HEIGHT: u16 = 8;
 const MIN_COMPOSER_HEIGHT: u16 = 4;
@@ -1913,7 +1912,6 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
             Constraint::Min(12),
             Constraint::Length(footer_height),
             Constraint::Length(input_height),
-            Constraint::Length(SHELL_KEY_HINT_HEIGHT),
         ])
         .split(area);
 
@@ -1959,7 +1957,11 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         ],
     };
     let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Shell"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(build_shell_title()),
+        )
         .wrap(Wrap { trim: true });
     frame.render_widget(header, layout[0]);
 
@@ -1974,13 +1976,21 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         layout[1].height.saturating_sub(2),
     );
     let conversation = Paragraph::new(conversation_lines)
-        .block(Block::default().borders(Borders::ALL).title("Transcript"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(build_transcript_title(app)),
+        )
         .scroll((conversation_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(conversation, layout[1]);
 
     let footer = Paragraph::new(footer_lines)
-        .block(Block::default().borders(Borders::ALL).title("Status"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(build_status_title()),
+        )
         .wrap(Wrap { trim: true });
     frame.render_widget(footer, layout[2]);
 
@@ -1992,11 +2002,6 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(input, layout[3]);
-
-    let help = Paragraph::new(build_shell_key_lines(app))
-        .block(Block::default().borders(Borders::ALL).title("Controls"))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(help, layout[4]);
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
@@ -2708,10 +2713,6 @@ fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                     conversation.auto_follow_state.template_count(),
                 )),
                 Line::from(format!(
-                    "transcript: {}",
-                    app.transcript_viewport_status_label()
-                )),
-                Line::from(format!(
                     "template source: {}  |  last skip: {}  |  detail: {}",
                     conversation.auto_follow_state.template_source_label(),
                     skip_summary,
@@ -2830,10 +2831,34 @@ fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) 
     (lines.len() as u16 + 2).clamp(min_height, max_height)
 }
 
+fn build_shell_title() -> Line<'static> {
+    Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
+}
+
+fn build_transcript_title(app: &NativeTuiApp) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("Transcript / "),
+        Span::raw(app.transcript_viewport_status_label()),
+        Span::raw(" / PageUp PageDown / Home End"),
+    ])
+}
+
+fn build_status_title() -> Line<'static> {
+    Line::from(
+        "Status / Ctrl+o sessions / Ctrl+d diagnostics / Ctrl+p templates / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
+    )
+}
+
 fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
+    let submit_hint = build_primary_submit_hint(app);
+
     match &app.conversation_state {
-        ConversationState::Loading => Line::from("Composer / loading"),
-        ConversationState::Failed(_) => Line::from("Composer / unavailable"),
+        ConversationState::Loading => Line::from(format!(
+            "Composer / loading / {submit_hint} / Ctrl+j newline"
+        )),
+        ConversationState::Failed(_) => Line::from(format!(
+            "Composer / unavailable / {submit_hint} / Ctrl+j newline"
+        )),
         ConversationState::Ready(conversation) => Line::from(vec![
             Span::raw("Composer / "),
             Span::styled(
@@ -2845,27 +2870,18 @@ fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
                 shell_action_availability_label(app).to_string(),
                 startup_state_style(app),
             ),
+            Span::raw(format!(" / {submit_hint} / Ctrl+j newline")),
         ]),
     }
 }
 
-fn build_shell_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let primary_submit_help = match &app.conversation_state {
+fn build_primary_submit_hint(app: &NativeTuiApp) -> &'static str {
+    match &app.conversation_state {
         ConversationState::Ready(conversation) if conversation.has_running_turn() => {
             "Enter send when idle"
         }
         _ => "Enter send",
-    };
-
-    vec![
-        Line::from(format!(
-            "{primary_submit_help}  |  Ctrl+j newline  |  Ctrl+t new draft  |  Ctrl+C back  |  Ctrl+q quit"
-        )),
-        Line::from("PageUp/PageDown transcript  |  Home top  |  End tail"),
-        Line::from(
-            "Ctrl+o sessions  |  Ctrl+d diagnostics  |  Ctrl+p templates  |  Ctrl+a auto  |  Ctrl+g stop edit",
-        ),
-    ]
+    }
 }
 
 fn input_state_style(input_state: ConversationInputState) -> Style {
@@ -2927,8 +2943,9 @@ mod tests {
         RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
         TuiPresentationMode, TurnActivityState, build_conversation_scroll_offset,
         build_followup_template_preview_lines, build_followup_template_status_lines,
-        build_input_block_height, build_ready_input_lines, build_shell_footer_height,
-        build_shell_footer_lines, count_rendered_conversation_lines, format_conversation_lines,
+        build_input_block_height, build_input_title, build_ready_input_lines,
+        build_shell_footer_height, build_shell_footer_lines, build_status_title,
+        build_transcript_title, count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3207,7 +3224,7 @@ mod tests {
 
         let rendered = build_shell_footer_lines(&app);
 
-        assert_eq!(build_shell_footer_height(&rendered), 8);
+        assert_eq!(build_shell_footer_height(&rendered), 7);
     }
 
     #[test]
@@ -3380,19 +3397,38 @@ mod tests {
     }
 
     #[test]
-    fn shell_footer_includes_transcript_viewport_status() {
+    fn transcript_title_includes_transcript_viewport_status() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
         app.sync_transcript_viewport_metrics(18, 6);
         app.scroll_transcript_page_up();
 
-        let rendered = build_shell_footer_lines(&app)
-            .iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+        assert_eq!(
+            build_transcript_title(&app).to_string(),
+            "Transcript / manual 13/18 / PageUp PageDown / Home End"
+        );
+    }
 
-        assert!(rendered.contains("transcript: manual 13/18"));
+    #[test]
+    fn composer_title_includes_submit_and_newline_hints() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let rendered = build_input_title(&app).to_string();
+
+        assert!(rendered.contains("Composer / ready"));
+        assert!(rendered.contains("Enter send"));
+        assert!(rendered.contains("Ctrl+j newline"));
+    }
+
+    #[test]
+    fn status_title_surfaces_overlay_and_followup_controls() {
+        let rendered = build_status_title().to_string();
+
+        assert!(rendered.contains("Ctrl+o sessions"));
+        assert!(rendered.contains("Ctrl+d diagnostics"));
+        assert!(rendered.contains("Ctrl+p templates"));
+        assert!(rendered.contains("Ctrl+a auto"));
     }
 
     #[test]
