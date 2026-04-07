@@ -83,6 +83,7 @@ pub enum ShellChromeEvent {
     OverlayClosed,
     ExitConfirmationShown,
     ExitConfirmationHidden,
+    TransientChromeDismissed,
     SessionSelectionMoved {
         delta: isize,
     },
@@ -130,7 +131,7 @@ pub fn reduce_shell_chrome(
             }
         },
         ShellChromeEvent::SessionsRequested { limit } => {
-            queue_session_load_if_allowed(&mut state, limit, &mut effects);
+            queue_session_reload_if_allowed(&mut state, limit, &mut effects);
         }
         ShellChromeEvent::SessionsLoaded(result) => {
             state.session_state = match result {
@@ -188,6 +189,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::ExitConfirmationHidden => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
         }
+        ShellChromeEvent::TransientChromeDismissed => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::Hidden;
+        }
         ShellChromeEvent::SessionSelectionMoved { delta } => {
             let SessionState::Ready(recent_sessions) = &state.session_state else {
                 return ShellChromeReduction { state, effects };
@@ -213,6 +218,17 @@ fn queue_session_load_if_allowed(
     effects: &mut Vec<ShellChromeEffect>,
 ) {
     if state.can_open_session_list() && matches!(state.session_state, SessionState::Idle) {
+        state.session_state = SessionState::Loading;
+        effects.push(ShellChromeEffect::LoadRecentSessions { limit });
+    }
+}
+
+fn queue_session_reload_if_allowed(
+    state: &mut ShellChromeState,
+    limit: usize,
+    effects: &mut Vec<ShellChromeEffect>,
+) {
+    if state.can_open_session_list() && !matches!(state.session_state, SessionState::Loading) {
         state.session_state = SessionState::Loading;
         effects.push(ShellChromeEffect::LoadRecentSessions { limit });
     }
@@ -269,6 +285,21 @@ mod tests {
             vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
         );
         assert!(second.effects.is_empty());
+    }
+
+    #[test]
+    fn explicit_sessions_request_reloads_after_failure() {
+        let mut state = ShellChromeState::new();
+        state.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        state.session_state = SessionState::Failed("boom".to_string());
+
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::SessionsRequested { limit: 10 });
+
+        assert!(matches!(reduced.state.session_state, SessionState::Loading));
+        assert_eq!(
+            reduced.effects,
+            vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
+        );
     }
 
     #[test]
