@@ -26,15 +26,15 @@ The following are baseline capabilities or planning updates that are already don
 These are the current baseline, not the final UX target. The next phase pivots from a full-screen TUI feel toward a stream-first shell.
 
 ## P1. UX Pivot
-- [ ] replace the current panel-heavy shell layout with a single flowing transcript
+- [x] replace the current panel-heavy shell layout with a single flowing transcript
 - [ ] keep the composer anchored at the bottom while transcript output continues above it
 - [ ] reduce dependence on alternate-screen navigation for normal conversation flow
 - [ ] decide which auxiliary surfaces still deserve overlays versus inline command entry
 
 ## P2. Stream Shell Ergonomics
 - [x] improve multiline input editing behavior
-- [ ] redesign focus and status affordances for a single-column transcript plus fixed composer
-- [ ] decide whether status and tool activity stay inline, move to a slim footer, or remain optional overlays
+- [x] redesign focus and status affordances for a single-column transcript plus fixed composer
+- [x] decide whether status and tool activity stay inline, move to a slim footer, or remain optional overlays
 - [ ] review whether any transcript viewport controls are needed beyond terminal scrollback and lightweight in-app navigation
 
 ## P2. Auto Follow-Up

@@ -44,6 +44,10 @@ const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
+const SHELL_STATUS_HEIGHT: u16 = 6;
+const SHELL_KEY_HINT_HEIGHT: u16 = 4;
+const MIN_COMPOSER_HEIGHT: u16 = 4;
+const MAX_COMPOSER_HEIGHT: u16 = 8;
 
 #[path = "app/conversation_input.rs"]
 mod conversation_input;
@@ -1590,6 +1594,8 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiA
 fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let area = frame.area();
     frame.render_widget(Clear, area);
+    let input_lines = build_input_lines(app);
+    let input_height = build_input_block_height(&input_lines);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -1597,8 +1603,9 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(12),
-            Constraint::Length(4),
-            Constraint::Length(3),
+            Constraint::Length(SHELL_STATUS_HEIGHT),
+            Constraint::Length(input_height),
+            Constraint::Length(SHELL_KEY_HINT_HEIGHT),
         ])
         .split(area);
 
@@ -1648,51 +1655,36 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .wrap(Wrap { trim: true });
     frame.render_widget(header, layout[0]);
 
-    let content_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
-        .split(layout[1]);
-
     let conversation_lines = build_conversation_lines(app);
     let conversation_scroll = build_conversation_scroll_offset(
         &conversation_lines,
-        content_layout[0].width.saturating_sub(2),
-        content_layout[0].height.saturating_sub(2),
+        layout[1].width.saturating_sub(2),
+        layout[1].height.saturating_sub(2),
     );
     let conversation = Paragraph::new(conversation_lines)
-        .block(Block::default().borders(Borders::ALL).title("Conversation"))
+        .block(Block::default().borders(Borders::ALL).title("Transcript"))
         .scroll((conversation_scroll, 0))
         .wrap(Wrap { trim: false });
-    frame.render_widget(conversation, content_layout[0]);
+    frame.render_widget(conversation, layout[1]);
 
-    let activity = Paragraph::new(build_conversation_activity_lines(app))
-        .block(Block::default().borders(Borders::ALL).title("Activity"))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(activity, content_layout[1]);
+    let footer = Paragraph::new(build_shell_footer_lines(app))
+        .block(Block::default().borders(Borders::ALL).title("Status"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(footer, layout[2]);
 
-    let input = Paragraph::new(build_input_lines(app))
+    let input = Paragraph::new(input_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(build_input_title(app)),
         )
         .wrap(Wrap { trim: false });
-    frame.render_widget(input, layout[2]);
+    frame.render_widget(input, layout[3]);
 
-    let help = Paragraph::new(vec![
-        Line::from("Type your prompt, Ctrl+j inserts a new line, Enter sends"),
-        Line::from(
-            "Ctrl+a: auto on/off    Ctrl+f: next template    Ctrl+k: stop keyword    Ctrl+n: no-file stop",
-        ),
-        Line::from(
-            "Ctrl+p: template preview    Ctrl+o: recent sessions    Ctrl+d: diagnostics",
-        ),
-        Line::from(
-            "Ctrl+t: new draft    Ctrl+r: rerun startup    Backspace: delete    Ctrl+C: shell back    Ctrl+q: quit",
-        ),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Keys"));
-    frame.render_widget(help, layout[3]);
+    let help = Paragraph::new(build_shell_key_lines(app))
+        .block(Block::default().borders(Borders::ALL).title("Controls"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(help, layout[4]);
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
@@ -2203,6 +2195,14 @@ fn recent_session_status_label(app: &NativeTuiApp) -> String {
     }
 }
 
+fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
+    if conversation.has_running_turn() {
+        "running"
+    } else {
+        "idle"
+    }
+}
+
 fn build_session_list_item(session: &SessionSummary) -> ListItem<'static> {
     ListItem::new(vec![
         Line::from(format!(
@@ -2294,121 +2294,83 @@ fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'stat
     lines
 }
 
-fn build_conversation_activity_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
-        ConversationState::Loading => vec![Line::from("Loading conversation metadata")],
-        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Loading => vec![
+            Line::from(format!(
+                "startup: {}  |  sessions: {}",
+                shell_action_availability_label(app),
+                recent_session_status_label(app)
+            )),
+            Line::from("conversation state: loading thread metadata"),
+            Line::from("status: waiting for thread history from codex app-server"),
+        ],
+        ConversationState::Failed(message) => vec![
+            Line::from(format!(
+                "startup: {}  |  sessions: {}",
+                shell_action_availability_label(app),
+                recent_session_status_label(app)
+            )),
+            Line::from("conversation state: failed"),
+            Line::from(format!("status: {message}")),
+        ],
         ConversationState::Ready(conversation) => {
-            let mut lines = vec![
+            let skip_summary = conversation
+                .last_auto_followup_skip
+                .as_ref()
+                .map(|skip| skip.reason.label())
+                .unwrap_or("none");
+            let skip_detail = conversation
+                .last_auto_followup_skip
+                .as_ref()
+                .map(|skip| skip.detail.as_str())
+                .unwrap_or("none");
+            let warning_summary = if conversation.warnings.is_empty() {
+                "warnings: none".to_string()
+            } else {
+                format!("warnings: {}", conversation.warnings.len())
+            };
+
+            vec![
                 Line::from(format!(
-                    "shell startup: {}",
-                    shell_action_availability_label(app)
+                    "startup: {}  |  sessions: {}  |  turn: {}  |  input: {}",
+                    shell_action_availability_label(app),
+                    recent_session_status_label(app),
+                    turn_status_label(conversation),
+                    conversation.input_state.label(),
                 )),
                 Line::from(format!(
-                    "recent sessions: {}",
-                    recent_session_status_label(app)
-                )),
-                Line::from("overlay keys: Ctrl+o sessions / Ctrl+d diagnostics"),
-                Line::from(""),
-                Line::from(format!("title: {}", conversation.title)),
-                Line::from(format!(
-                    "thread id: {}",
+                    "thread: {}  |  auto: {} ({})  |  template: {}",
                     if conversation.has_active_thread() {
                         conversation.thread_id.as_str()
                     } else {
-                        "(new thread will be created on first send)"
-                    }
-                )),
-                Line::from(format!("cwd: {}", conversation.cwd)),
-                Line::from(format!("messages: {}", conversation.messages.len())),
-                Line::from(format!(
-                    "turn running: {}",
-                    if conversation.has_running_turn() {
-                        "yes"
-                    } else {
-                        "no"
-                    }
-                )),
-                Line::from(format!("input state: {}", conversation.input_state.label())),
-                Line::from(format!(
-                    "input detail: {}",
-                    conversation.input_state.detail()
-                )),
-                Line::from(format!(
-                    "send action: {}",
-                    if !conversation.can_submit_prompt() {
-                        "waiting for current turn"
-                    } else {
-                        match app.shell_action_availability() {
-                            ShellActionAvailability::Ready => "enabled",
-                            ShellActionAvailability::Pending => "waiting for startup checks",
-                            ShellActionAvailability::Blocked => "blocked by startup diagnostics",
-                        }
-                    }
-                )),
-                Line::from(format!(
-                    "auto follow-up: {}",
-                    conversation.auto_follow_state.status_label()
-                )),
-                Line::from(format!(
-                    "auto progress: {}",
-                    conversation.auto_follow_state.progress_label()
-                )),
-                Line::from(format!(
-                    "auto template: {}",
+                        "new draft"
+                    },
+                    conversation.auto_follow_state.status_label(),
+                    conversation.auto_follow_state.progress_label(),
                     conversation.auto_follow_state.template_label()
                 )),
                 Line::from(format!(
-                    "auto template source: {}",
-                    conversation.auto_follow_state.template_source_label()
-                )),
-                Line::from(format!(
-                    "auto template count: {}",
-                    conversation.auto_follow_state.template_count()
-                )),
-                Line::from("auto template preview: open Ctrl+p"),
-                Line::from(format!(
-                    "auto stop keyword: {}",
-                    conversation.auto_follow_state.stop_keyword_label()
-                )),
-                Line::from(format!(
-                    "auto stop no-files: {}",
-                    conversation.auto_follow_state.no_file_change_stop_label()
-                )),
-                Line::from(format!(
-                    "last turn file changes: {}",
+                    "status: {}  |  file changes: {}  |  {}",
+                    conversation.status_text,
                     conversation
                         .turn_activity
-                        .last_completed_file_change_count()
+                        .last_completed_file_change_count(),
+                    warning_summary,
                 )),
                 Line::from(format!(
-                    "auto last skip: {}",
-                    conversation
-                        .last_auto_followup_skip
-                        .as_ref()
-                        .map(|skip| skip.reason.label())
-                        .unwrap_or("none")
+                    "input detail: {}  |  template slot: {}/{}",
+                    conversation.input_state.detail(),
+                    conversation.auto_follow_state.selected_template_index() + 1,
+                    conversation.auto_follow_state.template_count(),
                 )),
-                Line::from(format!("status: {}", conversation.status_text)),
-            ];
-
-            if let Some(skip) = &conversation.last_auto_followup_skip {
-                lines.push(Line::from(format!("auto skip detail: {}", skip.detail)));
-            }
-
-            if let Some(turn_id) = &conversation.active_turn_id {
-                lines.push(Line::from(format!("active turn: {turn_id}")));
-            }
-
-            if !conversation.warnings.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from("warnings"));
-                for warning in &conversation.warnings {
-                    lines.push(Line::from(warning.clone()));
-                }
-            }
-
-            lines
+                Line::from(format!(
+                    "template source: {}  |  last skip: {}  |  detail: {}",
+                    conversation.auto_follow_state.template_source_label(),
+                    skip_summary,
+                    skip_detail,
+                )),
+            ]
         }
     }
 }
@@ -2504,18 +2466,45 @@ fn build_ready_input_lines(
     lines
 }
 
-fn build_input_title(app: &NativeTuiApp) -> String {
+fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
+    (lines.len() as u16 + 2).clamp(MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
+}
+
+fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
     match &app.conversation_state {
-        ConversationState::Loading => "Input / loading".to_string(),
-        ConversationState::Failed(_) => "Input / unavailable".to_string(),
-        ConversationState::Ready(conversation) => {
-            format!(
-                "Input / {} / {}",
-                conversation.input_state.label(),
-                shell_action_availability_label(app)
-            )
-        }
+        ConversationState::Loading => Line::from("Composer / loading"),
+        ConversationState::Failed(_) => Line::from("Composer / unavailable"),
+        ConversationState::Ready(conversation) => Line::from(vec![
+            Span::raw("Composer / "),
+            Span::styled(
+                conversation.input_state.label().to_string(),
+                input_state_style(conversation.input_state),
+            ),
+            Span::raw(" / startup "),
+            Span::styled(
+                shell_action_availability_label(app).to_string(),
+                startup_state_style(app),
+            ),
+        ]),
     }
+}
+
+fn build_shell_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    let primary_submit_help = match &app.conversation_state {
+        ConversationState::Ready(conversation) if conversation.has_running_turn() => {
+            "Enter send when idle"
+        }
+        _ => "Enter send",
+    };
+
+    vec![
+        Line::from(format!(
+            "{primary_submit_help}  |  Ctrl+j newline  |  Ctrl+t new draft  |  Ctrl+C back  |  Ctrl+q quit"
+        )),
+        Line::from(
+            "Ctrl+o sessions  |  Ctrl+d diagnostics  |  Ctrl+p template preview  |  Ctrl+a auto  |  Ctrl+f next template",
+        ),
+    ]
 }
 
 fn input_state_style(input_state: ConversationInputState) -> Style {
@@ -2572,11 +2561,11 @@ mod tests {
     use super::{
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-        ConversationViewModel, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, NativeTuiApp, PromptOrigin,
-        RecordedAutoFollowupSkip, ShellActionAvailability, ShellOverlay, StartupState,
-        TurnActivityState, build_conversation_activity_lines, build_conversation_scroll_offset,
-        build_followup_template_preview_lines, build_ready_input_lines,
-        count_rendered_conversation_lines, format_conversation_lines,
+        ConversationViewModel, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, MAX_COMPOSER_HEIGHT,
+        NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
+        ShellOverlay, StartupState, TurnActivityState, build_conversation_scroll_offset,
+        build_followup_template_preview_lines, build_input_block_height, build_ready_input_lines,
+        build_shell_footer_lines, count_rendered_conversation_lines, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -2796,6 +2785,16 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Ctrl+j inserts a new line"))
         );
+    }
+
+    #[test]
+    fn multiline_buffer_expands_composer_height() {
+        let mut conversation = ready_conversation();
+        conversation.input_buffer = "one\ntwo\nthree\nfour\nfive\nsix".to_string();
+
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready);
+
+        assert_eq!(build_input_block_height(&rendered), MAX_COMPOSER_HEIGHT);
     }
 
     #[test]
@@ -3199,7 +3198,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_followup_skip_reason_is_visible_in_activity_panel() {
+    fn auto_followup_skip_reason_is_visible_in_status_footer() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
         conversation
@@ -3220,18 +3219,18 @@ mod tests {
             },
         ));
 
-        let rendered = build_conversation_activity_lines(&app)
+        let rendered = build_shell_footer_lines(&app)
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("auto last skip: no file changes"));
-        assert!(rendered.contains("auto skip detail: the last completed turn changed 0 files"));
+        assert!(rendered.contains("last skip: no file changes"));
+        assert!(rendered.contains("detail: the last completed turn changed 0 files"));
     }
 
     #[test]
-    fn auto_followup_queue_clears_previous_skip_reason_from_activity_panel() {
+    fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
         conversation.last_auto_followup_skip = Some(RecordedAutoFollowupSkip {
@@ -3255,14 +3254,14 @@ mod tests {
             },
         ));
 
-        let rendered = build_conversation_activity_lines(&app)
+        let rendered = build_shell_footer_lines(&app)
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("auto last skip: none"));
-        assert!(!rendered.contains("auto skip detail:"));
+        assert!(rendered.contains("last skip: none"));
+        assert!(rendered.contains("detail: none"));
     }
 
     #[test]
@@ -3290,18 +3289,14 @@ mod tests {
         };
         conversation.auto_follow_state.completed_auto_turns = 0;
 
-        let rendered = build_conversation_activity_lines(&app)
+        let rendered = build_shell_footer_lines(&app)
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("auto last skip: turn limit reached"));
-        assert!(
-            rendered.contains("auto skip detail: reached the configured auto-turn budget (3/3)")
-        );
-        assert!(
-            !rendered.contains("auto skip detail: reached the configured auto-turn budget (0/3)")
-        );
+        assert!(rendered.contains("last skip: turn limit reached"));
+        assert!(rendered.contains("detail: reached the configured auto-turn budget (3/3)"));
+        assert!(!rendered.contains("detail: reached the configured auto-turn budget (0/3)"));
     }
 }
