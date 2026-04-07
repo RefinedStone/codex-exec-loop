@@ -704,12 +704,12 @@ impl NativeTuiApp {
         app
     }
 
-    fn current_shell_chrome_state(&self) -> ShellChromeState {
+    fn take_shell_chrome_state(&mut self) -> ShellChromeState {
         ShellChromeState {
             shell_overlay: self.shell_overlay,
             exit_confirmation_state: self.exit_confirmation_state,
-            startup_state: self.startup_state.clone(),
-            session_state: self.session_state.clone(),
+            startup_state: std::mem::replace(&mut self.startup_state, StartupState::Idle),
+            session_state: std::mem::replace(&mut self.session_state, SessionState::Idle),
             selected_session_index: self.selected_session_index,
         }
     }
@@ -723,7 +723,7 @@ impl NativeTuiApp {
     }
 
     fn dispatch_shell_chrome(&mut self, event: ShellChromeEvent) {
-        let reduction = reduce_shell_chrome(self.current_shell_chrome_state(), event);
+        let reduction = reduce_shell_chrome(self.take_shell_chrome_state(), event);
         self.apply_shell_chrome_state(reduction.state);
         for effect in reduction.effects {
             self.execute_shell_chrome_effect(effect);
@@ -858,20 +858,10 @@ impl NativeTuiApp {
                         Ok(diagnostics) => Some(diagnostics.workspace_path.clone()),
                         Err(_) => None,
                     };
-                    match result {
-                        Ok(diagnostics) => {
-                            self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                                result: Ok(diagnostics),
-                                session_page_size: SESSION_PAGE_SIZE,
-                            })
-                        }
-                        Err(message) => {
-                            self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                                result: Err(message),
-                                session_page_size: SESSION_PAGE_SIZE,
-                            })
-                        }
-                    }
+                    self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
+                        result,
+                        session_page_size: SESSION_PAGE_SIZE,
+                    });
                     if let Some(workspace_directory) = workspace_directory {
                         self.sync_draft_shell_workspace(&workspace_directory);
                     }
@@ -1052,7 +1042,10 @@ impl NativeTuiApp {
     }
 
     fn can_open_session_list(&self) -> bool {
-        self.current_shell_chrome_state().can_open_session_list()
+        matches!(
+            &self.startup_state,
+            StartupState::Ready(diagnostics) if diagnostics.can_continue()
+        )
     }
 
     fn shell_action_availability(&self) -> ShellActionAvailability {
@@ -1144,11 +1137,11 @@ impl NativeTuiApp {
     }
 
     fn toggle_followup_template_overlay(&mut self) {
-        if self.shell_overlay == ShellOverlay::FollowupTemplates {
-            self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
-        } else {
+        if self.shell_overlay != ShellOverlay::FollowupTemplates {
             self.show_followup_template_overlay();
+            return;
         }
+        self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayToggled);
     }
 
     fn close_shell_overlay(&mut self) {
@@ -1164,8 +1157,7 @@ impl NativeTuiApp {
         }
 
         self.active_session = None;
-        self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
-        self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationHidden);
+        self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
         let workspace_directory = self.current_workspace_directory();
         self.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
             workspace_directory.clone(),
@@ -1195,8 +1187,7 @@ impl NativeTuiApp {
         if let Some(session) = self.current_session().cloned() {
             let thread_id = session.id.clone();
             self.active_session = Some(session);
-            self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationHidden);
-            self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
+            self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
             self.start_conversation_load(thread_id);
         }
     }
