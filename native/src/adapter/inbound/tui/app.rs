@@ -49,6 +49,8 @@ const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 mod conversation_lifecycle;
 #[path = "app/conversation_runtime.rs"]
 mod conversation_runtime;
+#[path = "app/followup_controls.rs"]
+mod followup_controls;
 
 use conversation_lifecycle::{
     ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
@@ -57,6 +59,7 @@ use conversation_lifecycle::{
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
+use followup_controls::{FollowupControlEffect, FollowupControlEvent, reduce_followup_controls};
 
 pub fn run() -> Result<()> {
     let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
@@ -880,6 +883,27 @@ impl NativeTuiApp {
         }
     }
 
+    fn dispatch_followup_controls(&mut self, event: FollowupControlEvent) {
+        let Some(conversation) = self.take_ready_conversation_state() else {
+            return;
+        };
+
+        let reduction = reduce_followup_controls(conversation, event);
+        self.conversation_state = ConversationState::Ready(reduction.state);
+        for effect in reduction.effects {
+            self.execute_followup_control_effect(effect);
+        }
+    }
+
+    fn execute_followup_control_effect(&mut self, effect: FollowupControlEffect) {
+        match effect {
+            FollowupControlEffect::SyncTemplateOverlayUi => {
+                self.sync_followup_template_overlay_state();
+                self.reset_followup_template_preview_scroll();
+            }
+        }
+    }
+
     fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
         if !self.shell_action_availability().allows_actions() {
             self.set_conversation_status(self.submission_blocked_status(prompt_origin));
@@ -989,18 +1013,10 @@ impl NativeTuiApp {
             return;
         }
 
-        let load_result = self.load_followup_template_catalog(workspace_directory);
-        let template_count = load_result.catalog.items.len();
-
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.cwd = workspace_directory.to_string();
-            conversation.auto_follow_state = AutoFollowState::new(load_result.catalog);
-            conversation.warnings = load_result.warnings;
-            conversation.status_text =
-                format!("draft workspace synced / templates: {template_count}");
-        }
-        self.sync_followup_template_overlay_state();
-        self.reset_followup_template_preview_scroll();
+        self.dispatch_followup_controls(FollowupControlEvent::DraftWorkspaceSynced {
+            workspace_directory: workspace_directory.to_string(),
+            template_load_result: self.load_followup_template_catalog(workspace_directory),
+        });
     }
 
     fn show_startup_overlay(&mut self) {
@@ -1109,64 +1125,23 @@ impl NativeTuiApp {
     }
 
     fn toggle_auto_followup(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.auto_follow_state.toggle();
-            conversation.clear_auto_followup_skip();
-            conversation.status_text = format!(
-                "auto follow-up {}",
-                conversation.auto_follow_state.status_label()
-            );
-        }
+        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowToggled);
     }
 
     fn toggle_stop_keyword(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.auto_follow_state.toggle_stop_keyword();
-            conversation.clear_auto_followup_skip();
-            conversation.status_text = format!(
-                "auto stop keyword {}",
-                conversation.auto_follow_state.stop_keyword_label()
-            );
-        }
+        self.dispatch_followup_controls(FollowupControlEvent::StopKeywordToggled);
     }
 
     fn toggle_no_file_change_stop(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.auto_follow_state.toggle_no_file_change_stop();
-            conversation.clear_auto_followup_skip();
-            conversation.status_text = format!(
-                "auto stop without file changes {}",
-                conversation.auto_follow_state.no_file_change_stop_label()
-            );
-        }
+        self.dispatch_followup_controls(FollowupControlEvent::NoFileChangeStopToggled);
     }
 
     fn cycle_auto_followup_template(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.auto_follow_state.cycle_template_kind();
-            conversation.clear_auto_followup_skip();
-            conversation.status_text = format!(
-                "auto follow-up template: {}",
-                conversation.auto_follow_state.template_label()
-            );
-        }
-        self.sync_followup_template_overlay_state();
-        self.reset_followup_template_preview_scroll();
+        self.dispatch_followup_controls(FollowupControlEvent::TemplateCycledForward);
     }
 
     fn cycle_auto_followup_template_backward(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation
-                .auto_follow_state
-                .cycle_template_kind_backward();
-            conversation.clear_auto_followup_skip();
-            conversation.status_text = format!(
-                "auto follow-up template: {}",
-                conversation.auto_follow_state.template_label()
-            );
-        }
-        self.sync_followup_template_overlay_state();
-        self.reset_followup_template_preview_scroll();
+        self.dispatch_followup_controls(FollowupControlEvent::TemplateCycledBackward);
     }
 
     fn sync_followup_template_overlay_state(&mut self) {
