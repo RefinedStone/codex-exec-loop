@@ -33,6 +33,8 @@ The current shell can stop auto follow-up when:
 - the agent emits the configured stop keyword, default `AUTO_STOP`
 - the "no file changes" rule is enabled and the last completed turn changed nothing
 
+The activity panel now keeps the last auto follow-up skip reason visible so the operator can tell why the loop did not continue.
+
 ## Current UI Controls
 Inside the shell:
 
