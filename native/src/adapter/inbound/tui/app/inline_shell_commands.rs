@@ -11,13 +11,23 @@ impl InlineShellCommand {
     const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :templates  :new  :help";
 
     pub(super) fn parse(input: &str) -> Option<Self> {
-        match input.trim().to_ascii_lowercase().as_str() {
-            ":diag" | ":diagnostics" => Some(Self::Diagnostics),
-            ":session" | ":sessions" => Some(Self::Sessions),
-            ":template" | ":templates" => Some(Self::Templates),
-            ":new" => Some(Self::NewDraft),
-            ":help" => Some(Self::Help),
-            _ => None,
+        let trimmed = input.trim();
+        if trimmed.eq_ignore_ascii_case(":diag") || trimmed.eq_ignore_ascii_case(":diagnostics") {
+            Some(Self::Diagnostics)
+        } else if trimmed.eq_ignore_ascii_case(":session")
+            || trimmed.eq_ignore_ascii_case(":sessions")
+        {
+            Some(Self::Sessions)
+        } else if trimmed.eq_ignore_ascii_case(":template")
+            || trimmed.eq_ignore_ascii_case(":templates")
+        {
+            Some(Self::Templates)
+        } else if trimmed.eq_ignore_ascii_case(":new") {
+            Some(Self::NewDraft)
+        } else if trimmed.eq_ignore_ascii_case(":help") {
+            Some(Self::Help)
+        } else {
+            None
         }
     }
 
@@ -52,26 +62,23 @@ mod tests {
 
     #[test]
     fn parse_recognizes_supported_aliases() {
-        assert_eq!(
-            InlineShellCommand::parse(":diag"),
-            Some(InlineShellCommand::Diagnostics)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":sessions"),
-            Some(InlineShellCommand::Sessions)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":templates"),
-            Some(InlineShellCommand::Templates)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":new"),
-            Some(InlineShellCommand::NewDraft)
-        );
-        assert_eq!(
-            InlineShellCommand::parse(":help"),
-            Some(InlineShellCommand::Help)
-        );
+        let cases = [
+            (":diag", Some(InlineShellCommand::Diagnostics)),
+            (":diagnostics", Some(InlineShellCommand::Diagnostics)),
+            (":DIAG", Some(InlineShellCommand::Diagnostics)),
+            (":session", Some(InlineShellCommand::Sessions)),
+            (":sessions", Some(InlineShellCommand::Sessions)),
+            (":template", Some(InlineShellCommand::Templates)),
+            (":templates", Some(InlineShellCommand::Templates)),
+            (":new", Some(InlineShellCommand::NewDraft)),
+            (":help", Some(InlineShellCommand::Help)),
+            ("  :help  ", Some(InlineShellCommand::Help)),
+            (":unknown", None),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(InlineShellCommand::parse(input), expected, "{input}");
+        }
     }
 
     #[test]
