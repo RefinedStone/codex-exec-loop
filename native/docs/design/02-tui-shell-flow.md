@@ -31,4 +31,12 @@ The shell already tracks more than page-level loading:
 - warnings and status text
 
 ## Current UX Gap
-The shell itself is now the primary frame, but the experience is still not fully continuous. The next UX step should focus on runtime continuity and shell ergonomics, not rebuilding transcript streaming from scratch.
+The shell itself is now the primary frame, but the experience is still not fully continuous. The current layout is still a full-screen Ratatui application with a header, panel split, and alternate-screen assumptions.
+
+## Next UX Direction
+The next UX step is not "more panels" or "more routes". It is a pivot toward a stream-first shell closer to Codex CLI:
+
+- the transcript should feel like one vertical flow rather than a dashboard
+- the prompt composer should stay anchored at the bottom
+- previous conversation should be readable through terminal scrollback first, with in-app scrolling only where it still adds value
+- diagnostics, session browse, and template inspection should become secondary surfaces instead of competing primary panes

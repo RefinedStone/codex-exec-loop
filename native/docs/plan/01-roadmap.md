@@ -1,26 +1,26 @@
 # Roadmap
 
-## R1. Make The Existing Shell Feel Primary
-- reduce dependence on full-screen navigation
-- let users reach recent sessions and startup status without leaving the shell mindset
-- keep diagnostics available, but stop treating them as the main product surface
+## R1. Adopt A Stream-First Shell UX
+- treat the conversation as one vertical transcript instead of a dashboard-style layout
+- keep the prompt composer anchored at the bottom while the transcript flows above it
+- prefer terminal scrollback and append-only output over full-screen page transitions
 
 ## R2. Stabilize Runtime Lifecycle
 - move from action-scoped app-server processes toward a longer-lived runtime model
 - keep current event mapping and domain contracts intact
 - improve reconnect, reset, and failure recovery behavior
 
-## R3. Improve Shell Ergonomics
-- better multiline input editing and focus behavior
-- clearer shell status and transport activity
-- richer template inspection and clearer stop-rule visibility
+## R3. Reduce Full-Screen TUI Surface Area
+- shrink the role of alternate-screen panels and persistent sidebars
+- move diagnostics, session browse, and template inspection toward lighter overlays or command-style entry points
+- ensure the shell can stay primary even when auxiliary information is needed
 
 ## R4. Strengthen Auto Follow-Up
 - keep the current builtin and workspace-template support intact
 - add safer controls around stop conditions and operator visibility
 - preserve file-change-based stopping and stop-keyword behavior
 
-## R5. Split TUI Responsibilities
-- keep `app.rs` readable
-- extract focused shell state and reducer logic when new complexity is added
-- avoid moving protocol or persistence code into the TUI layer
+## R5. Re-scope Inbound UI Responsibilities
+- keep `app.rs` readable while the shell model changes
+- extract focused shell state and reducer logic when the stream-first UX settles
+- avoid moving protocol or persistence code into the UI layer
