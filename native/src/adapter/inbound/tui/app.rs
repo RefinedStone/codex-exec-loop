@@ -66,6 +66,8 @@ mod followup_controls;
 mod followup_overlay_ui;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/shell_layout.rs"]
+mod shell_layout;
 #[path = "app/transcript_viewport.rs"]
 mod transcript_viewport;
 
@@ -86,6 +88,10 @@ use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
 use inline_shell_commands::InlineShellCommand;
+use shell_layout::{
+    block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
+    build_shell_footer_height,
+};
 use transcript_viewport::TranscriptViewportState;
 
 pub fn run() -> Result<()> {
@@ -2530,46 +2536,6 @@ fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn build_conversation_scroll_offset(
-    lines: &[Line<'static>],
-    content_width: u16,
-    visible_height: u16,
-) -> u16 {
-    if content_width == 0 || visible_height == 0 {
-        return 0;
-    }
-
-    let rendered_line_count = count_rendered_conversation_lines(lines, content_width);
-    let visible_height = visible_height as usize;
-    rendered_line_count
-        .saturating_sub(visible_height)
-        .min(u16::MAX as usize) as u16
-}
-
-fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16) -> usize {
-    if content_width == 0 {
-        return 0;
-    }
-
-    lines
-        .iter()
-        .map(|line| count_wrapped_rows(line, content_width))
-        .sum()
-}
-
-fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {
-    if content_width == 0 {
-        return 0;
-    }
-
-    let line_width = line.width();
-    if line_width == 0 {
-        return 1;
-    }
-
-    line_width.div_ceil(content_width as usize)
-}
-
 fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -2780,18 +2746,6 @@ fn build_ready_input_lines(
     lines
 }
 
-fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
-    (lines.len() as u16 + 2).clamp(MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
-}
-
-fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
-    (lines.len() as u16 + 2).clamp(MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
-}
-
-fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) -> u16 {
-    (lines.len() as u16 + 2).clamp(min_height, max_height)
-}
-
 fn build_shell_title() -> Line<'static> {
     Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
 }
@@ -2903,11 +2857,10 @@ mod tests {
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
         ShellOverlay, StartupState, TuiPresentationMode, TurnActivityState,
-        build_conversation_scroll_offset, build_followup_template_preview_lines,
-        build_followup_template_status_lines, build_input_block_height, build_input_title,
-        build_ready_input_lines, build_shell_footer_height, build_shell_footer_lines,
-        build_status_title, build_transcript_title, count_rendered_conversation_lines,
-        format_conversation_lines,
+        build_followup_template_preview_lines, build_followup_template_status_lines,
+        build_input_block_height, build_input_title, build_ready_input_lines,
+        build_shell_footer_height, build_shell_footer_lines, build_status_title,
+        build_transcript_title, format_conversation_lines,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3389,43 +3342,6 @@ mod tests {
                 .status_text
                 .contains(InlineShellCommand::command_list_line())
         );
-    }
-
-    #[test]
-    fn conversation_scroll_offset_moves_to_latest_rows() {
-        let lines = vec![
-            ratatui::text::Line::from("line-1"),
-            ratatui::text::Line::from("line-2"),
-            ratatui::text::Line::from("line-3"),
-            ratatui::text::Line::from("line-4"),
-        ];
-
-        let scroll_offset = build_conversation_scroll_offset(&lines, 20, 2);
-
-        assert_eq!(scroll_offset, 2);
-    }
-
-    #[test]
-    fn conversation_scroll_offset_counts_wrapped_rows() {
-        let lines = vec![
-            ratatui::text::Line::from("1234567890"),
-            ratatui::text::Line::from("tail"),
-        ];
-
-        let rendered_line_count = count_rendered_conversation_lines(&lines, 4);
-        let scroll_offset = build_conversation_scroll_offset(&lines, 4, 2);
-
-        assert_eq!(rendered_line_count, 4);
-        assert_eq!(scroll_offset, 2);
-    }
-
-    #[test]
-    fn conversation_scroll_offset_handles_zero_visible_height() {
-        let lines = vec![ratatui::text::Line::from("line-1")];
-
-        let scroll_offset = build_conversation_scroll_offset(&lines, 10, 0);
-
-        assert_eq!(scroll_offset, 0);
     }
 
     #[test]
