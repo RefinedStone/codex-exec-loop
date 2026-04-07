@@ -2845,7 +2845,7 @@ fn build_transcript_title(app: &NativeTuiApp) -> Line<'static> {
 
 fn build_status_title() -> Line<'static> {
     Line::from(
-        "Status / Ctrl+o sessions / Ctrl+d diagnostics / Ctrl+p templates / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
+        "Status / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
     )
 }
 
@@ -2853,12 +2853,8 @@ fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
     let submit_hint = build_primary_submit_hint(app);
 
     match &app.conversation_state {
-        ConversationState::Loading => Line::from(format!(
-            "Composer / loading / {submit_hint} / Ctrl+j newline"
-        )),
-        ConversationState::Failed(_) => Line::from(format!(
-            "Composer / unavailable / {submit_hint} / Ctrl+j newline"
-        )),
+        ConversationState::Loading => Line::from("Composer / loading"),
+        ConversationState::Failed(_) => Line::from("Composer / unavailable"),
         ConversationState::Ready(conversation) => Line::from(vec![
             Span::raw("Composer / "),
             Span::styled(
@@ -2880,7 +2876,11 @@ fn build_primary_submit_hint(app: &NativeTuiApp) -> &'static str {
         ConversationState::Ready(conversation) if conversation.has_running_turn() => {
             "Enter send when idle"
         }
-        _ => "Enter send",
+        ConversationState::Ready(_) if !app.shell_action_availability().allows_actions() => {
+            "Enter send when ready"
+        }
+        ConversationState::Ready(_) => "Enter send",
+        _ => "",
     }
 }
 
@@ -3422,12 +3422,23 @@ mod tests {
     }
 
     #[test]
+    fn composer_title_shows_readiness_gated_submit_hint() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Loading;
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let rendered = build_input_title(&app).to_string();
+
+        assert!(rendered.contains("Enter send when ready"));
+    }
+
+    #[test]
     fn status_title_surfaces_overlay_and_followup_controls() {
         let rendered = build_status_title().to_string();
 
         assert!(rendered.contains("Ctrl+o sessions"));
-        assert!(rendered.contains("Ctrl+d diagnostics"));
-        assert!(rendered.contains("Ctrl+p templates"));
+        assert!(rendered.contains("Ctrl+d diag"));
+        assert!(rendered.contains("Ctrl+p templ"));
         assert!(rendered.contains("Ctrl+a auto"));
     }
 
