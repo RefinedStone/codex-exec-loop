@@ -20,10 +20,7 @@ pub(super) fn build_conversation_scroll_offset(
         .min(u16::MAX as usize) as u16
 }
 
-pub(super) fn count_rendered_conversation_lines(
-    lines: &[Line<'static>],
-    content_width: u16,
-) -> usize {
+fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16) -> usize {
     if content_width == 0 {
         return 0;
     }
@@ -35,15 +32,18 @@ pub(super) fn count_rendered_conversation_lines(
 }
 
 pub(super) fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
-    (lines.len() as u16 + 2).clamp(MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
+    block_height_for_lines(lines, MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
 }
 
 pub(super) fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
-    (lines.len() as u16 + 2).clamp(MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
+    block_height_for_lines(lines, MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
 }
 
 pub(super) fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) -> u16 {
-    (lines.len() as u16 + 2).clamp(min_height, max_height)
+    lines
+        .len()
+        .saturating_add(2)
+        .clamp(min_height as usize, max_height as usize) as u16
 }
 
 fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {

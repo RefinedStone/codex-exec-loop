@@ -2858,9 +2858,8 @@ mod tests {
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
         ShellOverlay, StartupState, TuiPresentationMode, TurnActivityState,
         build_followup_template_preview_lines, build_followup_template_status_lines,
-        build_input_block_height, build_input_title, build_ready_input_lines,
-        build_shell_footer_height, build_shell_footer_lines, build_status_title,
-        build_transcript_title, format_conversation_lines,
+        build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
+        build_transcript_title, format_conversation_lines, shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -3145,7 +3144,10 @@ mod tests {
 
         let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready);
 
-        assert_eq!(build_input_block_height(&rendered), MAX_COMPOSER_HEIGHT);
+        assert_eq!(
+            shell_layout::build_input_block_height(&rendered),
+            MAX_COMPOSER_HEIGHT
+        );
     }
 
     #[test]
@@ -3155,7 +3157,7 @@ mod tests {
 
         let rendered = build_shell_footer_lines(&app);
 
-        assert_eq!(build_shell_footer_height(&rendered), 7);
+        assert_eq!(shell_layout::build_shell_footer_height(&rendered), 7);
     }
 
     #[test]
