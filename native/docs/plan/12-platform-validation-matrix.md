@@ -44,7 +44,7 @@ The native client currently supports two frontend modes:
 Build once before a validation pass:
 
 ```bash
-cd /home/akra/codex-exec-loop/native
+cd <path-to-repo>/native
 . "$HOME/.cargo/env"
 cargo build
 ```
@@ -52,7 +52,7 @@ cargo build
 Run in inline mode:
 
 ```bash
-cd /home/akra/codex-exec-loop/native
+cd <path-to-repo>/native
 . "$HOME/.cargo/env"
 CODEX_EXEC_LOOP_FRONTEND=inline cargo run
 ```
@@ -60,7 +60,7 @@ CODEX_EXEC_LOOP_FRONTEND=inline cargo run
 Run in alternate-screen mode:
 
 ```bash
-cd /home/akra/codex-exec-loop/native
+cd <path-to-repo>/native
 . "$HOME/.cargo/env"
 CODEX_EXEC_LOOP_FRONTEND=alternate cargo run
 ```
@@ -68,7 +68,7 @@ CODEX_EXEC_LOOP_FRONTEND=alternate cargo run
 Run with the legacy alternate-screen flag:
 
 ```bash
-cd /home/akra/codex-exec-loop/native
+cd <path-to-repo>/native
 . "$HOME/.cargo/env"
 CODEX_EXEC_LOOP_ALT_SCREEN=1 cargo run
 ```
@@ -76,7 +76,7 @@ CODEX_EXEC_LOOP_ALT_SCREEN=1 cargo run
 PowerShell equivalents:
 
 ```powershell
-Set-Location C:\Users\dorani\codex-exec-loop\native
+Set-Location <path-to-repo>\native
 cargo build
 $env:CODEX_EXEC_LOOP_FRONTEND = "inline"; cargo run
 $env:CODEX_EXEC_LOOP_FRONTEND = "alternate"; cargo run
