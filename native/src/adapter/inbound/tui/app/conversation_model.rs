@@ -534,6 +534,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) cwd: String,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) cached_conversation_lines: Vec<Line<'static>>,
+    pub(crate) live_agent_message: Option<ConversationMessage>,
     pub(crate) base_warnings: Vec<String>,
     pub(crate) template_warnings: Vec<String>,
     pub(crate) warnings: Vec<String>,
@@ -564,6 +565,7 @@ impl ConversationViewModel {
             cwd,
             messages: Vec::new(),
             cached_conversation_lines: Vec::new(),
+            live_agent_message: None,
             base_warnings: Vec::new(),
             template_warnings: template_load_result.warnings.clone(),
             warnings: template_load_result.warnings,
@@ -602,6 +604,7 @@ impl ConversationViewModel {
             cwd: snapshot.cwd,
             messages: snapshot.messages,
             cached_conversation_lines: Vec::new(),
+            live_agent_message: None,
             base_warnings,
             template_warnings,
             warnings,
@@ -767,6 +770,87 @@ impl ConversationViewModel {
 
     pub(crate) fn refresh_conversation_lines(&mut self) {
         self.cached_conversation_lines = format_conversation_lines(&self.messages);
+    }
+
+    pub(crate) fn push_live_agent_delta(
+        &mut self,
+        item_id: String,
+        phase: Option<String>,
+        delta: String,
+    ) -> bool {
+        if let Some(message) = self.live_agent_message.as_mut() {
+            if message.item_id.as_deref() == Some(item_id.as_str()) {
+                message.text.push_str(&delta);
+                if phase.is_some() {
+                    message.phase = phase;
+                }
+                return false;
+            }
+        }
+
+        let committed_previous_live_message = self.commit_live_agent_message();
+        self.live_agent_message = Some(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            delta,
+            phase,
+            Some(item_id),
+        ));
+        committed_previous_live_message
+    }
+
+    pub(crate) fn complete_live_agent_message(
+        &mut self,
+        item_id: String,
+        phase: Option<String>,
+        text: String,
+    ) -> bool {
+        if let Some(mut message) = self.live_agent_message.take() {
+            if message.item_id.as_deref() == Some(item_id.as_str()) {
+                message.text = text;
+                message.phase = phase;
+                self.messages.push(message);
+                return true;
+            }
+
+            self.messages.push(message);
+        }
+
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
+        {
+            message.text = text;
+            message.phase = phase;
+            return true;
+        }
+
+        self.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            text,
+            phase,
+            Some(item_id),
+        ));
+        true
+    }
+
+    pub(crate) fn commit_live_agent_message(&mut self) -> bool {
+        let Some(message) = self.live_agent_message.take() else {
+            return false;
+        };
+
+        self.messages.push(message);
+        true
+    }
+
+    pub(crate) fn live_agent_summary(&self, max_detail_len: usize) -> Option<String> {
+        let message = self.live_agent_message.as_ref()?;
+        Some(format!(
+            "{}: {}",
+            message.kind.label(message.phase.as_deref()),
+            Self::truncate_warning_text(&message.text, max_detail_len)
+        ))
     }
 
     pub(crate) fn has_active_thread(&self) -> bool {
@@ -966,6 +1050,7 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             messages: Vec::new(),
             cached_conversation_lines: format_conversation_lines(&[]),
+            live_agent_message: None,
             base_warnings: Vec::new(),
             template_warnings: Vec::new(),
             warnings: Vec::new(),

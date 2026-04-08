@@ -4,7 +4,7 @@ This file now keeps the current open planning surface, not a long implementation
 
 ## Current Baseline
 - live shell-first conversation flow
-- startup diagnostics and recent sessions as shell-adjacent overlays
+- startup diagnostics, recent sessions, and follow-up templates as inline shell inspections in main-buffer mode
 - streamed turn updates, new-thread flow, and thread resume
 - inline shell commands and lightweight transcript navigation
 - builtin and workspace follow-up templates with reload, editable max turns, and stop rules
@@ -15,7 +15,6 @@ This file now keeps the current open planning surface, not a long implementation
 
 ## Open Change Buckets
 - shell ergonomics
-  - inline main-buffer mode still depends on modal overlay-style diagnostics, sessions, and template surfaces
   - streamed output still needs a scrollback-safe history shape instead of frame-style replay assumptions
 - platform validation
   - the validation matrix and packaging docs are landed, but real macOS and Windows runs still need to be recorded

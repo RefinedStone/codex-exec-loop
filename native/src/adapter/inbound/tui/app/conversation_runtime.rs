@@ -95,6 +95,7 @@ pub(super) fn reduce_conversation_runtime(
                 }
                 ConversationStreamEvent::TurnStarted { turn_id } => {
                     state.mark_turn_started(turn_id);
+                    state.live_agent_message = None;
                     state.status_text = "turn started".to_string();
                 }
                 ConversationStreamEvent::StatusUpdated { text } => {
@@ -105,16 +106,14 @@ pub(super) fn reduce_conversation_runtime(
                     phase,
                     delta,
                 } => {
-                    push_agent_delta(&mut state.messages, item_id, phase, delta);
-                    should_refresh_lines = true;
+                    should_refresh_lines = state.push_live_agent_delta(item_id, phase, delta);
                 }
                 ConversationStreamEvent::AgentMessageCompleted {
                     item_id,
                     phase,
                     text,
                 } => {
-                    complete_agent_message(&mut state.messages, item_id, phase, text);
-                    should_refresh_lines = true;
+                    should_refresh_lines = state.complete_live_agent_message(item_id, phase, text);
                 }
                 ConversationStreamEvent::ToolActivity { activity } => {
                     state.turn_activity.register_tool_activity(&activity);
@@ -130,6 +129,8 @@ pub(super) fn reduce_conversation_runtime(
                     state.update_approval_review(review);
                 }
                 ConversationStreamEvent::TurnCompleted { turn_id } => {
+                    should_refresh_lines =
+                        state.commit_live_agent_message() || should_refresh_lines;
                     state.turn_activity.complete_turn();
                     state.mark_turn_finished();
                     match state.decide_auto_followup() {
@@ -155,6 +156,7 @@ pub(super) fn reduce_conversation_runtime(
                     }
                 }
                 ConversationStreamEvent::Failed { message } => {
+                    state.commit_live_agent_message();
                     state.mark_turn_finished();
                     state.status_text = "turn failed".to_string();
                     state.messages.push(ConversationMessage::new(
@@ -174,58 +176,6 @@ pub(super) fn reduce_conversation_runtime(
     }
 
     ConversationRuntimeReduction { state, effects }
-}
-
-fn push_agent_delta(
-    messages: &mut Vec<ConversationMessage>,
-    item_id: String,
-    phase: Option<String>,
-    delta: String,
-) {
-    if let Some(message) = find_message_by_item_id_mut(messages, &item_id) {
-        message.text.push_str(&delta);
-        if phase.is_some() {
-            message.phase = phase;
-        }
-        return;
-    }
-
-    messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        delta,
-        phase,
-        Some(item_id),
-    ));
-}
-
-fn complete_agent_message(
-    messages: &mut Vec<ConversationMessage>,
-    item_id: String,
-    phase: Option<String>,
-    text: String,
-) {
-    if let Some(message) = find_message_by_item_id_mut(messages, &item_id) {
-        message.text = text;
-        message.phase = phase;
-        return;
-    }
-
-    messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        text,
-        phase,
-        Some(item_id),
-    ));
-}
-
-fn find_message_by_item_id_mut<'a>(
-    messages: &'a mut [ConversationMessage],
-    item_id: &str,
-) -> Option<&'a mut ConversationMessage> {
-    messages
-        .iter_mut()
-        .rev()
-        .find(|message| message.item_id.as_deref() == Some(item_id))
 }
 
 #[cfg(test)]
@@ -543,6 +493,64 @@ mod tests {
     }
 
     #[test]
+    fn agent_message_delta_stays_in_live_region_until_completion() {
+        let state = sample_active_turn_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::AgentMessageDelta {
+                item_id: "agent-1".to_string(),
+                phase: Some("final_answer".to_string()),
+                delta: "partial answer".to_string(),
+            }),
+        );
+
+        assert!(reduced.state.messages.is_empty());
+        assert_eq!(
+            reduced
+                .state
+                .live_agent_message
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("partial answer")
+        );
+        assert_eq!(
+            reduced.state.cached_conversation_lines,
+            format_conversation_lines(&[])
+        );
+    }
+
+    #[test]
+    fn agent_message_completion_commits_live_output_to_stable_history() {
+        let mut state = sample_active_turn_conversation();
+        state.live_agent_message = Some(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "partial answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(
+                ConversationStreamEvent::AgentMessageCompleted {
+                    item_id: "agent-1".to_string(),
+                    phase: Some("final_answer".to_string()),
+                    text: "completed answer".to_string(),
+                },
+            ),
+        );
+
+        assert!(reduced.state.live_agent_message.is_none());
+        assert_eq!(reduced.state.messages.len(), 1);
+        assert_eq!(reduced.state.messages[0].text, "completed answer");
+        assert_eq!(
+            reduced.state.cached_conversation_lines,
+            format_conversation_lines(&reduced.state.messages)
+        );
+    }
+
+    #[test]
     fn turn_completed_carries_command_activity_into_last_turn_summary() {
         let mut state = sample_active_turn_conversation();
         state.turn_activity.current_turn_command_count = 1;
@@ -621,6 +629,7 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             messages: Vec::new(),
             cached_conversation_lines: format_conversation_lines(&[]),
+            live_agent_message: None,
             base_warnings: Vec::new(),
             template_warnings: Vec::new(),
             warnings: Vec::new(),

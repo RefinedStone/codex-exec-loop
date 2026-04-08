@@ -9,6 +9,7 @@ const FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOOTER_GITHUB_REVIEW_DETAIL_LIMIT: usize = 44;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
+const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
 
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
@@ -80,13 +81,19 @@ pub(super) fn build_conversation_shell_view(
 ) -> ConversationShellView {
     let mut header_lines = build_shell_header_lines(app);
     header_lines.push(build_frontend_summary_line(mode));
+    let mut footer_lines = build_shell_footer_lines(app);
+    if mode == ShellFrontendMode::InlineMainBuffer {
+        if let Some(live_agent_summary) = current_live_agent_footer_line(app) {
+            footer_lines.push(live_agent_summary);
+        }
+    }
 
     ConversationShellView {
         shell_title: build_shell_title(mode),
         header_lines,
         conversation_lines: build_conversation_lines(app),
         status_title: build_status_title(mode),
-        footer_lines: build_shell_footer_lines(app),
+        footer_lines,
         input_title: build_input_title(app, mode),
         input_lines: build_input_lines(app),
     }
@@ -272,6 +279,16 @@ pub(super) fn build_followup_template_overlay_view(
         status_lines: build_followup_template_status_lines(app),
         key_lines: build_followup_template_key_lines(app),
     }
+}
+
+fn current_live_agent_footer_line(app: &NativeTuiApp) -> Option<Line<'static>> {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return None;
+    };
+
+    conversation
+        .live_agent_summary(INLINE_LIVE_AGENT_DETAIL_LIMIT)
+        .map(|summary| Line::from(format!("live output: {summary}")))
 }
 
 fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

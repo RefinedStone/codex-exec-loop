@@ -5,17 +5,16 @@ The `prerelease` branch is a working shell-first native client, not a dashboard 
 
 ## Shipped Capability
 - shell-first startup into a draft conversation on the main terminal screen by default, with `CODEX_EXEC_LOOP_FRONTEND=alternate` as the explicit fullscreen override and legacy `CODEX_EXEC_LOOP_ALT_SCREEN` still accepted as fallback
-- startup diagnostics and recent-session browsing exposed as shell overlays, with recent-session loading still gated by startup diagnostics
+- startup diagnostics, recent-session browsing, and follow-up template inspection rendered inside the inline shell, with alternate-screen still available as the framed fallback path
 - manual prompt submission can queue while startup checks are still running, then auto-send once startup becomes ready
 - new-thread start, existing-thread resume, snapshot loading, and streamed turn execution through the app-server flow
 - inline shell commands such as `:diag`, `:sessions`, `:templates`, `:new`, and `:help`
 - single-column transcript with a bottom composer and lightweight viewport navigation
-- builtin auto follow-up templates, workspace template loading, overlay-backed stop-keyword editing, and a no-file-change stop rule
+- builtin auto follow-up templates, workspace template loading, inspection-backed stop-keyword editing, and a no-file-change stop rule
 
 ## What Still Feels Transitional
-- diagnostics, sessions, and template browsing are still modal overlays
 - recent-session loading still depends on startup diagnostics passing, and blocked startup still keeps prompt execution from starting
-- the shell still runs as a full Ratatui raw-mode viewport rather than a true scrollback-native CLI
+- the shell still runs as a full Ratatui raw-mode viewport and the streaming transcript is not yet a true scrollback-native CLI history
 - concurrent non-stream requests can still fall back to an isolated connection while a turn stream is active
 
 ## Product Strengths Worth Preserving
