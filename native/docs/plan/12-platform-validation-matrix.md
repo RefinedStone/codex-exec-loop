@@ -116,6 +116,12 @@ Summarize recorded coverage before closing a platform-facing PR:
 ./scripts/summarize_native_validation.sh
 ```
 
+Emit a markdown summary when you want to paste the current matrix state into a PR or issue:
+
+```bash
+./scripts/summarize_native_validation.sh --format markdown
+```
+
 ## Environment Capture
 
 Record this before marking a matrix row complete:

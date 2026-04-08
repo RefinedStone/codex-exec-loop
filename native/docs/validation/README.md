@@ -44,3 +44,9 @@ Coverage summary from the repository root:
 ```bash
 ./scripts/summarize_native_validation.sh
 ```
+
+Markdown summary for a PR or issue comment:
+
+```bash
+./scripts/summarize_native_validation.sh --format markdown
+```

@@ -80,6 +80,12 @@ validation 결과 템플릿 캡처:
 ./scripts/summarize_native_validation.sh
 ```
 
+PR/issue용 markdown 요약:
+
+```bash
+./scripts/summarize_native_validation.sh --format markdown
+```
+
 운영자 runbook 과 플랫폼 검증 기준:
 
 - [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md)

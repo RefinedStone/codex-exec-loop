@@ -8,6 +8,8 @@ Usage:
 
 Options:
   --records-dir <path>    Validation record directory. Default: native/docs/validation
+  --format <text|markdown>
+                          Output format. Default: text
   --fail-on-incomplete    Exit non-zero unless every required row is recorded as pass
   -h, --help              Show this help text.
 EOF
@@ -109,6 +111,7 @@ row_key() {
 }
 
 records_dir="native/docs/validation"
+output_format="text"
 fail_on_incomplete=0
 
 while (($# > 0)); do
@@ -119,6 +122,14 @@ while (($# > 0)); do
         exit 1
       fi
       records_dir="$2"
+      shift 2
+      ;;
+    --format)
+      if [[ -z "${2-}" ]]; then
+        printf 'missing value for %s\n' "$1" >&2
+        exit 1
+      fi
+      output_format="$2"
       shift 2
       ;;
     --fail-on-incomplete)
@@ -136,6 +147,15 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+case "${output_format}" in
+  text|markdown)
+    ;;
+  *)
+    printf 'unsupported format: %s\n' "${output_format}" >&2
+    exit 1
+    ;;
+esac
 
 declare -a row_specs=(
   "required|macos|terminal-app|zsh|inline|macOS / Terminal.app / zsh / inline"
@@ -196,16 +216,10 @@ required_non_pass=0
 optional_total=0
 optional_pass=0
 
-printf 'Native Validation Summary\n'
-printf 'records dir: %s\n' "${records_dir}"
-printf '\n'
-
-printf 'Required Rows\n'
 for spec in "${row_specs[@]}"; do
   IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
   key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
   result="${latest_result_by_row["${key}"]-missing}"
-  source_file="${latest_file_by_row["${key}"]-}"
 
   if [[ "${kind}" == "required" ]]; then
     ((required_total += 1))
@@ -222,48 +236,114 @@ for spec in "${row_specs[@]}"; do
       ((optional_pass += 1))
     fi
   fi
-
-  if [[ "${kind}" == "required" ]]; then
-    if [[ -n "${source_file}" ]]; then
-      printf -- '- %-8s %s (%s)\n' "${result}" "${label}" "${source_file}"
-    else
-      printf -- '- %-8s %s\n' "${result}" "${label}"
-    fi
-  fi
 done
 
-printf '\n'
-printf 'Optional Rows\n'
-for spec in "${row_specs[@]}"; do
-  IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
-  key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-  result="${latest_result_by_row["${key}"]-missing}"
-  source_file="${latest_file_by_row["${key}"]-}"
-
-  if [[ "${kind}" == "optional" ]]; then
-    if [[ -n "${source_file}" ]]; then
-      printf -- '- %-8s %s (%s)\n' "${result}" "${label}" "${source_file}"
-    else
-      printf -- '- %-8s %s\n' "${result}" "${label}"
-    fi
-  fi
-done
-
-printf '\n'
-printf 'Counts\n'
-printf -- '- required pass: %d/%d\n' "${required_pass}" "${required_total}"
-printf -- '- required missing: %d\n' "${required_missing}"
-printf -- '- required non-pass: %d\n' "${required_non_pass}"
-printf -- '- optional pass: %d/%d\n' "${optional_pass}" "${optional_total}"
-
-if ((${#unmatched_entries[@]} > 0)); then
+if [[ "${output_format}" == "text" ]]; then
+  printf 'Native Validation Summary\n'
+  printf 'records dir: %s\n' "${records_dir}"
   printf '\n'
-  printf 'Unmatched Records\n'
-  for entry in "${unmatched_entries[@]}"; do
-    IFS='|' read -r file os_value terminal_value shell_value frontend_value result_value <<<"${entry}"
-    printf -- '- %s (os=%s; terminal=%s; shell=%s; frontend=%s; result=%s)\n' \
-      "${file}" "${os_value}" "${terminal_value}" "${shell_value}" "${frontend_value}" "${result_value}"
+
+  printf 'Required Rows\n'
+  for spec in "${row_specs[@]}"; do
+    IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
+    key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
+    result="${latest_result_by_row["${key}"]-missing}"
+    source_file="${latest_file_by_row["${key}"]-}"
+
+    if [[ "${kind}" == "required" ]]; then
+      if [[ -n "${source_file}" ]]; then
+        printf -- '- %-8s %s (%s)\n' "${result}" "${label}" "${source_file}"
+      else
+        printf -- '- %-8s %s\n' "${result}" "${label}"
+      fi
+    fi
   done
+
+  printf '\n'
+  printf 'Optional Rows\n'
+  for spec in "${row_specs[@]}"; do
+    IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
+    key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
+    result="${latest_result_by_row["${key}"]-missing}"
+    source_file="${latest_file_by_row["${key}"]-}"
+
+    if [[ "${kind}" == "optional" ]]; then
+      if [[ -n "${source_file}" ]]; then
+        printf -- '- %-8s %s (%s)\n' "${result}" "${label}" "${source_file}"
+      else
+        printf -- '- %-8s %s\n' "${result}" "${label}"
+      fi
+    fi
+  done
+
+  printf '\n'
+  printf 'Counts\n'
+  printf -- '- required pass: %d/%d\n' "${required_pass}" "${required_total}"
+  printf -- '- required missing: %d\n' "${required_missing}"
+  printf -- '- required non-pass: %d\n' "${required_non_pass}"
+  printf -- '- optional pass: %d/%d\n' "${optional_pass}" "${optional_total}"
+
+  if ((${#unmatched_entries[@]} > 0)); then
+    printf '\n'
+    printf 'Unmatched Records\n'
+    for entry in "${unmatched_entries[@]}"; do
+      IFS='|' read -r file os_value terminal_value shell_value frontend_value result_value <<<"${entry}"
+      printf -- '- %s (os=%s; terminal=%s; shell=%s; frontend=%s; result=%s)\n' \
+        "${file}" "${os_value}" "${terminal_value}" "${shell_value}" "${frontend_value}" "${result_value}"
+    done
+  fi
+else
+  printf '# Native Validation Summary\n\n'
+  printf -- '- records dir: `%s`\n' "${records_dir}"
+  printf -- '- required pass: `%d/%d`\n' "${required_pass}" "${required_total}"
+  printf -- '- required missing: `%d`\n' "${required_missing}"
+  printf -- '- required non-pass: `%d`\n' "${required_non_pass}"
+  printf -- '- optional pass: `%d/%d`\n' "${optional_pass}" "${optional_total}"
+  printf '\n'
+  printf '## Required Rows\n\n'
+  printf '| Status | Row | Record |\n'
+  printf '| --- | --- | --- |\n'
+  for spec in "${row_specs[@]}"; do
+    IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
+    key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
+    result="${latest_result_by_row["${key}"]-missing}"
+    source_file="${latest_file_by_row["${key}"]-}"
+    if [[ "${kind}" == "required" ]]; then
+      if [[ -n "${source_file}" ]]; then
+        printf '| `%s` | %s | `%s` |\n' "${result}" "${label}" "${source_file}"
+      else
+        printf '| `%s` | %s | - |\n' "${result}" "${label}"
+      fi
+    fi
+  done
+
+  printf '\n'
+  printf '## Optional Rows\n\n'
+  printf '| Status | Row | Record |\n'
+  printf '| --- | --- | --- |\n'
+  for spec in "${row_specs[@]}"; do
+    IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
+    key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
+    result="${latest_result_by_row["${key}"]-missing}"
+    source_file="${latest_file_by_row["${key}"]-}"
+    if [[ "${kind}" == "optional" ]]; then
+      if [[ -n "${source_file}" ]]; then
+        printf '| `%s` | %s | `%s` |\n' "${result}" "${label}" "${source_file}"
+      else
+        printf '| `%s` | %s | - |\n' "${result}" "${label}"
+      fi
+    fi
+  done
+
+  if ((${#unmatched_entries[@]} > 0)); then
+    printf '\n'
+    printf '## Unmatched Records\n\n'
+    for entry in "${unmatched_entries[@]}"; do
+      IFS='|' read -r file os_value terminal_value shell_value frontend_value result_value <<<"${entry}"
+      printf -- '- `%s` (`os=%s`; `terminal=%s`; `shell=%s`; `frontend=%s`; `result=%s`)\n' \
+        "${file}" "${os_value}" "${terminal_value}" "${shell_value}" "${frontend_value}" "${result_value}"
+    done
+  fi
 fi
 
 if ((fail_on_incomplete == 1)) && ((required_missing > 0 || required_non_pass > 0)); then

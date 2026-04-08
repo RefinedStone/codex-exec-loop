@@ -44,6 +44,7 @@
   - validation result capture helpers
   - validation record directory
   - validation coverage summary helper
+  - validation markdown report helper
   - packaging runbook
   - release checksum helpers
 - inline shell parity

@@ -56,6 +56,12 @@ Summarize the checked-in validation coverage:
 ./scripts/summarize_native_validation.sh
 ```
 
+Render the same summary as markdown for a PR or issue:
+
+```bash
+./scripts/summarize_native_validation.sh --format markdown
+```
+
 Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.
 
 Operator-facing packaging notes live in [`docs/plan/13-native-packaging-and-operator-runbook.md`](./docs/plan/13-native-packaging-and-operator-runbook.md).

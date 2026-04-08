@@ -166,6 +166,12 @@ Check current matrix coverage from the repository root:
 ./scripts/summarize_native_validation.sh
 ```
 
+For a copy-pastable PR summary:
+
+```bash
+./scripts/summarize_native_validation.sh --format markdown
+```
+
 ## Release Handoff Notes
 
 - keep package creation deterministic by running from a clean checkout

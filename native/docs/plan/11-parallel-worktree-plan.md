@@ -66,6 +66,7 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 - [x] WSL validation capture context and optional IDE terminal summary coverage
 - [x] platform validation record directory and naming rules
 - [x] platform validation coverage summary helper
+- [x] platform validation markdown report helper
 
 ## 4. Remaining Slices
 
