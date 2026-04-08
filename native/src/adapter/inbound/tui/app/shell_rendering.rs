@@ -1,7 +1,8 @@
 use super::shell_presentation::{
-    ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
-    StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
-    build_session_overlay_view, build_startup_overlay_view,
+    ConversationShellFrameView, ConversationShellView, FollowupTemplateOverlayView,
+    OverlayListView, SessionOverlayView, StartupOverlayView, build_conversation_shell_frame_view,
+    build_conversation_shell_view, build_followup_template_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, build_transcript_panel_view,
 };
 use super::*;
 
@@ -66,6 +67,87 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<
 }
 
 fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
+    match mode {
+        ShellFrontendMode::InlineMainBuffer => draw_inline_conversation_shell(frame, app, mode),
+        ShellFrontendMode::AlternateScreen => {
+            draw_framed_conversation_shell(frame, app, mode);
+        }
+    }
+}
+
+fn draw_inline_conversation_shell(
+    frame: &mut Frame<'_>,
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+) {
+    let area = frame.area();
+    let shell_view = build_conversation_shell_view(app, mode);
+    let ConversationShellView {
+        shell_title,
+        header_lines,
+        conversation_lines,
+        status_title,
+        footer_lines,
+        input_title,
+        input_lines,
+    } = shell_view;
+    let header_height = inline_section_height(&header_lines, MAX_SHELL_HEADER_HEIGHT);
+    let footer_height = inline_section_height(&footer_lines, MAX_SHELL_STATUS_HEIGHT);
+    let input_height = inline_section_height(&input_lines, MAX_COMPOSER_HEIGHT);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6)),
+            Constraint::Length(footer_height),
+            Constraint::Length(input_height),
+        ])
+        .split(area);
+
+    let transcript_view = build_transcript_panel_view(
+        app,
+        mode,
+        conversation_lines,
+        layout[1].width,
+        layout[1].height.saturating_sub(1).max(1),
+    );
+
+    frame.render_widget(
+        Paragraph::new(header_lines)
+            .block(Block::default().title(shell_title))
+            .wrap(Wrap { trim: true }),
+        layout[0],
+    );
+
+    frame.render_widget(
+        Paragraph::new(transcript_view.lines)
+            .block(Block::default().title(transcript_view.title))
+            .scroll((transcript_view.scroll_offset, 0))
+            .wrap(Wrap { trim: false }),
+        layout[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new(footer_lines)
+            .block(Block::default().title(status_title))
+            .wrap(Wrap { trim: true }),
+        layout[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new(input_lines)
+            .block(Block::default().title(input_title))
+            .wrap(Wrap { trim: false }),
+        layout[3],
+    );
+}
+
+fn draw_framed_conversation_shell(
+    frame: &mut Frame<'_>,
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+) {
     let area = frame.area();
     frame.render_widget(Clear, area);
     let shell_frame_view = build_conversation_shell_frame_view(app, mode, area);
@@ -107,6 +189,10 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
         .block(Block::default().borders(Borders::ALL).title(input_title))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, input_area);
+}
+
+fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
+    lines.len().saturating_add(1).clamp(2, max_height as usize) as u16
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
@@ -376,12 +462,135 @@ fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use anyhow::Result;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
     use super::*;
+    use crate::application::port::outbound::codex_app_server_port::{
+        AppServerStartupContext, CodexAppServerPort,
+    };
+    use crate::application::port::outbound::followup_template_port::{
+        FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
+    };
+    use crate::application::service::conversation_service::ConversationService;
+    use crate::application::service::followup_template_service::FollowupTemplateService;
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
+    use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+    use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
     fn centered_rect_clamps_percentages_above_hundred() {
         let area = Rect::new(4, 2, 80, 24);
 
         assert_eq!(centered_rect(140, 120, area), area);
+    }
+
+    #[test]
+    fn inline_main_buffer_rendering_avoids_box_borders() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+        let mut app = make_test_app();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+            .expect("inline render succeeds");
+
+        let rendered = format!("{}", terminal.backend());
+
+        assert!(rendered.contains("Inline Shell"));
+        assert!(rendered.contains("History"));
+        assert!(!rendered.contains("┌"));
+        assert!(!rendered.contains("│"));
+    }
+
+    #[test]
+    fn alternate_screen_rendering_keeps_bordered_frame() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+        let mut app = make_test_app();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::AlternateScreen))
+            .expect("alternate render succeeds");
+
+        let rendered = format!("{}", terminal.backend());
+
+        assert!(rendered.contains("Shell"));
+        assert!(rendered.contains("Transcript"));
+        assert!(rendered.contains("┌"));
+        assert!(rendered.contains("│"));
+    }
+
+    struct FakeCodexAppServerPort;
+
+    impl CodexAppServerPort for FakeCodexAppServerPort {
+        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+            Ok(AppServerStartupContext {
+                initialize_detail: "ok".to_string(),
+                account_detail: "ok".to_string(),
+                account_ok: true,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
+            Ok(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+            })
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FakeFollowupTemplatePort;
+
+    impl FollowupTemplatePort for FakeFollowupTemplatePort {
+        fn load_workspace_templates(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn make_test_app() -> NativeTuiApp {
+        let codex_port = Arc::new(FakeCodexAppServerPort);
+        let followup_port = Arc::new(FakeFollowupTemplatePort);
+        NativeTuiApp::new(
+            StartupService::new(codex_port.clone()),
+            SessionService::new(codex_port.clone()),
+            ConversationService::new(codex_port),
+            FollowupTemplateService::new(followup_port),
+        )
     }
 }
