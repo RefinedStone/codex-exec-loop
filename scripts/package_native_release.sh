@@ -69,15 +69,12 @@ if [[ -f "${HOME}/.cargo/env" ]]; then
   . "${HOME}/.cargo/env"
 fi
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "package_native_release: cargo is required" >&2
-  exit 1
-fi
-
-if ! command -v rustc >/dev/null 2>&1; then
-  echo "package_native_release: rustc is required" >&2
-  exit 1
-fi
+for cmd in cargo rustc tar; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "package_native_release: ${cmd} is required" >&2
+    exit 1
+  fi
+done
 
 host_triple="$(rustc -vV | sed -n 's/^host: //p')"
 artifact_target="${target:-${host_triple}}"
@@ -106,7 +103,7 @@ if [[ ! -f "${binary_path}" ]]; then
 fi
 
 version="$(
-  sed -n 's/^version = "\(.*\)"/\1/p' "${native_dir}/Cargo.toml" | head -n 1
+  sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "${native_dir}/Cargo.toml" | head -n 1
 )"
 if [[ -z "${version}" ]]; then
   echo "package_native_release: failed to read native crate version" >&2
