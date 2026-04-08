@@ -49,13 +49,14 @@ impl TerminalRestoreGuard {
     fn activate(frontend: ShellFrontend) -> Result<Self> {
         let use_alternate_screen = frontend.mode().uses_alternate_screen();
         enable_raw_mode()?;
+        let guard = Self {
+            use_alternate_screen,
+        };
         let mut stdout = io::stdout();
         if use_alternate_screen {
             execute!(stdout, EnterAlternateScreen)?;
         }
-        Ok(Self {
-            use_alternate_screen,
-        })
+        Ok(guard)
     }
 }
 
