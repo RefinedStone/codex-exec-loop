@@ -1,9 +1,8 @@
 use ratatui::text::Line;
 
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
-    ConversationMessageKind, ConversationSnapshot, ConversationToolActivity,
-    ConversationToolActivityKind,
+    ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
+    ConversationToolActivity, ConversationToolActivityKind,
 };
 use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
@@ -668,52 +667,11 @@ impl ConversationViewModel {
     pub(crate) fn approval_summary(&self) -> Option<String> {
         self.approval_review
             .as_ref()
-            .map(Self::format_approval_summary)
-    }
-
-    fn format_approval_summary(review: &ConversationApprovalReview) -> String {
-        let status = match review.status {
-            ConversationApprovalReviewStatus::InProgress => "reviewing",
-            ConversationApprovalReviewStatus::Approved => "approved",
-            ConversationApprovalReviewStatus::Denied => "denied",
-            ConversationApprovalReviewStatus::Aborted => "aborted",
-        };
-        match review
-            .risk_level
-            .as_deref()
-            .filter(|risk| !risk.trim().is_empty())
-        {
-            Some(risk_level) => format!("{status} {risk_level}"),
-            None => status.to_string(),
-        }
-    }
-
-    fn format_approval_status_text(review: &ConversationApprovalReview) -> String {
-        let mut segments = vec![match review.status {
-            ConversationApprovalReviewStatus::InProgress => {
-                "approval review in progress".to_string()
-            }
-            ConversationApprovalReviewStatus::Approved => "approval review approved".to_string(),
-            ConversationApprovalReviewStatus::Denied => "approval review denied".to_string(),
-            ConversationApprovalReviewStatus::Aborted => "approval review aborted".to_string(),
-        }];
-
-        if !review.target_item_id.trim().is_empty() {
-            segments.push(format!("target: {}", review.target_item_id));
-        }
-        if let Some(risk_level) = review
-            .risk_level
-            .as_deref()
-            .filter(|risk| !risk.trim().is_empty())
-        {
-            segments.push(format!("risk: {risk_level}"));
-        }
-
-        segments.join(" / ")
+            .map(ConversationApprovalReview::summary_text)
     }
 
     pub(crate) fn update_approval_review(&mut self, review: ConversationApprovalReview) {
-        self.status_text = Self::format_approval_status_text(&review);
+        self.set_status_with_warnings(review.status_text());
         self.approval_review = Some(review);
     }
 
@@ -903,6 +861,9 @@ mod tests {
         FollowupTemplateCatalog, FollowupTemplateDefinition, StopKeywordRule, TurnActivityState,
         format_conversation_lines,
     };
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus,
+    };
     use crate::domain::followup_template::FollowupTemplateSource;
 
     fn sample_template_catalog() -> FollowupTemplateCatalog {
@@ -987,6 +948,24 @@ mod tests {
         assert_eq!(
             summary,
             "warnings (2): shared runtime busy with an activ..."
+        );
+    }
+
+    #[test]
+    fn approval_review_status_preserves_warning_suffix() {
+        let mut conversation = ready_conversation();
+        conversation.warnings = vec!["workspace template warning".to_string()];
+
+        conversation.update_approval_review(ConversationApprovalReview {
+            target_item_id: "command-1".to_string(),
+            status: ConversationApprovalReviewStatus::InProgress,
+            risk_level: Some("high".to_string()),
+            rationale: None,
+        });
+
+        assert_eq!(
+            conversation.status_text,
+            "approval review in progress / target: command-1 / risk: high / workspace template warning"
         );
     }
 

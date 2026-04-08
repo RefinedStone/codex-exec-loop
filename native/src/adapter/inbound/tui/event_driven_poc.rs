@@ -416,31 +416,7 @@ fn apply_stream_event(state: &mut StreamShellState, event: ConversationStreamEve
             push_tool_activity(&mut state.thread.transcript, activity);
         }
         ConversationStreamEvent::ApprovalReviewUpdated { review } => {
-            let mut segments = vec![match review.status {
-                crate::domain::conversation::ConversationApprovalReviewStatus::InProgress => {
-                    "approval review in progress".to_string()
-                }
-                crate::domain::conversation::ConversationApprovalReviewStatus::Approved => {
-                    "approval review approved".to_string()
-                }
-                crate::domain::conversation::ConversationApprovalReviewStatus::Denied => {
-                    "approval review denied".to_string()
-                }
-                crate::domain::conversation::ConversationApprovalReviewStatus::Aborted => {
-                    "approval review aborted".to_string()
-                }
-            }];
-            if !review.target_item_id.trim().is_empty() {
-                segments.push(format!("target: {}", review.target_item_id));
-            }
-            if let Some(risk_level) = review
-                .risk_level
-                .as_deref()
-                .filter(|risk| !risk.trim().is_empty())
-            {
-                segments.push(format!("risk: {risk_level}"));
-            }
-            state.status_line = segments.join(" / ");
+            state.status_line = review.status_text();
         }
         ConversationStreamEvent::TurnCompleted { turn_id } => {
             state.thread.turn_phase = StreamTurnPhase::Idle;

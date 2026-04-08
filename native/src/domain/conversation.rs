@@ -74,12 +74,62 @@ pub enum ConversationApprovalReviewStatus {
     Aborted,
 }
 
+impl ConversationApprovalReviewStatus {
+    fn summary_label(self) -> &'static str {
+        match self {
+            Self::InProgress => "reviewing",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::Aborted => "aborted",
+        }
+    }
+
+    fn status_prefix(self) -> &'static str {
+        match self {
+            Self::InProgress => "approval review in progress",
+            Self::Approved => "approval review approved",
+            Self::Denied => "approval review denied",
+            Self::Aborted => "approval review aborted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationApprovalReview {
     pub target_item_id: String,
     pub status: ConversationApprovalReviewStatus,
     pub risk_level: Option<String>,
     pub rationale: Option<String>,
+}
+
+impl ConversationApprovalReview {
+    pub fn summary_text(&self) -> String {
+        match self
+            .risk_level
+            .as_deref()
+            .filter(|risk| !risk.trim().is_empty())
+        {
+            Some(risk_level) => format!("{} {risk_level}", self.status.summary_label()),
+            None => self.status.summary_label().to_string(),
+        }
+    }
+
+    pub fn status_text(&self) -> String {
+        let mut segments = vec![self.status.status_prefix().to_string()];
+
+        if !self.target_item_id.trim().is_empty() {
+            segments.push(format!("target: {}", self.target_item_id));
+        }
+        if let Some(risk_level) = self
+            .risk_level
+            .as_deref()
+            .filter(|risk| !risk.trim().is_empty())
+        {
+            segments.push(format!("risk: {risk_level}"));
+        }
+
+        segments.join(" / ")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
