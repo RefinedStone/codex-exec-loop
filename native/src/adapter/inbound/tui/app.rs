@@ -101,12 +101,12 @@ use shell_layout::{
     build_shell_footer_height,
 };
 use shell_presentation::{
-    ConversationShellView, build_conversation_shell_view, format_conversation_lines,
+    ConversationShellView, build_conversation_shell_view, build_transcript_title,
+    format_conversation_lines,
 };
 #[cfg(test)]
 use shell_presentation::{
     build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
-    build_transcript_title,
 };
 use transcript_viewport::TranscriptViewportState;
 
@@ -919,9 +919,10 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
+        let transcript_title = build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer);
 
         assert!(view.shell_title.to_string().contains("Inline Shell"));
-        assert!(view.transcript_title.to_string().contains("History /"));
+        assert!(transcript_title.to_string().contains("History /"));
         assert!(view.status_title.to_string().contains("Inline Controls"));
         assert!(view.input_title.to_string().contains("Prompt / ready"));
         assert!(header.contains("thread: thread-1"));

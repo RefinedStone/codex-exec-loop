@@ -135,24 +135,24 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
     let area = frame.area();
     frame.render_widget(Clear, area);
     let shell_view = build_conversation_shell_view(app, mode);
-    let footer_height = build_shell_footer_height(&shell_view.footer_lines);
-    let input_height = build_input_block_height(&shell_view.input_lines);
     let ConversationShellView {
         shell_title,
         header_lines,
-        transcript_title,
         conversation_lines,
         status_title,
         footer_lines,
         input_title,
         input_lines,
     } = shell_view;
+    let header_height = block_height_for_lines(&header_lines, 4, 6);
+    let footer_height = build_shell_footer_height(&footer_lines);
+    let input_height = build_input_block_height(&input_lines);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(header_height),
             Constraint::Min(12),
             Constraint::Length(footer_height),
             Constraint::Length(input_height),
@@ -173,6 +173,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
         conversation_max_scroll,
         layout[1].height.saturating_sub(2),
     );
+    let transcript_title = build_transcript_title(app, mode);
     let conversation = Paragraph::new(conversation_lines)
         .block(
             Block::default()

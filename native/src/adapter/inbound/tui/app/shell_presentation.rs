@@ -3,7 +3,6 @@ use super::*;
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
     pub(super) header_lines: Vec<Line<'static>>,
-    pub(super) transcript_title: Line<'static>,
     pub(super) conversation_lines: Vec<Line<'static>>,
     pub(super) status_title: Line<'static>,
     pub(super) footer_lines: Vec<Line<'static>>,
@@ -18,7 +17,6 @@ pub(super) fn build_conversation_shell_view(
     ConversationShellView {
         shell_title: build_shell_title(mode),
         header_lines: build_shell_header_lines(app),
-        transcript_title: build_transcript_title(app, mode),
         conversation_lines: build_conversation_lines(app),
         status_title: build_status_title(mode),
         footer_lines: build_shell_footer_lines(app),
@@ -27,7 +25,7 @@ pub(super) fn build_conversation_shell_view(
     }
 }
 
-pub(super) fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("Loading thread history...")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
@@ -288,7 +286,7 @@ fn build_shell_header_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-pub(super) fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
+fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
     match mode {
         ShellFrontendMode::InlineMainBuffer => {
             Line::from("Inline Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
