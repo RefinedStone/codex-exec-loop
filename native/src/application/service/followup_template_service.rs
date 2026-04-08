@@ -45,6 +45,12 @@ pub struct FollowupTemplateService {
     followup_template_port: Arc<dyn FollowupTemplatePort>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FollowupTemplateReloadResult {
+    pub load_result: FollowupTemplateCatalogLoadResult,
+    pub workspace_load_failed: bool,
+}
+
 impl FollowupTemplateService {
     pub fn new(followup_template_port: Arc<dyn FollowupTemplatePort>) -> Self {
         Self {
@@ -53,8 +59,13 @@ impl FollowupTemplateService {
     }
 
     pub fn load_catalog(&self, workspace_dir: &str) -> FollowupTemplateCatalogLoadResult {
+        self.reload_catalog(workspace_dir).load_result
+    }
+
+    pub fn reload_catalog(&self, workspace_dir: &str) -> FollowupTemplateReloadResult {
         let mut warnings = Vec::new();
         let mut items = Self::builtin_templates();
+        let mut workspace_load_failed = false;
 
         match self
             .followup_template_port
@@ -80,14 +91,20 @@ impl FollowupTemplateService {
                     });
                 }
             }
-            Err(error) => warnings.push(format!(
-                "failed to load workspace follow-up templates: {error}"
-            )),
+            Err(error) => {
+                workspace_load_failed = true;
+                warnings.push(format!(
+                    "failed to load workspace follow-up templates: {error}"
+                ));
+            }
         }
 
-        FollowupTemplateCatalogLoadResult {
-            catalog: FollowupTemplateCatalog { items },
-            warnings,
+        FollowupTemplateReloadResult {
+            load_result: FollowupTemplateCatalogLoadResult {
+                catalog: FollowupTemplateCatalog { items },
+                warnings,
+            },
+            workspace_load_failed,
         }
     }
 
@@ -131,6 +148,7 @@ mod tests {
 
     struct FakeFollowupTemplatePort {
         templates: Vec<WorkspaceFollowupTemplateRecord>,
+        error_message: Option<String>,
     }
 
     impl FollowupTemplatePort for FakeFollowupTemplatePort {
@@ -138,7 +156,10 @@ mod tests {
             &self,
             _workspace_dir: &str,
         ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
-            Ok(self.templates.clone())
+            match &self.error_message {
+                Some(message) => Err(anyhow::anyhow!(message.clone())),
+                None => Ok(self.templates.clone()),
+            }
         }
     }
 
@@ -150,6 +171,7 @@ mod tests {
                 path: "/tmp/workspace/.codex-exec-loop/followups/custom-review.md".to_string(),
                 body: "workspace body".to_string(),
             }],
+            error_message: None,
         }));
 
         let result = service.load_catalog("/tmp/workspace");
@@ -167,11 +189,26 @@ mod tests {
                 path: "/tmp/workspace/.codex-exec-loop/followups/empty-template.md".to_string(),
                 body: "   ".to_string(),
             }],
+            error_message: None,
         }));
 
         let result = service.load_catalog("/tmp/workspace");
 
         assert_eq!(result.catalog.items.len(), 4);
         assert_eq!(result.warnings.len(), 1);
+    }
+
+    #[test]
+    fn reload_catalog_marks_workspace_failure_and_keeps_builtins() {
+        let service = FollowupTemplateService::new(Arc::new(FakeFollowupTemplatePort {
+            templates: Vec::new(),
+            error_message: Some("permission denied".to_string()),
+        }));
+
+        let result = service.reload_catalog("/tmp/workspace");
+
+        assert!(result.workspace_load_failed);
+        assert_eq!(result.load_result.catalog.items.len(), 4);
+        assert_eq!(result.load_result.warnings.len(), 1);
     }
 }

@@ -259,6 +259,13 @@ impl AutoFollowState {
         self.stop_rules.stop_on_no_file_changes = !self.stop_rules.stop_on_no_file_changes;
     }
 
+    pub(crate) fn reload_template_catalog(
+        &mut self,
+        template_catalog: FollowupTemplateCatalog,
+    ) -> bool {
+        self.template_state.reload_catalog(template_catalog)
+    }
+
     pub(crate) fn cycle_template_kind(&mut self) {
         self.template_state.cycle();
     }
@@ -400,6 +407,18 @@ impl AutoFollowTemplateState {
             self.selected_index -= 1;
         }
     }
+
+    pub(crate) fn reload_catalog(&mut self, template_catalog: FollowupTemplateCatalog) -> bool {
+        let selected_template_id = self.current().id.clone();
+        self.items = template_catalog.items;
+        self.selected_index = self
+            .items
+            .iter()
+            .position(|template| template.id == selected_template_id)
+            .unwrap_or(0);
+
+        self.current().id != selected_template_id
+    }
 }
 
 impl TurnActivityState {
@@ -427,6 +446,8 @@ pub(crate) struct ConversationViewModel {
     pub(crate) cwd: String,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) cached_conversation_lines: Vec<Line<'static>>,
+    pub(crate) base_warnings: Vec<String>,
+    pub(crate) template_warnings: Vec<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) input_buffer: String,
     pub(crate) active_turn_id: Option<String>,
@@ -452,6 +473,8 @@ impl ConversationViewModel {
             cwd,
             messages: Vec::new(),
             cached_conversation_lines: Vec::new(),
+            base_warnings: Vec::new(),
+            template_warnings: template_load_result.warnings.clone(),
             warnings: template_load_result.warnings,
             input_buffer: String::new(),
             active_turn_id: None,
@@ -469,8 +492,9 @@ impl ConversationViewModel {
         snapshot: ConversationSnapshot,
         template_load_result: FollowupTemplateCatalogLoadResult,
     ) -> Self {
-        let mut warnings = snapshot.warnings;
-        warnings.extend(template_load_result.warnings);
+        let base_warnings = snapshot.warnings;
+        let template_warnings = template_load_result.warnings;
+        let warnings = Self::merge_warnings(&base_warnings, &template_warnings);
         let status_text = if warnings.is_empty() {
             format!(
                 "thread loaded / templates: {}",
@@ -486,6 +510,8 @@ impl ConversationViewModel {
             cwd: snapshot.cwd,
             messages: snapshot.messages,
             cached_conversation_lines: Vec::new(),
+            base_warnings,
+            template_warnings,
             warnings,
             input_buffer: String::new(),
             active_turn_id: None,
@@ -497,6 +523,54 @@ impl ConversationViewModel {
         };
         view_model.refresh_conversation_lines();
         view_model
+    }
+
+    fn merge_warnings(base_warnings: &[String], template_warnings: &[String]) -> Vec<String> {
+        let mut warnings = base_warnings.to_vec();
+        warnings.extend(template_warnings.iter().cloned());
+        warnings
+    }
+
+    pub(crate) fn replace_template_warnings(&mut self, template_warnings: Vec<String>) {
+        self.template_warnings = template_warnings;
+        self.warnings = Self::merge_warnings(&self.base_warnings, &self.template_warnings);
+    }
+
+    pub(crate) fn reload_followup_templates(
+        &mut self,
+        template_load_result: FollowupTemplateCatalogLoadResult,
+    ) -> bool {
+        let template_count = template_load_result.catalog.items.len();
+        let selection_changed = self
+            .auto_follow_state
+            .reload_template_catalog(template_load_result.catalog);
+        self.replace_template_warnings(template_load_result.warnings);
+        self.clear_auto_followup_skip();
+        self.status_text = if selection_changed && self.warnings.is_empty() {
+            format!(
+                "follow-up templates reloaded / selected template reset to {} / templates: {template_count}",
+                self.auto_follow_state.template_label()
+            )
+        } else if selection_changed {
+            format!(
+                "follow-up templates reloaded / selected template reset to {} / templates: {template_count} / {}",
+                self.auto_follow_state.template_label(),
+                self.warnings.join(" | ")
+            )
+        } else if self.warnings.is_empty() {
+            format!(
+                "follow-up templates reloaded / selected: {} / templates: {template_count}",
+                self.auto_follow_state.template_label()
+            )
+        } else {
+            format!(
+                "follow-up templates reloaded / selected: {} / templates: {template_count} / {}",
+                self.auto_follow_state.template_label(),
+                self.warnings.join(" | ")
+            )
+        };
+
+        selection_changed
     }
 
     pub(crate) fn refresh_conversation_lines(&mut self) {
@@ -652,6 +726,8 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             messages: Vec::new(),
             cached_conversation_lines: format_conversation_lines(&[]),
+            base_warnings: Vec::new(),
+            template_warnings: Vec::new(),
             warnings: Vec::new(),
             input_buffer: String::new(),
             active_turn_id: None,
@@ -790,6 +866,49 @@ mod tests {
             AutoFollowState::normalize_max_auto_turns_candidate("three"),
             None
         );
+    }
+
+    #[test]
+    fn reloading_template_catalog_preserves_selected_template_when_id_still_exists() {
+        let mut state = AutoFollowState::new(sample_template_catalog());
+        state.template_state.selected_index = 1;
+
+        state.reload_template_catalog(FollowupTemplateCatalog {
+            items: vec![
+                FollowupTemplateDefinition {
+                    id: "builtin-next-task".to_string(),
+                    label: "builtin next-task".to_string(),
+                    body: "next".to_string(),
+                    source: FollowupTemplateSource::Builtin,
+                },
+                FollowupTemplateDefinition {
+                    id: "builtin-plan-queue".to_string(),
+                    label: "builtin plan-queue".to_string(),
+                    body: "reloaded".to_string(),
+                    source: FollowupTemplateSource::Builtin,
+                },
+            ],
+        });
+
+        assert_eq!(state.template_label(), "builtin plan-queue");
+    }
+
+    #[test]
+    fn reloading_template_catalog_falls_back_to_first_template_when_selection_disappears() {
+        let mut state = AutoFollowState::new(sample_template_catalog());
+        state.template_state.selected_index = 2;
+
+        state.reload_template_catalog(FollowupTemplateCatalog {
+            items: vec![FollowupTemplateDefinition {
+                id: "builtin-next-task".to_string(),
+                label: "builtin next-task".to_string(),
+                body: "next".to_string(),
+                source: FollowupTemplateSource::Builtin,
+            }],
+        });
+
+        assert_eq!(state.template_label(), "builtin next-task");
+        assert_eq!(state.selected_template_index(), 0);
     }
 
     #[test]

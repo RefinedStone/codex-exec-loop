@@ -449,6 +449,8 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             messages: Vec::new(),
             cached_conversation_lines: format_conversation_lines(&[]),
+            base_warnings: Vec::new(),
+            template_warnings: Vec::new(),
             warnings: Vec::new(),
             input_buffer: "ship it".to_string(),
             active_turn_id: None,

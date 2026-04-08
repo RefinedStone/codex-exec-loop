@@ -6,6 +6,9 @@ pub(super) enum FollowupControlEvent {
         workspace_directory: String,
         template_load_result: FollowupTemplateCatalogLoadResult,
     },
+    TemplateCatalogReloaded {
+        reload_result: FollowupTemplateReloadResult,
+    },
     AutoFollowToggled,
     MaxAutoTurnsUpdated {
         value: String,
@@ -48,7 +51,8 @@ pub(super) fn reduce_followup_controls(
                 let warnings = template_load_result.warnings;
                 state.cwd = workspace_directory;
                 state.auto_follow_state = AutoFollowState::new(template_load_result.catalog);
-                state.warnings = warnings;
+                state.base_warnings.clear();
+                state.replace_template_warnings(warnings);
                 state.clear_auto_followup_skip();
                 state.status_text = if state.warnings.is_empty() {
                     format!("draft workspace synced / templates: {template_count}")
@@ -58,6 +62,47 @@ pub(super) fn reduce_followup_controls(
                         state.warnings.join(" | ")
                     )
                 };
+                effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
+            }
+        }
+        FollowupControlEvent::TemplateCatalogReloaded { reload_result } => {
+            let template_count = reload_result.load_result.catalog.items.len();
+            let catalog_changed = state.auto_follow_state.template_state.items
+                != reload_result.load_result.catalog.items;
+            let warnings_changed = state.template_warnings != reload_result.load_result.warnings;
+
+            if reload_result.workspace_load_failed {
+                state.replace_template_warnings(reload_result.load_result.warnings);
+                state.status_text = if state.warnings.is_empty() {
+                    "failed to reload workspace follow-up templates / keeping current catalog"
+                        .to_string()
+                } else {
+                    format!(
+                        "failed to reload workspace follow-up templates / keeping current catalog / {}",
+                        state.warnings.join(" | ")
+                    )
+                };
+                return FollowupControlReduction { state, effects };
+            }
+
+            if !catalog_changed && !warnings_changed {
+                state.status_text = if state.warnings.is_empty() {
+                    format!(
+                        "follow-up templates already up to date / selected: {} / templates: {template_count}",
+                        state.auto_follow_state.template_label()
+                    )
+                } else {
+                    format!(
+                        "follow-up templates already up to date / selected: {} / templates: {template_count} / {}",
+                        state.auto_follow_state.template_label(),
+                        state.warnings.join(" | ")
+                    )
+                };
+                return FollowupControlReduction { state, effects };
+            }
+
+            state.reload_followup_templates(reload_result.load_result);
+            if catalog_changed {
                 effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
             }
         }
@@ -231,6 +276,229 @@ mod tests {
         assert_eq!(
             reduced.state.auto_follow_state.template_label(),
             "builtin next-task"
+        );
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn template_reload_preserves_existing_followup_settings() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result_pair(),
+        );
+        state.thread_id = "thread-1".to_string();
+        state.auto_follow_state.enabled = false;
+        state.auto_follow_state.set_max_auto_turns(7);
+        state
+            .auto_follow_state
+            .set_stop_keyword_value("DONE".to_string());
+        state.auto_follow_state.stop_rules.stop_on_no_file_changes = true;
+        state.auto_follow_state.template_state.selected_index = 1;
+        state.record_auto_followup_skip(AutoFollowupSkipReason::LimitReached);
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::TemplateCatalogReloaded {
+                reload_result: FollowupTemplateReloadResult {
+                    load_result: FollowupTemplateCatalogLoadResult {
+                        catalog: FollowupTemplateCatalog {
+                            items: vec![
+                                FollowupTemplateDefinition {
+                                    id: "builtin-next-task".to_string(),
+                                    label: "builtin next-task".to_string(),
+                                    body: "follow up".to_string(),
+                                    source: FollowupTemplateSource::Builtin,
+                                },
+                                FollowupTemplateDefinition {
+                                    id: "workspace-review".to_string(),
+                                    label: "workspace review".to_string(),
+                                    body: "review reloaded".to_string(),
+                                    source: FollowupTemplateSource::WorkspaceFile {
+                                        path: "/tmp/root/.codex-exec-loop/followups/review.md"
+                                            .to_string(),
+                                    },
+                                },
+                            ],
+                        },
+                        warnings: Vec::new(),
+                    },
+                    workspace_load_failed: false,
+                },
+            },
+        );
+
+        assert!(!reduced.state.auto_follow_state.enabled);
+        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 7);
+        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE");
+        assert_eq!(
+            reduced.state.auto_follow_state.no_file_change_stop_label(),
+            "on"
+        );
+        assert_eq!(
+            reduced.state.auto_follow_state.template_label(),
+            "workspace review"
+        );
+        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert_eq!(
+            reduced.effects,
+            vec![FollowupControlEffect::SyncTemplateOverlayUi]
+        );
+    }
+
+    #[test]
+    fn template_reload_updates_warning_summary() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+        state.thread_id = "thread-1".to_string();
+        state.base_warnings = vec!["snapshot warning".to_string()];
+        state.replace_template_warnings(Vec::new());
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::TemplateCatalogReloaded {
+                reload_result: FollowupTemplateReloadResult {
+                    load_result: FollowupTemplateCatalogLoadResult {
+                        catalog: FollowupTemplateCatalog {
+                            items: vec![FollowupTemplateDefinition {
+                                id: "builtin-next-task".to_string(),
+                                label: "builtin next-task".to_string(),
+                                body: "follow up".to_string(),
+                                source: FollowupTemplateSource::Builtin,
+                            }],
+                        },
+                        warnings: vec!["template warning".to_string()],
+                    },
+                    workspace_load_failed: false,
+                },
+            },
+        );
+
+        assert_eq!(
+            reduced.state.warnings,
+            vec![
+                "snapshot warning".to_string(),
+                "template warning".to_string()
+            ]
+        );
+        assert!(reduced.state.status_text.contains("snapshot warning"));
+        assert!(reduced.state.status_text.contains("template warning"));
+    }
+
+    #[test]
+    fn template_reload_noop_reports_up_to_date_without_overlay_sync() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result_pair(),
+        );
+        state.thread_id = "thread-1".to_string();
+        state.auto_follow_state.template_state.selected_index = 1;
+        state.base_warnings = vec!["snapshot warning".to_string()];
+        state.replace_template_warnings(vec!["template warning".to_string()]);
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::TemplateCatalogReloaded {
+                reload_result: FollowupTemplateReloadResult {
+                    load_result: FollowupTemplateCatalogLoadResult {
+                        catalog: FollowupTemplateCatalog {
+                            items: vec![
+                                FollowupTemplateDefinition {
+                                    id: "builtin-next-task".to_string(),
+                                    label: "builtin next-task".to_string(),
+                                    body: "follow up".to_string(),
+                                    source: FollowupTemplateSource::Builtin,
+                                },
+                                FollowupTemplateDefinition {
+                                    id: "workspace-review".to_string(),
+                                    label: "workspace review".to_string(),
+                                    body: "review".to_string(),
+                                    source: FollowupTemplateSource::WorkspaceFile {
+                                        path: "/tmp/root/.codex-exec-loop/followups/review.md"
+                                            .to_string(),
+                                    },
+                                },
+                            ],
+                        },
+                        warnings: vec!["template warning".to_string()],
+                    },
+                    workspace_load_failed: false,
+                },
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.template_label(),
+            "workspace review"
+        );
+        assert_eq!(
+            reduced.state.warnings,
+            vec![
+                "snapshot warning".to_string(),
+                "template warning".to_string()
+            ]
+        );
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("follow-up templates already up to date")
+        );
+        assert!(reduced.state.status_text.contains("snapshot warning"));
+        assert!(reduced.state.status_text.contains("template warning"));
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn template_reload_failure_keeps_existing_catalog_without_overlay_sync() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result_pair(),
+        );
+        state.thread_id = "thread-1".to_string();
+        state.auto_follow_state.template_state.selected_index = 1;
+        state.base_warnings = vec!["snapshot warning".to_string()];
+        state.replace_template_warnings(Vec::new());
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::TemplateCatalogReloaded {
+                reload_result: FollowupTemplateReloadResult {
+                    load_result: FollowupTemplateCatalogLoadResult {
+                        catalog: FollowupTemplateCatalog {
+                            items: vec![FollowupTemplateDefinition {
+                                id: "builtin-next-task".to_string(),
+                                label: "builtin next-task".to_string(),
+                                body: "follow up".to_string(),
+                                source: FollowupTemplateSource::Builtin,
+                            }],
+                        },
+                        warnings: vec![
+                            "failed to load workspace follow-up templates: permission denied"
+                                .to_string(),
+                        ],
+                    },
+                    workspace_load_failed: true,
+                },
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.template_label(),
+            "workspace review"
+        );
+        assert_eq!(
+            reduced.state.warnings,
+            vec![
+                "snapshot warning".to_string(),
+                "failed to load workspace follow-up templates: permission denied".to_string()
+            ]
+        );
+        assert!(
+            reduced.state.status_text.contains(
+                "failed to reload workspace follow-up templates / keeping current catalog"
+            )
         );
         assert!(reduced.effects.is_empty());
     }

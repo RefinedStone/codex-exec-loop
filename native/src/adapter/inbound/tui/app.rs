@@ -12,7 +12,9 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::followup_template_service::FollowupTemplateService;
+use crate::application::service::followup_template_service::{
+    FollowupTemplateReloadResult, FollowupTemplateService,
+};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -250,6 +252,9 @@ mod tests {
             &self,
             workspace_dir: &str,
         ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
+            if workspace_dir == "/tmp/failing" {
+                return Err(anyhow::anyhow!("permission denied"));
+            }
             if workspace_dir == "/tmp/root" {
                 return Ok(vec![WorkspaceFollowupTemplateRecord {
                     name: "root-template".to_string(),
@@ -346,6 +351,8 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             messages: Vec::new(),
             cached_conversation_lines: format_conversation_lines(&[]),
+            base_warnings: Vec::new(),
+            template_warnings: Vec::new(),
             warnings: Vec::new(),
             input_buffer: String::new(),
             active_turn_id: None,
@@ -1021,6 +1028,7 @@ mod tests {
         assert!(preview.contains("Rendered Preview"));
         assert!(status.contains("auto follow-up:"));
         assert!(keys.contains("change template"));
+        assert!(keys.contains("r: reload"));
     }
 
     #[test]
@@ -1084,6 +1092,105 @@ mod tests {
         assert!(conversation.status_text.contains("auto follow-up template"));
         assert_eq!(app.followup_template_selection(), Some(1));
         assert_eq!(app.followup_overlay_ui_state.preview_scroll, 0);
+    }
+
+    #[test]
+    fn followup_template_overlay_reload_refreshes_catalog_for_active_thread() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.cwd = "/tmp/root".to_string();
+        conversation.auto_follow_state.enabled = false;
+        conversation.auto_follow_state.set_max_auto_turns(7);
+        conversation
+            .auto_follow_state
+            .set_stop_keyword_value("DONE".to_string());
+        conversation
+            .auto_follow_state
+            .stop_rules
+            .stop_on_no_file_changes = true;
+        conversation.auto_follow_state.template_state.selected_index = 1;
+        app.conversation_state = ConversationState::Ready(conversation);
+        app.show_followup_template_overlay();
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,))
+        );
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(conversation.auto_follow_state.template_count(), 5);
+        assert_eq!(
+            conversation.auto_follow_state.template_label(),
+            "builtin plan-queue"
+        );
+        assert!(!conversation.auto_follow_state.enabled);
+        assert_eq!(conversation.auto_follow_state.max_auto_turns_value(), 7);
+        assert_eq!(conversation.auto_follow_state.stop_keyword_value(), "DONE");
+        assert_eq!(
+            conversation.auto_follow_state.no_file_change_stop_label(),
+            "on"
+        );
+        assert!(
+            conversation
+                .status_text
+                .contains("follow-up templates reloaded")
+        );
+    }
+
+    #[test]
+    fn followup_template_overlay_reload_reports_noop_when_catalog_is_current() {
+        let (mut app, _) = make_test_app();
+        let conversation = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            app.load_followup_template_catalog("/tmp/root"),
+        );
+        app.conversation_state = ConversationState::Ready(conversation);
+        app.show_followup_template_overlay();
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,))
+        );
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(conversation.auto_follow_state.template_count(), 5);
+        assert!(
+            conversation
+                .status_text
+                .contains("follow-up templates already up to date")
+        );
+    }
+
+    #[test]
+    fn followup_template_overlay_reload_failure_keeps_existing_catalog() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ConversationViewModel::new_draft(
+            "/tmp/failing".to_string(),
+            app.load_followup_template_catalog("/tmp/root"),
+        );
+        conversation.auto_follow_state.template_state.selected_index = 4;
+        app.conversation_state = ConversationState::Ready(conversation);
+        app.show_followup_template_overlay();
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,))
+        );
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(conversation.auto_follow_state.template_count(), 5);
+        assert_eq!(
+            conversation.auto_follow_state.template_label(),
+            "workspace root-template"
+        );
+        assert!(
+            conversation.status_text.contains(
+                "failed to reload workspace follow-up templates / keeping current catalog"
+            )
+        );
     }
 
     #[test]

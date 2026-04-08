@@ -77,6 +77,19 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn reload_followup_templates(&mut self) {
+        let workspace_directory = match &self.conversation_state {
+            ConversationState::Ready(conversation) => conversation.cwd.clone(),
+            ConversationState::Loading | ConversationState::Failed(_) => return,
+        };
+
+        self.dispatch_followup_controls(FollowupControlEvent::TemplateCatalogReloaded {
+            reload_result: self
+                .followup_template_service
+                .reload_catalog(&workspace_directory),
+        });
+    }
+
     pub(super) fn show_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayShown);
     }
@@ -506,6 +519,7 @@ impl NativeTuiApp {
                 KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
                     self.cycle_auto_followup_template()
                 }
+                KeyCode::Char('r') if key.modifiers.is_empty() => self.reload_followup_templates(),
                 KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                     self.toggle_auto_followup()
                 }

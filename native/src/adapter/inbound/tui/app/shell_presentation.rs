@@ -607,7 +607,7 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
     }
 
     vec![
-        Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
+        Line::from("Up/Down or j/k: change template    Ctrl+f: next template    r: reload"),
         Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
         Line::from("Ctrl+a: auto on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword"),
         Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
