@@ -229,6 +229,7 @@ fn ready_conversation() -> ConversationViewModel {
         messages: Vec::new(),
         cached_conversation_lines: format_conversation_lines(&[]),
         live_agent_message: None,
+        buffered_tool_messages: Vec::new(),
         base_warnings: Vec::new(),
         template_warnings: Vec::new(),
         warnings: Vec::new(),
@@ -418,6 +419,60 @@ fn inline_shell_view_surfaces_live_agent_output_in_footer() {
     assert!(
         rendered.contains("live output: Codex: working through the next streaming answer chunk")
     );
+}
+
+#[test]
+fn tool_activity_stays_out_of_inline_transcript_until_turn_completion() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::ToolActivity {
+            activity: crate::domain::conversation::ConversationToolActivity {
+                kind: crate::domain::conversation::ConversationToolActivityKind::CommandExecution,
+                text: "command: cargo test [running]".to_string(),
+                file_change_count: 0,
+            },
+        },
+    ));
+
+    let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+    let transcript_rendered = view
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let footer_rendered = view
+        .footer_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!transcript_rendered.contains("command: cargo test [running]"));
+    assert!(footer_rendered.contains("tool activity: command: cargo test [running]"));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+    let transcript_rendered = view
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(transcript_rendered.contains("Tool:"));
+    assert!(transcript_rendered.contains("command: cargo test [running]"));
 }
 
 #[test]

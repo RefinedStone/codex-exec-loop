@@ -121,20 +121,15 @@ pub(super) fn reduce_conversation_runtime(
                 }
                 ConversationStreamEvent::ToolActivity { activity } => {
                     state.turn_activity.register_tool_activity(&activity);
-                    state.messages.push(ConversationMessage::new(
-                        ConversationMessageKind::Tool,
-                        activity.text,
-                        None,
-                        None,
-                    ));
-                    should_refresh_lines = true;
+                    state.buffer_tool_message(activity.text);
                 }
                 ConversationStreamEvent::ApprovalReviewUpdated { review } => {
                     state.update_approval_review(review);
                 }
                 ConversationStreamEvent::TurnCompleted { turn_id } => {
-                    should_refresh_lines =
-                        state.commit_live_agent_message() || should_refresh_lines;
+                    should_refresh_lines = state.commit_live_agent_message()
+                        || state.flush_buffered_tool_messages()
+                        || should_refresh_lines;
                     state.turn_activity.complete_turn();
                     state.mark_turn_finished();
                     match state.decide_auto_followup() {
@@ -162,7 +157,9 @@ pub(super) fn reduce_conversation_runtime(
                         || should_refresh_lines;
                 }
                 ConversationStreamEvent::Failed { message } => {
-                    state.commit_live_agent_message();
+                    should_refresh_lines = state.commit_live_agent_message()
+                        || state.flush_buffered_tool_messages()
+                        || should_refresh_lines;
                     state.mark_turn_finished();
                     state.status_text = "turn failed".to_string();
                     should_refresh_lines =
@@ -557,10 +554,39 @@ mod tests {
             reduced.state.turn_activity.activity_summary(true),
             "command: cargo test [completed]"
         );
-        assert_eq!(reduced.state.messages.len(), 1);
+        assert!(reduced.state.messages.is_empty());
+        assert_eq!(reduced.state.buffered_tool_messages.len(), 1);
         assert_eq!(
-            reduced.state.messages[0].kind,
+            reduced.state.buffered_tool_messages[0].kind,
             ConversationMessageKind::Tool
+        );
+    }
+
+    #[test]
+    fn turn_completed_flushes_buffered_tool_messages_into_stable_history() {
+        let mut state = sample_active_turn_conversation();
+        state.turn_activity.current_turn_command_count = 1;
+        state.buffer_tool_message("command: cargo test [completed]");
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+            }),
+        );
+
+        assert!(reduced.state.buffered_tool_messages.is_empty());
+        assert!(
+            reduced
+                .state
+                .messages
+                .iter()
+                .any(|message| message.kind == ConversationMessageKind::Tool
+                    && message.text == "command: cargo test [completed]")
+        );
+        assert_eq!(
+            reduced.state.cached_conversation_lines,
+            format_conversation_lines(&reduced.state.messages)
         );
     }
 
@@ -694,6 +720,34 @@ mod tests {
         assert!(reduced.effects.is_empty());
     }
 
+    #[test]
+    fn stream_failure_flushes_buffered_tool_messages_before_status_message() {
+        let mut state = sample_active_turn_conversation();
+        state.buffer_tool_message("command: cargo test [failed]");
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed {
+                message: "stream exploded".to_string(),
+            }),
+        );
+
+        assert_eq!(reduced.state.messages.len(), 2);
+        assert_eq!(
+            reduced.state.messages[0].kind,
+            ConversationMessageKind::Tool
+        );
+        assert_eq!(
+            reduced.state.messages[0].text,
+            "command: cargo test [failed]"
+        );
+        assert_eq!(
+            reduced.state.messages[1].kind,
+            ConversationMessageKind::Status
+        );
+        assert_eq!(reduced.state.messages[1].text, "stream exploded");
+    }
+
     fn sample_conversation() -> ConversationViewModel {
         ConversationViewModel {
             thread_id: "thread-1".to_string(),
@@ -702,6 +756,7 @@ mod tests {
             messages: Vec::new(),
             cached_conversation_lines: format_conversation_lines(&[]),
             live_agent_message: None,
+            buffered_tool_messages: Vec::new(),
             base_warnings: Vec::new(),
             template_warnings: Vec::new(),
             warnings: Vec::new(),
