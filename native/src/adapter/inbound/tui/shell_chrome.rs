@@ -83,6 +83,8 @@ pub enum ShellChromeEvent {
     OverlayClosed,
     ExitConfirmationShown,
     ExitConfirmationHidden,
+    // Conversation transitions use this event to collapse transient shell chrome so overlays do
+    // not outlive the shell context they were opened from.
     TransientChromeDismissed,
     SessionSelectionMoved {
         delta: isize,
@@ -303,6 +305,65 @@ mod tests {
     }
 
     #[test]
+    fn opening_sessions_overlay_while_startup_blocked_does_not_queue_load() {
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        state.startup_state = StartupState::Ready(sample_blocked_startup_diagnostics());
+
+        let reduced =
+            reduce_shell_chrome(state, ShellChromeEvent::SessionsOverlayShown { limit: 10 });
+
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::Sessions);
+        assert_eq!(
+            reduced.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert!(matches!(reduced.state.session_state, SessionState::Idle));
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn toggling_sessions_overlay_requests_load_only_when_opening() {
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        state.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+        let opened = reduce_shell_chrome(
+            state,
+            ShellChromeEvent::SessionsOverlayToggled { limit: 10 },
+        );
+        let closed = reduce_shell_chrome(
+            opened.state.clone(),
+            ShellChromeEvent::SessionsOverlayToggled { limit: 10 },
+        );
+
+        assert_eq!(opened.state.shell_overlay, ShellOverlay::Sessions);
+        assert_eq!(
+            opened.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert!(matches!(opened.state.session_state, SessionState::Loading));
+        assert_eq!(
+            opened.effects,
+            vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
+        );
+        assert_eq!(closed.state.shell_overlay, ShellOverlay::Hidden);
+        assert!(closed.effects.is_empty());
+    }
+
+    #[test]
+    fn explicit_sessions_request_while_loading_does_not_duplicate_effect() {
+        let mut state = ShellChromeState::new();
+        state.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        state.session_state = SessionState::Loading;
+
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::SessionsRequested { limit: 10 });
+
+        assert!(matches!(reduced.state.session_state, SessionState::Loading));
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
     fn moving_selection_clamps_to_available_bounds() {
         let mut state = ShellChromeState::new();
         state.session_state = SessionState::Ready(RecentSessions {
@@ -346,6 +407,14 @@ mod tests {
             account_detail: "logged in".to_string(),
             warnings: Vec::new(),
             schema_snapshot: "native/schema/codex_app_server_protocol.v2.schemas.json".to_string(),
+        }
+    }
+
+    fn sample_blocked_startup_diagnostics() -> StartupDiagnostics {
+        StartupDiagnostics {
+            account_ok: false,
+            account_detail: "login required".to_string(),
+            ..sample_startup_diagnostics()
         }
     }
 

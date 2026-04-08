@@ -254,13 +254,13 @@ mod tests {
     use super::{
         AutoFollowState, AutoFollowupSkipReason, BackgroundMessage, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-        ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+        ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
-        NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, ShellActionAvailability,
-        ShellOverlay, StartupState, TurnActivityState, build_followup_template_preview_lines,
-        build_followup_template_status_lines, build_input_title, build_ready_input_lines,
-        build_shell_footer_lines, build_status_title, build_transcript_title,
-        format_conversation_lines, shell_layout,
+        NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
+        ShellActionAvailability, ShellOverlay, StartupState, TurnActivityState,
+        build_followup_template_preview_lines, build_followup_template_status_lines,
+        build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
+        build_transcript_title, format_conversation_lines, shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -277,6 +277,7 @@ mod tests {
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
     };
     use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
 
     #[derive(Default)]
@@ -418,6 +419,21 @@ mod tests {
             },
             warnings: Vec::new(),
             schema_snapshot: "schema".to_string(),
+        }
+    }
+
+    fn sample_session(id: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            preview: "preview".to_string(),
+            cwd: "/tmp/root".to_string(),
+            source: "codex".to_string(),
+            model_provider: "openai".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: format!("/tmp/root/{id}.json"),
+            git_branch: Some("main".to_string()),
         }
     }
 
@@ -894,6 +910,94 @@ mod tests {
         assert!(conversation.status_text.contains("auto follow-up template"));
         assert_eq!(app.followup_template_selection(), Some(1));
         assert_eq!(app.followup_overlay_ui_state.preview_scroll, 0);
+    }
+
+    #[test]
+    fn startup_overlay_ctrl_o_opens_sessions_overlay_and_starts_loading_when_ready() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.show_startup_overlay();
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL,))
+        );
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Sessions);
+        assert!(matches!(app.session_state, SessionState::Loading));
+    }
+
+    #[test]
+    fn sessions_overlay_reload_is_gated_until_startup_ready() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", false));
+        app.session_state = SessionState::Failed("load failed".to_string());
+        app.show_session_overlay();
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,))
+        );
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Sessions);
+        assert!(matches!(
+            &app.session_state,
+            SessionState::Failed(message) if message == "load failed"
+        ));
+    }
+
+    #[test]
+    fn sessions_overlay_enter_opens_selected_session_and_dismisses_chrome() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![sample_session("thread-1"), sample_session("thread-2")],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.selected_session_index = 1;
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .map(|session| session.id.as_str()),
+            Some("thread-2")
+        );
+    }
+
+    #[test]
+    fn sessions_overlay_enter_while_turn_is_streaming_keeps_overlay_visible() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.thread_id = "thread-current".to_string();
+        conversation.title = "Streaming thread".to_string();
+        conversation.input_state = ConversationInputState::StreamingTurn;
+        app.conversation_state = ConversationState::Ready(conversation);
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![sample_session("thread-2")],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Sessions);
+        assert!(app.active_session.is_none());
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(conversation.thread_id, "thread-current");
+        assert!(
+            conversation
+                .status_text
+                .contains("wait for completion before switching sessions")
+        );
     }
 
     #[test]
