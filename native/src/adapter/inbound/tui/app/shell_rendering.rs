@@ -1,7 +1,7 @@
 use super::*;
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
-    draw_conversation_shell(frame, app);
+pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
+    draw_conversation_shell(frame, app, mode);
 
     match app.shell_overlay {
         ShellOverlay::Hidden => {}
@@ -131,7 +131,7 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiA
     frame.render_widget(detail, area);
 }
 
-fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     let area = frame.area();
     frame.render_widget(Clear, area);
     let footer_lines = build_shell_footer_lines(app);
@@ -195,7 +195,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(build_shell_title()),
+                .title(build_shell_title(mode)),
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(header, layout[0]);
@@ -214,7 +214,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(build_transcript_title(app)),
+                .title(build_transcript_title(app, mode)),
         )
         .scroll((conversation_scroll, 0))
         .wrap(Wrap { trim: false });
@@ -224,7 +224,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(build_status_title()),
+                .title(build_status_title(mode)),
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(footer, layout[2]);
@@ -233,7 +233,7 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(build_input_title(app)),
+                .title(build_input_title(app, mode)),
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(input, layout[3]);

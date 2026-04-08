@@ -217,32 +217,55 @@ pub(super) fn build_ready_input_lines(
     lines
 }
 
-pub(super) fn build_shell_title() -> Line<'static> {
-    Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
+pub(super) fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
+    match mode {
+        ShellFrontendMode::InlineMainBuffer => {
+            Line::from("Inline Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
+        }
+        ShellFrontendMode::AlternateScreen => {
+            Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
+        }
+    }
 }
 
-pub(super) fn build_transcript_title(app: &NativeTuiApp) -> Line<'static> {
-    Line::from(vec![
-        Span::raw("Transcript / "),
-        Span::raw(app.transcript_viewport_status_label()),
-        Span::raw(" / PageUp PageDown / Home End"),
-    ])
+pub(super) fn build_transcript_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
+    match mode {
+        ShellFrontendMode::InlineMainBuffer => Line::from(vec![
+            Span::raw("History / "),
+            Span::raw(app.transcript_viewport_status_label()),
+            Span::raw(" / scrollback-first"),
+        ]),
+        ShellFrontendMode::AlternateScreen => Line::from(vec![
+            Span::raw("Transcript / "),
+            Span::raw(app.transcript_viewport_status_label()),
+            Span::raw(" / PageUp PageDown / Home End"),
+        ]),
+    }
 }
 
-pub(super) fn build_status_title() -> Line<'static> {
-    Line::from(
-        "Status / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
-    )
+pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
+    match mode {
+        ShellFrontendMode::InlineMainBuffer => Line::from(
+            "Inline Controls / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
+        ),
+        ShellFrontendMode::AlternateScreen => Line::from(
+            "Status / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
+        ),
+    }
 }
 
-pub(super) fn build_input_title(app: &NativeTuiApp) -> Line<'static> {
+pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
     let submit_hint = build_primary_submit_hint(app);
+    let prompt_label = match mode {
+        ShellFrontendMode::InlineMainBuffer => "Prompt",
+        ShellFrontendMode::AlternateScreen => "Composer",
+    };
 
     match &app.conversation_state {
-        ConversationState::Loading => Line::from("Composer / loading"),
-        ConversationState::Failed(_) => Line::from("Composer / unavailable"),
+        ConversationState::Loading => Line::from(format!("{prompt_label} / loading")),
+        ConversationState::Failed(_) => Line::from(format!("{prompt_label} / unavailable")),
         ConversationState::Ready(conversation) => Line::from(vec![
-            Span::raw("Composer / "),
+            Span::raw(format!("{prompt_label} / ")),
             Span::styled(
                 conversation.input_state.label().to_string(),
                 input_state_style(conversation.input_state),

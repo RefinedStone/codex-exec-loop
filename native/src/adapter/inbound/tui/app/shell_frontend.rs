@@ -43,16 +43,22 @@ fn run_ratatui_frontend(mut runtime: ShellRuntime, use_alternate_screen: bool) -
     let _restore_guard = TerminalRestoreGuard::activate(use_alternate_screen)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    run_event_loop(&mut terminal, &mut runtime)
+    let mode = if use_alternate_screen {
+        ShellFrontendMode::AlternateScreen
+    } else {
+        ShellFrontendMode::InlineMainBuffer
+    };
+    run_event_loop(&mut terminal, &mut runtime, mode)
 }
 
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
+    mode: ShellFrontendMode,
 ) -> Result<()> {
     while !runtime.should_quit() {
         runtime.poll_background_messages();
-        terminal.draw(|frame| draw(frame, runtime.app_mut()))?;
+        terminal.draw(|frame| draw(frame, runtime.app_mut(), mode))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;

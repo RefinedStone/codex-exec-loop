@@ -95,6 +95,7 @@ use followup_overlay_ui::{
 use inline_shell_commands::InlineShellCommand;
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
+use shell_frontend::ShellFrontendMode;
 use shell_layout::{
     block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
     build_shell_footer_height,
@@ -261,7 +262,7 @@ mod tests {
         ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
-        ShellActionAvailability, ShellOverlay, StartupState, TurnActivityState,
+        ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
         build_followup_template_preview_lines, build_followup_template_status_lines,
         build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
         build_transcript_title, format_conversation_lines, shell_layout,
@@ -832,8 +833,21 @@ mod tests {
         app.scroll_transcript_page_up();
 
         assert_eq!(
-            build_transcript_title(&app).to_string(),
+            build_transcript_title(&app, ShellFrontendMode::AlternateScreen).to_string(),
             "Transcript / manual 13/18 / PageUp PageDown / Home End"
+        );
+    }
+
+    #[test]
+    fn inline_history_title_prefers_scrollback_copy() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(18, 6);
+        app.scroll_transcript_page_up();
+
+        assert_eq!(
+            build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer).to_string(),
+            "History / manual 13/18 / scrollback-first"
         );
     }
 
@@ -842,11 +856,22 @@ mod tests {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
 
-        let rendered = build_input_title(&app).to_string();
+        let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
 
         assert!(rendered.contains("Composer / ready"));
         assert!(rendered.contains("Enter send"));
         assert!(rendered.contains("Ctrl+j newline"));
+    }
+
+    #[test]
+    fn inline_prompt_title_uses_prompt_label() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
+
+        assert!(rendered.contains("Prompt / ready"));
+        assert!(rendered.contains("Enter send"));
     }
 
     #[test]
@@ -855,19 +880,27 @@ mod tests {
         app.startup_state = StartupState::Loading;
         app.conversation_state = ConversationState::Ready(ready_conversation());
 
-        let rendered = build_input_title(&app).to_string();
+        let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
 
         assert!(rendered.contains("Enter send when ready"));
     }
 
     #[test]
     fn status_title_surfaces_overlay_and_followup_controls() {
-        let rendered = build_status_title().to_string();
+        let rendered = build_status_title(ShellFrontendMode::AlternateScreen).to_string();
 
         assert!(rendered.contains("Ctrl+o sessions"));
         assert!(rendered.contains("Ctrl+d diag"));
         assert!(rendered.contains("Ctrl+p templ"));
         assert!(rendered.contains("Ctrl+a auto"));
+    }
+
+    #[test]
+    fn inline_status_title_uses_inline_controls_copy() {
+        let rendered = build_status_title(ShellFrontendMode::InlineMainBuffer).to_string();
+
+        assert!(rendered.contains("Inline Controls"));
+        assert!(rendered.contains("Ctrl+o sessions"));
     }
 
     #[test]
