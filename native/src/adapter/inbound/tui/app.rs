@@ -553,6 +553,11 @@ mod tests {
             .followup_overlay_ui_state
             .stop_keyword_editor
             .buffer = "STALE".to_string();
+        runtime
+            .app_mut()
+            .followup_overlay_ui_state
+            .max_auto_turns_editor
+            .buffer = "99".to_string();
 
         runtime
             .app()
@@ -1236,7 +1241,7 @@ mod tests {
         assert!(app.is_max_auto_turns_editing());
         assert_eq!(
             app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
-            "3"
+            DEFAULT_AUTO_FOLLOW_MAX_TURNS.to_string()
         );
     }
 
@@ -1411,7 +1416,7 @@ mod tests {
         assert!(!app.is_max_auto_turns_editing());
         assert_eq!(
             app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
-            "3"
+            DEFAULT_AUTO_FOLLOW_MAX_TURNS.to_string()
         );
     }
 

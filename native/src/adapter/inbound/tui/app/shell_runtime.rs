@@ -119,6 +119,9 @@ impl ShellRuntime {
             KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.toggle_auto_followup()
             }
+            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                self.app.start_max_auto_turns_edit()
+            }
             KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.start_stop_keyword_edit()
             }
@@ -334,5 +337,23 @@ mod tests {
             panic!("expected ready conversation state");
         };
         assert_eq!(conversation.input_buffer, "a");
+    }
+
+    #[test]
+    fn ctrl_l_starts_max_auto_turns_editing() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().conversation_state =
+            ConversationState::Ready(ConversationViewModel::new_draft(
+                "/tmp/root".to_string(),
+                runtime.app().load_followup_template_catalog("/tmp/root"),
+            ));
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('l'),
+            KeyModifiers::CONTROL,
+        )));
+
+        assert!(runtime.app().is_max_auto_turns_editing());
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::FollowupTemplates);
     }
 }

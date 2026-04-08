@@ -687,10 +687,10 @@ pub(super) fn build_transcript_title(app: &NativeTuiApp, mode: ShellFrontendMode
 pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
     match mode {
         ShellFrontendMode::InlineMainBuffer => Line::from(
-            "Inline Controls / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
+            "Inline Controls / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g stop-edit / Ctrl+l limit",
         ),
         ShellFrontendMode::AlternateScreen => Line::from(
-            "Status / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g edit",
+            "Status / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g stop-edit / Ctrl+l limit",
         ),
     }
 }
