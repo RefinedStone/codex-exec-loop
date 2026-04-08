@@ -1,7 +1,8 @@
 # Known Gaps And Risk Areas
 
 ## Current Gaps
-- the shell is live, but streamed history still redraws like a frame instead of a stable scrollback log
+- inline mode is still not fully at the target "flow shell" contract because diagnostics, sessions, and templates still lean on modal inspection patterns and streaming history is not yet fully scrollback-safe
+- the shell is live, but overlays are still modal and still interrupt the flow
 - recent-session loading and blocked startup still gate shell actions, even though manual prompt submission can now queue while startup checks are running
 - the shared runtime is better than the old action-scoped model, but concurrent requests still need a fallback path while a streaming turn holds the shared runtime
 - `src/adapter/inbound/tui/app.rs` is much smaller than before, but future work should keep it near composition and shared shell state rather than grow it again

@@ -9,6 +9,7 @@
 ## Current Focus
 
 - Make native the real "agent loop" product, not just a conversation shell
+- Make inline mode read like natural terminal history instead of a fullscreen frame replay
 - Run canned auto-follow-up prompts after turn completion
 - Keep the flow understandable for a Spring Boot Kotlin developer
 

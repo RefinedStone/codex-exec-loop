@@ -1,8 +1,35 @@
 # Inline Scrollback Shell
 
-This document is the detailed feature plan for the large refactor that moves the native client from the current redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
+This document is the active workstream plan for the refactor that moves the native client from a redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
 
-This file is intentionally detailed. The compactness rule applies to completed baseline docs and posture docs, not to a major active refactor where detailed planning reduces execution risk.
+This file should stay opinionated about one product goal:
+- inline mode should feel like flow-oriented terminal history
+- terminal scrollback should stay meaningful
+- scrolling the terminal should not feel like the app is replaying one fullscreen frame downward
+
+Completed prerequisite slices should stay compact here. The detailed planning weight should stay on the work that is still open.
+
+## 0. Current Status
+
+Current priority:
+- make inline mode behave like a flow shell, not an alternate-screen app with the fullscreen flag turned off
+- finish the last two product-critical slices from this workstream before widening scope again
+
+Landed on `prerelease`:
+- shared runtime and explicit frontend split
+- neutralized shell presentation copy
+- inline live-region renderer and inline-main-buffer baseline
+
+Still remaining:
+- inline inspection surfaces for diagnostics, sessions, and templates
+- scrollback-safe streaming history without whole-frame replay
+- terminal validation and default-switch follow-through after those two slices are stable
+
+If a doc reader only needs the current action:
+- read the success contract in section 6
+- read the overlay strategy in section 10
+- read the implementation sequence in section 12
+- treat phases 1 through 3 as landed foundation, not the current execution frontier
 
 ## 1. Why This Work Exists
 
@@ -416,28 +443,26 @@ Reason:
 
 ## Phase 0: Lock Target And Vocabulary
 
-Deliverables:
-- keep this plan as the source of truth for the workstream
-- align terminology around "inline shell" vs "alternate-screen shell"
-- stop describing the target as a fully append-only REPL
+Status:
+- landed
+
+Delivered:
+- this document became the source of truth for the workstream
+- terminology now centers on inline shell vs alternate-screen shell
+- the target is explicitly a flow-oriented inline shell, not a plain append-only REPL
 
 Exit criteria:
 - docs and implementation discussion use the same target vocabulary
 
 ## Phase 1: Extract Shared Runtime
 
-Primary goal:
-- separate behavior orchestration from ratatui frame rendering
+Status:
+- landed
 
-Concrete tasks:
-- isolate event polling, background-message consumption, reducer dispatch, and effect execution from the current draw loop
-- define a controller/runtime object that can drive more than one frontend
-- make the runtime-event boundary explicit enough that async work can re-enter as typed shell events
-- keep behavior identical while the alternate-screen renderer still owns display
-
-Files most affected:
-- `src/adapter/inbound/tui/app/app_runtime.rs`
-- possibly new runtime/controller files under `src/adapter/inbound/tui/app/`
+Delivered:
+- behavior orchestration is separated more clearly from frontend-specific rendering setup
+- frontend selection is explicit instead of being only an alternate-screen toggle
+- async runtime handling can drive more than one frontend shape
 
 Exit criteria:
 - alternate-screen path still works
@@ -445,39 +470,26 @@ Exit criteria:
 
 ## Phase 2: Split Frontends
 
-Primary goal:
-- make inline and alternate frontends explicit
+Status:
+- landed
 
-Concrete tasks:
-- keep the existing fullscreen renderer as alternate-screen fallback
-- introduce a dedicated inline frontend path behind a flag
-- make renderer selection an explicit branch in the runtime instead of a minor alternate-screen toggle
-- begin separating terminal-facing frontend code from reducer/effect handling
-
-Files most affected:
-- `src/adapter/inbound/tui/app/app_runtime.rs`
-- `src/adapter/inbound/tui/app/shell_rendering.rs`
-- any new inline renderer modules
+Delivered:
+- inline and alternate-screen frontends are explicit runtime choices
+- alternate-screen remains the fallback path
+- the renderer split no longer treats main-buffer mode as only "fullscreen minus one flag"
 
 Exit criteria:
 - both frontends can start and share the same behavior engine
 
 ## Phase 3: Inline MVP
 
-Primary goal:
-- achieve a minimally useful scrollback-friendly main-buffer shell
+Status:
+- landed
 
-Concrete tasks:
-- print stable transcript history without whole-frame redraw
-- keep a live region for current input and status
-- support startup state, prompt submission, streaming updates, and thread switching
-- keep diagnostics/sessions/templates minimally usable
-- make inline rendering consume presentation data that is less tied to `NativeTuiApp`
-
-Files most affected:
-- inline renderer module(s)
-- `shell_presentation.rs`
-- `shell_controller.rs`
+Delivered:
+- inline main-buffer mode became the default baseline
+- the shell has a live inline region instead of only fullscreen-style composition
+- startup, submission, streaming, session switching, and basic operator status still work in inline mode
 
 Exit criteria:
 - one can run a normal conversation in inline mode without the current redraw artifact
@@ -485,7 +497,7 @@ Exit criteria:
 ## Phase 4: Parity And Interaction Hardening
 
 Primary goal:
-- close the feature and ergonomics gap between inline mode and the current shell
+- close the remaining ergonomics gap so inline mode stops depending on popup-first shell assumptions
 
 Concrete tasks:
 - improve inline diagnostics/session/template inspection
@@ -505,7 +517,7 @@ Exit criteria:
 ## Phase 5: Validation And Default Switch
 
 Primary goal:
-- make inline mode the default main-buffer experience
+- finish the terminal-behavior contract and validate the shell across representative terminals
 
 Concrete tasks:
 - validate behavior across representative terminals

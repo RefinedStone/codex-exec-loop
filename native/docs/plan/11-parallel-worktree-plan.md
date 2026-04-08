@@ -9,6 +9,7 @@ Status baseline:
 - current reference branch: `origin/prerelease`
 - source backlog: `docs/plan/02-todo-backlog.md`, repository root `../TODO.md`, and `docs/plan/10-inline-scrollback-shell.md`
 - compaction rule: landed slices stay short here; only remaining slices keep detailed execution notes
+- primary remaining product work: lane A `A4` and `A5`; the other remaining items are support or follow-up slices
 
 ## 1. Planning Rules
 

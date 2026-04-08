@@ -14,6 +14,9 @@ This file now keeps the current open planning surface, not a long implementation
 - focused TUI module extraction and targeted shell/runtime tests
 
 ## Open Change Buckets
+- primary remaining product work
+  - make inline mode behave like stable terminal history instead of a fullscreen frame replay
+  - finish inline inspections and scrollback-safe streaming before widening scope again
 - shell ergonomics
   - streamed output still needs a scrollback-safe history shape instead of frame-style replay assumptions
 - platform validation
