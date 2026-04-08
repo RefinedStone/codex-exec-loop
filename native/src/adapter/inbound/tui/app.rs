@@ -2032,10 +2032,11 @@ mod tests {
     fn followup_template_status_lines_include_warning_summary_detail() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
-        conversation.warnings = vec![
+        conversation.template_warnings = vec![
             "template catalog reloaded with fallback".to_string(),
             "workspace template missing".to_string(),
         ];
+        conversation.warnings = conversation.template_warnings.clone();
         app.conversation_state = ConversationState::Ready(conversation);
 
         let rendered = build_followup_template_status_lines(&app)
@@ -2044,7 +2045,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("warnings (2): workspace template missing"));
+        assert!(rendered.contains("template warnings (2): workspace template missing"));
     }
 
     #[test]
@@ -2277,7 +2278,8 @@ mod tests {
     fn shell_footer_surfaces_warning_summary_detail() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
-        conversation.warnings = vec!["workspace template missing".to_string()];
+        conversation.template_warnings = vec!["workspace template missing".to_string()];
+        conversation.warnings = conversation.template_warnings.clone();
         app.conversation_state = ConversationState::Ready(conversation);
 
         let rendered = build_shell_footer_lines(&app)
@@ -2286,7 +2288,34 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("warning: workspace template missing"));
+        assert!(rendered.contains("template warning: workspace template missing"));
+    }
+
+    #[test]
+    fn shell_footer_prioritizes_runtime_warning_summary_when_runtime_and_template_mix() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.base_warnings = vec![
+            "shared runtime reconnected after the previous app-server process exited".to_string(),
+        ];
+        conversation.template_warnings = vec!["workspace template missing".to_string()];
+        conversation.warnings = conversation
+            .base_warnings
+            .iter()
+            .chain(conversation.template_warnings.iter())
+            .cloned()
+            .collect();
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(
+            "warnings: runtime 1, template 1 / shared runtime reconnected after the previous"
+        ));
     }
 
     #[test]

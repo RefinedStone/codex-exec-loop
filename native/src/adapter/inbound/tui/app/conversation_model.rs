@@ -552,7 +552,7 @@ impl ConversationViewModel {
         cwd: String,
         template_load_result: FollowupTemplateCatalogLoadResult,
     ) -> Self {
-        let status_text = format!(
+        let base_status = format!(
             "new thread draft / templates: {}",
             template_load_result.catalog.items.len()
         );
@@ -572,8 +572,9 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
-            status_text,
+            status_text: String::new(),
         };
+        view_model.set_status_with_warnings(base_status);
         view_model.refresh_conversation_lines();
         view_model
     }
@@ -585,14 +586,10 @@ impl ConversationViewModel {
         let base_warnings = snapshot.warnings;
         let template_warnings = template_load_result.warnings;
         let warnings = Self::merge_warnings(&base_warnings, &template_warnings);
-        let status_text = if warnings.is_empty() {
-            format!(
-                "thread loaded / templates: {}",
-                template_load_result.catalog.items.len()
-            )
-        } else {
-            warnings.join(" | ")
-        };
+        let base_status = format!(
+            "thread loaded / templates: {}",
+            template_load_result.catalog.items.len()
+        );
 
         let mut view_model = Self {
             thread_id: snapshot.thread_id,
@@ -610,8 +607,9 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
-            status_text,
+            status_text: String::new(),
         };
+        view_model.set_status_with_warnings(base_status);
         view_model.refresh_conversation_lines();
         view_model
     }
@@ -649,18 +647,56 @@ impl ConversationViewModel {
         format!("{truncated}{TRUNCATION_SUFFIX}")
     }
 
+    fn selected_warning_for_summary(&self) -> Option<&str> {
+        self.base_warnings
+            .last()
+            .map(String::as_str)
+            .or_else(|| self.template_warnings.last().map(String::as_str))
+            .or_else(|| self.warnings.last().map(String::as_str))
+    }
+
+    fn warning_status_label(&self) -> Option<String> {
+        let runtime_count = self.base_warnings.len();
+        let template_count = self.template_warnings.len();
+
+        match (runtime_count, template_count, self.warnings.len()) {
+            (_, _, 0) => None,
+            (0, 0, 1) => Some("warning".to_string()),
+            (0, 0, warning_count) => Some(format!("warnings ({warning_count})")),
+            (1, 0, _) => Some("runtime warning".to_string()),
+            (runtime_count, 0, _) => Some(format!("runtime warnings ({runtime_count})")),
+            (0, 1, _) => Some("template warning".to_string()),
+            (0, template_count, _) => Some(format!("template warnings ({template_count})")),
+            (runtime_count, template_count, _) => Some(format!(
+                "warnings: runtime {runtime_count}, template {template_count}"
+            )),
+        }
+    }
+
     // Warning order is normalized differently across sources, so this surfaces
-    // a compact warning summary without claiming chronological order.
+    // a compact warning summary without claiming chronology and prefers
+    // shared-runtime warnings over template warnings when both exist.
     pub(crate) fn warning_summary(&self, max_detail_len: usize) -> String {
-        let Some(selected_warning) = self.warnings.last() else {
+        let Some(selected_warning) = self.selected_warning_for_summary() else {
             return "warning: none".to_string();
         };
 
         let summary = Self::truncate_warning_text(selected_warning, max_detail_len);
-        if self.warnings.len() == 1 {
-            format!("warning: {summary}")
-        } else {
-            format!("warnings ({}): {summary}", self.warnings.len())
+        let runtime_count = self.base_warnings.len();
+        let template_count = self.template_warnings.len();
+
+        match (runtime_count, template_count, self.warnings.len()) {
+            (0, 0, 1) => format!("warning: {summary}"),
+            (0, 0, warning_count) => format!("warnings ({warning_count}): {summary}"),
+            (1, 0, _) => format!("runtime warning: {summary}"),
+            (runtime_count, 0, _) => format!("runtime warnings ({runtime_count}): {summary}"),
+            (0, 1, _) => format!("template warning: {summary}"),
+            (0, template_count, _) => {
+                format!("template warnings ({template_count}): {summary}")
+            }
+            (runtime_count, template_count, _) => {
+                format!("warnings: runtime {runtime_count}, template {template_count} / {summary}")
+            }
         }
     }
 
@@ -681,10 +717,9 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn set_status_with_warnings(&mut self, base_status: String) {
-        self.status_text = if self.warnings.is_empty() {
-            base_status
-        } else {
-            format!("{base_status} / {}", self.warnings.join(" | "))
+        self.status_text = match self.warning_status_label() {
+            Some(warning_label) => format!("{base_status} / {warning_label}"),
+            None => base_status,
         };
     }
 
@@ -857,14 +892,16 @@ impl ConversationViewModel {
 mod tests {
     use super::{
         AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
-        ConversationMessage, ConversationMessageKind, ConversationViewModel,
-        FollowupTemplateCatalog, FollowupTemplateDefinition, StopKeywordRule, TurnActivityState,
-        format_conversation_lines,
+        ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
+        TurnActivityState, format_conversation_lines,
     };
     use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus,
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
     };
-    use crate::domain::followup_template::FollowupTemplateSource;
+    use crate::domain::followup_template::{
+        FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
+        FollowupTemplateSource,
+    };
 
     fn sample_template_catalog() -> FollowupTemplateCatalog {
         FollowupTemplateCatalog {
@@ -936,25 +973,27 @@ mod tests {
     }
 
     #[test]
-    fn warning_summary_uses_selected_warning_and_truncates() {
+    fn warning_summary_prefers_runtime_warning_detail_and_truncates() {
         let mut conversation = ready_conversation();
-        conversation.warnings = vec![
+        conversation.base_warnings = vec![
             "first warning".to_string(),
             "shared runtime busy with an active turn stream; request used an isolated app-server connection".to_string(),
         ];
+        conversation.warnings = conversation.base_warnings.clone();
 
         let summary = conversation.warning_summary(36);
 
         assert_eq!(
             summary,
-            "warnings (2): shared runtime busy with an activ..."
+            "runtime warnings (2): shared runtime busy with an activ..."
         );
     }
 
     #[test]
     fn approval_review_status_preserves_warning_suffix() {
         let mut conversation = ready_conversation();
-        conversation.warnings = vec!["workspace template warning".to_string()];
+        conversation.template_warnings = vec!["workspace template warning".to_string()];
+        conversation.warnings = conversation.template_warnings.clone();
 
         conversation.update_approval_review(ConversationApprovalReview {
             target_item_id: "command-1".to_string(),
@@ -965,7 +1004,53 @@ mod tests {
 
         assert_eq!(
             conversation.status_text,
-            "approval review in progress / target: command-1 / risk: high / workspace template warning"
+            "approval review in progress / target: command-1 / risk: high / template warning"
+        );
+    }
+
+    #[test]
+    fn warning_summary_reports_runtime_and_template_counts_when_both_exist() {
+        let mut conversation = ready_conversation();
+        conversation.base_warnings = vec![
+            "shared runtime reset after turn stream failure; the next request will reconnect"
+                .to_string(),
+        ];
+        conversation.template_warnings = vec![
+            "workspace template missing".to_string(),
+            "template catalog reloaded with fallback".to_string(),
+        ];
+        conversation.warnings = conversation
+            .base_warnings
+            .iter()
+            .chain(conversation.template_warnings.iter())
+            .cloned()
+            .collect();
+
+        assert_eq!(
+            conversation.warning_summary(48),
+            "warnings: runtime 1, template 2 / shared runtime reset after turn stream failur..."
+        );
+    }
+
+    #[test]
+    fn snapshot_status_keeps_base_status_with_compact_warning_label() {
+        let conversation = ConversationViewModel::from_snapshot(
+            ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Existing session".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                messages: Vec::new(),
+                warnings: vec!["shared runtime reset after startup checks failure".to_string()],
+            },
+            FollowupTemplateCatalogLoadResult {
+                catalog: sample_template_catalog(),
+                warnings: vec!["workspace template missing".to_string()],
+            },
+        );
+
+        assert_eq!(
+            conversation.status_text,
+            "thread loaded / templates: 3 / warnings: runtime 1, template 1"
         );
     }
 

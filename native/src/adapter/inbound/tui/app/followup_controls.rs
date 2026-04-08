@@ -231,12 +231,7 @@ mod tests {
         );
 
         assert!(reduced.state.last_auto_followup_activity.is_none());
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("workspace template parse warning")
-        );
+        assert!(reduced.state.status_text.contains("template warning"));
     }
 
     #[test]
@@ -365,8 +360,12 @@ mod tests {
                 "template warning".to_string()
             ]
         );
-        assert!(reduced.state.status_text.contains("snapshot warning"));
-        assert!(reduced.state.status_text.contains("template warning"));
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("warnings: runtime 1, template 1")
+        );
     }
 
     #[test]
@@ -428,8 +427,12 @@ mod tests {
                 .status_text
                 .contains("follow-up templates already up to date")
         );
-        assert!(reduced.state.status_text.contains("snapshot warning"));
-        assert!(reduced.state.status_text.contains("template warning"));
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("warnings: runtime 1, template 1")
+        );
         assert!(reduced.effects.is_empty());
     }
 
