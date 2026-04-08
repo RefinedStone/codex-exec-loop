@@ -5,6 +5,7 @@ pub(super) enum ConversationInputEvent {
     CharacterTyped { character: char },
     NewlineInserted,
     BackspacePressed,
+    PreviousWordDeleted,
     InputCleared,
     StatusMessageShown { status_text: String },
 }
@@ -28,6 +29,9 @@ pub(super) fn reduce_conversation_input(
         ConversationInputEvent::BackspacePressed => {
             state.input_buffer.pop();
         }
+        ConversationInputEvent::PreviousWordDeleted => {
+            delete_previous_word(&mut state.input_buffer);
+        }
         ConversationInputEvent::InputCleared => {
             state.input_buffer.clear();
         }
@@ -37,6 +41,31 @@ pub(super) fn reduce_conversation_input(
     }
 
     ConversationInputReduction { state }
+}
+
+fn delete_previous_word(buffer: &mut String) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    let mut truncate_at = buffer.len();
+    let mut saw_non_whitespace = false;
+
+    for (index, character) in buffer.char_indices().rev() {
+        if !saw_non_whitespace && character.is_whitespace() {
+            truncate_at = index;
+            continue;
+        }
+
+        if saw_non_whitespace && character.is_whitespace() {
+            break;
+        }
+
+        saw_non_whitespace = true;
+        truncate_at = index;
+    }
+
+    buffer.truncate(truncate_at);
 }
 
 #[cfg(test)]
@@ -85,6 +114,45 @@ mod tests {
         let reduced = reduce_conversation_input(state, ConversationInputEvent::NewlineInserted);
 
         assert_eq!(reduced.state.input_buffer, "draft\n");
+    }
+
+    #[test]
+    fn previous_word_deleted_removes_last_word() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = "ship this next".to_string();
+
+        let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
+
+        assert_eq!(reduced.state.input_buffer, "ship this ");
+    }
+
+    #[test]
+    fn previous_word_deleted_trims_trailing_space_before_removing_last_word() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = "ship this   ".to_string();
+
+        let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
+
+        assert_eq!(reduced.state.input_buffer, "ship ");
+    }
+
+    #[test]
+    fn previous_word_deleted_respects_newline_boundaries() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = "first line\nsecond".to_string();
+
+        let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
+
+        assert_eq!(reduced.state.input_buffer, "first line\n");
     }
 
     #[test]
