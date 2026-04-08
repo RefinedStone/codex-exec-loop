@@ -1,3 +1,4 @@
+use super::session_browser::build_session_browser_view;
 use super::*;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 
@@ -852,15 +853,32 @@ fn build_session_list_view(app: &NativeTuiApp) -> OverlayListView {
                 selected_index: None,
             }
         }
-        SessionState::Ready(recent_sessions) => OverlayListView {
-            message_lines: None,
-            items: recent_sessions
-                .items
-                .iter()
-                .map(build_session_list_entry)
-                .collect(),
-            selected_index: Some(app.selected_session_index),
-        },
+        SessionState::Ready(recent_sessions) => {
+            let browser_view = build_session_browser_view(
+                recent_sessions,
+                app.session_overlay_ui_state.browser_state(),
+                app.selected_session_index,
+            );
+            if browser_view.visible_sessions.is_empty() {
+                return OverlayListView {
+                    message_lines: Some(vec![Line::from(
+                        "no sessions match the current browser state",
+                    )]),
+                    items: Vec::new(),
+                    selected_index: None,
+                };
+            }
+
+            OverlayListView {
+                message_lines: None,
+                items: browser_view
+                    .visible_sessions
+                    .iter()
+                    .map(|session| build_session_list_entry(session))
+                    .collect(),
+                selected_index: browser_view.selected_index,
+            }
+        }
     }
 }
 
@@ -877,10 +895,16 @@ fn build_session_detail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             vec![Line::from("no session detail to show")]
         }
         SessionState::Ready(recent_sessions) => {
-            let selected_session = recent_sessions
-                .items
-                .get(app.selected_session_index)
-                .unwrap_or(&recent_sessions.items[0]);
+            let browser_view = build_session_browser_view(
+                recent_sessions,
+                app.session_overlay_ui_state.browser_state(),
+                app.selected_session_index,
+            );
+            let Some(selected_session) = browser_view.selected_session() else {
+                return vec![Line::from(
+                    "no session detail to show for the current browser state",
+                )];
+            };
 
             let mut lines = vec![
                 Line::from(format!("id: {}", selected_session.id)),
@@ -897,6 +921,13 @@ fn build_session_detail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             if let Some(branch) = &selected_session.git_branch {
                 lines.push(Line::from(format!("git branch: {branch}")));
             }
+
+            lines.push(Line::from(format!(
+                "browser: page {} of {}  |  matches: {}",
+                browser_view.projection.page_index + 1,
+                browser_view.projection.total_pages.max(1),
+                browser_view.projection.filtered_session_count,
+            )));
 
             if recent_sessions.next_cursor.is_some() {
                 lines.push(Line::from("more threads are available in the next cursor"));

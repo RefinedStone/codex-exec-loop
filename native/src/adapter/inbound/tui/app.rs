@@ -58,6 +58,8 @@ mod followup_controls;
 mod followup_overlay_ui;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/session_browser.rs"]
+mod session_browser;
 #[path = "app/session_overlay_ui.rs"]
 mod session_overlay_ui;
 #[path = "app/shell_controller.rs"]
@@ -330,16 +332,20 @@ mod tests {
     }
 
     fn sample_session(id: &str) -> SessionSummary {
+        sample_session_with_workspace(id, "/tmp/root", "preview")
+    }
+
+    fn sample_session_with_workspace(id: &str, cwd: &str, preview: &str) -> SessionSummary {
         SessionSummary {
             id: id.to_string(),
             name: Some(id.to_string()),
-            preview: "preview".to_string(),
-            cwd: "/tmp/root".to_string(),
+            preview: preview.to_string(),
+            cwd: cwd.to_string(),
             source: "codex".to_string(),
             model_provider: "openai".to_string(),
             updated_at_epoch: 1_700_000_000,
             status_type: "ready".to_string(),
-            path: format!("/tmp/root/{id}.json"),
+            path: format!("{cwd}/{id}.json"),
             git_branch: Some("main".to_string()),
         }
     }
@@ -970,6 +976,41 @@ mod tests {
         assert!(detail.contains("id: thread-2"));
         assert!(detail.contains("/tmp/root/thread-2.json"));
         assert!(keys.contains("Enter: open thread"));
+    }
+
+    #[test]
+    fn session_overlay_view_clamps_selection_inside_filtered_browser_page() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session("thread-1"),
+                sample_session_with_workspace("thread-2", "/tmp/docs", "docs refresh"),
+                sample_session_with_workspace("thread-3", "/tmp/docs", "docs release"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.selected_session_index = 7;
+        app.session_overlay_ui_state.set_project_filter(
+            crate::application::service::session_service::SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+        );
+        app.session_overlay_ui_state.set_search_query("release");
+
+        let view = build_session_overlay_view(&app);
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(view.list_view.selected_index, Some(0));
+        assert_eq!(view.list_view.items.len(), 1);
+        assert!(detail.contains("id: thread-3"));
+        assert!(detail.contains("browser: page 1 of 1  |  matches: 1"));
     }
 
     #[test]

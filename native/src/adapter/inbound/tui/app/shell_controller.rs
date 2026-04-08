@@ -1,3 +1,4 @@
+use super::session_browser::build_session_browser_view;
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,9 +154,12 @@ impl NativeTuiApp {
 
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {
         match &self.session_state {
-            SessionState::Ready(recent_sessions) => {
-                recent_sessions.items.get(self.selected_session_index)
-            }
+            SessionState::Ready(recent_sessions) => build_session_browser_view(
+                recent_sessions,
+                self.session_overlay_ui_state.browser_state(),
+                self.selected_session_index,
+            )
+            .selected_session(),
             _ => None,
         }
     }
