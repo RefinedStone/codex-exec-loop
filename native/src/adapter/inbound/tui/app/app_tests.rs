@@ -290,7 +290,9 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
         .join("\n");
 
     assert!(rendered.contains("prompt: session ready"));
-    assert!(rendered.contains(":help commands"));
+    assert!(rendered.contains("Ctrl+j nl"));
+    assert!(rendered.contains(":help"));
+    assert!(!rendered.contains(":help commands"));
     assert!(!rendered.contains("Ready to continue this session."));
     assert!(!rendered.contains("Shell commands: :diag"));
 }
@@ -311,8 +313,29 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
         .join("\n");
 
     assert!(rendered.contains("prompt: new thread ready"));
-    assert!(rendered.contains(":help commands"));
+    assert!(rendered.contains("Ctrl+j nl"));
+    assert!(rendered.contains(":help"));
+    assert!(!rendered.contains(":help commands"));
     assert!(!rendered.contains("Ready to start a new thread."));
+}
+
+#[test]
+fn inline_tail_uses_compact_thread_title_instead_of_full_thread_id() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.thread_id = "019d6e93-818a-7661-9e0d-7dec23c4b84d".to_string();
+    conversation.title = "Untitled thread".to_string();
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("thread: Untitled thread"));
+    assert!(!rendered.contains("019d6e93-818a-7661-9e0d-7dec23c4b84d"));
 }
 
 #[test]

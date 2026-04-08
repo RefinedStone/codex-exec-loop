@@ -10,6 +10,11 @@ const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOOTER_GITHUB_REVIEW_DETAIL_LIMIT: usize = 44;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
+const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
+const INLINE_TAIL_TEMPLATE_LABEL_LIMIT: usize = 16;
+const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
+const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
+const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
@@ -482,38 +487,42 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
         }
         ConversationState::Ready(conversation) => {
             let turn_running = conversation.has_running_turn();
-            let warning_summary = conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT);
-            let runtime_notice_summary =
-                conversation.runtime_notice_summary(FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT);
+            let warning_summary = compact_inline_summary_label(
+                &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
+            );
+            let runtime_notice_summary = conversation
+                .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
+                .map(|summary| compact_inline_summary_label(&summary));
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
                 app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
 
             lines.push(Line::from(format!(
-                "thread: {}  |  turn: {}  |  auto: {} ({})",
-                if conversation.has_active_thread() {
-                    conversation.thread_id.as_str()
-                } else {
-                    "new draft"
-                },
+                "thread: {}  |  turn: {}  |  auto: {} ({})  |  tmpl: {}",
+                inline_thread_label(conversation),
                 turn_status_label(conversation),
                 conversation.auto_follow_state.status_label(),
                 conversation.auto_follow_state.progress_label(),
-            )));
-            lines.push(Line::from(format!(
-                "template: {}  |  startup: {}  |  github: {}",
-                conversation.auto_follow_state.template_label(),
-                shell_action_availability_label(app),
-                github_review_polling_status_label(app),
+                inline_template_label(conversation),
             )));
             lines.push(Line::from(match runtime_notice_summary.as_deref() {
                 Some(runtime_notice_summary) => format!(
                     "status: {}  |  {}  |  {}",
-                    conversation.status_text, warning_summary, runtime_notice_summary,
+                    compact_inline_detail(
+                        &conversation.status_text,
+                        INLINE_TAIL_STATUS_DETAIL_LIMIT,
+                    ),
+                    warning_summary,
+                    runtime_notice_summary,
                 ),
                 None => format!(
-                    "status: {}  |  {}",
-                    conversation.status_text, warning_summary,
+                    "status: {}  |  startup: {}  |  gh: {}",
+                    compact_inline_detail(
+                        &conversation.status_text,
+                        INLINE_TAIL_STATUS_DETAIL_LIMIT,
+                    ),
+                    shell_action_availability_label(app),
+                    github_review_polling_status_label(app),
                 ),
             }));
 
@@ -521,7 +530,7 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
                 lines.push(live_agent_summary);
             } else {
                 let mut activity_line = format!(
-                    "tool activity: {}  |  cmd: {}  |  files: {}",
+                    "tool: {}  |  cmd: {}  |  files: {}",
                     conversation.turn_activity.activity_summary(turn_running),
                     conversation
                         .turn_activity
@@ -534,7 +543,9 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
                     activity_line.push_str(&format!("  |  approval: {approval_summary}"));
                 }
                 if let Some(github_review_summary) = github_review_summary.as_deref() {
-                    activity_line.push_str(&format!("  |  gh update: {github_review_summary}"));
+                    activity_line.push_str(&format!("  |  gh: {github_review_summary}"));
+                } else if runtime_notice_summary.is_some() {
+                    activity_line.push_str(&format!("  |  {}", warning_summary));
                 }
                 lines.push(Line::from(activity_line));
             }
@@ -566,19 +577,16 @@ fn build_inline_ready_prompt_lines(
     if conversation.input_buffer.is_empty() {
         let line = match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
-                "prompt: waiting for startup readiness  |  type now, Enter sends when ready"
-                    .to_string()
+                "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
             }
             (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
                 "prompt: blocked by startup diagnostics  |  Ctrl+d inspect".to_string()
             }
             (ConversationInputState::DraftReady, _) => {
-                "prompt: new thread ready  |  Enter send  |  Ctrl+j newline  |  :help commands"
-                    .to_string()
+                "prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
             }
             (ConversationInputState::ReadyToContinue, _) => {
-                "prompt: session ready  |  Enter send  |  Ctrl+j newline  |  :help commands"
-                    .to_string()
+                "prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
             }
             (ConversationInputState::SubmittingTurn, _) => {
                 "prompt: sending  |  wait for turn start".to_string()
@@ -613,16 +621,59 @@ fn build_inline_ready_prompt_lines(
         (
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Ready,
-        ) => "buffered prompt  |  Enter send  |  Ctrl+j newline",
+        ) => "buffered prompt  |  Enter send  |  Ctrl+j nl",
         (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
-            "buffered prompt  |  Enter when ready  |  Ctrl+j newline"
+            "buffered prompt  |  Enter when ready  |  Ctrl+j nl"
         }
         (ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn, _) => {
-            "buffered prompt  |  Enter when idle  |  Ctrl+j newline"
+            "buffered prompt  |  Enter when idle  |  Ctrl+j nl"
         }
     };
     lines.push(Line::from(hint));
     lines
+}
+
+fn inline_thread_label(conversation: &ConversationViewModel) -> String {
+    if !conversation.has_active_thread() {
+        return "new draft".to_string();
+    }
+
+    compact_inline_detail(&conversation.title, INLINE_TAIL_THREAD_LABEL_LIMIT)
+}
+
+fn inline_template_label(conversation: &ConversationViewModel) -> String {
+    let label = conversation.auto_follow_state.template_label();
+    let compact_label = label
+        .strip_prefix("builtin ")
+        .or_else(|| label.strip_prefix("workspace "))
+        .unwrap_or(label);
+    compact_inline_detail(compact_label, INLINE_TAIL_TEMPLATE_LABEL_LIMIT)
+}
+
+fn compact_inline_summary_label(summary: &str) -> String {
+    compact_inline_detail(
+        &summary
+            .replace("runtime warning:", "rt warn:")
+            .replace("runtime warnings", "rt warns")
+            .replace("template warning:", "tmpl warn:")
+            .replace("template warnings", "tmpl warns")
+            .replace("warning:", "warn:")
+            .replace("warnings:", "warn:")
+            .replace("runtime notices", "notices")
+            .replace("runtime:", "notice:"),
+        INLINE_TAIL_WARNING_DETAIL_LIMIT,
+    )
+}
+
+fn compact_inline_detail(text: &str, max_len: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_len {
+        return compact;
+    }
+
+    let keep = max_len.saturating_sub(3);
+    let truncated = compact.chars().take(keep).collect::<String>();
+    format!("{truncated}...")
 }
 
 pub(super) fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
