@@ -100,12 +100,13 @@ use shell_layout::{
     block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
     build_shell_footer_height,
 };
-#[cfg(test)]
-use shell_presentation::build_ready_input_lines;
 use shell_presentation::{
-    build_conversation_lines, build_input_lines, build_input_title, build_shell_footer_lines,
-    build_shell_title, build_status_title, build_transcript_title, format_conversation_lines,
-    input_state_style, shell_action_availability_label, startup_state_style,
+    ConversationShellView, build_conversation_shell_view, format_conversation_lines,
+};
+#[cfg(test)]
+use shell_presentation::{
+    build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
+    build_transcript_title,
 };
 use transcript_viewport::TranscriptViewportState;
 
@@ -263,9 +264,10 @@ mod tests {
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
         ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
-        build_followup_template_preview_lines, build_followup_template_status_lines,
-        build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
-        build_transcript_title, format_conversation_lines, shell_layout,
+        build_conversation_shell_view, build_followup_template_preview_lines,
+        build_followup_template_status_lines, build_input_title, build_ready_input_lines,
+        build_shell_footer_lines, build_status_title, build_transcript_title,
+        format_conversation_lines, shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -901,6 +903,32 @@ mod tests {
 
         assert!(rendered.contains("Inline Controls"));
         assert!(rendered.contains("Ctrl+o sessions"));
+    }
+
+    #[test]
+    fn conversation_shell_view_collects_inline_snapshot_content() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(18, 6);
+
+        let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+        let header = view
+            .header_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(view.shell_title.to_string().contains("Inline Shell"));
+        assert!(view.transcript_title.to_string().contains("History /"));
+        assert!(view.status_title.to_string().contains("Inline Controls"));
+        assert!(view.input_title.to_string().contains("Prompt / ready"));
+        assert!(header.contains("thread: thread-1"));
+        assert!(header.contains("startup: "));
+        assert!(!view.conversation_lines.is_empty());
+        assert!(!view.footer_lines.is_empty());
+        assert!(!view.input_lines.is_empty());
     }
 
     #[test]

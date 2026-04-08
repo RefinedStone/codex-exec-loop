@@ -134,10 +134,19 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiA
 fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     let area = frame.area();
     frame.render_widget(Clear, area);
-    let footer_lines = build_shell_footer_lines(app);
-    let footer_height = build_shell_footer_height(&footer_lines);
-    let input_lines = build_input_lines(app);
-    let input_height = build_input_block_height(&input_lines);
+    let shell_view = build_conversation_shell_view(app, mode);
+    let footer_height = build_shell_footer_height(&shell_view.footer_lines);
+    let input_height = build_input_block_height(&shell_view.input_lines);
+    let ConversationShellView {
+        shell_title,
+        header_lines,
+        transcript_title,
+        conversation_lines,
+        status_title,
+        footer_lines,
+        input_title,
+        input_lines,
+    } = shell_view;
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -150,57 +159,11 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
         ])
         .split(area);
 
-    let header_lines = match &app.conversation_state {
-        ConversationState::Loading => vec![
-            Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-                Span::raw(" / loading thread"),
-            ]),
-            Line::from("Reading thread history from codex app-server."),
-        ],
-        ConversationState::Ready(conversation) => vec![
-            Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-                Span::raw(format!(" / {}", conversation.title)),
-            ]),
-            Line::from(vec![
-                Span::raw(format!(
-                    "thread: {}  |  input: ",
-                    if conversation.has_active_thread() {
-                        conversation.thread_id.as_str()
-                    } else {
-                        "not started yet"
-                    }
-                )),
-                Span::styled(
-                    conversation.input_state.label(),
-                    input_state_style(conversation.input_state),
-                ),
-                Span::raw("  |  startup: "),
-                Span::styled(
-                    shell_action_availability_label(app),
-                    startup_state_style(app),
-                ),
-            ]),
-        ],
-        ConversationState::Failed(message) => vec![
-            Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
-                Span::raw(" / failed"),
-            ]),
-            Line::from(message.clone()),
-        ],
-    };
     let header = Paragraph::new(header_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(build_shell_title(mode)),
-        )
+        .block(Block::default().borders(Borders::ALL).title(shell_title))
         .wrap(Wrap { trim: true });
     frame.render_widget(header, layout[0]);
 
-    let conversation_lines = build_conversation_lines(app);
     let conversation_max_scroll = build_conversation_scroll_offset(
         &conversation_lines,
         layout[1].width.saturating_sub(2),
@@ -214,27 +177,19 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(build_transcript_title(app, mode)),
+                .title(transcript_title),
         )
         .scroll((conversation_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(conversation, layout[1]);
 
     let footer = Paragraph::new(footer_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(build_status_title(mode)),
-        )
+        .block(Block::default().borders(Borders::ALL).title(status_title))
         .wrap(Wrap { trim: true });
     frame.render_widget(footer, layout[2]);
 
     let input = Paragraph::new(input_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(build_input_title(app, mode)),
-        )
+        .block(Block::default().borders(Borders::ALL).title(input_title))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, layout[3]);
 }

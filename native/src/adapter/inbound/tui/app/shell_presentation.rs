@@ -1,5 +1,32 @@
 use super::*;
 
+pub(super) struct ConversationShellView {
+    pub(super) shell_title: Line<'static>,
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) transcript_title: Line<'static>,
+    pub(super) conversation_lines: Vec<Line<'static>>,
+    pub(super) status_title: Line<'static>,
+    pub(super) footer_lines: Vec<Line<'static>>,
+    pub(super) input_title: Line<'static>,
+    pub(super) input_lines: Vec<Line<'static>>,
+}
+
+pub(super) fn build_conversation_shell_view(
+    app: &NativeTuiApp,
+    mode: ShellFrontendMode,
+) -> ConversationShellView {
+    ConversationShellView {
+        shell_title: build_shell_title(mode),
+        header_lines: build_shell_header_lines(app),
+        transcript_title: build_transcript_title(app, mode),
+        conversation_lines: build_conversation_lines(app),
+        status_title: build_status_title(mode),
+        footer_lines: build_shell_footer_lines(app),
+        input_title: build_input_title(app, mode),
+        input_lines: build_input_lines(app),
+    }
+}
+
 pub(super) fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("Loading thread history...")],
@@ -215,6 +242,50 @@ pub(super) fn build_ready_input_lines(
     }
 
     lines
+}
+
+fn build_shell_header_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Loading => vec![
+            Line::from(vec![
+                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
+                Span::raw(" / loading thread"),
+            ]),
+            Line::from("Reading thread history from codex app-server."),
+        ],
+        ConversationState::Ready(conversation) => vec![
+            Line::from(vec![
+                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
+                Span::raw(format!(" / {}", conversation.title)),
+            ]),
+            Line::from(vec![
+                Span::raw(format!(
+                    "thread: {}  |  input: ",
+                    if conversation.has_active_thread() {
+                        conversation.thread_id.as_str()
+                    } else {
+                        "not started yet"
+                    }
+                )),
+                Span::styled(
+                    conversation.input_state.label(),
+                    input_state_style(conversation.input_state),
+                ),
+                Span::raw("  |  startup: "),
+                Span::styled(
+                    shell_action_availability_label(app),
+                    startup_state_style(app),
+                ),
+            ]),
+        ],
+        ConversationState::Failed(message) => vec![
+            Line::from(vec![
+                Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
+                Span::raw(" / failed"),
+            ]),
+            Line::from(message.clone()),
+        ],
+    }
 }
 
 pub(super) fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
