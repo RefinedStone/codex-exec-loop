@@ -34,8 +34,7 @@ fn draw_session_list_panel(
         list_view
             .items
             .into_iter()
-            .map(|item| ListItem::new(item.lines))
-            .collect::<Vec<_>>(),
+            .map(|item| ListItem::new(item.lines)),
     )
     .block(Block::default().borders(Borders::ALL).title("Threads"))
     .highlight_style(
@@ -335,8 +334,7 @@ fn draw_followup_template_list_panel(
         list_view
             .items
             .into_iter()
-            .map(|item| ListItem::new(item.lines))
-            .collect::<Vec<_>>(),
+            .map(|item| ListItem::new(item.lines)),
     )
     .block(
         Block::default()
