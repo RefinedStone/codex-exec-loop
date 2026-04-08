@@ -832,6 +832,84 @@ mod tests {
     }
 
     #[test]
+    fn inline_top_command_jumps_transcript_to_top_and_clears_input() {
+        let (mut app, codex_port) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(18, 6);
+        app.scroll_transcript_page_up();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should stay ready");
+        };
+        conversation.input_buffer = ":top".to_string();
+
+        app.start_turn_submission();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(app.transcript_viewport_status_label(), "manual 0/18");
+        assert!(conversation.input_buffer.is_empty());
+        assert!(
+            conversation
+                .status_text
+                .contains("jumped transcript viewport to top")
+        );
+        assert!(
+            codex_port
+                .new_thread_calls
+                .lock()
+                .expect("new-thread call mutex poisoned")
+                .is_empty()
+        );
+        assert!(
+            codex_port
+                .turn_calls
+                .lock()
+                .expect("turn call mutex poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inline_tail_command_jumps_transcript_to_tail_and_clears_input() {
+        let (mut app, codex_port) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.sync_transcript_viewport_metrics(18, 6);
+        app.scroll_transcript_to_top();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should stay ready");
+        };
+        conversation.input_buffer = ":tail".to_string();
+
+        app.start_turn_submission();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(app.transcript_viewport_status_label(), "tail");
+        assert!(conversation.input_buffer.is_empty());
+        assert!(
+            conversation
+                .status_text
+                .contains("jumped transcript viewport to tail")
+        );
+        assert!(
+            codex_port
+                .new_thread_calls
+                .lock()
+                .expect("new-thread call mutex poisoned")
+                .is_empty()
+        );
+        assert!(
+            codex_port
+                .turn_calls
+                .lock()
+                .expect("turn call mutex poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn transcript_title_includes_transcript_viewport_status() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());

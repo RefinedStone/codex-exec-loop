@@ -4,11 +4,14 @@ pub(super) enum InlineShellCommand {
     Sessions,
     Templates,
     NewDraft,
+    TranscriptTop,
+    TranscriptTail,
     Help,
 }
 
 impl InlineShellCommand {
-    const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :templates  :new  :help";
+    const COMMAND_LIST_LINE: &str =
+        "Shell commands: :diag  :sessions  :templates  :new  :top  :tail  :help";
 
     pub(super) fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
@@ -24,6 +27,10 @@ impl InlineShellCommand {
             Some(Self::Templates)
         } else if trimmed.eq_ignore_ascii_case(":new") {
             Some(Self::NewDraft)
+        } else if trimmed.eq_ignore_ascii_case(":top") || trimmed.eq_ignore_ascii_case(":home") {
+            Some(Self::TranscriptTop)
+        } else if trimmed.eq_ignore_ascii_case(":tail") || trimmed.eq_ignore_ascii_case(":end") {
+            Some(Self::TranscriptTail)
         } else if trimmed.eq_ignore_ascii_case(":help") {
             Some(Self::Help)
         } else {
@@ -41,6 +48,8 @@ impl InlineShellCommand {
             Self::Sessions => "Press Enter to open the recent-sessions overlay.",
             Self::Templates => "Press Enter to open the template overlay.",
             Self::NewDraft => "Press Enter to open a new draft in the shell.",
+            Self::TranscriptTop => "Press Enter to jump the transcript viewport to the top.",
+            Self::TranscriptTail => "Press Enter to jump the transcript viewport to the tail.",
             Self::Help => "Press Enter to show the available shell commands.",
         }
     }
@@ -51,6 +60,8 @@ impl InlineShellCommand {
             Self::Sessions => Some("opened recent sessions overlay from :sessions"),
             Self::Templates => Some("opened template overlay from :templates"),
             Self::NewDraft => None,
+            Self::TranscriptTop => Some("jumped transcript viewport to top from :top"),
+            Self::TranscriptTail => Some("jumped transcript viewport to tail from :tail"),
             Self::Help => Some(Self::command_list_line()),
         }
     }
@@ -71,6 +82,10 @@ mod tests {
             (":template", Some(InlineShellCommand::Templates)),
             (":templates", Some(InlineShellCommand::Templates)),
             (":new", Some(InlineShellCommand::NewDraft)),
+            (":top", Some(InlineShellCommand::TranscriptTop)),
+            (":home", Some(InlineShellCommand::TranscriptTop)),
+            (":tail", Some(InlineShellCommand::TranscriptTail)),
+            (":end", Some(InlineShellCommand::TranscriptTail)),
             (":help", Some(InlineShellCommand::Help)),
             ("  :help  ", Some(InlineShellCommand::Help)),
             (":unknown", None),
