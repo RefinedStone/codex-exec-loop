@@ -282,6 +282,7 @@ impl NativeTuiApp {
                 });
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                     stop_keyword: self.current_stop_keyword_value(),
+                    max_auto_turns: self.current_max_auto_turns_value().to_string(),
                 });
             }
             ConversationIntentEffect::OpenSession { session } => {
@@ -346,6 +347,11 @@ impl NativeTuiApp {
 
         let reduction = reduce_followup_controls(conversation, event);
         self.conversation_state = ConversationState::Ready(reduction.state);
+        if !self.is_max_auto_turns_editing() {
+            self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsValueSynced {
+                value: self.current_max_auto_turns_value().to_string(),
+            });
+        }
         if !self.is_stop_keyword_editing() {
             self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordValueSynced {
                 value: self.current_stop_keyword_value(),
@@ -360,6 +366,13 @@ impl NativeTuiApp {
         match effect {
             FollowupControlEffect::SyncTemplateOverlayUi => {
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::TemplateChanged);
+            }
+            FollowupControlEffect::SyncMaxAutoTurnsEditor { value } => {
+                self.dispatch_followup_overlay_ui(
+                    FollowupOverlayUiEvent::MaxAutoTurnsEditCommitted {
+                        current_value: value,
+                    },
+                );
             }
             FollowupControlEffect::SyncStopKeywordEditor { value } => {
                 self.dispatch_followup_overlay_ui(

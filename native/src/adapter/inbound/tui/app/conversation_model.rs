@@ -186,6 +186,10 @@ impl AutoFollowState {
         format!("{}/{}", self.completed_auto_turns, self.max_auto_turns)
     }
 
+    pub(crate) fn max_auto_turns_value(&self) -> usize {
+        self.max_auto_turns
+    }
+
     pub(crate) fn template_label(&self) -> &str {
         self.template_state.current().label.as_str()
     }
@@ -238,6 +242,10 @@ impl AutoFollowState {
         self.enabled = !self.enabled;
     }
 
+    pub(crate) fn set_max_auto_turns(&mut self, value: usize) {
+        self.max_auto_turns = value;
+    }
+
     pub(crate) fn toggle_stop_keyword(&mut self) {
         self.stop_rules.stop_keyword.toggle();
     }
@@ -285,6 +293,12 @@ impl AutoFollowState {
             .filter(|value| !value.is_empty())
             .unwrap_or("(waiting for next agent reply)");
         self.render_prompt(preview_thread_id, preview_last_message)
+    }
+
+    pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
+        let normalized = candidate.trim();
+        let value = normalized.parse::<usize>().ok()?;
+        if value == 0 { None } else { Some(value) }
     }
 }
 
@@ -747,6 +761,22 @@ mod tests {
         assert_eq!(StopKeywordRule::normalize_candidate("two words"), None);
         assert_eq!(StopKeywordRule::normalize_candidate(""), None);
         assert_eq!(StopKeywordRule::normalize_candidate("stop!"), None);
+    }
+
+    #[test]
+    fn max_auto_turn_candidate_requires_positive_whole_number() {
+        assert_eq!(
+            AutoFollowState::normalize_max_auto_turns_candidate(" 7 "),
+            Some(7)
+        );
+        assert_eq!(
+            AutoFollowState::normalize_max_auto_turns_candidate("0"),
+            None
+        );
+        assert_eq!(
+            AutoFollowState::normalize_max_auto_turns_candidate("three"),
+            None
+        );
     }
 
     #[test]

@@ -544,6 +544,10 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     conversation.auto_follow_state.progress_label()
                 )),
                 Line::from(format!(
+                    "max auto turns: {}",
+                    conversation.auto_follow_state.max_auto_turns_value()
+                )),
+                Line::from(format!(
                     "stop keyword: {}",
                     conversation.auto_follow_state.stop_keyword_label()
                 )),
@@ -559,13 +563,20 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 )),
             ];
 
-            if app.is_stop_keyword_editing() {
+            if app.is_max_auto_turns_editing() {
+                lines.push(Line::from(format!(
+                    "editing max auto turns: {}",
+                    app.followup_overlay_ui_state.max_auto_turns_editor.buffer
+                )));
+                lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
+            } else if app.is_stop_keyword_editing() {
                 lines.push(Line::from(format!(
                     "editing stop keyword: {}",
                     app.followup_overlay_ui_state.stop_keyword_editor.buffer
                 )));
                 lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
             } else {
+                lines.push(Line::from("max auto turns edit: press Ctrl+l"));
                 lines.push(Line::from("stop keyword edit: press Ctrl+g"));
             }
             lines.push(Line::from(Span::styled(
@@ -579,6 +590,14 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
 }
 
 pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if app.is_max_auto_turns_editing() {
+        return vec![
+            Line::from("Type the new max-turn value directly. Backspace deletes."),
+            Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
+            Line::from("Use a positive whole number."),
+        ];
+    }
+
     if app.is_stop_keyword_editing() {
         return vec![
             Line::from("Type the new stop keyword directly. Backspace deletes."),
@@ -590,7 +609,7 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
     vec![
         Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
         Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
-        Line::from("Ctrl+a: auto on/off    Ctrl+g: edit stop keyword"),
+        Line::from("Ctrl+a: auto on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword"),
         Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
     ]
 }

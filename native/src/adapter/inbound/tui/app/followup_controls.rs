@@ -7,6 +7,9 @@ pub(super) enum FollowupControlEvent {
         template_load_result: FollowupTemplateCatalogLoadResult,
     },
     AutoFollowToggled,
+    MaxAutoTurnsUpdated {
+        value: String,
+    },
     StopKeywordToggled,
     StopKeywordValueUpdated {
         value: String,
@@ -19,6 +22,7 @@ pub(super) enum FollowupControlEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FollowupControlEffect {
     SyncTemplateOverlayUi,
+    SyncMaxAutoTurnsEditor { value: String },
     SyncStopKeywordEditor { value: String },
 }
 
@@ -62,6 +66,23 @@ pub(super) fn reduce_followup_controls(
             state.clear_auto_followup_skip();
             state.status_text =
                 format!("auto follow-up {}", state.auto_follow_state.status_label());
+        }
+        FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
+            let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
+                state.status_text =
+                    "auto follow-up max turns must be a positive whole number".to_string();
+                return FollowupControlReduction { state, effects };
+            };
+
+            state.auto_follow_state.set_max_auto_turns(value);
+            state.clear_auto_followup_skip();
+            state.status_text = format!(
+                "auto follow-up max turns {}",
+                state.auto_follow_state.max_auto_turns_value()
+            );
+            effects.push(FollowupControlEffect::SyncMaxAutoTurnsEditor {
+                value: value.to_string(),
+            });
         }
         FollowupControlEvent::StopKeywordToggled => {
             state.auto_follow_state.toggle_stop_keyword();
@@ -227,6 +248,75 @@ mod tests {
         assert!(!reduced.state.auto_follow_state.enabled);
         assert!(reduced.state.last_auto_followup_skip.is_none());
         assert_eq!(reduced.state.status_text, "auto follow-up off");
+    }
+
+    #[test]
+    fn updating_max_auto_turns_clears_skip_and_emits_editor_sync() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+        state.record_auto_followup_skip(AutoFollowupSkipReason::LimitReached);
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::MaxAutoTurnsUpdated {
+                value: "5".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 5);
+        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert_eq!(
+            reduced.effects,
+            vec![FollowupControlEffect::SyncMaxAutoTurnsEditor {
+                value: "5".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn invalid_max_auto_turns_keeps_existing_limit() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::MaxAutoTurnsUpdated {
+                value: "zero".to_string(),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.max_auto_turns_value(),
+            DEFAULT_AUTO_FOLLOW_MAX_TURNS
+        );
+        assert!(reduced.effects.is_empty());
+        assert!(reduced.state.status_text.contains("positive whole number"));
+    }
+
+    #[test]
+    fn zero_max_auto_turns_keeps_existing_limit() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::MaxAutoTurnsUpdated {
+                value: "0".to_string(),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.max_auto_turns_value(),
+            DEFAULT_AUTO_FOLLOW_MAX_TURNS
+        );
+        assert!(reduced.effects.is_empty());
+        assert!(reduced.state.status_text.contains("positive whole number"));
     }
 
     #[test]

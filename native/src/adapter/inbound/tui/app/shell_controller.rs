@@ -90,6 +90,7 @@ impl NativeTuiApp {
     pub(super) fn show_followup_template_overlay(&mut self) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown {
             stop_keyword: self.current_stop_keyword_value(),
+            max_auto_turns: self.current_max_auto_turns_value().to_string(),
         });
         self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayShown);
     }
@@ -172,6 +173,17 @@ impl NativeTuiApp {
         self.dispatch_followup_controls(FollowupControlEvent::AutoFollowToggled);
     }
 
+    pub(super) fn current_max_auto_turns_value(&self) -> usize {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                conversation.auto_follow_state.max_auto_turns_value()
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                DEFAULT_AUTO_FOLLOW_MAX_TURNS
+            }
+        }
+    }
+
     pub(super) fn current_stop_keyword_value(&self) -> String {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation
@@ -184,10 +196,60 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn is_max_auto_turns_editing(&self) -> bool {
+        self.followup_overlay_ui_state
+            .max_auto_turns_editor
+            .is_editing
+    }
+
     pub(super) fn is_stop_keyword_editing(&self) -> bool {
         self.followup_overlay_ui_state
             .stop_keyword_editor
             .is_editing
+    }
+
+    pub(super) fn start_max_auto_turns_edit(&mut self) {
+        if !matches!(self.conversation_state, ConversationState::Ready(_)) {
+            return;
+        }
+
+        if self.shell_overlay != ShellOverlay::FollowupTemplates {
+            self.show_followup_template_overlay();
+        }
+
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditStarted {
+            current_value: self.current_max_auto_turns_value().to_string(),
+        });
+    }
+
+    pub(super) fn save_max_auto_turns_edit(&mut self) {
+        if !self.is_max_auto_turns_editing() {
+            return;
+        }
+
+        self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
+            value: self
+                .followup_overlay_ui_state
+                .max_auto_turns_editor
+                .buffer
+                .clone(),
+        });
+    }
+
+    pub(super) fn cancel_max_auto_turns_edit(&mut self) {
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditCanceled {
+            current_value: self.current_max_auto_turns_value().to_string(),
+        });
+    }
+
+    pub(super) fn push_max_auto_turns_character(&mut self, character: char) {
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsCharacterTyped {
+            character,
+        });
+    }
+
+    pub(super) fn pop_max_auto_turns_character(&mut self) {
+        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsBackspacePressed);
     }
 
     pub(super) fn start_stop_keyword_edit(&mut self) {
@@ -372,11 +434,40 @@ impl NativeTuiApp {
         true
     }
 
+    pub(super) fn handle_max_auto_turns_editor_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::FollowupTemplates
+            || !self.is_max_auto_turns_editing()
+        {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => self.save_max_auto_turns_edit(),
+            KeyCode::Esc => self.cancel_max_auto_turns_edit(),
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                self.cancel_max_auto_turns_edit()
+            }
+            KeyCode::Backspace => self.pop_max_auto_turns_character(),
+            KeyCode::Char(character)
+                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.push_max_auto_turns_character(character);
+            }
+            _ => {}
+        }
+
+        true
+    }
+
     pub(super) fn handle_shell_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         if self.shell_overlay == ShellOverlay::Hidden {
             return false;
         }
         let is_startup_overlay = self.shell_overlay == ShellOverlay::Startup;
+
+        if self.handle_max_auto_turns_editor_key(key) {
+            return true;
+        }
 
         if self.handle_stop_keyword_editor_key(key) {
             return true;
@@ -415,6 +506,9 @@ impl NativeTuiApp {
                 }
                 KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                     self.toggle_auto_followup()
+                }
+                KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.start_max_auto_turns_edit()
                 }
                 KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
                     self.start_stop_keyword_edit()

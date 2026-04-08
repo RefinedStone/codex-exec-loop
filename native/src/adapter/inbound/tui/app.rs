@@ -152,9 +152,9 @@ mod tests {
     use super::{
         AutoFollowState, AutoFollowupSkipReason, BackgroundMessage, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-        ConversationViewModel, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
-        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
-        NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
+        ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+        ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand,
+        MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
         ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
         build_conversation_shell_frame_view, build_conversation_shell_view,
         build_followup_template_overlay_view, build_followup_template_preview_lines,
@@ -578,6 +578,10 @@ mod tests {
         assert_eq!(conversation.cwd, "/tmp/root");
         assert_eq!(app.followup_overlay_ui_state.preview_scroll, 0);
         assert_eq!(app.followup_overlay_ui_state.list_state.selected(), None);
+        assert_eq!(
+            app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
+            "3"
+        );
         assert_eq!(
             app.followup_overlay_ui_state.stop_keyword_editor.buffer,
             DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
@@ -1222,6 +1226,72 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_l_starts_max_auto_turns_edit_in_followup_overlay() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        app.start_max_auto_turns_edit();
+
+        assert_eq!(app.shell_overlay, ShellOverlay::FollowupTemplates);
+        assert!(app.is_max_auto_turns_editing());
+        assert_eq!(
+            app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
+            "3"
+        );
+    }
+
+    #[test]
+    fn max_auto_turns_edit_commit_updates_saved_value_and_preview() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        app.conversation_state = ConversationState::Ready(conversation);
+        app.start_max_auto_turns_edit();
+        app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "5".to_string();
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(conversation.auto_follow_state.max_auto_turns_value(), 5);
+        assert!(!app.is_max_auto_turns_editing());
+
+        let rendered = build_followup_template_preview_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("1/5"));
+    }
+
+    #[test]
+    fn invalid_max_auto_turns_edit_keeps_editor_open() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.start_max_auto_turns_edit();
+        app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "zero".to_string();
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should stay ready");
+        };
+        assert_eq!(
+            conversation.auto_follow_state.max_auto_turns_value(),
+            DEFAULT_AUTO_FOLLOW_MAX_TURNS
+        );
+        assert!(app.is_max_auto_turns_editing());
+        assert!(conversation.status_text.contains("positive whole number"));
+    }
+
+    #[test]
     fn stop_keyword_edit_commit_updates_saved_value_and_preview() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
@@ -1298,6 +1368,22 @@ mod tests {
     }
 
     #[test]
+    fn followup_template_status_lines_include_max_auto_turns_value() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.auto_follow_state.set_max_auto_turns(5);
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_followup_template_status_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("max auto turns: 5"));
+    }
+
+    #[test]
     fn stop_keyword_edit_cancel_restores_saved_value() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
@@ -1310,6 +1396,22 @@ mod tests {
         assert_eq!(
             app.followup_overlay_ui_state.stop_keyword_editor.buffer,
             DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+        );
+    }
+
+    #[test]
+    fn max_auto_turns_edit_cancel_restores_saved_value() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.start_max_auto_turns_edit();
+        app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "9".to_string();
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+
+        assert!(!app.is_max_auto_turns_editing());
+        assert_eq!(
+            app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
+            "3"
         );
     }
 
