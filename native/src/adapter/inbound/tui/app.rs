@@ -124,9 +124,10 @@ use shell_presentation::format_conversation_lines;
 use shell_presentation::{
     build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
-    build_followup_template_status_lines, build_input_title, build_ready_input_lines,
-    build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
-    build_status_title, build_transcript_panel_view, build_transcript_title,
+    build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
+    build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
+    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
+    build_transcript_title,
 };
 use transcript_viewport::TranscriptViewportState;
 

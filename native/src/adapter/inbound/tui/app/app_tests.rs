@@ -17,10 +17,10 @@ use super::{
     ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
     build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
-    build_followup_template_status_lines, build_input_title, build_ready_input_lines,
-    build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
-    build_status_title, build_transcript_panel_view, build_transcript_title,
-    format_conversation_lines, shell_layout,
+    build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
+    build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
+    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
+    build_transcript_title, format_conversation_lines, shell_layout,
 };
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -275,6 +275,44 @@ fn empty_existing_session_prompts_for_next_message() {
     assert!(rendered.contains("Ready to continue this session."));
     assert!(rendered.contains("Ctrl+j for newline"));
     assert!(rendered.contains("Shell commands: :diag"));
+}
+
+#[test]
+fn inline_tail_compacts_empty_session_prompt_copy() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("prompt: session ready"));
+    assert!(rendered.contains(":help commands"));
+    assert!(!rendered.contains("Ready to continue this session."));
+    assert!(!rendered.contains("Shell commands: :diag"));
+}
+
+#[test]
+fn inline_tail_compacts_empty_draft_prompt_copy() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.thread_id.clear();
+    conversation.input_state = ConversationInputState::DraftReady;
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("prompt: new thread ready"));
+    assert!(rendered.contains(":help commands"));
+    assert!(!rendered.contains("Ready to start a new thread."));
 }
 
 #[test]

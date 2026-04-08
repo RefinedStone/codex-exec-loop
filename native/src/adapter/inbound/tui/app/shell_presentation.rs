@@ -541,7 +541,87 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
         }
     }
 
-    lines.extend(build_input_lines(app));
+    lines.extend(build_inline_tail_prompt_lines(app));
+    lines
+}
+
+fn build_inline_tail_prompt_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
+        ConversationState::Failed(message) => {
+            vec![Line::from(format!("prompt: unavailable  |  {message}"))]
+        }
+        ConversationState::Ready(conversation) => {
+            build_inline_ready_prompt_lines(conversation, app.shell_action_availability())
+        }
+    }
+}
+
+fn build_inline_ready_prompt_lines(
+    conversation: &ConversationViewModel,
+    shell_action_availability: ShellActionAvailability,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    if conversation.input_buffer.is_empty() {
+        let line = match (conversation.input_state, shell_action_availability) {
+            (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
+                "prompt: waiting for startup readiness  |  type now, Enter sends when ready"
+                    .to_string()
+            }
+            (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
+                "prompt: blocked by startup diagnostics  |  Ctrl+d inspect".to_string()
+            }
+            (ConversationInputState::DraftReady, _) => {
+                "prompt: new thread ready  |  Enter send  |  Ctrl+j newline  |  :help commands"
+                    .to_string()
+            }
+            (ConversationInputState::ReadyToContinue, _) => {
+                "prompt: session ready  |  Enter send  |  Ctrl+j newline  |  :help commands"
+                    .to_string()
+            }
+            (ConversationInputState::SubmittingTurn, _) => {
+                "prompt: sending  |  wait for turn start".to_string()
+            }
+            (ConversationInputState::StreamingTurn, _) => {
+                "prompt: turn running  |  type now, Enter when idle".to_string()
+            }
+        };
+        lines.push(Line::from(line));
+        return lines;
+    }
+
+    lines.extend(
+        conversation
+            .input_buffer
+            .lines()
+            .map(|line| Line::from(line.to_string())),
+    );
+
+    if let Some(command) = InlineShellCommand::parse(&conversation.input_buffer) {
+        lines.push(Line::from(command.buffered_hint()));
+        return lines;
+    }
+
+    let hint = match (conversation.input_state, shell_action_availability) {
+        (
+            ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
+            ShellActionAvailability::Pending,
+        ) if conversation.startup_submit_armed => {
+            "queued until startup is ready  |  editing cancels the queued send"
+        }
+        (
+            ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
+            ShellActionAvailability::Ready,
+        ) => "buffered prompt  |  Enter send  |  Ctrl+j newline",
+        (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
+            "buffered prompt  |  Enter when ready  |  Ctrl+j newline"
+        }
+        (ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn, _) => {
+            "buffered prompt  |  Enter when idle  |  Ctrl+j newline"
+        }
+    };
+    lines.push(Line::from(hint));
     lines
 }
 
