@@ -4,7 +4,7 @@
 The `prerelease` branch is a working shell-first native client, not a dashboard prototype.
 
 ## Shipped Capability
-- shell-first startup into a draft conversation on the main terminal screen by default, with `CODEX_EXEC_LOOP_ALT_SCREEN` as an opt-in fallback
+- shell-first startup into a draft conversation on the main terminal screen by default, with `CODEX_EXEC_LOOP_FRONTEND=alternate` as the explicit fullscreen override and legacy `CODEX_EXEC_LOOP_ALT_SCREEN` still accepted as fallback
 - startup diagnostics and recent-session browsing exposed as shell overlays, with recent-session loading still gated by startup diagnostics
 - new-thread start, existing-thread resume, snapshot loading, and streamed turn execution through the app-server flow
 - inline shell commands such as `:diag`, `:sessions`, `:templates`, `:new`, and `:help`
