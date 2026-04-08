@@ -31,6 +31,7 @@ fn centered_rect_clamps_percentages_above_hundred() {
 fn inline_main_buffer_rendering_avoids_box_borders() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
     let mut app = make_test_app();
+    append_stable_history_message(&mut app, "stable history should stay above the live region");
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -43,6 +44,8 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
     assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
+    assert!(!rendered.contains("stable history should stay above the live region"));
+    assert!(!rendered.contains("No messages in this thread yet."));
     assert!(!rendered.contains("┌"));
     assert!(!rendered.contains("│"));
 }
@@ -51,6 +54,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 fn alternate_screen_rendering_keeps_bordered_frame() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
     let mut app = make_test_app();
+    append_stable_history_message(&mut app, "stable history stays inside the framed renderer");
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::AlternateScreen))
@@ -60,6 +64,7 @@ fn alternate_screen_rendering_keeps_bordered_frame() {
 
     assert!(rendered.contains("Shell / Ctrl+t new draft"));
     assert!(rendered.contains("Transcript"));
+    assert!(rendered.contains("stable history stays inside the framed renderer"));
     assert!(rendered.contains("┌"));
     assert!(rendered.contains("│"));
 }
@@ -235,4 +240,17 @@ fn sample_session(id: &str) -> SessionSummary {
         path: format!("/tmp/root/{id}.json"),
         git_branch: Some("feature/demo".to_string()),
     }
+}
+
+fn append_stable_history_message(app: &mut NativeTuiApp, text: &str) {
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        text.to_string(),
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.refresh_conversation_lines();
 }

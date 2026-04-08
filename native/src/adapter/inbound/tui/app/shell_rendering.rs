@@ -1,10 +1,9 @@
 use std::rc::Rc;
 
 use super::shell_presentation::{
-    ConversationShellFrameView, ConversationShellView, FollowupTemplateOverlayView,
-    OverlayListView, SessionOverlayView, StartupOverlayView, build_conversation_shell_frame_view,
-    build_conversation_shell_view, build_followup_template_overlay_view, build_inline_tail_lines,
-    build_session_overlay_view, build_startup_overlay_view, build_transcript_panel_view,
+    ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
+    StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
+    build_inline_tail_lines, build_session_overlay_view, build_startup_overlay_view,
 };
 use super::*;
 
@@ -81,29 +80,10 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
 fn draw_inline_conversation_shell(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
-    mode: ShellFrontendMode,
+    _mode: ShellFrontendMode,
 ) {
     let layout = build_inline_terminal_flow_layout(app, frame.area());
-    let shell_view = build_conversation_shell_view(app, mode);
-    let ConversationShellView {
-        conversation_lines, ..
-    } = shell_view;
     let tail_lines = build_inline_tail_lines(app);
-
-    let transcript_view = build_transcript_panel_view(
-        app,
-        mode,
-        conversation_lines,
-        layout[0].width,
-        layout[0].height.max(1),
-    );
-
-    render_inline_transcript(
-        frame,
-        layout[0],
-        transcript_view.lines,
-        transcript_view.scroll_offset,
-    );
     render_inline_body(frame, layout[1], tail_lines, false);
 }
 
@@ -217,20 +197,6 @@ fn render_inline_scrolled_section(
             .scroll((scroll_offset, 0))
             .wrap(Wrap { trim: false }),
         section_layout[1],
-    );
-}
-
-fn render_inline_transcript(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    lines: Vec<Line<'static>>,
-    scroll_offset: u16,
-) {
-    frame.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll_offset, 0))
-            .wrap(Wrap { trim: false }),
-        area,
     );
 }
 
