@@ -4,7 +4,7 @@ Rust TUI client prototype for `codex-exec-loop`.
 
 This crate is the main product track for `codex-exec-loop`.
 
-Current milestones:
+Implemented baseline:
 
 - spawn `codex app-server` over stdio
 - perform `initialize`
@@ -14,10 +14,11 @@ Current milestones:
 - load selected thread history with `thread/read`
 - resume a selected thread and send a prompt with `turn/start`
 - stream agent message deltas into the shell view
-- continue work automatically with a builtin next-task follow-up prompt
-- switch builtin follow-up strategies from the TUI
-- load workspace follow-up templates from `.codex-exec-loop/followups/`
-- stop auto follow-up when the agent emits `AUTO_STOP` or when the no-file-change rule is enabled
+- queue a manual prompt while startup checks are still pending, then auto-send once startup becomes ready
+- continue work automatically with builtin follow-up strategies from the TUI
+- edit max auto turns, reload workspace templates, and stop auto follow-up with shell controls
+- search, page, and filter recent sessions by current project context
+- surface approval, tool activity, warning, and GitHub review-change notices in shell status
 - schedule optional GitHub PR review/comment polling for the active or configured pull request
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
@@ -53,7 +54,7 @@ When RefinedStone GitHub credentials are available, the runtime first tries to a
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`: enable polling for a specific pull request
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`: optional polling interval in seconds; defaults to `60`
 
-When the poller is enabled, the footer shows whether polling is starting, running, watching normally, or blocked by a setup/runtime error. Review-change notices are still a later UI slice.
+When the poller is enabled, the footer shows whether polling is starting, running, watching normally, or blocked by a setup/runtime error, and it can surface compact review-change notices.
 
 ## Frontend Selection
 

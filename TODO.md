@@ -14,36 +14,40 @@
 
 ## Done
 
-- startup dashboard and environment checks
-- recent session list via `thread/list`
-- existing session resume and new thread start
-- streamed conversation rendering
-- conversation tail visibility for long histories
-- Ctrl+C back navigation and exit confirmation
-- native auto-follow-up v1 with builtin next-task prompt and per-conversation toggle
-- native builtin follow-up strategy picker
-  - next-task
-  - plan-queue
-  - bugfix
-  - docs
-- native external follow-up template loading
-  - workspace path: `.codex-exec-loop/followups/`
-  - supported files: `.md`, `.txt`
-  - builtin templates stay first, workspace files are appended in filename order
-- native auto-follow-up stop rules
-  - stop keyword: `AUTO_STOP`
-  - no-file-change stop toggle
-  - activity panel now shows stop configuration and last turn file changes
+- shell baseline
+  - startup dashboard and environment checks
+  - recent session list via `thread/list`
+  - existing session resume and new thread start
+  - streamed conversation rendering
+  - conversation tail visibility for long histories
+  - Ctrl+C back navigation and exit confirmation
+- automation controls
+  - builtin auto-follow-up toggle and strategy picker
+  - workspace follow-up template loading and reload
+  - editable max auto turns
+  - startup-pending manual submit queue
+  - stop keyword and no-file-change stop rules
+  - clearer queue / submit / stop / skip activity summaries
+- session browser
+  - search query
+  - paging
+  - recent-project filter
+  - keyboard controls and result shaping
+- runtime and operator visibility
+  - shared runtime request policy
+  - approval and tool activity status
+  - reconnect / reset / warning visibility
+  - GitHub PR review polling and review-change notices
+- platform and packaging docs
+  - validation matrix for terminal behavior
+  - packaging runbook
+  - release checksum helpers
 
 ## Next
 
-- add max-auto-turns editing from UI
-- add template reload from the conversation shell
-- show clearer activity for auto follow-up queue / submit / stop decisions
-- add session search, paging, and recent project filters
-- add approval and tool activity panels
-- add GitHub PR review/comment polling in the native UI
-- validate packaging and terminal behavior on macOS and Windows
+- finish inline main-buffer inspection surfaces for diagnostics, sessions, and templates
+- make streaming output scrollback-safe without replaying the whole shell frame
+- run real terminal validation on macOS and Windows and land only focused compatibility fixes when findings exist
 
 ## Migration
 

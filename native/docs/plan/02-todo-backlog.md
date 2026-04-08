@@ -7,20 +7,21 @@ This file now keeps the current open planning surface, not a long implementation
 - startup diagnostics and recent sessions as shell-adjacent overlays
 - streamed turn updates, new-thread flow, and thread resume
 - inline shell commands and lightweight transcript navigation
-- builtin and workspace follow-up templates with stop rules
-- shared adapter runtime reuse across startup, session, snapshot, and turn paths
+- builtin and workspace follow-up templates with reload, editable max turns, and stop rules
+- shared adapter runtime reuse across startup, session, snapshot, turn, and GitHub polling paths
+- session browser query, paging, recent-project filter, and result shaping
+- approval, tool activity, warning, and GitHub review notices in shell status
 - focused TUI module extraction and targeted shell/runtime tests
 
 ## Open Change Buckets
-- runtime continuity
-  - fallback behavior during concurrent work is still part of the current runtime story
-  - reconnect, reset, and warning handling still need to stay visible and predictable
 - shell ergonomics
-  - overlays and raw-mode shell chrome are still transitional
-  - input editing and long-session handling are still weaker than the target shell feel
-- automation ergonomics
-  - auto follow-up must stay understandable and operator-visible while the shell changes
-  - new controls should preserve the current stop-rule model unless that model is explicitly redesigned
+  - inline main-buffer mode still depends on modal overlay-style diagnostics, sessions, and template surfaces
+  - streamed output still needs a scrollback-safe history shape instead of frame-style replay assumptions
+- platform validation
+  - the validation matrix and packaging docs are landed, but real macOS and Windows runs still need to be recorded
+  - Windows-specific fixes should stay conditional on validated findings instead of speculative portability edits
+- migration docs
+  - the repository root README still carries more Python/legacy weight than the current native-first product story
 - maintenance
   - `app.rs` should stay near composition and shared-state ownership
   - runtime and UX changes should keep shipping with targeted regression coverage
