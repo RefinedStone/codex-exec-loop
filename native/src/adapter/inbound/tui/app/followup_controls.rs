@@ -54,14 +54,9 @@ pub(super) fn reduce_followup_controls(
                 state.base_warnings.clear();
                 state.replace_template_warnings(warnings);
                 state.clear_auto_followup_skip();
-                state.status_text = if state.warnings.is_empty() {
-                    format!("draft workspace synced / templates: {template_count}")
-                } else {
-                    format!(
-                        "draft workspace synced / templates: {template_count} / {}",
-                        state.warnings.join(" | ")
-                    )
-                };
+                state.set_status_with_warnings(format!(
+                    "draft workspace synced / templates: {template_count}"
+                ));
                 effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
             }
         }
@@ -73,31 +68,19 @@ pub(super) fn reduce_followup_controls(
 
             if reload_result.workspace_load_failed {
                 state.replace_template_warnings(reload_result.load_result.warnings);
-                state.status_text = if state.warnings.is_empty() {
+                state.set_status_with_warnings(
                     "failed to reload workspace follow-up templates / keeping current catalog"
-                        .to_string()
-                } else {
-                    format!(
-                        "failed to reload workspace follow-up templates / keeping current catalog / {}",
-                        state.warnings.join(" | ")
-                    )
-                };
+                        .to_string(),
+                );
                 return FollowupControlReduction { state, effects };
             }
 
             if !catalog_changed && !warnings_changed {
-                state.status_text = if state.warnings.is_empty() {
-                    format!(
-                        "follow-up templates already up to date / selected: {} / templates: {template_count}",
-                        state.auto_follow_state.template_label()
-                    )
-                } else {
-                    format!(
-                        "follow-up templates already up to date / selected: {} / templates: {template_count} / {}",
-                        state.auto_follow_state.template_label(),
-                        state.warnings.join(" | ")
-                    )
-                };
+                let base_status = format!(
+                    "follow-up templates already up to date / selected: {} / templates: {template_count}",
+                    state.auto_follow_state.template_label()
+                );
+                state.set_status_with_warnings(base_status);
                 return FollowupControlReduction { state, effects };
             }
 

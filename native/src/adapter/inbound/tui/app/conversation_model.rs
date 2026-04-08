@@ -536,6 +536,14 @@ impl ConversationViewModel {
         self.warnings = Self::merge_warnings(&self.base_warnings, &self.template_warnings);
     }
 
+    pub(crate) fn set_status_with_warnings(&mut self, base_status: String) {
+        self.status_text = if self.warnings.is_empty() {
+            base_status
+        } else {
+            format!("{base_status} / {}", self.warnings.join(" | "))
+        };
+    }
+
     pub(crate) fn reload_followup_templates(
         &mut self,
         template_load_result: FollowupTemplateCatalogLoadResult,
@@ -546,29 +554,15 @@ impl ConversationViewModel {
             .reload_template_catalog(template_load_result.catalog);
         self.replace_template_warnings(template_load_result.warnings);
         self.clear_auto_followup_skip();
-        self.status_text = if selection_changed && self.warnings.is_empty() {
-            format!(
-                "follow-up templates reloaded / selected template reset to {} / templates: {template_count}",
-                self.auto_follow_state.template_label()
-            )
-        } else if selection_changed {
-            format!(
-                "follow-up templates reloaded / selected template reset to {} / templates: {template_count} / {}",
-                self.auto_follow_state.template_label(),
-                self.warnings.join(" | ")
-            )
-        } else if self.warnings.is_empty() {
-            format!(
-                "follow-up templates reloaded / selected: {} / templates: {template_count}",
-                self.auto_follow_state.template_label()
-            )
+        let selection_label = self.auto_follow_state.template_label();
+        let selection_msg = if selection_changed {
+            format!("selected template reset to {selection_label}")
         } else {
-            format!(
-                "follow-up templates reloaded / selected: {} / templates: {template_count} / {}",
-                self.auto_follow_state.template_label(),
-                self.warnings.join(" | ")
-            )
+            format!("selected: {selection_label}")
         };
+        let base_status =
+            format!("follow-up templates reloaded / {selection_msg} / templates: {template_count}");
+        self.set_status_with_warnings(base_status);
 
         selection_changed
     }
