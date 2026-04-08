@@ -48,24 +48,12 @@ fn delete_previous_word(buffer: &mut String) {
         return;
     }
 
-    let mut truncate_at = buffer.len();
-    let mut saw_non_whitespace = false;
-
-    for (index, character) in buffer.char_indices().rev() {
-        if !saw_non_whitespace && character.is_whitespace() {
-            truncate_at = index;
-            continue;
-        }
-
-        if saw_non_whitespace && character.is_whitespace() {
-            break;
-        }
-
-        saw_non_whitespace = true;
-        truncate_at = index;
-    }
-
-    buffer.truncate(truncate_at);
+    let trimmed = buffer.trim_end_matches(|character: char| character.is_whitespace());
+    let word_start = trimmed
+        .rfind(|character: char| character.is_whitespace())
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    buffer.truncate(word_start);
 }
 
 #[cfg(test)]
