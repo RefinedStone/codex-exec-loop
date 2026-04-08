@@ -2,7 +2,7 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::cursor::MoveToNextLine;
+use crossterm::cursor::{MoveToNextLine, Show};
 use crossterm::event;
 use crossterm::execute;
 use crossterm::terminal::{
@@ -36,39 +36,14 @@ impl ShellFrontendMode {
 }
 
 pub(super) fn run(runtime: ShellRuntime, mode: ShellFrontendMode) -> Result<()> {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => run_inline_main_buffer_frontend(runtime),
-        ShellFrontendMode::AlternateScreen => run_alternate_screen_frontend(runtime),
-    }
-}
-
-fn run_inline_main_buffer_frontend(runtime: ShellRuntime) -> Result<()> {
-    run_ratatui_frontend(runtime, false)
-}
-
-fn run_alternate_screen_frontend(runtime: ShellRuntime) -> Result<()> {
-    run_ratatui_frontend(runtime, true)
+    run_ratatui_frontend(runtime, matches!(mode, ShellFrontendMode::AlternateScreen))
 }
 
 fn run_ratatui_frontend(mut runtime: ShellRuntime, use_alternate_screen: bool) -> Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    if use_alternate_screen {
-        execute!(stdout, EnterAlternateScreen)?;
-    }
-    let backend = CrosstermBackend::new(stdout);
+    let _restore_guard = TerminalRestoreGuard::activate(use_alternate_screen)?;
+    let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-
-    let result = run_event_loop(&mut terminal, &mut runtime);
-
-    disable_raw_mode()?;
-    if use_alternate_screen {
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    } else {
-        execute!(terminal.backend_mut(), MoveToNextLine(1))?;
-    }
-    terminal.show_cursor()?;
-    result
+    run_event_loop(&mut terminal, &mut runtime)
 }
 
 fn run_event_loop(
@@ -94,6 +69,36 @@ fn env_flag_is_truthy(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+struct TerminalRestoreGuard {
+    use_alternate_screen: bool,
+}
+
+impl TerminalRestoreGuard {
+    fn activate(use_alternate_screen: bool) -> Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        if use_alternate_screen {
+            execute!(stdout, EnterAlternateScreen)?;
+        }
+        Ok(Self {
+            use_alternate_screen,
+        })
+    }
+}
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        if self.use_alternate_screen {
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        } else {
+            let _ = execute!(stdout, MoveToNextLine(1));
+        }
+        let _ = execute!(stdout, Show);
+    }
 }
 
 #[cfg(test)]
