@@ -1106,6 +1106,10 @@ enum AppServerLine {
     Stderr(String),
 }
 
+const SHARED_RUNTIME_NOTICE_PREFIX: &str = "shared runtime ";
+const ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT: &str =
+    "app-server connection while a turn stream was active";
+
 fn sort_and_dedup_warnings(warnings: &mut Vec<String>) {
     warnings.sort();
     warnings.dedup();
@@ -1127,8 +1131,8 @@ fn partition_runtime_notices(warnings: Vec<String>) -> (Vec<String>, Vec<String>
 }
 
 fn is_runtime_notice(warning: &str) -> bool {
-    warning.starts_with("shared runtime ")
-        || warning.contains("app-server connection while a turn stream was active")
+    warning.starts_with(SHARED_RUNTIME_NOTICE_PREFIX)
+        || warning.contains(ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT)
 }
 
 fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
