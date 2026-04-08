@@ -9,8 +9,8 @@
 ## Current Focus
 
 - Make native the real "agent loop" product, not just a conversation shell
-- Make inline mode read like natural terminal history instead of a fullscreen frame replay
-- Run canned auto-follow-up prompts after turn completion
+- Run real terminal validation on macOS and Windows from the published matrix
+- Land only focused Windows compatibility fixes when the validation matrix produces concrete findings
 - Keep the flow understandable for a Spring Boot Kotlin developer
 
 ## Done
@@ -45,13 +45,15 @@
   - release checksum helpers
 - inline shell parity
   - inline inspection surfaces for diagnostics, recent sessions, and follow-up templates
+  - stable streaming-history buffering for inline mode, with live output kept separate from committed transcript history
+- migration docs
+  - repository root README now presents native as the main product path
+  - Python CLI instructions are reduced to compatibility guidance
 
 ## Next
 
-- make streaming output scrollback-safe without replaying the whole shell frame
 - run real terminal validation on macOS and Windows and land only focused compatibility fixes when findings exist
 
 ## Migration
 
-- deprecate Python CLI usage in README once native reaches follow-up/template parity
-- remove Python CLI from the main product story after native covers the required workflow
+- keep Python CLI as a compatibility path until its final removal plan is explicit

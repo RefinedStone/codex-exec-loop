@@ -1,8 +1,8 @@
 # Known Gaps And Risk Areas
 
 ## Current Gaps
-- inline mode is still not fully at the target "flow shell" contract because diagnostics, sessions, and templates still lean on modal inspection patterns and streaming history is not yet fully scrollback-safe
-- the shell is live, but overlays are still modal and still interrupt the flow
+- inline mode is closer to the target "flow shell" contract, but the shell still runs as a raw-mode tail region rather than a fully append-only CLI history
+- real terminal validation is still missing on macOS and Windows, so Windows fixes should stay conditional on recorded findings
 - recent-session loading and blocked startup still gate shell actions, even though manual prompt submission can now queue while startup checks are running
 - the shared runtime is better than the old action-scoped model, but concurrent requests still need a fallback path while a streaming turn holds the shared runtime
 - `src/adapter/inbound/tui/app.rs` is much smaller than before, but future work should keep it near composition and shared shell state rather than grow it again

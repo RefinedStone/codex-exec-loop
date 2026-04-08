@@ -1,6 +1,6 @@
 # Inline Scrollback Shell
 
-This document is the active workstream plan for the refactor that moves the native client from a redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
+This document records the inline-shell migration workstream that moved the native client from a redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
 
 This file should stay opinionated about one product goal:
 - inline mode should feel like flow-oriented terminal history
@@ -12,17 +12,17 @@ Completed prerequisite slices should stay compact here. The detailed planning we
 ## 0. Current Status
 
 Current priority:
-- make inline mode behave like a flow shell, not an alternate-screen app with the fullscreen flag turned off
-- finish the last two product-critical slices from this workstream before widening scope again
+- preserve the landed inline-shell migration baseline and validate it across terminals before widening scope again
+- treat the sections below as the reference record for the completed workstream, not as an active slice queue
 
 Landed on `prerelease`:
 - shared runtime and explicit frontend split
 - neutralized shell presentation copy
 - inline live-region renderer and inline-main-buffer baseline
+- inline inspection surfaces for diagnostics, sessions, and templates
+- stable streaming-history buffering that keeps live agent output separate from committed transcript history until completion
 
 Still remaining:
-- inline inspection surfaces for diagnostics, sessions, and templates
-- scrollback-safe streaming history without whole-frame replay
 - terminal validation and default-switch follow-through after those two slices are stable
 
 If a doc reader only needs the current action:

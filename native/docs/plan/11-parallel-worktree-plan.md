@@ -9,7 +9,7 @@ Status baseline:
 - current reference branch: `origin/prerelease`
 - source backlog: `docs/plan/02-todo-backlog.md`, repository root `../TODO.md`, and `docs/plan/10-inline-scrollback-shell.md`
 - compaction rule: landed slices stay short here; only remaining slices keep detailed execution notes
-- primary remaining product work: lane A `A4` and `A5`; the other remaining items are support or follow-up slices
+- primary remaining work: conditional platform follow-through in `F2`; the shell-first product slices from lane A are landed
 
 ## 1. Planning Rules
 
@@ -40,6 +40,7 @@ The slices below are already landed on `prerelease` and should stay compact in t
 - [x] A2 Presentation Neutralization: shared shell presentation copy was neutralized so inline and alternate-screen frontends can share more status and title helpers.
 - [x] A3 Inline Live Region Renderer: inline main-buffer rendering landed while alternate-screen remains available as fallback.
 - [x] A4 Inline Inspection Surfaces: inline mode now renders diagnostics, sessions, and follow-up templates as in-shell inspection surfaces with focused rendering coverage, while alternate-screen keeps the popup fallback.
+- [x] A5 Scrollback-Safe Streaming History: active streaming output now stays in the live region until completion, then commits into stable transcript history instead of replaying each delta as transcript state.
 - [x] B1 Editable Max Auto Turns: the shell can edit max auto turns with bounded validation.
 - [x] B2 Template Reload Action: workspace follow-up templates can reload from the shell without restarting.
 - [x] B3 Auto-Follow Activity Clarity: queue, submit, stop, and skip outcomes are surfaced as clearer operator-visible activity.
@@ -54,6 +55,7 @@ The slices below are already landed on `prerelease` and should stay compact in t
 - [x] E3 Review Change Surface: review/comment change notices now appear in the shell.
 - [x] F1 Validation Matrix: the repository has a canonical terminal validation matrix for macOS and Windows.
 - [x] F3 Packaging and Operator Docs: packaging, checksum verification, and operator handoff docs are in place.
+- [x] M1 Root README Migration Cleanup: the repository root README is now native-first and keeps Python CLI guidance in a compatibility-only section.
 
 Additional landed follow-ups that were not explicit slices in the original lane table:
 
@@ -62,21 +64,6 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 - [x] native package checksum and verification helper follow-ups
 
 ## 4. Remaining Slices
-
-### A5. Scrollback-Safe Streaming History
-
-- status: remaining
-- branch: `feature/native-shell-stream-history`
-- goal: make streaming output append into stable history without replaying the full shell frame
-- ownership: `src/adapter/inbound/tui/app/conversation_runtime.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, and transcript-related tests under `src/adapter/inbound/tui/app/`
-- depends on: A3
-- done when:
-  - terminal scrollback reads like a coherent session instead of a frame repaint log
-  - buffered manual input and auto follow-up behavior remain understandable while streaming
-- verify with:
-  - `cargo fmt`
-  - `cargo build`
-  - `cargo test`
 
 ### F2. Windows Compatibility Fixes
 
@@ -89,23 +76,11 @@ Additional landed follow-ups that were not explicit slices in the original lane 
   - each validated Windows issue is either fixed with focused regression coverage or closed with explicit manual validation notes
   - no speculative portability edits are mixed into the fix branch
 
-### M1. Root README Migration Cleanup
-
-- status: remaining
-- branch: `docs/native-readme-migration`
-- goal: reduce Python CLI prominence in repository-root docs now that native is the main product path
-- ownership: `../README.md` and any root-level migration notes
-- done when:
-  - the root README reads as a native-first product document
-  - Python CLI instructions remain only as legacy or compatibility guidance
-
 ## 5. Parallelism Guardrails
 
 Keep these guardrails for the remaining slices:
 
-- do not run A5 in parallel with another slice that changes transcript rendering or shell presentation hotspots
 - do not start F2 until the validation matrix produces concrete Windows findings
-- docs-only migration cleanup can run alongside A5 because it does not touch runtime hotspots
 
 ## 6. Handoff Rule
 
