@@ -997,7 +997,7 @@ fn input_title_stays_neutral_in_inline_mode() {
 
     let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
-    assert!(rendered.contains("Input / ready"));
+    assert!(rendered.contains("Prompt / ready"));
     assert!(rendered.contains("Enter send"));
 }
 
@@ -1058,7 +1058,7 @@ fn conversation_shell_view_collects_inline_snapshot_content() {
     assert!(view.shell_title.to_string().contains("Shell /"));
     assert!(transcript_title.to_string().contains("Transcript /"));
     assert!(view.status_title.to_string().contains("Controls /"));
-    assert!(view.input_title.to_string().contains("Input / ready"));
+    assert!(view.input_title.to_string().contains("Prompt / ready"));
     assert!(header.contains("thread: thread-1"));
     assert!(header.contains("frontend: inline main buffer"));
     assert!(header.contains("transcript: terminal scrollback-first"));

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use super::shell_presentation::{
     ConversationShellFrameView, ConversationShellView, FollowupTemplateOverlayView,
     OverlayListView, SessionOverlayView, StartupOverlayView, build_conversation_shell_frame_view,
-    build_conversation_shell_view, build_followup_template_overlay_view,
+    build_conversation_shell_view, build_followup_template_overlay_view, build_inline_tail_lines,
     build_session_overlay_view, build_startup_overlay_view, build_transcript_panel_view,
 };
 use super::*;
@@ -83,55 +83,41 @@ fn draw_inline_conversation_shell(
     app: &mut NativeTuiApp,
     mode: ShellFrontendMode,
 ) {
-    let layout = build_inline_shell_layout(app, mode, frame.area());
+    let layout = build_inline_terminal_flow_layout(app, frame.area());
     let shell_view = build_conversation_shell_view(app, mode);
     let ConversationShellView {
-        shell_title,
-        header_lines,
         conversation_lines,
-        status_title,
-        footer_lines,
         input_title,
-        input_lines,
+        ..
     } = shell_view;
+    let tail_lines = build_inline_tail_lines(app);
 
     let transcript_view = build_transcript_panel_view(
         app,
         mode,
         conversation_lines,
-        layout[1].width,
-        layout[1].height.saturating_sub(1).max(1),
+        layout[0].width,
+        layout[0].height.max(1),
     );
 
-    render_inline_section(frame, layout[0], shell_title, header_lines, true);
-    render_inline_scrolled_section(
+    render_inline_transcript(
         frame,
-        layout[1],
-        transcript_view.title,
+        layout[0],
         transcript_view.lines,
         transcript_view.scroll_offset,
     );
-    render_inline_section(frame, layout[2], status_title, footer_lines, true);
-    render_inline_section(frame, layout[3], input_title, input_lines, false);
+    render_inline_section(frame, layout[1], input_title, tail_lines, false);
 }
 
-fn build_inline_shell_layout(
-    app: &NativeTuiApp,
-    mode: ShellFrontendMode,
-    area: Rect,
-) -> Rc<[Rect]> {
-    let shell_view = build_conversation_shell_view(app, mode);
-    let header_height = inline_section_height(&shell_view.header_lines, MAX_SHELL_HEADER_HEIGHT);
-    let footer_height = inline_section_height(&shell_view.footer_lines, MAX_SHELL_STATUS_HEIGHT);
-    let input_height = inline_section_height(&shell_view.input_lines, MAX_COMPOSER_HEIGHT);
+fn build_inline_terminal_flow_layout(app: &NativeTuiApp, area: Rect) -> Rc<[Rect]> {
+    let tail_lines = build_inline_tail_lines(app);
+    let tail_height = inline_section_height(&tail_lines, MAX_INLINE_TAIL_HEIGHT);
 
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(header_height),
             Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6)),
-            Constraint::Length(footer_height),
-            Constraint::Length(input_height),
+            Constraint::Length(tail_height),
         ])
         .split(area)
 }
@@ -228,6 +214,20 @@ fn render_inline_scrolled_section(
     );
 }
 
+fn render_inline_transcript(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    scroll_offset: u16,
+) {
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_offset, 0))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
 fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     if !header_lines.is_empty() {
         header_lines.remove(0);
@@ -238,9 +238,9 @@ fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec<Line<'stat
 fn draw_inline_shell_inspection(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
-    mode: ShellFrontendMode,
+    _mode: ShellFrontendMode,
 ) {
-    let inspection_area = build_inline_shell_layout(app, mode, frame.area())[1];
+    let inspection_area = build_inline_terminal_flow_layout(app, frame.area())[0];
     frame.render_widget(Clear, inspection_area);
 
     match app.shell_overlay {

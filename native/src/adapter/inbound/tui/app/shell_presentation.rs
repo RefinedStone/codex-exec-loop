@@ -446,6 +446,101 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
     }
 }
 
+pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    match &app.conversation_state {
+        ConversationState::Loading => {
+            lines.push(Line::from(format!(
+                "thread: loading  |  startup: {}  |  sessions: {}",
+                shell_action_availability_label(app),
+                recent_session_status_label(app),
+            )));
+            lines.push(Line::from(format!(
+                "github: {}  |  flow: terminal main buffer",
+                github_review_polling_status_label(app),
+            )));
+            lines.push(Line::from(
+                "status: waiting for thread history from codex app-server",
+            ));
+        }
+        ConversationState::Failed(message) => {
+            lines.push(Line::from(format!(
+                "thread: unavailable  |  startup: {}  |  sessions: {}",
+                shell_action_availability_label(app),
+                recent_session_status_label(app),
+            )));
+            lines.push(Line::from(format!(
+                "github: {}  |  flow: terminal main buffer",
+                github_review_polling_status_label(app),
+            )));
+            lines.push(Line::from(format!("status: {message}")));
+        }
+        ConversationState::Ready(conversation) => {
+            let turn_running = conversation.has_running_turn();
+            let warning_summary = conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT);
+            let runtime_notice_summary =
+                conversation.runtime_notice_summary(FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT);
+            let approval_summary = conversation.approval_summary();
+            let github_review_summary =
+                app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
+
+            lines.push(Line::from(format!(
+                "thread: {}  |  turn: {}  |  auto: {} ({})",
+                if conversation.has_active_thread() {
+                    conversation.thread_id.as_str()
+                } else {
+                    "new draft"
+                },
+                turn_status_label(conversation),
+                conversation.auto_follow_state.status_label(),
+                conversation.auto_follow_state.progress_label(),
+            )));
+            lines.push(Line::from(format!(
+                "template: {}  |  startup: {}  |  github: {}",
+                conversation.auto_follow_state.template_label(),
+                shell_action_availability_label(app),
+                github_review_polling_status_label(app),
+            )));
+            lines.push(Line::from(match runtime_notice_summary.as_deref() {
+                Some(runtime_notice_summary) => format!(
+                    "status: {}  |  {}  |  {}",
+                    conversation.status_text, warning_summary, runtime_notice_summary,
+                ),
+                None => format!(
+                    "status: {}  |  {}",
+                    conversation.status_text, warning_summary,
+                ),
+            }));
+
+            if let Some(live_agent_summary) = current_live_agent_footer_line(app) {
+                lines.push(live_agent_summary);
+            } else {
+                let mut activity_line = format!(
+                    "tool activity: {}  |  cmd: {}  |  files: {}",
+                    conversation.turn_activity.activity_summary(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_command_count(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_file_change_count(turn_running),
+                );
+                if let Some(approval_summary) = approval_summary.as_deref() {
+                    activity_line.push_str(&format!("  |  approval: {approval_summary}"));
+                }
+                if let Some(github_review_summary) = github_review_summary.as_deref() {
+                    activity_line.push_str(&format!("  |  gh update: {github_review_summary}"));
+                }
+                lines.push(Line::from(activity_line));
+            }
+        }
+    }
+
+    lines.extend(build_input_lines(app));
+    lines
+}
+
 pub(super) fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![
@@ -791,7 +886,31 @@ pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
 }
 
 pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    let _ = mode;
+    if mode == ShellFrontendMode::InlineMainBuffer {
+        return match &app.conversation_state {
+            ConversationState::Loading => {
+                Line::from(vec![Span::raw("Prompt"), Span::raw(" / loading")])
+            }
+            ConversationState::Failed(_) => {
+                Line::from(vec![Span::raw("Prompt"), Span::raw(" / unavailable")])
+            }
+            ConversationState::Ready(conversation) => {
+                let submit_hint = build_primary_submit_hint(app);
+                Line::from(vec![
+                    Span::raw("Prompt"),
+                    Span::raw(" / "),
+                    Span::styled(
+                        conversation.input_state.label().to_string(),
+                        input_state_style(conversation.input_state),
+                    ),
+                    Span::raw(" / "),
+                    Span::raw(submit_hint),
+                    Span::raw(" / Ctrl+j newline"),
+                ])
+            }
+        };
+    }
+
     let prompt_label = "Input";
 
     match &app.conversation_state {

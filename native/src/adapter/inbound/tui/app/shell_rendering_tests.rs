@@ -37,19 +37,11 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
         .expect("inline render succeeds");
 
     let rendered = format!("{}", terminal.backend());
-    let rendered_lines = rendered.lines().collect::<Vec<_>>();
-    let inline_shell_line = rendered_lines
-        .iter()
-        .position(|line| line.contains("Shell / Ctrl+t new draft"))
-        .expect("inline shell title should render");
-    let header_line = rendered_lines
-        .iter()
-        .position(|line| line.contains("thread:"))
-        .expect("header content should render");
 
-    assert!(rendered.contains("Shell / Ctrl+t new draft"));
-    assert!(rendered.contains("Transcript"));
-    assert_ne!(inline_shell_line, header_line);
+    assert!(!rendered.contains("Shell / Ctrl+t new draft"));
+    assert!(!rendered.contains("Transcript /"));
+    assert!(!rendered.contains("Controls / shell shortcuts and live status"));
+    assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
     assert!(!rendered.contains("┌"));
     assert!(!rendered.contains("│"));
 }
