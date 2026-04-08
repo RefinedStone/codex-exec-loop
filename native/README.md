@@ -18,13 +18,15 @@ Current milestones:
 - switch builtin follow-up strategies from the TUI
 - load workspace follow-up templates from `.codex-exec-loop/followups/`
 - stop auto follow-up when the agent emits `AUTO_STOP` or when the no-file-change rule is enabled
-- schedule optional GitHub PR review/comment polling for one configured pull request
+- schedule optional GitHub PR review/comment polling for the active or configured pull request
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
 
 ## Optional GitHub Polling
 
 The runtime can poll one GitHub pull request in the background and keep the polling state in the shell footer.
+
+When RefinedStone GitHub credentials are available, the runtime first tries to auto-detect the current branch's open `prerelease` pull request. An explicit `CODEX_EXEC_LOOP_GITHUB_PR` value overrides that detection.
 
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`: enable polling for a specific pull request
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`: optional polling interval in seconds; defaults to `60`

@@ -17,6 +17,7 @@ use super::{BackgroundMessage, NativeTuiApp};
 
 const GITHUB_PULL_REQUEST_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_PR";
 const GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS";
+const GITHUB_POLL_BASE_BRANCH: &str = "prerelease";
 const DEFAULT_GITHUB_POLL_INTERVAL_SECONDS: u64 = 60;
 const MAX_STATUS_DETAIL_LENGTH: usize = 48;
 
@@ -28,10 +29,24 @@ pub(super) struct GithubReviewPollingBootstrap {
 
 impl GithubReviewPollingBootstrap {
     pub(super) fn from_environment(repo_root: &Path, now: Instant) -> Self {
-        Self::from_env_values(
-            std::env::var(GITHUB_PULL_REQUEST_ENV_VAR).ok(),
-            std::env::var(GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR).ok(),
-            || Self::load_service(repo_root),
+        let pull_request_value = std::env::var(GITHUB_PULL_REQUEST_ENV_VAR).ok();
+        let interval_seconds_value = std::env::var(GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR).ok();
+        if pull_request_value
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Self::from_env_values(
+                pull_request_value,
+                interval_seconds_value,
+                || Self::load_service(repo_root),
+                now,
+            );
+        }
+
+        Self::from_discovery_result(
+            interval_seconds_value,
+            || Self::load_service_for_current_branch(repo_root),
             now,
         )
     }
@@ -103,6 +118,66 @@ impl GithubReviewPollingBootstrap {
         let adapter = GithubReviewPollerAdapter::from_refinedstone_credentials(repo_root)?;
         let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
         Ok(GithubReviewPollerService::new(port))
+    }
+
+    fn from_discovery_result<F>(
+        interval_seconds_value: Option<String>,
+        discovery_loader: F,
+        now: Instant,
+    ) -> Self
+    where
+        F: FnOnce() -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>>,
+    {
+        let interval = match parse_poll_interval(interval_seconds_value.as_deref()) {
+            Ok(interval) => interval,
+            Err(error) => {
+                return Self {
+                    service: None,
+                    state: GithubReviewPollingState::SetupError {
+                        target: None,
+                        message: error.to_string(),
+                    },
+                };
+            }
+        };
+
+        match discovery_loader() {
+            Ok(Some((target, service))) => Self {
+                service: Some(service),
+                state: GithubReviewPollingState::active(
+                    GithubReviewPollingConfig { target, interval },
+                    now,
+                ),
+            },
+            Ok(None) => Self {
+                service: None,
+                state: GithubReviewPollingState::Disabled,
+            },
+            Err(error) => Self {
+                service: None,
+                state: GithubReviewPollingState::SetupError {
+                    target: None,
+                    message: error.to_string(),
+                },
+            },
+        }
+    }
+
+    fn load_service_for_current_branch(
+        repo_root: &Path,
+    ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>> {
+        let adapter = match GithubReviewPollerAdapter::from_refinedstone_credentials(repo_root) {
+            Ok(adapter) => adapter,
+            Err(_) => return Ok(None),
+        };
+        let Some(target) = adapter
+            .find_open_pull_request_for_current_branch(repo_root, GITHUB_POLL_BASE_BRANCH)?
+        else {
+            return Ok(None);
+        };
+        let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
+
+        Ok(Some((target, GithubReviewPollerService::new(port))))
     }
 }
 
@@ -357,12 +432,8 @@ mod tests {
 
     #[test]
     fn bootstrap_stays_disabled_without_pull_request_env() {
-        let bootstrap = GithubReviewPollingBootstrap::from_env_values(
-            None,
-            None,
-            || unreachable!("service loader should not run"),
-            Instant::now(),
-        );
+        let bootstrap =
+            GithubReviewPollingBootstrap::from_discovery_result(None, || Ok(None), Instant::now());
 
         assert!(matches!(
             bootstrap.state,
@@ -496,6 +567,37 @@ mod tests {
             .expect("snapshot should load through the service");
         assert_eq!(snapshot.events.len(), 1);
         assert_eq!(*calls.lock().expect("calls mutex poisoned"), 1);
+    }
+
+    #[test]
+    fn bootstrap_auto_discovers_current_branch_pull_request_when_available() {
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+
+        let bootstrap = GithubReviewPollingBootstrap::from_discovery_result(
+            Some("15".to_string()),
+            || {
+                let port: Arc<dyn GithubReviewPollerPort> = Arc::new(FakeGithubReviewPollerPort {
+                    calls: Arc::new(Mutex::new(0usize)),
+                    snapshot: GithubPullRequestActivitySnapshot {
+                        target: target.clone(),
+                        title: "Track review state".to_string(),
+                        url: "https://example.invalid/pr/42".to_string(),
+                        head_branch: "feature/test".to_string(),
+                        base_branch: "prerelease".to_string(),
+                        events: Vec::new(),
+                    },
+                });
+                Ok(Some((target.clone(), GithubReviewPollerService::new(port))))
+            },
+            Instant::now(),
+        );
+
+        let GithubReviewPollingState::Active(runtime) = bootstrap.state else {
+            panic!("expected active polling state");
+        };
+        assert_eq!(runtime.config.target, target);
+        assert_eq!(runtime.config.interval, Duration::from_secs(15));
+        assert!(bootstrap.service.is_some());
     }
 
     fn sample_poll_result(timestamp: &str) -> GithubPullRequestPollResult {
