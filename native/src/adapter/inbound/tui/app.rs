@@ -101,12 +101,15 @@ use shell_layout::{
     build_shell_footer_height,
 };
 use shell_presentation::{
-    ConversationShellView, build_conversation_shell_view, build_transcript_title,
+    ConversationShellView, FollowupTemplateOverlayView, SessionOverlayView, StartupOverlayView,
+    build_conversation_shell_view, build_followup_template_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, build_transcript_title,
     format_conversation_lines,
 };
 #[cfg(test)]
 use shell_presentation::{
-    build_input_title, build_ready_input_lines, build_shell_footer_lines, build_status_title,
+    build_followup_template_preview_lines, build_followup_template_status_lines, build_input_title,
+    build_ready_input_lines, build_shell_footer_lines, build_status_title,
 };
 use transcript_viewport::TranscriptViewportState;
 
@@ -135,121 +138,6 @@ struct NativeTuiApp {
     rx: Receiver<BackgroundMessage>,
 }
 
-fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.conversation_state {
-        ConversationState::Loading => vec![Line::from("conversation is still loading")],
-        ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => {
-            let template = conversation.auto_follow_state.selected_template();
-            let preview_thread_id = if conversation.thread_id.trim().is_empty() {
-                "draft-thread"
-            } else {
-                conversation.thread_id.as_str()
-            };
-            let latest_agent_message = conversation.latest_agent_message_text();
-            let rendered_preview = conversation
-                .auto_follow_state
-                .render_prompt_preview(&conversation.thread_id, latest_agent_message);
-
-            let mut lines = vec![
-                Line::from(format!("selected: {}", template.label)),
-                Line::from(format!("source: {}", template.source_label())),
-                Line::from(format!("preview thread id: {preview_thread_id}")),
-            ];
-
-            if latest_agent_message.is_some() {
-                lines.push(Line::from(
-                    "preview last_message: using the latest non-empty agent reply",
-                ));
-            } else {
-                lines.push(Line::from(
-                    "preview last_message: placeholder until an agent reply exists",
-                ));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(Line::from("Raw Template"));
-            for body_line in template.body.lines() {
-                lines.push(Line::from(body_line.to_string()));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(Line::from("Rendered Preview"));
-            for preview_line in rendered_preview.lines() {
-                lines.push(Line::from(preview_line.to_string()));
-            }
-
-            lines
-        }
-    }
-}
-
-fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.conversation_state {
-        ConversationState::Loading => vec![Line::from("conversation is still loading")],
-        ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => {
-            let mut lines = vec![
-                Line::from(format!(
-                    "auto follow-up: {}",
-                    conversation.auto_follow_state.status_label()
-                )),
-                Line::from(format!(
-                    "progress: {}",
-                    conversation.auto_follow_state.progress_label()
-                )),
-                Line::from(format!(
-                    "stop keyword: {}",
-                    conversation.auto_follow_state.stop_keyword_label()
-                )),
-                Line::from(format!(
-                    "stop on no-file-change: {}",
-                    conversation.auto_follow_state.no_file_change_stop_label()
-                )),
-                Line::from(format!(
-                    "last turn file changes: {}",
-                    conversation
-                        .turn_activity
-                        .last_completed_file_change_count()
-                )),
-            ];
-
-            if app.is_stop_keyword_editing() {
-                lines.push(Line::from(format!(
-                    "editing stop keyword: {}",
-                    app.followup_overlay_ui_state.stop_keyword_editor.buffer
-                )));
-                lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
-            } else {
-                lines.push(Line::from("stop keyword edit: press Ctrl+g"));
-            }
-            lines.push(Line::from(Span::styled(
-                format!("status: {}", conversation.status_text),
-                Style::default().fg(Color::Yellow),
-            )));
-
-            lines
-        }
-    }
-}
-
-fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    if app.is_stop_keyword_editing() {
-        return vec![
-            Line::from("Type the new stop keyword directly. Backspace deletes."),
-            Line::from("Enter: save stop keyword    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use letters, numbers, or underscores only."),
-        ];
-    }
-
-    vec![
-        Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
-        Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
-        Line::from("Ctrl+a: auto on/off    Ctrl+g: edit stop keyword"),
-        Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -264,10 +152,11 @@ mod tests {
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
         ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
-        build_conversation_shell_view, build_followup_template_preview_lines,
-        build_followup_template_status_lines, build_input_title, build_ready_input_lines,
-        build_shell_footer_lines, build_status_title, build_transcript_title,
-        format_conversation_lines, shell_layout,
+        build_conversation_shell_view, build_followup_template_overlay_view,
+        build_followup_template_preview_lines, build_followup_template_status_lines,
+        build_input_title, build_ready_input_lines, build_session_overlay_view,
+        build_shell_footer_lines, build_startup_overlay_view, build_status_title,
+        build_transcript_title, format_conversation_lines, shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -930,6 +819,109 @@ mod tests {
         assert!(!view.conversation_lines.is_empty());
         assert!(!view.footer_lines.is_empty());
         assert!(!view.input_lines.is_empty());
+    }
+
+    #[test]
+    fn startup_overlay_view_collects_summary_checks_and_keys() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+        let view = build_startup_overlay_view(&app);
+        let summary = view
+            .summary_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let keys = view
+            .key_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            view.header_lines[0]
+                .to_string()
+                .contains("Startup Diagnostics")
+        );
+        assert!(summary.contains("status: ready"));
+        assert!(summary.contains("/tmp/root"));
+        assert!(!view.check_items.is_empty());
+        assert!(keys.contains("rerun checks"));
+    }
+
+    #[test]
+    fn session_overlay_view_collects_selected_session_detail_and_keys() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![sample_session("thread-1"), sample_session("thread-2")],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.selected_session_index = 1;
+
+        let view = build_session_overlay_view(&app);
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let keys = view
+            .key_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(view.header_lines[0].to_string().contains("Recent Sessions"));
+        assert!(detail.contains("id: thread-2"));
+        assert!(detail.contains("/tmp/root/thread-2.json"));
+        assert!(keys.contains("Enter: open thread"));
+    }
+
+    #[test]
+    fn followup_template_overlay_view_collects_preview_status_and_keys() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let view = build_followup_template_overlay_view(&app);
+        let preview = view
+            .preview_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let status = view
+            .status_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let keys = view
+            .key_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            view.header_lines[0]
+                .to_string()
+                .contains("Follow-Up Templates")
+        );
+        assert!(preview.contains("Rendered Preview"));
+        assert!(status.contains("auto follow-up:"));
+        assert!(keys.contains("change template"));
     }
 
     #[test]

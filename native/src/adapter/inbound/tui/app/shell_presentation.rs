@@ -10,6 +10,28 @@ pub(super) struct ConversationShellView {
     pub(super) input_lines: Vec<Line<'static>>,
 }
 
+pub(super) struct StartupOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) summary_lines: Vec<Line<'static>>,
+    pub(super) check_items: Vec<ListItem<'static>>,
+    pub(super) warning_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
+pub(super) struct SessionOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) detail_lines: Vec<Line<'static>>,
+    pub(super) warning_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
+pub(super) struct FollowupTemplateOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) preview_lines: Vec<Line<'static>>,
+    pub(super) status_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
 pub(super) fn build_conversation_shell_view(
     app: &NativeTuiApp,
     mode: ShellFrontendMode,
@@ -22,6 +44,112 @@ pub(super) fn build_conversation_shell_view(
         footer_lines: build_shell_footer_lines(app),
         input_title: build_input_title(app, mode),
         input_lines: build_input_lines(app),
+    }
+}
+
+pub(super) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayView {
+    StartupOverlayView {
+        header_lines: vec![
+            Line::from(vec![
+                Span::styled(
+                    "Startup Diagnostics",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" / shell overlay"),
+            ]),
+            Line::from("Inspect readiness without leaving the live shell."),
+        ],
+        summary_lines: match &app.startup_state {
+            StartupState::Idle => vec![
+                Line::from("status: idle"),
+                Line::from("startup checks have not started yet"),
+            ],
+            StartupState::Loading => vec![
+                Line::from(vec![
+                    Span::styled("status: ", Style::default().fg(Color::Gray)),
+                    Span::styled("running checks", Style::default().fg(Color::Yellow)),
+                ]),
+                Line::from("probing codex binary, app-server handshake, account state, and cwd"),
+            ],
+            StartupState::Ready(diagnostics) => vec![
+                Line::from(vec![
+                    Span::styled("status: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        if diagnostics.can_continue() {
+                            "ready"
+                        } else {
+                            "needs attention"
+                        },
+                        Style::default().fg(if diagnostics.can_continue() {
+                            Color::Green
+                        } else {
+                            Color::Yellow
+                        }),
+                    ),
+                ]),
+                Line::from(format!("cwd: {}", diagnostics.cwd)),
+            ],
+            StartupState::Failed(message) => vec![
+                Line::from(vec![
+                    Span::styled("status: ", Style::default().fg(Color::Gray)),
+                    Span::styled("failed", Style::default().fg(Color::Red)),
+                ]),
+                Line::from(message.clone()),
+            ],
+        },
+        check_items: build_startup_check_items(app),
+        warning_lines: build_startup_warning_lines(app),
+        key_lines: vec![
+            Line::from("Esc/Ctrl+C: close    r: rerun checks"),
+            Line::from("Ctrl+o: recent sessions"),
+        ],
+    }
+}
+
+pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayView {
+    SessionOverlayView {
+        header_lines: vec![
+            Line::from(vec![
+                Span::styled(
+                    "Recent Sessions",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" / shell overlay"),
+            ]),
+            Line::from("Resume a thread without leaving the shell view."),
+        ],
+        detail_lines: build_session_detail_lines(app),
+        warning_lines: build_session_warning_lines(app),
+        key_lines: vec![
+            Line::from("Up/Down or j/k: move    Enter: open thread"),
+            Line::from("n: new draft    r: reload    Esc/Ctrl+C: close    Ctrl+d: diagnostics"),
+        ],
+    }
+}
+
+pub(super) fn build_followup_template_overlay_view(
+    app: &NativeTuiApp,
+) -> FollowupTemplateOverlayView {
+    FollowupTemplateOverlayView {
+        header_lines: vec![
+            Line::from(vec![
+                Span::styled(
+                    "Follow-Up Templates",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" / shell overlay"),
+            ]),
+            Line::from("Inspect the selected strategy before the next auto follow-up turn."),
+        ],
+        preview_lines: build_followup_template_preview_lines(app),
+        status_lines: build_followup_template_status_lines(app),
+        key_lines: build_followup_template_key_lines(app),
     }
 }
 
@@ -242,6 +370,121 @@ pub(super) fn build_ready_input_lines(
     lines
 }
 
+pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Loading => vec![Line::from("conversation is still loading")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => {
+            let template = conversation.auto_follow_state.selected_template();
+            let preview_thread_id = if conversation.thread_id.trim().is_empty() {
+                "draft-thread"
+            } else {
+                conversation.thread_id.as_str()
+            };
+            let latest_agent_message = conversation.latest_agent_message_text();
+            let rendered_preview = conversation
+                .auto_follow_state
+                .render_prompt_preview(&conversation.thread_id, latest_agent_message);
+
+            let mut lines = vec![
+                Line::from(format!("selected: {}", template.label)),
+                Line::from(format!("source: {}", template.source_label())),
+                Line::from(format!("preview thread id: {preview_thread_id}")),
+            ];
+
+            if latest_agent_message.is_some() {
+                lines.push(Line::from(
+                    "preview last_message: using the latest non-empty agent reply",
+                ));
+            } else {
+                lines.push(Line::from(
+                    "preview last_message: placeholder until an agent reply exists",
+                ));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from("Raw Template"));
+            for body_line in template.body.lines() {
+                lines.push(Line::from(body_line.to_string()));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from("Rendered Preview"));
+            for preview_line in rendered_preview.lines() {
+                lines.push(Line::from(preview_line.to_string()));
+            }
+
+            lines
+        }
+    }
+}
+
+pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.conversation_state {
+        ConversationState::Loading => vec![Line::from("conversation is still loading")],
+        ConversationState::Failed(message) => vec![Line::from(message.clone())],
+        ConversationState::Ready(conversation) => {
+            let mut lines = vec![
+                Line::from(format!(
+                    "auto follow-up: {}",
+                    conversation.auto_follow_state.status_label()
+                )),
+                Line::from(format!(
+                    "progress: {}",
+                    conversation.auto_follow_state.progress_label()
+                )),
+                Line::from(format!(
+                    "stop keyword: {}",
+                    conversation.auto_follow_state.stop_keyword_label()
+                )),
+                Line::from(format!(
+                    "stop on no-file-change: {}",
+                    conversation.auto_follow_state.no_file_change_stop_label()
+                )),
+                Line::from(format!(
+                    "last turn file changes: {}",
+                    conversation
+                        .turn_activity
+                        .last_completed_file_change_count()
+                )),
+            ];
+
+            if app.is_stop_keyword_editing() {
+                lines.push(Line::from(format!(
+                    "editing stop keyword: {}",
+                    app.followup_overlay_ui_state.stop_keyword_editor.buffer
+                )));
+                lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
+            } else {
+                lines.push(Line::from("stop keyword edit: press Ctrl+g"));
+            }
+            lines.push(Line::from(Span::styled(
+                format!("status: {}", conversation.status_text),
+                Style::default().fg(Color::Yellow),
+            )));
+
+            lines
+        }
+    }
+}
+
+pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if app.is_stop_keyword_editing() {
+        return vec![
+            Line::from("Type the new stop keyword directly. Backspace deletes."),
+            Line::from("Enter: save stop keyword    Esc/Ctrl+C: cancel edit"),
+            Line::from("Use letters, numbers, or underscores only."),
+        ];
+    }
+
+    vec![
+        Line::from("Up/Down or j/k: change template    Ctrl+f: next template"),
+        Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
+        Line::from("Ctrl+a: auto on/off    Ctrl+g: edit stop keyword"),
+        Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
+    ]
+}
+
 fn build_shell_header_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![
@@ -400,6 +643,126 @@ fn recent_session_status_label(app: &NativeTuiApp) -> String {
         SessionState::Failed(_) => "load failed".to_string(),
         SessionState::Ready(recent_sessions) => format!("{} loaded", recent_sessions.items.len()),
     }
+}
+
+fn build_startup_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {
+    match &app.startup_state {
+        StartupState::Idle => vec![ListItem::new("startup check has not started")],
+        StartupState::Loading => vec![
+            ListItem::new("checking codex binary"),
+            ListItem::new("opening codex app-server"),
+            ListItem::new("reading account state"),
+        ],
+        StartupState::Ready(diagnostics) => vec![
+            diagnostic_item(
+                "codex binary",
+                diagnostics.codex_binary_ok,
+                &diagnostics.codex_binary_detail,
+            ),
+            diagnostic_item(
+                "workspace",
+                diagnostics.workspace_ok,
+                &diagnostics.workspace_detail,
+            ),
+            diagnostic_item(
+                "app-server initialize",
+                diagnostics.initialize_ok,
+                &diagnostics.initialize_detail,
+            ),
+            diagnostic_item(
+                "account/read",
+                diagnostics.account_ok,
+                &diagnostics.account_detail,
+            ),
+            ListItem::new(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
+        ],
+        StartupState::Failed(message) => vec![ListItem::new(format!("startup error: {message}"))],
+    }
+}
+
+fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.startup_state {
+        StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
+            .warnings
+            .iter()
+            .cloned()
+            .map(Line::from)
+            .collect::<Vec<_>>(),
+        StartupState::Failed(message) => vec![Line::from(message.clone())],
+        _ => vec![Line::from("no warnings")],
+    }
+}
+
+fn build_session_detail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.session_state {
+        SessionState::Idle => vec![Line::from(if app.can_open_session_list() {
+            "session details are not available yet"
+        } else {
+            "startup diagnostics must pass before recent-session detail is available"
+        })],
+        SessionState::Loading => vec![Line::from("waiting for session list response")],
+        SessionState::Failed(message) => vec![Line::from(message.clone())],
+        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => {
+            vec![Line::from("no session detail to show")]
+        }
+        SessionState::Ready(recent_sessions) => {
+            let selected_session = recent_sessions
+                .items
+                .get(app.selected_session_index)
+                .unwrap_or(&recent_sessions.items[0]);
+
+            let mut lines = vec![
+                Line::from(format!("id: {}", selected_session.id)),
+                Line::from(format!("updated: {}", selected_session.updated_at_label())),
+                Line::from(format!("workspace: {}", selected_session.cwd)),
+                Line::from(format!("source: {}", selected_session.source)),
+                Line::from(format!(
+                    "model provider: {}",
+                    selected_session.model_provider
+                )),
+                Line::from(format!("status: {}", selected_session.status_type)),
+            ];
+
+            if let Some(branch) = &selected_session.git_branch {
+                lines.push(Line::from(format!("git branch: {branch}")));
+            }
+
+            if recent_sessions.next_cursor.is_some() {
+                lines.push(Line::from("more threads are available in the next cursor"));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from("preview"));
+            lines.push(Line::from(selected_session.preview_block()));
+            lines.push(Line::from(""));
+            lines.push(Line::from(format!("path: {}", selected_session.path)));
+            lines
+        }
+    }
+}
+
+fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    match &app.session_state {
+        SessionState::Ready(recent_sessions) if !recent_sessions.warnings.is_empty() => {
+            recent_sessions
+                .warnings
+                .iter()
+                .cloned()
+                .map(Line::from)
+                .collect::<Vec<_>>()
+        }
+        SessionState::Failed(message) => vec![Line::from(message.clone())],
+        SessionState::Loading => vec![Line::from("waiting for app-server response")],
+        SessionState::Idle if !app.can_open_session_list() => vec![Line::from(
+            "recent sessions remain unavailable until startup diagnostics succeed",
+        )],
+        _ => vec![Line::from("no warnings")],
+    }
+}
+
+fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {
+    let marker = if ok { "[ok]" } else { "[warn]" };
+    ListItem::new(format!("{marker} {title}: {detail}"))
 }
 
 fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {

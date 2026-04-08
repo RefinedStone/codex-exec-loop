@@ -74,53 +74,7 @@ fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTu
     frame.render_stateful_widget(list, area, &mut app.session_overlay_ui_state.list_state);
 }
 
-fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let lines = match &app.session_state {
-        SessionState::Idle => vec![Line::from(if app.can_open_session_list() {
-            "session details are not available yet"
-        } else {
-            "startup diagnostics must pass before recent-session detail is available"
-        })],
-        SessionState::Loading => vec![Line::from("waiting for session list response")],
-        SessionState::Failed(message) => vec![Line::from(message.clone())],
-        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => {
-            vec![Line::from("no session detail to show")]
-        }
-        SessionState::Ready(recent_sessions) => {
-            let selected_session = recent_sessions
-                .items
-                .get(app.selected_session_index)
-                .unwrap_or(&recent_sessions.items[0]);
-
-            let mut lines = vec![
-                Line::from(format!("id: {}", selected_session.id)),
-                Line::from(format!("updated: {}", selected_session.updated_at_label())),
-                Line::from(format!("workspace: {}", selected_session.cwd)),
-                Line::from(format!("source: {}", selected_session.source)),
-                Line::from(format!(
-                    "model provider: {}",
-                    selected_session.model_provider
-                )),
-                Line::from(format!("status: {}", selected_session.status_type)),
-            ];
-
-            if let Some(branch) = &selected_session.git_branch {
-                lines.push(Line::from(format!("git branch: {branch}")));
-            }
-
-            if recent_sessions.next_cursor.is_some() {
-                lines.push(Line::from("more threads are available in the next cursor"));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(Line::from("preview"));
-            lines.push(Line::from(selected_session.preview_block()));
-            lines.push(Line::from(""));
-            lines.push(Line::from(format!("path: {}", selected_session.path)));
-            lines
-        }
-    };
-
+fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<'static>>) {
     let detail = Paragraph::new(lines)
         .block(
             Block::default()
@@ -196,6 +150,14 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let overlay_view = build_startup_overlay_view(app);
+    let StartupOverlayView {
+        header_lines,
+        summary_lines,
+        check_items,
+        warning_lines,
+        key_lines,
+    } = overlay_view;
     let popup_area = centered_rect(78, 72, frame.area());
     frame.render_widget(Clear, popup_area);
 
@@ -211,90 +173,43 @@ fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                "Startup Diagnostics",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" / shell overlay"),
-        ]),
-        Line::from("Inspect readiness without leaving the live shell."),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Diagnostics"));
+    let header = Paragraph::new(header_lines)
+        .block(Block::default().borders(Borders::ALL).title("Diagnostics"));
     frame.render_widget(header, layout[0]);
 
-    let summary = match &app.startup_state {
-        StartupState::Idle => vec![
-            Line::from("status: idle"),
-            Line::from("startup checks have not started yet"),
-        ],
-        StartupState::Loading => vec![
-            Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled("running checks", Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from("probing codex binary, app-server handshake, account state, and cwd"),
-        ],
-        StartupState::Ready(diagnostics) => vec![
-            Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    if diagnostics.can_continue() {
-                        "ready"
-                    } else {
-                        "needs attention"
-                    },
-                    Style::default().fg(if diagnostics.can_continue() {
-                        Color::Green
-                    } else {
-                        Color::Yellow
-                    }),
-                ),
-            ]),
-            Line::from(format!("cwd: {}", diagnostics.cwd)),
-        ],
-        StartupState::Failed(message) => vec![
-            Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled("failed", Style::default().fg(Color::Red)),
-            ]),
-            Line::from(message.clone()),
-        ],
-    };
     frame.render_widget(
-        Paragraph::new(summary)
+        Paragraph::new(summary_lines)
             .block(Block::default().borders(Borders::ALL).title("Startup"))
             .wrap(Wrap { trim: true }),
         layout[1],
     );
 
     frame.render_widget(
-        List::new(build_check_items(app))
-            .block(Block::default().borders(Borders::ALL).title("Checks")),
+        List::new(check_items).block(Block::default().borders(Borders::ALL).title("Checks")),
         layout[2],
     );
 
     frame.render_widget(
-        Paragraph::new(build_startup_warning_lines(app))
+        Paragraph::new(warning_lines)
             .block(Block::default().borders(Borders::ALL).title("Warnings"))
             .wrap(Wrap { trim: true }),
         layout[3],
     );
 
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("Esc/Ctrl+C: close    r: rerun checks"),
-            Line::from("Ctrl+o: recent sessions"),
-        ])
-        .block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
         layout[4],
     );
 }
 
 fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+    let overlay_view = build_session_overlay_view(app);
+    let SessionOverlayView {
+        header_lines,
+        detail_lines,
+        warning_lines,
+        key_lines,
+    } = overlay_view;
     let popup_area = centered_rect(90, 78, frame.area());
     frame.render_widget(Clear, popup_area);
 
@@ -309,19 +224,8 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                "Recent Sessions",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" / shell overlay"),
-        ]),
-        Line::from("Resume a thread without leaving the shell view."),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Sessions"));
+    let header = Paragraph::new(header_lines)
+        .block(Block::default().borders(Borders::ALL).title("Sessions"));
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -330,10 +234,10 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .split(layout[1]);
 
     draw_session_list_panel(frame, content_layout[0], app);
-    draw_session_detail_panel(frame, content_layout[1], app);
+    draw_session_detail_panel(frame, content_layout[1], detail_lines);
 
     frame.render_widget(
-        Paragraph::new(build_session_warning_lines(app))
+        Paragraph::new(warning_lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -344,21 +248,22 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     );
 
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("Up/Down or j/k: move    Enter: open thread"),
-            Line::from("n: new draft    r: reload    Esc/Ctrl+C: close    Ctrl+d: diagnostics"),
-        ])
-        .block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
         layout[3],
     );
 }
 
 fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+    let overlay_view = build_followup_template_overlay_view(app);
+    let FollowupTemplateOverlayView {
+        header_lines,
+        preview_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
     let popup_area = centered_rect(92, 82, frame.area());
     frame.render_widget(Clear, popup_area);
 
-    let status_lines = build_followup_template_status_lines(app);
-    let key_lines = build_followup_template_key_lines(app);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -370,19 +275,8 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                "Follow-Up Templates",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" / shell overlay"),
-        ]),
-        Line::from("Inspect the selected strategy before the next auto follow-up turn."),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Templates"));
+    let header = Paragraph::new(header_lines)
+        .block(Block::default().borders(Borders::ALL).title("Templates"));
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -390,7 +284,6 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
         .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
         .split(layout[1]);
 
-    let preview_lines = build_followup_template_preview_lines(app);
     let preview_scroll = clamp_scroll_offset(
         app.followup_overlay_ui_state.preview_scroll,
         &preview_lines,
@@ -439,73 +332,6 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     .wrap(Wrap { trim: true });
 
     frame.render_widget(popup, popup_area);
-}
-
-fn build_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {
-    match &app.startup_state {
-        StartupState::Idle => vec![ListItem::new("startup check has not started")],
-        StartupState::Loading => vec![
-            ListItem::new("checking codex binary"),
-            ListItem::new("opening codex app-server"),
-            ListItem::new("reading account state"),
-        ],
-        StartupState::Ready(diagnostics) => vec![
-            diagnostic_item(
-                "codex binary",
-                diagnostics.codex_binary_ok,
-                &diagnostics.codex_binary_detail,
-            ),
-            diagnostic_item(
-                "workspace",
-                diagnostics.workspace_ok,
-                &diagnostics.workspace_detail,
-            ),
-            diagnostic_item(
-                "app-server initialize",
-                diagnostics.initialize_ok,
-                &diagnostics.initialize_detail,
-            ),
-            diagnostic_item(
-                "account/read",
-                diagnostics.account_ok,
-                &diagnostics.account_detail,
-            ),
-            ListItem::new(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
-        ],
-        StartupState::Failed(message) => vec![ListItem::new(format!("startup error: {message}"))],
-    }
-}
-
-fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.startup_state {
-        StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
-            .warnings
-            .iter()
-            .cloned()
-            .map(Line::from)
-            .collect::<Vec<_>>(),
-        StartupState::Failed(message) => vec![Line::from(message.clone())],
-        _ => vec![Line::from("no warnings")],
-    }
-}
-
-fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.session_state {
-        SessionState::Ready(recent_sessions) if !recent_sessions.warnings.is_empty() => {
-            recent_sessions
-                .warnings
-                .iter()
-                .cloned()
-                .map(Line::from)
-                .collect::<Vec<_>>()
-        }
-        SessionState::Failed(message) => vec![Line::from(message.clone())],
-        SessionState::Loading => vec![Line::from("waiting for app-server response")],
-        SessionState::Idle if !app.can_open_session_list() => vec![Line::from(
-            "recent sessions remain unavailable until startup diagnostics succeed",
-        )],
-        _ => vec![Line::from("no warnings")],
-    }
 }
 
 fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
@@ -601,11 +427,6 @@ fn build_session_list_item(session: &SessionSummary) -> ListItem<'static> {
             session.model_provider,
         )),
     ])
-}
-
-fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {
-    let marker = if ok { "[ok]" } else { "[warn]" };
-    ListItem::new(format!("{marker} {title}: {detail}"))
 }
 
 fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
