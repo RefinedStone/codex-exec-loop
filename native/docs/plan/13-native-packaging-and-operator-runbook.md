@@ -75,6 +75,17 @@ shasum -a 256 -c codex-exec-loop-native-<version>-<target>.tar.gz.sha256
 
 If the packaging machine only has `openssl`, compare the emitted digest file with `openssl dgst -sha256 <archive>`.
 
+Repository helper:
+
+```bash
+cd /path/to/codex-exec-loop
+./scripts/verify_native_release.sh \
+  --archive dist/native/codex-exec-loop-native-<version>-<target>.tar.gz \
+  --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
+```
+
+The helper validates the archive sidecar and each unpacked bundle artifact against the generated checksum files.
+
 ## Operator Prerequisites
 
 The operator machine needs:

@@ -96,6 +96,14 @@ cd /home/akra/codex-exec-loop
 - `dist/native/codex-exec-loop-native-<version>-<target>.tar.gz`
 - `dist/native/codex-exec-loop-native-<version>-<target>.tar.gz.sha256`
 
+검증:
+
+```bash
+./scripts/verify_native_release.sh \
+  --archive dist/native/codex-exec-loop-native-<version>-<target>.tar.gz \
+  --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
+```
+
 운영자용 실행/배포 메모는 [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md) 에 정리했습니다.
 
 현재 native 쪽에서 확인된 흐름:

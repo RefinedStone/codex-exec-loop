@@ -32,6 +32,14 @@ Build a distributable native bundle from the repository root:
 
 The script stages a bundle under `dist/native/`, copies this crate README plus an operator runbook, writes a `.tar.gz` archive for handoff, and emits checksum files for both the unpacked bundle and the archive.
 
+Verify a generated package:
+
+```bash
+./scripts/verify_native_release.sh \
+  --archive dist/native/codex-exec-loop-native-<version>-<target>.tar.gz \
+  --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
+```
+
 Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.
 
 Operator-facing packaging notes live in [`docs/plan/13-native-packaging-and-operator-runbook.md`](./docs/plan/13-native-packaging-and-operator-runbook.md).
