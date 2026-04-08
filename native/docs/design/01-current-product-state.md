@@ -9,10 +9,11 @@ The `prerelease` branch is a working shell-first native client, not a dashboard 
 - manual prompt submission can queue while startup checks are still running, then auto-send once startup becomes ready
 - new-thread start, existing-thread resume, snapshot loading, and streamed turn execution through the app-server flow
 - inline shell commands such as `:diag`, `:sessions`, `:templates`, `:new`, and `:help`
-- single-column transcript with a bottom composer and lightweight viewport navigation
+- a transitional inline shell shape with a named transcript region above the composer and lightweight viewport navigation
 - builtin auto follow-up templates, workspace template loading, inspection-backed stop-keyword editing, and a no-file-change stop rule
 
 ## What Still Feels Transitional
+- inline mode still dedicates a `Transcript / tail` section above the prompt box, so the shell can still read like a repeated frame instead of ordinary terminal history
 - recent-session loading still depends on startup diagnostics passing, and blocked startup still keeps prompt execution from starting
 - the shell still runs as a full Ratatui raw-mode viewport and the streaming transcript is not yet a true scrollback-native CLI history
 - concurrent non-stream requests can still fall back to an isolated connection while a turn stream is active

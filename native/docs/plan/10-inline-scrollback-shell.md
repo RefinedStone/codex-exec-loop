@@ -1,6 +1,6 @@
 # Inline Scrollback Shell
 
-This document records the inline-shell migration workstream that moved the native client from a redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
+This document records the inline-shell migration workstream that moves the native client from a redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
 
 This file should stay opinionated about one product goal:
 - inline mode should feel like flow-oriented terminal history
@@ -12,8 +12,8 @@ Completed prerequisite slices should stay compact here. The detailed planning we
 ## 0. Current Status
 
 Current priority:
-- preserve the landed inline-shell migration baseline and validate it across terminals before widening scope again
-- treat the sections below as the reference record for the completed workstream, not as an active slice queue
+- finish the move from a middle `Transcript / tail` viewport to a real terminal-flow shell
+- treat the current inline shell as landed foundation, not as UX sign-off for the workstream
 
 Landed on `prerelease`:
 - shared runtime and explicit frontend split
@@ -23,7 +23,31 @@ Landed on `prerelease`:
 - stable streaming-history buffering that keeps live agent output separate from committed transcript history until completion
 
 Still remaining:
-- terminal validation and default-switch follow-through after those two slices are stable
+- remove the dedicated middle transcript viewport as the primary reading surface in inline mode
+- make host terminal scrollback the primary history mechanism for prior conversation output
+- keep only a tail-anchored prompt/live region in inline mode
+- terminal validation and default-switch follow-through after that terminal-flow target is stable
+
+## 0.1 Design Reset From Current Feedback
+
+If inline mode still reads like:
+- controls and status block
+- transcript block in the middle
+- input block at the bottom
+
+then the workstream is not done.
+
+The `Transcript / tail` panel is not the target. It is a transitional artifact that still encourages fullscreen-frame thinking.
+
+The target is closer to:
+- a Spring Boot application log running in a terminal
+- a Codex CLI session in the main terminal buffer
+
+That means:
+- conversation history should accumulate from top to bottom in the host terminal
+- host terminal scroll and mouse-wheel behavior should be the primary way to inspect older output
+- the shell may keep one live prompt/status region near the terminal tail
+- inline mode should not depend on a dedicated transcript viewport in the middle of the screen
 
 If a doc reader only needs the current action:
 - read the success contract in section 6
@@ -49,8 +73,9 @@ The target is not a Claude-Code-style append-only REPL.
 The target is a Codex-CLI-like inline TUI:
 - scrollback should remain meaningful conversation history
 - the shell can still use raw mode
-- the shell can still keep a live interaction region near the terminal tail
+- the shell can still keep one live interaction region near the terminal tail
 - the shell should preserve the current conversation-shell mental model where practical
+- inline mode should not depend on a dedicated transcript viewport as its primary reading surface
 - alternate-screen fullscreen mode should remain available as fallback during migration
 
 This means the refactor is not "remove TUI." It is "stop treating the main buffer as a fullscreen frame."
@@ -73,6 +98,7 @@ This means `MainScreen` is only "alternate-screen off." It is not architecturall
 `src/adapter/inbound/tui/app/shell_rendering.rs` currently assumes one composited frame:
 - `draw_conversation_shell` clears the whole area with `Clear`
 - layout is rebuilt as header + transcript + footer + composer
+- inline mode still renders `Transcript / tail` as a named middle panel between other shell sections
 - overlays are rendered as modal layers on top of that frame
 - transcript scrolling is handled as an in-frame viewport, not terminal scrollback
 
@@ -158,6 +184,8 @@ The new main-buffer shell is successful only if all of the following are true.
 
 - the shell should still feel like one active conversation surface
 - input should remain available near the tail of the terminal
+- inline mode should not require a titled or framed transcript viewport in the middle of the screen
+- host terminal scroll and mouse-wheel behavior should be the primary way to inspect earlier history
 - multiline entry should remain supported if technically practical
 - current shortcut habits should be preserved where they do not force the fullscreen model back in
 
@@ -494,30 +522,32 @@ Delivered:
 Exit criteria:
 - one can run a normal conversation in inline mode without the current redraw artifact
 
-## Phase 4: Parity And Interaction Hardening
+## Phase 4: Tail-Anchored Terminal Flow
 
 Primary goal:
-- close the remaining ergonomics gap so inline mode stops depending on popup-first shell assumptions
+- remove the middle transcript viewport so inline mode reads like ordinary terminal flow with one tail prompt region
 
 Concrete tasks:
-- improve inline diagnostics/session/template inspection
-- carry over stop-rule editing cleanly
-- refine input hints and shortcut behavior
-- reduce leftover fullscreen vocabulary in presentation and state
+- stop treating `Transcript / tail` as the primary reading surface in inline mode
+- keep prior output in the host terminal history instead of a named viewport block
+- preserve one tail-anchored prompt/live region for input, status, and the current turn
+- retain diagnostics/session/template access without forcing the shell back into framed composition
 
 Files most affected:
+- `ratatui_frontend.rs`
+- `shell_rendering.rs`
 - `shell_presentation.rs`
-- `followup_overlay_ui.rs`
-- `session_overlay_ui.rs`
 - `shell_controller.rs`
+- `transcript_viewport.rs`
 
 Exit criteria:
 - inline mode preserves the capability floor listed above
+- inline mode no longer depends on a dedicated transcript panel in the middle of the screen
 
 ## Phase 5: Validation And Default Switch
 
 Primary goal:
-- finish the terminal-behavior contract and validate the shell across representative terminals
+- validate the terminal-flow shell across representative terminals and switch defaults only after that behavior is credible
 
 Concrete tasks:
 - validate behavior across representative terminals

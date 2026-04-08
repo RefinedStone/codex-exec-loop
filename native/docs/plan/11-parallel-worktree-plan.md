@@ -9,7 +9,7 @@ Status baseline:
 - current reference branch: `origin/prerelease`
 - source backlog: `docs/plan/02-todo-backlog.md`, repository root `../TODO.md`, and `docs/plan/10-inline-scrollback-shell.md`
 - compaction rule: landed slices stay short here; only remaining slices keep detailed execution notes
-- primary remaining work: conditional platform follow-through in `F2`; the shell-first product slices from lane A are landed
+- primary remaining work: lane A `A6` terminal-flow shell reset, then conditional platform follow-through in `F2`
 
 ## 1. Planning Rules
 
@@ -40,7 +40,7 @@ The slices below are already landed on `prerelease` and should stay compact in t
 - [x] A2 Presentation Neutralization: shared shell presentation copy was neutralized so inline and alternate-screen frontends can share more status and title helpers.
 - [x] A3 Inline Live Region Renderer: inline main-buffer rendering landed while alternate-screen remains available as fallback.
 - [x] A4 Inline Inspection Surfaces: inline mode now renders diagnostics, sessions, and follow-up templates as in-shell inspection surfaces with focused rendering coverage, while alternate-screen keeps the popup fallback.
-- [x] A5 Scrollback-Safe Streaming History: active streaming output stays in the live region until completion, while thread and turn lifecycle markers commit into stable transcript history instead of replaying each delta as transcript state.
+- [x] A5 Scrollback-Safe Streaming History Foundation: active streaming output stays in the live region until completion, while thread and turn lifecycle markers commit into stable transcript history instead of replaying each delta as transcript state.
 - [x] B1 Editable Max Auto Turns: the shell can edit max auto turns with bounded validation.
 - [x] B2 Template Reload Action: workspace follow-up templates can reload from the shell without restarting.
 - [x] B3 Auto-Follow Activity Clarity: queue, submit, stop, and skip outcomes are surfaced as clearer operator-visible activity.
@@ -70,13 +70,26 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 
 ## 4. Remaining Slices
 
+### A6. Tail-Anchored Terminal Flow Shell
+
+- status: remaining
+- branch: `feature/native-shell-terminal-flow`
+- goal: remove the dedicated middle `Transcript / tail` viewport from inline mode so the host terminal becomes the primary history surface and the tail prompt/live region becomes the only anchored shell region
+- ownership: `src/adapter/inbound/tui/app/ratatui_frontend.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`, `src/adapter/inbound/tui/app/transcript_viewport.rs`, and shell rendering tests under `src/adapter/inbound/tui/app/`
+- depends on: A1 through A5 foundation
+- done when:
+  - inline mode no longer renders `Transcript / tail` as the primary reading surface
+  - sequential history reads top-to-bottom like Codex CLI or a Spring Boot application log
+  - host terminal scroll or mouse-wheel behavior is the primary way to inspect older output in inline mode
+  - a tail-anchored prompt box remains available for input without replaying the whole shell frame
+
 ### F2. Windows Compatibility Fixes
 
 - status: conditional remaining
 - branch: `fix/native-platform-windows-compat`
 - goal: land focused Windows-specific terminal fixes only when the validation matrix finds concrete issues
 - ownership: frontend and runtime files under `src/adapter/inbound/tui/app/` only as required by validated findings
-- depends on: F1 and a recorded Windows validation failure
+- depends on: F1, A6, and a recorded Windows validation failure
 - done when:
   - each validated Windows issue is either fixed with focused regression coverage or closed with explicit manual validation notes
   - no speculative portability edits are mixed into the fix branch
@@ -85,7 +98,8 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 
 Keep these guardrails for the remaining slices:
 
-- do not start F2 until the validation matrix produces concrete Windows findings
+- do not run A6 in parallel with another slice that changes shell rendering, transcript viewport, or prompt chrome hotspots
+- do not start F2 until A6 lands and the validation matrix produces concrete Windows findings
 
 ## 6. Handoff Rule
 

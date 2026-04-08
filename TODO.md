@@ -9,6 +9,7 @@
 ## Current Focus
 
 - Make native the real "agent loop" product, not just a conversation shell
+- Reset inline mode from a middle `Transcript / tail` viewport to a terminal-flow shell with one tail prompt box
 - Run real terminal validation on macOS and Windows from the published matrix
 - Land only focused Windows compatibility fixes when the validation matrix produces concrete findings
 - Keep the flow understandable for a Spring Boot Kotlin developer
@@ -56,6 +57,7 @@
 
 ## Next
 
+- replace the inline `Transcript / tail` viewport with top-to-bottom terminal flow where host terminal scroll is the primary history mechanism
 - run real terminal validation on macOS and Windows and land only focused compatibility fixes when findings exist
 
 ## Migration

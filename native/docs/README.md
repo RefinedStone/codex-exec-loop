@@ -12,7 +12,7 @@ The docs now optimize for phase-2 work:
 1. Read [design/01-current-product-state.md](design/01-current-product-state.md).
 2. Read [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md).
 3. Read [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md).
-4. If you need the landed inline-shell migration context, read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) next.
+4. If you are working on the remaining terminal-flow shell target, read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) next.
 5. Use [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md), [plan/02-todo-backlog.md](plan/02-todo-backlog.md), and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) for the current remaining-work baseline.
 6. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting active work across multiple git worktrees.
 7. Read [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md) when a PR changes terminal restore, frontend mode, or platform-facing shell behavior.
@@ -36,7 +36,7 @@ The docs now optimize for phase-2 work:
 - [plan/02-todo-backlog.md](plan/02-todo-backlog.md): current open change buckets that still matter across PRs
 - [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture and how future feature docs should take over detail
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch and worktree rules for concurrent native delivery
-- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): landed inline-shell migration workstream retained as a reference for the scrollback-first direction
-- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): compact completion snapshot plus detailed notes for the slices that still remain
+- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): active reference doc for the remaining terminal-flow shell target and the `Transcript / tail` reset
+- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): compact completion snapshot plus detailed notes for the remaining terminal-flow and platform-validation slices
 - [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): canonical manual validation matrix for macOS and Windows terminal behavior
 - [validation/README.md](validation/README.md): canonical location and naming rules for checked-in validation result rows
