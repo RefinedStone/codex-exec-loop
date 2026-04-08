@@ -9,4 +9,4 @@ This file now captures the current delivery posture rather than a standing step-
 4. Refresh regression coverage whenever a change alters runtime, shell flow, or auto follow-up behavior.
 
 ## Handoff Rule
-When a future feature doc is added under `plan/`, that feature doc should carry the detailed plan. This file should remain a short statement of the current project posture instead of accumulating stale ordering detail.
+When a concrete feature doc exists under `plan/`, that feature doc should carry the detailed plan for that workstream and can be as detailed as the change requires. This file should remain a short statement of the current project posture instead of accumulating stale ordering detail.
