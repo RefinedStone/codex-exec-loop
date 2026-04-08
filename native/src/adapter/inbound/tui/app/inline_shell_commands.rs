@@ -56,12 +56,12 @@ impl InlineShellCommand {
 
     pub(super) fn execution_status(self) -> Option<&'static str> {
         match self {
-            Self::Diagnostics => Some("opened diagnostics overlay from :diag"),
-            Self::Sessions => Some("opened recent sessions overlay from :sessions"),
-            Self::Templates => Some("opened template overlay from :templates"),
+            Self::Diagnostics => Some("opened diagnostics overlay"),
+            Self::Sessions => Some("opened recent sessions overlay"),
+            Self::Templates => Some("opened template overlay"),
             Self::NewDraft => None,
-            Self::TranscriptTop => Some("jumped transcript viewport to top from :top"),
-            Self::TranscriptTail => Some("jumped transcript viewport to tail from :tail"),
+            Self::TranscriptTop => Some("jumped transcript viewport to top"),
+            Self::TranscriptTail => Some("jumped transcript viewport to tail"),
             Self::Help => Some(Self::command_list_line()),
         }
     }
@@ -102,5 +102,35 @@ mod tests {
             InlineShellCommand::Help.execution_status(),
             Some(InlineShellCommand::command_list_line())
         );
+    }
+
+    #[test]
+    fn execution_status_stays_alias_neutral() {
+        let cases = [
+            (
+                InlineShellCommand::Diagnostics,
+                Some("opened diagnostics overlay"),
+            ),
+            (
+                InlineShellCommand::Sessions,
+                Some("opened recent sessions overlay"),
+            ),
+            (
+                InlineShellCommand::Templates,
+                Some("opened template overlay"),
+            ),
+            (
+                InlineShellCommand::TranscriptTop,
+                Some("jumped transcript viewport to top"),
+            ),
+            (
+                InlineShellCommand::TranscriptTail,
+                Some("jumped transcript viewport to tail"),
+            ),
+        ];
+
+        for (command, expected) in cases {
+            assert_eq!(command.execution_status(), expected);
+        }
     }
 }
