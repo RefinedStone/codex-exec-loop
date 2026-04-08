@@ -619,6 +619,43 @@ impl ConversationViewModel {
         warnings
     }
 
+    fn compact_warning_text(warning: &str) -> String {
+        warning.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn truncate_warning_text(warning: &str, max_detail_len: usize) -> String {
+        const TRUNCATION_SUFFIX: &str = "...";
+
+        let compact = Self::compact_warning_text(warning);
+        let max_detail_len = max_detail_len.max(TRUNCATION_SUFFIX.len());
+        if compact.chars().count() <= max_detail_len {
+            return compact;
+        }
+
+        let truncated = compact
+            .chars()
+            .take(max_detail_len - TRUNCATION_SUFFIX.len())
+            .collect::<String>();
+        format!("{truncated}{TRUNCATION_SUFFIX}")
+    }
+
+    pub(crate) fn latest_warning_summary(&self, max_detail_len: usize) -> String {
+        let Some(latest_warning) = self.warnings.last() else {
+            return "warning: none".to_string();
+        };
+
+        let summary = Self::truncate_warning_text(latest_warning, max_detail_len);
+        if self.warnings.len() == 1 {
+            format!("warning: {summary}")
+        } else {
+            format!(
+                "warning {}/{}: {summary}",
+                self.warnings.len(),
+                self.warnings.len()
+            )
+        }
+    }
+
     pub(crate) fn replace_template_warnings(&mut self, template_warnings: Vec<String>) {
         self.template_warnings = template_warnings;
         self.warnings = Self::merge_warnings(&self.base_warnings, &self.template_warnings);
@@ -872,6 +909,19 @@ mod tests {
         assert!(prompt.contains("자동 후속 1/3 입니다."));
         assert!(prompt.contains("latest answer"));
         assert!(prompt.contains("AUTO_STOP"));
+    }
+
+    #[test]
+    fn latest_warning_summary_uses_latest_warning_and_truncates() {
+        let mut conversation = ready_conversation();
+        conversation.warnings = vec![
+            "first warning".to_string(),
+            "shared runtime busy with an active turn stream; request used an isolated app-server connection".to_string(),
+        ];
+
+        let summary = conversation.latest_warning_summary(36);
+
+        assert_eq!(summary, "warning 2/2: shared runtime busy with an activ...");
     }
 
     #[test]

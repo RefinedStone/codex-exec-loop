@@ -1731,6 +1731,25 @@ mod tests {
     }
 
     #[test]
+    fn followup_template_status_lines_include_latest_warning_detail() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.warnings = vec![
+            "template catalog reloaded with fallback".to_string(),
+            "workspace template missing".to_string(),
+        ];
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_followup_template_status_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("warning 2/2: workspace template missing"));
+    }
+
+    #[test]
     fn followup_template_status_lines_include_max_auto_turns_value() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
@@ -1908,6 +1927,22 @@ mod tests {
         assert!(rendered.contains("tool activity: file change: update src/app.rs"));
         assert!(rendered.contains("last turn commands: 1"));
         assert!(rendered.contains("last turn file changes: 3"));
+    }
+
+    #[test]
+    fn shell_footer_surfaces_latest_warning_detail() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.warnings = vec!["workspace template missing".to_string()];
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("warning: workspace template missing"));
     }
 
     #[test]

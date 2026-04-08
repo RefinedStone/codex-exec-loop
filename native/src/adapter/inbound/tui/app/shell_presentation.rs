@@ -2,6 +2,9 @@ use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 
+const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
+const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
+
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
     pub(super) header_lines: Vec<Line<'static>>,
@@ -332,11 +335,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                 .as_ref()
                 .map(|activity| activity.detail.as_str())
                 .unwrap_or("none");
-            let warning_summary = if conversation.warnings.is_empty() {
-                "warnings: none".to_string()
-            } else {
-                format!("warnings: {}", conversation.warnings.len())
-            };
+            let warning_summary = conversation.latest_warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
 
             vec![
                 Line::from(format!(
@@ -600,7 +599,11 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 ));
             }
             lines.push(Line::from(Span::styled(
-                format!("status: {}", conversation.status_text),
+                format!(
+                    "status: {}  |  {}",
+                    conversation.status_text,
+                    conversation.latest_warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
+                ),
                 Style::default().fg(Color::Yellow),
             )));
 
