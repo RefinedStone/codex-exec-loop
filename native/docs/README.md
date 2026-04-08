@@ -13,7 +13,8 @@ The docs now optimize for phase-2 work:
 2. Read [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md).
 3. Read [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md).
 4. Use [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md) and the `plan/` docs for the current planning baseline.
-5. Read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) when working on the Codex-CLI-like inline shell migration workstream.
+5. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting active work across multiple git worktrees.
+6. Read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) when working on the Codex-CLI-like inline shell migration workstream.
 
 ## Compaction Rule
 - Core logic docs should keep stable contracts, ownership boundaries, lifecycle notes, and stop-rule behavior.
@@ -32,4 +33,6 @@ The docs now optimize for phase-2 work:
 - [plan/01-roadmap.md](plan/01-roadmap.md): current planning baseline, not a future milestone script
 - [plan/02-todo-backlog.md](plan/02-todo-backlog.md): current open change buckets that still matter across PRs
 - [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture and how future feature docs should take over detail
+- [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch and worktree rules for concurrent native delivery
 - [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): detailed feature plan for the Codex-CLI-like inline shell migration
+- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): detailed split of the remaining native work into worktree-ready slices

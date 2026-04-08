@@ -43,5 +43,17 @@ Use the repo-local RefinedStone identity for PR operations.
 - after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
 - for final integration, do not use GitHub merge-commit flow; rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits
 
+## Parallel Worktree Rule
+When multiple native slices move in parallel, treat worktree setup as part of the design work, not as an afterthought.
+
+- create one git worktree per live branch, normally from the latest `origin/prerelease`
+- keep one reviewable slice and one PR per worktree; do not mix unrelated backlog items in one branch
+- inspect active local worktrees, unmerged branches, and open PRs before naming a new branch
+- assume another unmerged worktree may already own a nearby file boundary and prefer a disjoint lane when two workers are active
+- use names that expose location such as `feature/native-<lane>-<zone>-<slice>`, `fix/native-<lane>-<zone>-<slice>`, `docs/native-<lane>-<zone>-<slice>`, or `chore/native-<lane>-<zone>-<slice>`
+- do not branch a new worktree from another in-flight feature branch unless the dependency is explicitly documented
+- if overlap is intentional, document the expected conflict surface and resolve it consciously during rebase or merge
+- before starting concurrent work, map the slice to [`docs/plan/04-worktree-branch-rules.md`](docs/plan/04-worktree-branch-rules.md) and the active split plan in [`docs/plan/11-parallel-worktree-plan.md`](docs/plan/11-parallel-worktree-plan.md)
+
 ## Working Rules
 Use official Codex interfaces first: `codex app-server`, `codex exec`, and `codex exec resume`. Keep commits small and milestone-based. Do not introduce unnecessary traits; add a port only when it improves a real boundary. For TUI changes, include a screenshot or short terminal capture in the PR when practical.
