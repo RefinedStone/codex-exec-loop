@@ -95,6 +95,8 @@ cd <path-to-repo>
   --output-dir native/docs/validation
 ```
 
+When this helper runs inside WSL, it records the Windows host OS plus the WSL distro and prefers `TERMINAL_EMULATOR` when an IDE terminal does not expose `WT_SESSION`.
+
 Capture a validation note scaffold in PowerShell:
 
 ```powershell
@@ -142,6 +144,8 @@ These are the minimum environments that should be exercised before closing a pla
 | Windows | Windows Terminal | WSL bash | inline | required |
 | Windows | Windows Terminal | WSL bash | alternate | required |
 | Windows | Git Bash or equivalent | bash | inline | optional |
+| Windows | JetBrains IDE terminal | WSL bash | inline | optional |
+| Windows | JetBrains IDE terminal | WSL bash | alternate | optional |
 
 ## Validation Checklist
 

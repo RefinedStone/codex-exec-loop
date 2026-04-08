@@ -34,6 +34,8 @@ require_value() {
 detect_terminal() {
   if [[ -n "${WT_SESSION-}" ]]; then
     printf 'Windows Terminal'
+  elif [[ -n "${TERMINAL_EMULATOR-}" ]]; then
+    printf '%s' "${TERMINAL_EMULATOR}"
   elif [[ -n "${TERM_PROGRAM-}" ]]; then
     printf '%s' "${TERM_PROGRAM}"
   elif [[ -n "${LC_TERMINAL-}" ]]; then
@@ -44,6 +46,15 @@ detect_terminal() {
 }
 
 detect_shell() {
+  if [[ -n "${WSL_DISTRO_NAME-}" ]]; then
+    if [[ -n "${SHELL-}" ]]; then
+      printf 'WSL %s' "$(basename "${SHELL}")"
+    else
+      printf 'WSL shell'
+    fi
+    return
+  fi
+
   if [[ -n "${SHELL-}" ]]; then
     basename "${SHELL}"
   else
@@ -51,7 +62,37 @@ detect_shell() {
   fi
 }
 
+detect_windows_host_os_from_wsl() {
+  local powershell_path='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+  local host_os
+
+  if [[ ! -x "${powershell_path}" ]]; then
+    return 1
+  fi
+
+  host_os="$(
+    "${powershell_path}" -NoProfile -Command \
+      '$instance = Get-CimInstance Win32_OperatingSystem; "$($instance.Caption) $($instance.Version)"' \
+      2>/dev/null | tr -d '\r' | head -n 1
+  )"
+
+  if [[ -z "${host_os}" ]]; then
+    return 1
+  fi
+
+  printf '%s' "${host_os}"
+}
+
 detect_os() {
+  if [[ -n "${WSL_DISTRO_NAME-}" ]]; then
+    local host_os=""
+    host_os="$(detect_windows_host_os_from_wsl || true)"
+    if [[ -n "${host_os}" ]]; then
+      printf '%s / WSL %s' "${host_os}" "${WSL_DISTRO_NAME}"
+      return
+    fi
+  fi
+
   if command -v sw_vers >/dev/null 2>&1; then
     printf 'macOS %s %s' "$(sw_vers -productVersion)" "$(sw_vers -buildVersion)"
     return

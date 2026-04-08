@@ -11,6 +11,7 @@ Rules:
 - keep the emitted checklist intact so later readers can compare rows quickly
 - use `./scripts/summarize_native_validation.sh` to see which required rows are still missing before calling the matrix complete
 - if a row finds a real Windows-specific issue, open the focused `F2` follow-up from the latest `origin/prerelease` instead of broadening the validation commit
+- when the bash helper runs inside WSL, it should record the Windows host OS plus the distro name and prefer `TERMINAL_EMULATOR` for IDE terminals that do not expose `WT_SESSION`
 
 Recommended filename shape:
 

@@ -26,7 +26,7 @@ canonical_os_family() {
     macos*|darwin*)
       printf 'macos'
       ;;
-    windows*|mingw*|msys*)
+    microsoft-windows*|windows*|mingw*|msys*)
       printf 'windows'
       ;;
     *)
@@ -47,6 +47,9 @@ canonical_terminal() {
       ;;
     windows-terminal*)
       printf 'windows-terminal'
+      ;;
+    jetbrains-jediterm*|jetbrains-terminal*|jediterm*)
+      printf 'jetbrains-terminal'
       ;;
     git-bash*|git-for-windows*|mingw64*|mingw32*)
       printf 'git-bash'
@@ -144,6 +147,8 @@ declare -a row_specs=(
   "required|windows|windows-terminal|wsl-bash|inline|Windows / Windows Terminal / WSL bash / inline"
   "required|windows|windows-terminal|wsl-bash|alternate|Windows / Windows Terminal / WSL bash / alternate"
   "optional|windows|git-bash|bash|inline|Windows / Git Bash / bash / inline"
+  "optional|windows|jetbrains-terminal|wsl-bash|inline|Windows / JetBrains IDE terminal / WSL bash / inline"
+  "optional|windows|jetbrains-terminal|wsl-bash|alternate|Windows / JetBrains IDE terminal / WSL bash / alternate"
 )
 
 declare -A row_labels=()
