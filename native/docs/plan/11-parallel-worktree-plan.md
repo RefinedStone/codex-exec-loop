@@ -2,10 +2,12 @@
 
 This document splits the remaining native work into worktree-ready slices so multiple branches can move at the same time without colliding.
 
+Unless noted otherwise, file paths below are relative to `native/`.
+
 Status baseline:
 - snapshot date: 2026-04-08
 - default merge target: `prerelease`
-- source backlog: `docs/plan/02-todo-backlog.md`, `../TODO.md`, and `plan/10-inline-scrollback-shell.md`
+- source backlog: `docs/plan/02-todo-backlog.md`, repository root `../TODO.md`, and `docs/plan/10-inline-scrollback-shell.md`
 
 This file covers the work that is still open or only planned. It is intentionally more detailed than the baseline roadmap docs because the point is to make concurrent execution safe.
 
@@ -15,7 +17,7 @@ This file covers the work that is still open or only planned. It is intentionall
 - every branch below assumes a fresh branch from `origin/prerelease` unless a dependency is called out
 - assume another unmerged worktree may already exist and check that before opening a new branch
 - use branch names in the form `kind/native-<lane>-<zone>-<slice>` so another worker can infer the likely ownership area
-- when a slice touches a hotspot file from `04-worktree-branch-rules.md`, do not start another hotspot-heavy slice in parallel without an explicit decision
+- when a slice touches a hotspot file from `docs/plan/04-worktree-branch-rules.md`, do not start another hotspot-heavy slice in parallel without an explicit decision
 - every slice below should ship with its own tests or documentation updates instead of relying on a later cleanup branch
 
 ## 2. Preflight For Another Worker
@@ -53,19 +55,19 @@ These slices can start together with the lowest collision risk.
 
 | Lane | Branch | Goal | Main Files |
 | --- | --- | --- | --- |
-| A1 | `feature/native-shell-runtime-split` | extract the inline-shell runtime seam without changing product behavior yet | `app/app_runtime.rs`, `app/shell_frontend.rs`, new runtime/frontend modules |
-| B1 | `feature/native-followup-max-turns-edit` | add editable max-auto-turn controls in the native shell | `app/conversation_model.rs`, `app/followup_controls.rs`, `app/followup_overlay_ui.rs` |
-| C1 | `feature/native-session-query-model` | add session search, paging state, and recent-project filter model | `application/service/session_service.rs`, `app/session_overlay_ui.rs`, session presentation helpers |
-| E1 | `feature/native-github-poller-port` | define the GitHub polling boundary and adapter without wiring the full UI yet | `application/port/*`, `application/service/*`, `adapter/outbound/*` |
-| F1 | `docs/native-platform-validation-matrix` | create the validation matrix for Windows and macOS terminal behavior | `docs/*`, packaging or validation notes |
+| A1 | `feature/native-shell-runtime-split` | extract the inline-shell runtime seam without changing product behavior yet | `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/shell_frontend.rs`, and new modules under `src/adapter/inbound/tui/app/` |
+| B1 | `feature/native-followup-max-turns-edit` | add editable max-auto-turn controls in the native shell | `src/adapter/inbound/tui/app/conversation_model.rs`, `src/adapter/inbound/tui/app/followup_controls.rs`, and `src/adapter/inbound/tui/app/followup_overlay_ui.rs` |
+| C1 | `feature/native-session-query-model` | add session search, paging state, and recent-project filter model | `src/application/service/session_service.rs`, `src/adapter/inbound/tui/app/session_overlay_ui.rs`, and session presentation helpers under `src/adapter/inbound/tui/app/` |
+| E1 | `feature/native-github-poller-port` | define the GitHub polling boundary and adapter without wiring the full UI yet | `src/application/port/`, `src/application/service/`, and `src/adapter/outbound/` |
+| F1 | `docs/native-platform-validation-matrix` | create the validation matrix for Windows and macOS terminal behavior | `docs/` and any supporting packaging or validation notes under `../` repo docs |
 
 Avoid starting `D1` in the first wave because it shares the same runtime hotspot area as `A1`.
 
 ## 5. Lane A: Inline Scrollback Shell Migration
 
-This lane maps the large refactor already described in `plan/10-inline-scrollback-shell.md`.
+This lane maps the large refactor already described in `docs/plan/10-inline-scrollback-shell.md`.
 
-Only one active worktree from lane A should exist at a time because most slices touch `app_runtime.rs`, `shell_rendering.rs`, or `shell_presentation.rs`.
+Only one active worktree from lane A should exist at a time because most slices touch `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, or `src/adapter/inbound/tui/app/shell_presentation.rs`.
 
 ### A1. Runtime and Frontend Split
 
@@ -87,7 +89,7 @@ Only one active worktree from lane A should exist at a time because most slices 
 - branch: `feature/native-shell-presentation-neutral`
 - status: after A1
 - goal: move reusable text summaries away from fullscreen-only legends and titles
-- ownership: `shell_presentation.rs`, `shell_layout.rs`, targeted tests in `app.rs`
+- ownership: `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_layout.rs`, and targeted tests in `src/adapter/inbound/tui/app.rs`
 - depends on: A1
 - done when:
   - presentation helpers can feed both inline and alternate-screen frontends
@@ -98,7 +100,7 @@ Only one active worktree from lane A should exist at a time because most slices 
 - branch: `feature/native-shell-live-region`
 - status: after A2
 - goal: introduce an inline live-region renderer while keeping alternate-screen as fallback
-- ownership: `shell_rendering.rs`, new renderer modules, `transcript_viewport.rs`
+- ownership: `src/adapter/inbound/tui/app/shell_rendering.rs`, new renderer modules under `src/adapter/inbound/tui/app/`, and `src/adapter/inbound/tui/app/transcript_viewport.rs`
 - depends on: A2
 - done when:
   - main-buffer mode no longer redraws the entire frame as if it were fullscreen
@@ -109,7 +111,7 @@ Only one active worktree from lane A should exist at a time because most slices 
 - branch: `feature/native-shell-inline-inspection`
 - status: after A3
 - goal: replace modal diagnostics, sessions, and template overlays in main-buffer mode with inline inspections
-- ownership: `session_overlay_ui.rs`, `followup_overlay_ui.rs`, `shell_controller.rs`, `shell_rendering.rs`
+- ownership: `src/adapter/inbound/tui/app/session_overlay_ui.rs`, `src/adapter/inbound/tui/app/followup_overlay_ui.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`, and `src/adapter/inbound/tui/app/shell_rendering.rs`
 - depends on: A3
 - done when:
   - main-buffer mode no longer depends on popup-first interaction for diagnostics, sessions, or templates
@@ -120,7 +122,7 @@ Only one active worktree from lane A should exist at a time because most slices 
 - branch: `feature/native-shell-stream-history`
 - status: after A3
 - goal: make streaming output append into stable history without replaying the entire shell frame
-- ownership: `conversation_runtime.rs`, `shell_rendering.rs`, `shell_presentation.rs`, transcript-related tests
+- ownership: `src/adapter/inbound/tui/app/conversation_runtime.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, and transcript-related tests under `src/adapter/inbound/tui/app/`
 - depends on: A3
 - done when:
   - terminal scrollback reads like a coherent session
@@ -128,14 +130,14 @@ Only one active worktree from lane A should exist at a time because most slices 
 
 ## 6. Lane B: Automation Controls and Visibility
 
-Lane B can run in parallel with lane A until a slice needs `shell_presentation.rs` or shared runtime hotspots.
+Lane B can run in parallel with lane A until a slice needs `src/adapter/inbound/tui/app/shell_presentation.rs` or shared runtime hotspots.
 
 ### B1. Editable Max Auto Turns
 
 - branch: `feature/native-followup-max-turns-edit`
 - status: ready to start
 - goal: add UI editing for the maximum auto-follow turn count
-- ownership: `conversation_model.rs`, `followup_controls.rs`, `followup_overlay_ui.rs`, related tests
+- ownership: `src/adapter/inbound/tui/app/conversation_model.rs`, `src/adapter/inbound/tui/app/followup_controls.rs`, `src/adapter/inbound/tui/app/followup_overlay_ui.rs`, and related tests under `src/adapter/inbound/tui/app/`
 - done when:
   - the operator can edit the max-turn value from the shell
   - invalid values are rejected predictably
@@ -146,7 +148,7 @@ Lane B can run in parallel with lane A until a slice needs `shell_presentation.r
 - branch: `feature/native-followup-template-reload`
 - status: after B1
 - goal: reload workspace templates from the shell without restarting the app
-- ownership: `followup_controls.rs`, follow-up service or filesystem adapter glue, overlay key hints
+- ownership: `src/adapter/inbound/tui/app/followup_controls.rs`, follow-up service or filesystem adapter glue under `src/application/service/` and `src/adapter/outbound/`, and overlay key hints in `src/adapter/inbound/tui/app/shell_presentation.rs`
 - depends on: B1 only if both slices would otherwise fight over the same overlay UI files
 - done when:
   - a reload action exists in the shell
@@ -157,7 +159,7 @@ Lane B can run in parallel with lane A until a slice needs `shell_presentation.r
 - branch: `feature/native-followup-activity-clarity`
 - status: after B2
 - goal: show clearer queue, submit, stop, and skip decisions around auto follow-up
-- ownership: `conversation_runtime.rs`, `conversation_model.rs`, `shell_presentation.rs`
+- ownership: `src/adapter/inbound/tui/app/conversation_runtime.rs`, `src/adapter/inbound/tui/app/conversation_model.rs`, and `src/adapter/inbound/tui/app/shell_presentation.rs`
 - depends on: B2
 - done when:
   - queueing, submit, stop-rule hits, and skip reasons read clearly from the shell without digging into tests
@@ -171,7 +173,7 @@ Lane C can run in parallel with lanes A, B, E, and F until lane A reaches inline
 - branch: `feature/native-session-query-model`
 - status: ready to start
 - goal: add search query, paging state, and recent-project filter state for recent sessions
-- ownership: `application/service/session_service.rs`, `session_overlay_ui.rs`, session mapping or presentation helpers
+- ownership: `src/application/service/session_service.rs`, `src/adapter/inbound/tui/app/session_overlay_ui.rs`, and session mapping or presentation helpers under `src/adapter/inbound/tui/app/`
 - done when:
   - the state model supports filtering and paging without mixing UI concerns into domain types
   - regression tests cover state transitions and mapping behavior
@@ -181,7 +183,7 @@ Lane C can run in parallel with lanes A, B, E, and F until lane A reaches inline
 - branch: `feature/native-session-ui-controls`
 - status: after C1
 - goal: wire keyboard controls and visible filter summaries into the shell
-- ownership: `shell_controller.rs`, `session_overlay_ui.rs`, `shell_presentation.rs`, tests in `app.rs`
+- ownership: `src/adapter/inbound/tui/app/shell_controller.rs`, `src/adapter/inbound/tui/app/session_overlay_ui.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, and tests in `src/adapter/inbound/tui/app.rs`
 - depends on: C1
 - done when:
   - the operator can edit query text, move pages, and switch recent-project filters
@@ -192,7 +194,7 @@ Lane C can run in parallel with lanes A, B, E, and F until lane A reaches inline
 - branch: `feature/native-session-result-shaping`
 - status: after C2
 - goal: improve ranking, empty-state copy, and recent-project context in the session browser
-- ownership: session presentation helpers, session overlay tests, any small service shaping needed
+- ownership: session presentation helpers under `src/adapter/inbound/tui/app/`, session overlay tests under `src/adapter/inbound/tui/app.rs`, and any small service shaping under `src/application/service/`
 - depends on: C2
 - done when:
   - no-result, one-result, and multi-page states all read clearly
@@ -206,7 +208,7 @@ Lane D should start after A1 lands because it shares the shared-runtime boundary
 - branch: `feature/native-runtime-request-policy`
 - status: after A1
 - goal: make concurrent fallback behavior explicit while a streaming turn holds the shared runtime
-- ownership: `adapter/outbound/codex_app_server_adapter.rs`, runtime request tests, shell runtime glue
+- ownership: `src/adapter/outbound/codex_app_server_adapter.rs`, runtime request tests under `src/adapter/outbound/`, and shell runtime glue under `src/adapter/inbound/tui/app/`
 - depends on: A1
 - done when:
   - concurrent startup, session, snapshot, or fallback requests have an explicit rule instead of incidental behavior
@@ -217,7 +219,7 @@ Lane D should start after A1 lands because it shares the shared-runtime boundary
 - branch: `feature/native-runtime-activity-surface`
 - status: after D1
 - goal: show approval requests and tool activity in the live shell
-- ownership: runtime event models, outbound adapter parsing, `shell_presentation.rs`, `shell_rendering.rs`
+- ownership: runtime event models under `src/adapter/inbound/tui/app/`, outbound adapter parsing under `src/adapter/outbound/`, `src/adapter/inbound/tui/app/shell_presentation.rs`, and `src/adapter/inbound/tui/app/shell_rendering.rs`
 - depends on: D1
 - done when:
   - approval and tool activity are visible without digging into raw stream events
@@ -228,7 +230,7 @@ Lane D should start after A1 lands because it shares the shared-runtime boundary
 - branch: `feature/native-runtime-warning-visibility`
 - status: after D2
 - goal: normalize reconnect, reset, and warning visibility in the shell
-- ownership: outbound adapter notices, shell status output, regression tests
+- ownership: outbound adapter notices under `src/adapter/outbound/`, shell status output under `src/adapter/inbound/tui/app/shell_presentation.rs`, and regression tests under `src/adapter/inbound/tui/app/`
 - depends on: D2
 - done when:
   - warning transitions are readable and predictable
@@ -243,7 +245,7 @@ Lane E can start early because it primarily adds a new outbound boundary and app
 - branch: `feature/native-github-poller-port`
 - status: ready to start
 - goal: define the application port and outbound adapter for GitHub PR review/comment polling
-- ownership: new files under `application/port/`, `application/service/`, and `adapter/outbound/`
+- ownership: new files under `src/application/port/`, `src/application/service/`, and `src/adapter/outbound/`
 - done when:
   - the polling contract exists without leaking transport details into domain code
   - the adapter has unit coverage for response parsing and poll-state mapping
@@ -253,7 +255,7 @@ Lane E can start early because it primarily adds a new outbound boundary and app
 - branch: `feature/native-github-poll-scheduling`
 - status: after E1
 - goal: integrate the poller with the native runtime lifecycle and app state
-- ownership: `app_runtime.rs`, shell runtime glue, app state or reducer modules
+- ownership: `src/adapter/inbound/tui/app/app_runtime.rs`, shell runtime glue under `src/adapter/inbound/tui/app/`, and app state or reducer modules under `src/adapter/inbound/tui/app/`
 - depends on: E1
 - done when:
   - the app can start, stop, and refresh polling on a predictable schedule
@@ -264,7 +266,7 @@ Lane E can start early because it primarily adds a new outbound boundary and app
 - branch: `feature/native-github-ui-notices`
 - status: after E2
 - goal: surface new PR review and comment changes in the shell
-- ownership: `shell_presentation.rs`, `shell_rendering.rs`, relevant app tests
+- ownership: `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, and relevant app tests under `src/adapter/inbound/tui/app/`
 - depends on: E2
 - done when:
   - review changes appear as clear notices in the native UI
@@ -279,7 +281,7 @@ Lane F is the safest sidecar lane and should stay mostly independent from hot ru
 - branch: `docs/native-platform-validation-matrix`
 - status: ready to start
 - goal: document how native raw-mode, alternate-screen, and inline-shell behavior should be checked on Windows and macOS
-- ownership: `docs/`, validation notes, operator checklists
+- ownership: `docs/`, validation notes under `docs/`, and operator checklists under `docs/`
 - done when:
   - the repo has one canonical validation matrix for terminal behavior
   - manual validation steps are specific enough to reuse during future PRs
@@ -289,7 +291,7 @@ Lane F is the safest sidecar lane and should stay mostly independent from hot ru
 - branch: `fix/native-platform-windows-compat`
 - status: after F1 and only when concrete findings exist
 - goal: land any Windows-specific raw-mode or terminal behavior fixes found during validation
-- ownership: frontend/runtime files only as required by validated findings
+- ownership: frontend and runtime files under `src/adapter/inbound/tui/app/` only as required by validated findings
 - depends on: F1
 - done when:
   - validated Windows issues are fixed with focused regression coverage or documented manual checks
@@ -299,7 +301,7 @@ Lane F is the safest sidecar lane and should stay mostly independent from hot ru
 - branch: `chore/native-platform-packaging`
 - status: after F1
 - goal: define packaging steps and operator-facing run/install documentation for macOS and Windows
-- ownership: packaging scripts, `README.md`, release notes or operator docs
+- ownership: packaging scripts under `../scripts/`, `README.md`, and release notes or operator docs under `docs/`
 - depends on: F1
 - done when:
   - packaging steps are documented and repeatable
