@@ -255,28 +255,37 @@ pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
 }
 
 pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    let submit_hint = build_primary_submit_hint(app);
     let prompt_label = match mode {
         ShellFrontendMode::InlineMainBuffer => "Prompt",
         ShellFrontendMode::AlternateScreen => "Composer",
     };
 
     match &app.conversation_state {
-        ConversationState::Loading => Line::from(format!("{prompt_label} / loading")),
-        ConversationState::Failed(_) => Line::from(format!("{prompt_label} / unavailable")),
-        ConversationState::Ready(conversation) => Line::from(vec![
-            Span::raw(format!("{prompt_label} / ")),
-            Span::styled(
-                conversation.input_state.label().to_string(),
-                input_state_style(conversation.input_state),
-            ),
-            Span::raw(" / startup "),
-            Span::styled(
-                shell_action_availability_label(app).to_string(),
-                startup_state_style(app),
-            ),
-            Span::raw(format!(" / {submit_hint} / Ctrl+j newline")),
-        ]),
+        ConversationState::Loading => {
+            Line::from(vec![Span::raw(prompt_label), Span::raw(" / loading")])
+        }
+        ConversationState::Failed(_) => {
+            Line::from(vec![Span::raw(prompt_label), Span::raw(" / unavailable")])
+        }
+        ConversationState::Ready(conversation) => {
+            let submit_hint = build_primary_submit_hint(app);
+            Line::from(vec![
+                Span::raw(prompt_label),
+                Span::raw(" / "),
+                Span::styled(
+                    conversation.input_state.label().to_string(),
+                    input_state_style(conversation.input_state),
+                ),
+                Span::raw(" / startup "),
+                Span::styled(
+                    shell_action_availability_label(app).to_string(),
+                    startup_state_style(app),
+                ),
+                Span::raw(" / "),
+                Span::raw(submit_hint),
+                Span::raw(" / Ctrl+j newline"),
+            ])
+        }
     }
 }
 

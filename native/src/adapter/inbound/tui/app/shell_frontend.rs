@@ -36,18 +36,13 @@ impl ShellFrontendMode {
 }
 
 pub(super) fn run(runtime: ShellRuntime, mode: ShellFrontendMode) -> Result<()> {
-    run_ratatui_frontend(runtime, matches!(mode, ShellFrontendMode::AlternateScreen))
+    run_ratatui_frontend(runtime, mode)
 }
 
-fn run_ratatui_frontend(mut runtime: ShellRuntime, use_alternate_screen: bool) -> Result<()> {
-    let _restore_guard = TerminalRestoreGuard::activate(use_alternate_screen)?;
+fn run_ratatui_frontend(mut runtime: ShellRuntime, mode: ShellFrontendMode) -> Result<()> {
+    let _restore_guard = TerminalRestoreGuard::activate(mode)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    let mode = if use_alternate_screen {
-        ShellFrontendMode::AlternateScreen
-    } else {
-        ShellFrontendMode::InlineMainBuffer
-    };
     run_event_loop(&mut terminal, &mut runtime, mode)
 }
 
@@ -82,7 +77,8 @@ struct TerminalRestoreGuard {
 }
 
 impl TerminalRestoreGuard {
-    fn activate(use_alternate_screen: bool) -> Result<Self> {
+    fn activate(mode: ShellFrontendMode) -> Result<Self> {
+        let use_alternate_screen = matches!(mode, ShellFrontendMode::AlternateScreen);
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         if use_alternate_screen {
