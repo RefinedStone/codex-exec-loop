@@ -59,14 +59,30 @@ pub enum ConversationToolActivityKind {
     CommandExecution,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationToolActivity {
     pub kind: ConversationToolActivityKind,
     pub text: String,
     pub file_change_count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationApprovalReviewStatus {
+    InProgress,
+    Approved,
+    Denied,
+    Aborted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationApprovalReview {
+    pub target_item_id: String,
+    pub status: ConversationApprovalReviewStatus,
+    pub risk_level: Option<String>,
+    pub rationale: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversationStreamEvent {
     ThreadPrepared {
         thread_id: String,
@@ -91,6 +107,9 @@ pub enum ConversationStreamEvent {
     },
     ToolActivity {
         activity: ConversationToolActivity,
+    },
+    ApprovalReviewUpdated {
+        review: ConversationApprovalReview,
     },
     TurnCompleted {
         turn_id: String,

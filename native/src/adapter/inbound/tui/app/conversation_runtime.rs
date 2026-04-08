@@ -126,6 +126,9 @@ pub(super) fn reduce_conversation_runtime(
                     ));
                     should_refresh_lines = true;
                 }
+                ConversationStreamEvent::ApprovalReviewUpdated { review } => {
+                    state.update_approval_review(review);
+                }
                 ConversationStreamEvent::TurnCompleted { turn_id } => {
                     state.turn_activity.complete_turn();
                     state.mark_turn_finished();
@@ -228,7 +231,10 @@ fn find_message_by_item_id_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::conversation::{ConversationToolActivity, ConversationToolActivityKind};
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
+        ConversationToolActivityKind,
+    };
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
     };
@@ -340,6 +346,58 @@ mod tests {
             reduced.effects.as_slice(),
             [ConversationRuntimeEffect::QueueAutoPrompt { .. }]
         ));
+    }
+
+    #[test]
+    fn approval_review_update_sets_status_and_summary_state() {
+        let state = sample_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(
+                ConversationStreamEvent::ApprovalReviewUpdated {
+                    review: ConversationApprovalReview {
+                        target_item_id: "command-1".to_string(),
+                        status: ConversationApprovalReviewStatus::InProgress,
+                        risk_level: Some("high".to_string()),
+                        rationale: None,
+                    },
+                },
+            ),
+        );
+
+        assert_eq!(
+            reduced.state.status_text,
+            "approval review in progress / target: command-1 / risk: high"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .approval_review
+                .as_ref()
+                .map(|review| review.status),
+            Some(ConversationApprovalReviewStatus::InProgress)
+        );
+    }
+
+    #[test]
+    fn turn_started_clears_previous_approval_review_state() {
+        let mut state = sample_conversation();
+        state.approval_review = Some(ConversationApprovalReview {
+            target_item_id: "command-1".to_string(),
+            status: ConversationApprovalReviewStatus::Approved,
+            risk_level: Some("medium".to_string()),
+            rationale: None,
+        });
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-2".to_string(),
+            }),
+        );
+
+        assert!(reduced.state.approval_review.is_none());
     }
 
     #[test]
@@ -578,6 +636,7 @@ mod tests {
                 }],
             }),
             turn_activity: TurnActivityState::default(),
+            approval_review: None,
             last_auto_followup_activity: None,
             status_text: "thread loaded".to_string(),
         }

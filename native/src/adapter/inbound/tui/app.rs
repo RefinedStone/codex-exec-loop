@@ -196,7 +196,10 @@ mod tests {
     use crate::application::service::followup_template_service::FollowupTemplateService;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
+        ConversationStreamEvent,
+    };
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
     };
@@ -387,6 +390,7 @@ mod tests {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
+            approval_review: None,
             last_auto_followup_activity: None,
             status_text: "thread loaded".to_string(),
         }
@@ -1813,6 +1817,27 @@ mod tests {
     }
 
     #[test]
+    fn followup_template_status_lines_include_approval_review_summary() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.approval_review = Some(ConversationApprovalReview {
+            target_item_id: "command-1".to_string(),
+            status: ConversationApprovalReviewStatus::InProgress,
+            risk_level: Some("high".to_string()),
+            rationale: None,
+        });
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_followup_template_status_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("approval: reviewing high"));
+    }
+
+    #[test]
     fn followup_template_status_lines_fit_default_overlay_budget() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
@@ -1971,6 +1996,33 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("warning: workspace template missing"));
+    }
+
+    #[test]
+    fn shell_footer_surfaces_approval_review_summary() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.turn_activity.last_completed_turn_command_count = 1;
+        conversation
+            .turn_activity
+            .last_completed_turn_file_change_count = 2;
+        conversation.approval_review = Some(ConversationApprovalReview {
+            target_item_id: "command-1".to_string(),
+            status: ConversationApprovalReviewStatus::Approved,
+            risk_level: Some("medium".to_string()),
+            rationale: None,
+        });
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("approval: approved medium"));
+        assert!(rendered.contains("cmd: 1"));
+        assert!(rendered.contains("files: 2"));
     }
 
     #[test]

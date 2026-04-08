@@ -1,7 +1,8 @@
 use ratatui::text::Line;
 
 use crate::domain::conversation::{
-    ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationToolActivity,
+    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
+    ConversationMessageKind, ConversationSnapshot, ConversationToolActivity,
     ConversationToolActivityKind,
 };
 use crate::domain::followup_template::{
@@ -542,6 +543,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
     pub(crate) turn_activity: TurnActivityState,
+    pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
     pub(crate) status_text: String,
 }
@@ -569,6 +571,7 @@ impl ConversationViewModel {
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
+            approval_review: None,
             last_auto_followup_activity: None,
             status_text,
         };
@@ -606,6 +609,7 @@ impl ConversationViewModel {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
+            approval_review: None,
             last_auto_followup_activity: None,
             status_text,
         };
@@ -659,6 +663,58 @@ impl ConversationViewModel {
         } else {
             format!("warnings ({}): {summary}", self.warnings.len())
         }
+    }
+
+    pub(crate) fn approval_summary(&self) -> Option<String> {
+        self.approval_review
+            .as_ref()
+            .map(Self::format_approval_summary)
+    }
+
+    fn format_approval_summary(review: &ConversationApprovalReview) -> String {
+        let status = match review.status {
+            ConversationApprovalReviewStatus::InProgress => "reviewing",
+            ConversationApprovalReviewStatus::Approved => "approved",
+            ConversationApprovalReviewStatus::Denied => "denied",
+            ConversationApprovalReviewStatus::Aborted => "aborted",
+        };
+        match review
+            .risk_level
+            .as_deref()
+            .filter(|risk| !risk.trim().is_empty())
+        {
+            Some(risk_level) => format!("{status} {risk_level}"),
+            None => status.to_string(),
+        }
+    }
+
+    fn format_approval_status_text(review: &ConversationApprovalReview) -> String {
+        let mut segments = vec![match review.status {
+            ConversationApprovalReviewStatus::InProgress => {
+                "approval review in progress".to_string()
+            }
+            ConversationApprovalReviewStatus::Approved => "approval review approved".to_string(),
+            ConversationApprovalReviewStatus::Denied => "approval review denied".to_string(),
+            ConversationApprovalReviewStatus::Aborted => "approval review aborted".to_string(),
+        }];
+
+        if !review.target_item_id.trim().is_empty() {
+            segments.push(format!("target: {}", review.target_item_id));
+        }
+        if let Some(risk_level) = review
+            .risk_level
+            .as_deref()
+            .filter(|risk| !risk.trim().is_empty())
+        {
+            segments.push(format!("risk: {risk_level}"));
+        }
+
+        segments.join(" / ")
+    }
+
+    pub(crate) fn update_approval_review(&mut self, review: ConversationApprovalReview) {
+        self.status_text = Self::format_approval_status_text(&review);
+        self.approval_review = Some(review);
     }
 
     pub(crate) fn replace_template_warnings(&mut self, template_warnings: Vec<String>) {
@@ -736,6 +792,7 @@ impl ConversationViewModel {
         self.active_turn_id = Some(turn_id);
         self.input_state = ConversationInputState::StreamingTurn;
         self.turn_activity.start_new_turn();
+        self.approval_review = None;
     }
 
     pub(crate) fn mark_turn_finished(&mut self) {
@@ -891,6 +948,7 @@ mod tests {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
+            approval_review: None,
             last_auto_followup_activity: None,
             status_text: "thread loaded".to_string(),
         }

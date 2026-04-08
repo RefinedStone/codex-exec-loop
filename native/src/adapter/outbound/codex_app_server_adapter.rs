@@ -14,7 +14,8 @@ use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
 use crate::domain::conversation::{
-    ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
+    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
+    ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
     ConversationToolActivity, ConversationToolActivityKind,
 };
 use crate::domain::recent_sessions::RecentSessions;
@@ -731,6 +732,13 @@ impl AppServerConnection {
         };
 
         match method {
+            "item/autoApprovalReview/started" | "item/autoApprovalReview/completed" => {
+                if let Some(event) =
+                    Self::parse_approval_review_event(method, params, thread_id, turn_id)
+                {
+                    let _ = event_sender.send(event);
+                }
+            }
             "thread/status/changed" => {
                 if params.get("threadId").and_then(Value::as_str) == Some(thread_id) {
                     let status = params
@@ -808,6 +816,58 @@ impl AppServerConnection {
         }
 
         Ok(false)
+    }
+
+    fn parse_approval_review_event(
+        method: &str,
+        params: &Value,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Option<ConversationStreamEvent> {
+        if !matches!(
+            method,
+            "item/autoApprovalReview/started" | "item/autoApprovalReview/completed"
+        ) {
+            return None;
+        }
+
+        if params.get("threadId").and_then(Value::as_str) != Some(thread_id)
+            || params.get("turnId").and_then(Value::as_str) != Some(turn_id)
+        {
+            return None;
+        }
+
+        let review = params.get("review")?;
+        let status = review
+            .get("status")
+            .and_then(Value::as_str)
+            .and_then(Self::parse_approval_review_status)?;
+        let target_item_id = params.get("targetItemId").and_then(Value::as_str)?;
+
+        Some(ConversationStreamEvent::ApprovalReviewUpdated {
+            review: ConversationApprovalReview {
+                target_item_id: target_item_id.to_string(),
+                status,
+                risk_level: review
+                    .get("riskLevel")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                rationale: review
+                    .get("rationale")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+        })
+    }
+
+    fn parse_approval_review_status(value: &str) -> Option<ConversationApprovalReviewStatus> {
+        match value {
+            "inProgress" => Some(ConversationApprovalReviewStatus::InProgress),
+            "approved" => Some(ConversationApprovalReviewStatus::Approved),
+            "denied" => Some(ConversationApprovalReviewStatus::Denied),
+            "aborted" => Some(ConversationApprovalReviewStatus::Aborted),
+            _ => None,
+        }
     }
 
     fn handle_completed_item(
@@ -1163,9 +1223,14 @@ struct ThreadGitInfo {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
-        RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, request_failure_outcome,
-        sort_and_dedup_warnings,
+        AppServerConnection, RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime,
+        request_failure_outcome, sort_and_dedup_warnings,
+    };
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
     };
 
     #[test]
@@ -1227,6 +1292,37 @@ mod tests {
         assert_eq!(
             request_failure_outcome(RequestRuntimeMode::IsolatedFallback, 1),
             RequestFailureOutcome::ReturnIsolatedFailure
+        );
+    }
+
+    #[test]
+    fn parses_approval_review_notification_for_current_turn() {
+        let event = AppServerConnection::parse_approval_review_event(
+            "item/autoApprovalReview/started",
+            &json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "targetItemId": "command-1",
+                "review": {
+                    "status": "inProgress",
+                    "riskLevel": "high",
+                    "rationale": "needs confirmation"
+                }
+            }),
+            "thread-1",
+            "turn-1",
+        );
+
+        assert_eq!(
+            event,
+            Some(ConversationStreamEvent::ApprovalReviewUpdated {
+                review: ConversationApprovalReview {
+                    target_item_id: "command-1".to_string(),
+                    status: ConversationApprovalReviewStatus::InProgress,
+                    risk_level: Some("high".to_string()),
+                    rationale: Some("needs confirmation".to_string()),
+                },
+            })
         );
     }
 }

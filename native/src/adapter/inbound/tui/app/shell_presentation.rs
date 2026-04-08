@@ -339,6 +339,30 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                 .map(|activity| activity.detail.as_str())
                 .unwrap_or("none");
             let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
+            let approval_summary = conversation.approval_summary();
+            let tool_activity_line = if let Some(approval_summary) = approval_summary.as_deref() {
+                format!(
+                    "tool activity: {}  |  cmd: {}  |  files: {}  |  approval: {approval_summary}",
+                    conversation.turn_activity.activity_summary(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_command_count(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_file_change_count(turn_running),
+                )
+            } else {
+                format!(
+                    "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
+                    conversation.turn_activity.activity_summary(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_command_count(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_file_change_count(turn_running),
+                )
+            };
 
             vec![
                 Line::from(format!(
@@ -364,16 +388,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     "status: {}  |  {}",
                     conversation.status_text, warning_summary,
                 )),
-                Line::from(format!(
-                    "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
-                    conversation.turn_activity.activity_summary(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_command_count(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_file_change_count(turn_running),
-                )),
+                Line::from(tool_activity_line),
                 Line::from(format!(
                     "input detail: {}  |  template slot: {}/{}",
                     conversation.input_state.detail(),
@@ -551,6 +566,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let activity_scope = conversation
                 .turn_activity
                 .activity_scope_label(turn_running);
+            let approval_summary = conversation.approval_summary();
             let mut lines = vec![
                 Line::from(format!(
                     "auto follow-up: {}",
@@ -581,10 +597,19 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                         .turn_activity
                         .activity_file_change_count(turn_running)
                 )),
-                Line::from(format!(
-                    "{activity_scope} tool activity: {}",
-                    conversation.turn_activity.activity_summary(turn_running)
-                )),
+                Line::from(
+                    if let Some(approval_summary) = approval_summary.as_deref() {
+                        format!(
+                            "{activity_scope} tool activity: {}  |  approval: {approval_summary}",
+                            conversation.turn_activity.activity_summary(turn_running)
+                        )
+                    } else {
+                        format!(
+                            "{activity_scope} tool activity: {}",
+                            conversation.turn_activity.activity_summary(turn_running)
+                        )
+                    },
+                ),
             ];
 
             if app.is_max_auto_turns_editing() {
