@@ -1,21 +1,13 @@
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
-use crate::adapter::outbound::filesystem_followup_template_adapter::FilesystemFollowupTemplateAdapter;
-use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
-use crate::application::port::outbound::followup_template_port::FollowupTemplatePort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
-use anyhow::Result;
 
-use super::shell_frontend::{ShellFrontendMode, run as run_shell_frontend};
-use super::shell_runtime::ShellRuntime;
 use super::{
     AutoFollowupSubmitContext, ConversationInputEvent, ConversationIntentEffect,
     ConversationIntentEvent, ConversationIntentMode, ConversationIntentState,
@@ -29,28 +21,6 @@ use super::{
     reduce_followup_controls, reduce_followup_overlay_ui, reduce_shell_chrome,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
-
-pub fn run() -> Result<()> {
-    let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
-        "codex-exec-loop-native",
-        env!("CARGO_PKG_VERSION"),
-    ));
-    let followup_template_port: Arc<dyn FollowupTemplatePort> =
-        Arc::new(FilesystemFollowupTemplateAdapter::new());
-    let startup_service = StartupService::new(codex_app_server_port.clone());
-    let session_service = SessionService::new(codex_app_server_port.clone());
-    let conversation_service = ConversationService::new(codex_app_server_port);
-    let followup_template_service = FollowupTemplateService::new(followup_template_port);
-
-    let mut app = NativeTuiApp::new(
-        startup_service,
-        session_service,
-        conversation_service,
-        followup_template_service,
-    );
-    app.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested);
-    run_tui(app)
-}
 
 #[derive(Debug, Clone)]
 pub(super) enum BackgroundMessage {
@@ -412,10 +382,4 @@ impl NativeTuiApp {
             origin: prompt_origin,
         });
     }
-}
-
-fn run_tui(app: NativeTuiApp) -> Result<()> {
-    let frontend_mode = ShellFrontendMode::from_environment();
-    let runtime = ShellRuntime::new(app);
-    run_shell_frontend(runtime, frontend_mode)
 }

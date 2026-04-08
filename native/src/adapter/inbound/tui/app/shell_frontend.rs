@@ -1,18 +1,7 @@
-use std::io;
-use std::time::Duration;
-
 use anyhow::Result;
-use crossterm::cursor::{MoveToNextLine, Show};
-use crossterm::event;
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 
 use super::ALT_SCREEN_ENV_VAR;
-use super::shell_rendering::draw;
+use super::ratatui_frontend::run as run_ratatui_frontend;
 use super::shell_runtime::ShellRuntime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,36 +22,33 @@ impl ShellFrontendMode {
             Self::InlineMainBuffer
         }
     }
+
+    pub(super) fn uses_alternate_screen(self) -> bool {
+        matches!(self, Self::AlternateScreen)
+    }
 }
 
-pub(super) fn run(runtime: ShellRuntime, mode: ShellFrontendMode) -> Result<()> {
-    run_ratatui_frontend(runtime, mode)
-}
-
-fn run_ratatui_frontend(mut runtime: ShellRuntime, mode: ShellFrontendMode) -> Result<()> {
-    let _restore_guard = TerminalRestoreGuard::activate(mode)?;
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend)?;
-    run_event_loop(&mut terminal, &mut runtime, mode)
-}
-
-fn run_event_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    runtime: &mut ShellRuntime,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ShellFrontend {
     mode: ShellFrontendMode,
-) -> Result<()> {
-    while !runtime.should_quit() {
-        runtime.poll_background_messages();
-        terminal.draw(|frame| draw(frame, runtime.app_mut(), mode))?;
+}
 
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-
-        runtime.handle_terminal_event(event::read()?);
+impl ShellFrontend {
+    pub(super) fn from_environment() -> Self {
+        Self::new(ShellFrontendMode::from_environment())
     }
 
-    Ok(())
+    pub(super) fn new(mode: ShellFrontendMode) -> Self {
+        Self { mode }
+    }
+
+    pub(super) fn mode(self) -> ShellFrontendMode {
+        self.mode
+    }
+
+    pub(super) fn run(self, runtime: ShellRuntime) -> Result<()> {
+        run_ratatui_frontend(runtime, self)
+    }
 }
 
 fn env_flag_is_truthy(value: &str) -> bool {
@@ -72,40 +58,9 @@ fn env_flag_is_truthy(value: &str) -> bool {
     )
 }
 
-struct TerminalRestoreGuard {
-    use_alternate_screen: bool,
-}
-
-impl TerminalRestoreGuard {
-    fn activate(mode: ShellFrontendMode) -> Result<Self> {
-        let use_alternate_screen = matches!(mode, ShellFrontendMode::AlternateScreen);
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        if use_alternate_screen {
-            execute!(stdout, EnterAlternateScreen)?;
-        }
-        Ok(Self {
-            use_alternate_screen,
-        })
-    }
-}
-
-impl Drop for TerminalRestoreGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let mut stdout = io::stdout();
-        if self.use_alternate_screen {
-            let _ = execute!(stdout, LeaveAlternateScreen);
-        } else {
-            let _ = execute!(stdout, MoveToNextLine(1));
-        }
-        let _ = execute!(stdout, Show);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::ShellFrontendMode;
+    use super::{ShellFrontend, ShellFrontendMode};
 
     #[test]
     fn shell_frontend_mode_defaults_to_inline_main_buffer() {
@@ -145,5 +100,23 @@ mod tests {
             ShellFrontendMode::from_env_value(Some("maybe")),
             ShellFrontendMode::InlineMainBuffer
         );
+    }
+
+    #[test]
+    fn shell_frontend_wraps_the_explicit_frontend_mode() {
+        assert_eq!(
+            ShellFrontend::new(ShellFrontendMode::AlternateScreen).mode(),
+            ShellFrontendMode::AlternateScreen
+        );
+        assert_eq!(
+            ShellFrontend::new(ShellFrontendMode::InlineMainBuffer).mode(),
+            ShellFrontendMode::InlineMainBuffer
+        );
+    }
+
+    #[test]
+    fn shell_frontend_mode_reports_alternate_screen_usage() {
+        assert!(ShellFrontendMode::AlternateScreen.uses_alternate_screen());
+        assert!(!ShellFrontendMode::InlineMainBuffer.uses_alternate_screen());
     }
 }

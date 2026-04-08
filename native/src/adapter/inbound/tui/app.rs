@@ -58,12 +58,16 @@ mod followup_controls;
 mod followup_overlay_ui;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/ratatui_frontend.rs"]
+mod ratatui_frontend;
 #[path = "app/session_browser.rs"]
 mod session_browser;
 #[path = "app/session_overlay_ui.rs"]
 mod session_overlay_ui;
 #[path = "app/shell_controller.rs"]
 mod shell_controller;
+#[path = "app/shell_entrypoint.rs"]
+mod shell_entrypoint;
 #[path = "app/shell_frontend.rs"]
 mod shell_frontend;
 #[path = "app/shell_layout.rs"]
@@ -78,7 +82,6 @@ mod shell_runtime;
 mod transcript_viewport;
 
 use app_runtime::BackgroundMessage;
-pub use app_runtime::run;
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
 use conversation_intents::{
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
@@ -105,6 +108,7 @@ use followup_overlay_ui::{
 use inline_shell_commands::InlineShellCommand;
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
+pub use shell_entrypoint::run;
 use shell_frontend::ShellFrontendMode;
 use shell_layout::{
     block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
