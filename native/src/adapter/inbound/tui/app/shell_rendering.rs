@@ -228,16 +228,11 @@ fn render_inline_scrolled_section(
     );
 }
 
-fn take_panel_title(
-    mut header_lines: Vec<Line<'static>>,
-    fallback: &str,
-) -> (Line<'static>, Vec<Line<'static>>) {
-    let title = if header_lines.is_empty() {
-        Line::from(fallback.to_string())
-    } else {
-        header_lines.remove(0)
-    };
-    (title, header_lines)
+fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if !header_lines.is_empty() {
+        header_lines.remove(0);
+    }
+    header_lines
 }
 
 fn draw_inline_shell_inspection(
@@ -267,7 +262,7 @@ fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
         warning_lines,
         key_lines,
     } = overlay_view;
-    let (title, body_lines) = take_panel_title(header_lines, "Startup Diagnostics");
+    let body_lines = take_panel_body_lines(header_lines);
     let check_height = inline_section_height(&check_lines, 10).max(4);
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -280,7 +275,13 @@ fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
         ])
         .split(area);
 
-    render_inline_section(frame, layout[0], title, body_lines, true);
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Diagnostics / inline inspection"),
+        body_lines,
+        true,
+    );
     render_inline_section(frame, layout[1], Line::from("Startup"), summary_lines, true);
     render_inline_section(frame, layout[2], Line::from("Checks"), check_lines, false);
     render_inline_section(
@@ -302,7 +303,7 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         warning_lines,
         key_lines,
     } = overlay_view;
-    let (title, body_lines) = take_panel_title(header_lines, "Recent Sessions");
+    let body_lines = take_panel_body_lines(header_lines);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -313,7 +314,13 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         ])
         .split(area);
 
-    render_inline_section(frame, layout[0], title, body_lines, true);
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Recent Sessions / inline inspection"),
+        body_lines,
+        true,
+    );
 
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -352,7 +359,7 @@ fn draw_inline_followup_template_inspection(
         status_lines,
         key_lines,
     } = overlay_view;
-    let (title, body_lines) = take_panel_title(header_lines, "Follow-Up Templates");
+    let body_lines = take_panel_body_lines(header_lines);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -363,7 +370,13 @@ fn draw_inline_followup_template_inspection(
         ])
         .split(area);
 
-    render_inline_section(frame, layout[0], title, body_lines, true);
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Follow-Up Templates / inline inspection"),
+        body_lines,
+        true,
+    );
 
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -836,9 +849,10 @@ mod tests {
 
         let rendered = format!("{}", terminal.backend());
 
-        assert!(rendered.contains("Startup Diagnostics / shell inspection"));
+        assert!(rendered.contains("Diagnostics / inline inspection"));
         assert!(rendered.contains("Checks"));
         assert!(rendered.contains("schema snapshot: snapshot.json"));
+        assert!(!rendered.contains("shell inspection"));
         assert!(!rendered.contains("Transcript /"));
         assert!(!rendered.contains("┌"));
     }
@@ -861,10 +875,11 @@ mod tests {
 
         let rendered = format!("{}", terminal.backend());
 
-        assert!(rendered.contains("Recent Sessions / shell inspection"));
+        assert!(rendered.contains("Recent Sessions / inline inspection"));
         assert!(rendered.contains("Threads"));
         assert!(rendered.contains("Selected Session"));
         assert!(rendered.contains("Session Warnings"));
+        assert!(!rendered.contains("shell inspection"));
         assert!(!rendered.contains("Transcript /"));
         assert!(!rendered.contains("┌"));
     }
@@ -881,10 +896,11 @@ mod tests {
 
         let rendered = format!("{}", terminal.backend());
 
-        assert!(rendered.contains("Follow-Up Templates / shell inspection"));
+        assert!(rendered.contains("Follow-Up Templates / inline inspection"));
         assert!(rendered.contains("Template List"));
         assert!(rendered.contains("Preview"));
         assert!(rendered.contains("auto follow-up: on"));
+        assert!(!rendered.contains("shell inspection"));
         assert!(!rendered.contains("Transcript /"));
         assert!(!rendered.contains("┌"));
     }
