@@ -41,8 +41,9 @@ The product-facing UX pivot is largely complete. The active work is now in P3 co
 
 - the main shell behavior is already on `prerelease`
 - the current effort is reducing the size and mixed responsibilities of `app.rs`
-- recent refactors already pulled rendering, presentation, layout, viewport, runtime, shell-controller, and conversation-model state into dedicated modules
-- the next meaningful slice should stay large enough to remove the remaining TUI runtime and background event-loop wiring in one pass instead of another helper-by-helper move
+- recent refactors already pulled rendering, presentation, layout, viewport, shell controller, conversation-model state, and the TUI runtime/background event loop into dedicated modules
+- `app.rs` is now primarily the composition root for shared state plus shell-specific builder helpers and tests
+- the next remaining work is smaller and should focus on controller or shell-chrome test coverage plus any comments that still clarify non-obvious runtime behavior
 
 ## Immediate Documentation Goal
 All docs should assume the current branch already has streaming shell behavior and auto follow-up. Future planning should build on that baseline instead of describing the older placeholder shell.

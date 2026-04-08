@@ -43,13 +43,13 @@ These are the current baseline, not the final UX target. The next phase pivots f
 ## P3. Code Health
 - [~] split large shell state and reducer code into milestone-sized units after the stream-first model settles
 - [x] extract input, lifecycle, runtime, viewport, layout, presentation, rendering, shell controller, and conversation-model responsibilities out of `app.rs`
-- [ ] separate the remaining TUI runtime and background message loop from `app.rs` in one larger refactor slice
-- [ ] decide whether the remaining `app.rs` should become only composition, shared state ownership, and tests after the larger extractions land
+- [x] separate the remaining TUI runtime and background message loop from `app.rs` in one larger refactor slice
+- [x] keep the remaining `app.rs` focused on composition, shared state ownership, shell-specific builders, and tests unless a new responsibility boundary appears
 - [~] add focused tests for event reduction and failure paths
 - [x] move auto follow-up/template/state tests with the extracted conversation-model module instead of leaving them in `app.rs`
 - [x] add targeted runtime failure-path coverage for blank prompts, duplicate submits, and failed stream updates
 - [ ] add focused controller and shell-chrome tests for overlay navigation, readiness gating, and session-opening behavior
-- [ ] add a small integration-style test pass around background event sequencing once the runtime extraction settles
+- [x] add a small integration-style test pass around background event sequencing once the runtime extraction settles
 - [ ] add docs or comments only where runtime behavior is otherwise hard to infer
 
 For the remaining P3 work, prefer milestone-sized PRs over micro-refactors. Each PR should remove one coherent responsibility boundary instead of moving one helper at a time.
