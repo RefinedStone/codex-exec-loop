@@ -28,6 +28,7 @@ Before starting a new worktree:
 - identify which lane and zone are already occupied
 - prefer a disjoint lane or zone when two workers are active
 - if overlap is intentional, record the expected conflict files in the task note or PR body
+- remember that only the integration checkout should own local `prerelease`; feature worktrees rebase onto `origin/prerelease`
 
 ## 3. Two-Worker Default Model
 

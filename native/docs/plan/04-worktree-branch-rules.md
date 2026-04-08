@@ -18,10 +18,13 @@ Assume a second unmerged worker exists by default. The branch rule should help t
 ## 2. Worktree Layout
 
 - keep the main repository checkout as the integration reference checkout
+- let that integration checkout be the only checkout that owns local `prerelease`
 - create active branches in sibling worktrees, not nested directories inside the repository
 - use a stable path pattern such as `../codex-exec-loop-worktrees/<branch-slug>`
 - let one worktree own exactly one live branch
 - do not reuse one worktree for multiple active branches
+
+Git does not deadlock here. If a second worktree tries to check out `prerelease`, Git fails immediately because one branch cannot be checked out in two worktrees at once. Treat that as a design rule, not as a recoverable surprise.
 
 Example:
 
@@ -106,6 +109,7 @@ For two workers, prefer one hotspot-heavy lane and one disjoint support lane rat
 ## 7. Dependency Rule
 
 - by default, every worktree branches from the latest `origin/prerelease`
+- feature worktrees should rebase with `git fetch origin && git rebase origin/prerelease` instead of switching to local `prerelease`
 - do not stack one in-flight feature branch on top of another by default
 - allow a dependent branch only when rebasing both slices onto `prerelease` would create more churn than the dependency itself
 - when a dependent branch is unavoidable, write the parent branch and restack order into the detailed plan doc and the PR body
@@ -131,6 +135,7 @@ If two lanes need one of these files, prefer a short precursor branch that extra
 - commit, push, and open one PR per worktree branch once the slice is reviewable
 - keep review-response commits separate from the original milestone commit when practical
 - rebase the worktree branch onto the latest `origin/prerelease` before final integration
+- perform the final fast-forward of `prerelease` only from the integration checkout that already owns local `prerelease`
 - do not use GitHub merge-commit flow
 - fast-forward `prerelease` locally to the reviewed branch head, push `prerelease`, then close the PR after the base branch already contains the commits
 - after merge or closure, remove the worktree and delete the branch if it no longer has a job
@@ -151,6 +156,7 @@ git push origin --delete feature/native-session-query-model
 4. Confirm that no other active slice owns the same hotspot files unless the overlap is intentional and documented.
 5. Create a dedicated worktree and branch.
 6. Keep the branch scoped to that slice only.
-7. Run the slice-specific verification commands before review.
-8. Rebase, fast-forward merge, and close the PR with linear history.
-9. Remove the finished worktree before starting another slice in the same lane.
+7. Rebase onto `origin/prerelease` from the feature worktree without checking out local `prerelease`.
+8. Run the slice-specific verification commands before review.
+9. Fast-forward merge from the integration checkout, then close the PR with linear history.
+10. Remove the finished worktree before starting another slice in the same lane.

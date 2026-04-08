@@ -51,6 +51,7 @@ When multiple native slices move in parallel, treat worktree setup as part of th
 - inspect active local worktrees, unmerged branches, and open PRs before naming a new branch
 - assume another unmerged worktree may already own a nearby file boundary and prefer a disjoint lane when two workers are active
 - use names that expose location such as `feature/native-<lane>-<zone>-<slice>`, `fix/native-<lane>-<zone>-<slice>`, `docs/native-<lane>-<zone>-<slice>`, or `chore/native-<lane>-<zone>-<slice>`
+- keep `prerelease` checked out in one integration checkout only; feature worktrees should rebase onto `origin/prerelease` without checking out local `prerelease`
 - do not branch a new worktree from another in-flight feature branch unless the dependency is explicitly documented
 - if overlap is intentional, document the expected conflict surface and resolve it consciously during rebase or merge
 - before starting concurrent work, map the slice to [`docs/plan/04-worktree-branch-rules.md`](docs/plan/04-worktree-branch-rules.md) and the active split plan in [`docs/plan/11-parallel-worktree-plan.md`](docs/plan/11-parallel-worktree-plan.md)
