@@ -652,7 +652,6 @@ impl ConversationViewModel {
             .last()
             .map(String::as_str)
             .or_else(|| self.template_warnings.last().map(String::as_str))
-            .or_else(|| self.warnings.last().map(String::as_str))
     }
 
     fn warning_status_label(&self) -> Option<String> {
