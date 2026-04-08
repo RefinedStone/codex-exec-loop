@@ -92,7 +92,7 @@ cd <path-to-repo>
   --frontend inline \
   --terminal "iTerm2 3.5" \
   --result pass \
-  --output native/docs/validation/2026-04-09-macos-iterm2-inline.txt
+  --output-dir native/docs/validation
 ```
 
 Capture a validation note scaffold in PowerShell:
@@ -103,8 +103,10 @@ Set-Location <path-to-repo>
   -Frontend inline `
   -Terminal "Windows Terminal 1.22" `
   -Result pass `
-  -OutputPath native\docs\validation\2026-04-09-windows-terminal-inline.txt
+  -OutputDir native\docs\validation
 ```
+
+Committed validation records live under [`../validation/`](../validation/).
 
 ## Environment Capture
 
@@ -248,7 +250,7 @@ result:
 notes:
 ```
 
-The helper scripts above emit this template with the current commit, detected host info, and the standard checklist already filled in.
+The helper scripts above emit this template with the current commit, detected host info, the standard checklist already filled in, and a slugged filename when `output-dir` is used.
 
 ## Exit Criteria
 

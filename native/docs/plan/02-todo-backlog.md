@@ -16,7 +16,7 @@ This file now keeps the current open planning surface, not a long implementation
 
 ## Open Change Buckets
 - platform validation
-  - the validation matrix, capture helpers, and packaging docs are landed, but real macOS and Windows runs still need to be recorded
+  - the validation matrix, capture helpers, checked-in record directory, and packaging docs are landed, but real macOS and Windows runs still need to be recorded
   - Windows-specific fixes should stay conditional on validated findings instead of speculative portability edits
 - maintenance
   - `app.rs` should stay near composition and shared-state ownership

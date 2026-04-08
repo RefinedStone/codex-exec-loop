@@ -68,7 +68,10 @@ cd /path/to/codex-exec-loop
 validation 결과 템플릿 캡처:
 
 ```bash
-./scripts/capture_native_validation.sh --frontend inline --result pass
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --result pass \
+  --output-dir native/docs/validation
 ```
 
 운영자 runbook 과 플랫폼 검증 기준:

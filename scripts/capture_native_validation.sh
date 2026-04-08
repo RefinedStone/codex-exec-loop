@@ -17,6 +17,7 @@ Options:
   --os <value>         OS label. Default: detected from host.
   --date <value>       Date label. Default: today in local time.
   --output <path>      Write the report to a file instead of stdout.
+  --output-dir <path>  Generate a slugged report filename under this directory.
   -h, --help           Show this help text.
 EOF
 }
@@ -68,6 +69,12 @@ detect_os() {
   uname -sr
 }
 
+slugify() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
+}
+
 repo_root="$(git rev-parse --show-toplevel)"
 frontend=""
 terminal=""
@@ -79,6 +86,7 @@ commit_sha=""
 os_value=""
 date_value=""
 output_path=""
+output_dir=""
 
 while (($# > 0)); do
   case "$1" in
@@ -132,6 +140,11 @@ while (($# > 0)); do
       output_path="$2"
       shift 2
       ;;
+    --output-dir)
+      require_value "$1" "${2-}"
+      output_dir="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -147,6 +160,11 @@ done
 if [[ -z "${frontend}" ]]; then
   printf '--frontend is required\n' >&2
   usage >&2
+  exit 1
+fi
+
+if [[ -n "${output_path}" && -n "${output_dir}" ]]; then
+  printf '--output and --output-dir cannot be used together\n' >&2
   exit 1
 fi
 
@@ -168,6 +186,10 @@ fi
 
 if [[ -z "${date_value}" ]]; then
   date_value="$(date '+%Y-%m-%d')"
+fi
+
+if [[ -n "${output_dir}" ]]; then
+  output_path="${output_dir}/${date_value}-$(slugify "${os_value}")-$(slugify "${terminal}")-$(slugify "${shell_name}")-$(slugify "${frontend}").txt"
 fi
 
 report="$(cat <<EOF
@@ -194,6 +216,7 @@ EOF
 if [[ -n "${output_path}" ]]; then
   mkdir -p "$(dirname "${output_path}")"
   printf '%s\n' "${report}" > "${output_path}"
+  printf 'wrote %s\n' "${output_path}"
 else
   printf '%s\n' "${report}"
 fi

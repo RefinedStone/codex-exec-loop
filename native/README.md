@@ -44,7 +44,10 @@ Verify a generated package:
 Capture a validation report scaffold after a manual terminal pass:
 
 ```bash
-./scripts/capture_native_validation.sh --frontend inline --result pass
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --result pass \
+  --output-dir native/docs/validation
 ```
 
 Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.

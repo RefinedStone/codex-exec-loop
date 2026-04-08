@@ -42,6 +42,7 @@
 - platform and packaging docs
   - validation matrix for terminal behavior
   - validation result capture helpers
+  - validation record directory
   - packaging runbook
   - release checksum helpers
 - inline shell parity

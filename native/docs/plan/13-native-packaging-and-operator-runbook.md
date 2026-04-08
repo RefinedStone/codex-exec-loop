@@ -142,15 +142,23 @@ macOS or Linux:
 
 ```bash
 cd /path/to/codex-exec-loop
-./scripts/capture_native_validation.sh --frontend inline --result pass
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --result pass \
+  --output-dir native/docs/validation
 ```
 
 Windows PowerShell:
 
 ```powershell
 Set-Location C:\path\to\codex-exec-loop
-.\scripts\capture_native_validation.ps1 -Frontend inline -Result pass
+.\scripts\capture_native_validation.ps1 `
+  -Frontend inline `
+  -Result pass `
+  -OutputDir native\docs\validation
 ```
+
+Keep the recorded files under `native/docs/validation/` so later platform follow-ups can point to a checked-in row instead of a transient comment.
 
 ## Release Handoff Notes
 
