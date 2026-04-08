@@ -1,5 +1,6 @@
-use super::session_browser::build_session_browser_view;
+use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
+use crate::application::service::session_service::project_recent_sessions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellActionAvailability {
@@ -153,19 +154,8 @@ impl NativeTuiApp {
     }
 
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {
-        match &self.session_state {
-            SessionState::Ready(recent_sessions) => build_session_browser_view(
-                recent_sessions,
-                self.session_overlay_ui_state.browser_state(),
-                recent_sessions
-                    .items
-                    .get(self.selected_session_index)
-                    .map(|session| session.id.as_str()),
-                self.selected_session_index,
-            )
-            .selected_session(),
-            _ => None,
-        }
+        self.current_session_browser_view()
+            .and_then(|browser_view| browser_view.selected_session())
     }
 
     pub(super) fn open_conversation_shell(&mut self) {
@@ -175,7 +165,29 @@ impl NativeTuiApp {
     }
 
     pub(super) fn move_selection(&mut self, delta: isize) {
-        self.dispatch_shell_chrome(ShellChromeEvent::SessionSelectionMoved { delta });
+        let Some((next_index, selected_session_id)) =
+            self.current_session_browser_view().map(|browser_view| {
+                if browser_view.visible_sessions.is_empty() {
+                    return (0, None);
+                }
+
+                let current_index = browser_view.selected_index.unwrap_or(0) as isize;
+                let max_index = browser_view.visible_sessions.len().saturating_sub(1) as isize;
+                let next_index = (current_index + delta).clamp(0, max_index) as usize;
+                let selected_session_id = browser_view
+                    .visible_sessions
+                    .get(next_index)
+                    .map(|session| session.id.clone());
+
+                (next_index, selected_session_id)
+            })
+        else {
+            return;
+        };
+
+        self.selected_session_index = next_index;
+        self.session_overlay_ui_state
+            .set_selected_session_id(selected_session_id);
     }
 
     pub(super) fn push_input_character(&mut self, character: char) {
@@ -482,6 +494,137 @@ impl NativeTuiApp {
         true
     }
 
+    fn current_session_browser_view(&self) -> Option<SessionBrowserView<'_>> {
+        match &self.session_state {
+            SessionState::Ready(recent_sessions) => Some(build_session_browser_view(
+                recent_sessions,
+                self.session_overlay_ui_state.browser_state(),
+                self.session_overlay_ui_state.selected_session_id(),
+                self.selected_session_index,
+            )),
+            _ => None,
+        }
+    }
+
+    fn sync_session_browser_selection(&mut self) {
+        let (selected_session_index, selected_session_id) =
+            match self.current_session_browser_view() {
+                Some(browser_view) => (
+                    browser_view.selected_index.unwrap_or(0),
+                    browser_view
+                        .selected_session()
+                        .map(|session| session.id.clone()),
+                ),
+                None => (0, None),
+            };
+
+        self.selected_session_index = selected_session_index;
+        self.session_overlay_ui_state
+            .set_selected_session_id(selected_session_id);
+    }
+
+    pub(super) fn is_session_search_query_editing(&self) -> bool {
+        self.session_overlay_ui_state.is_search_query_editing()
+    }
+
+    pub(super) fn start_session_search_query_edit(&mut self) {
+        if self.shell_overlay != ShellOverlay::Sessions {
+            return;
+        }
+
+        self.session_overlay_ui_state.start_search_query_edit();
+    }
+
+    pub(super) fn save_session_search_query_edit(&mut self) {
+        if !self.is_session_search_query_editing() {
+            return;
+        }
+
+        self.session_overlay_ui_state.save_search_query_edit();
+        self.sync_session_browser_selection();
+    }
+
+    pub(super) fn cancel_session_search_query_edit(&mut self) {
+        if !self.is_session_search_query_editing() {
+            return;
+        }
+
+        self.session_overlay_ui_state.cancel_search_query_edit();
+    }
+
+    pub(super) fn push_session_search_query_character(&mut self, character: char) {
+        self.session_overlay_ui_state
+            .push_search_query_character(character);
+    }
+
+    pub(super) fn pop_session_search_query_character(&mut self) {
+        self.session_overlay_ui_state.pop_search_query_character();
+    }
+
+    pub(super) fn cycle_session_project_filter(&mut self, delta: isize) {
+        let SessionState::Ready(recent_sessions) = &self.session_state else {
+            return;
+        };
+
+        let projection = project_recent_sessions(
+            recent_sessions,
+            self.session_overlay_ui_state.browser_state(),
+        );
+        let option_count = projection.project_filter_options.len() as isize;
+        if option_count == 0 {
+            return;
+        }
+
+        let current_index = projection
+            .project_filter_options
+            .iter()
+            .position(|option| option.filter == projection.active_project_filter)
+            .unwrap_or(0) as isize;
+        let next_index = (current_index + delta).rem_euclid(option_count) as usize;
+        let next_filter = projection.project_filter_options[next_index].filter.clone();
+
+        self.session_overlay_ui_state
+            .set_project_filter(next_filter);
+        self.sync_session_browser_selection();
+    }
+
+    pub(super) fn move_session_page(&mut self, delta: isize) {
+        let SessionState::Ready(recent_sessions) = &self.session_state else {
+            return;
+        };
+
+        let total_pages = project_recent_sessions(
+            recent_sessions,
+            self.session_overlay_ui_state.browser_state(),
+        )
+        .total_pages;
+        self.session_overlay_ui_state.move_page(delta, total_pages);
+        self.sync_session_browser_selection();
+    }
+
+    pub(super) fn handle_session_search_query_editor_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::Sessions || !self.is_session_search_query_editing() {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => self.save_session_search_query_edit(),
+            KeyCode::Esc => self.cancel_session_search_query_edit(),
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                self.cancel_session_search_query_edit()
+            }
+            KeyCode::Backspace => self.pop_session_search_query_character(),
+            KeyCode::Char(character)
+                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.push_session_search_query_character(character);
+            }
+            _ => {}
+        }
+
+        true
+    }
+
     pub(super) fn handle_shell_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         if self.shell_overlay == ShellOverlay::Hidden {
             return false;
@@ -493,6 +636,10 @@ impl NativeTuiApp {
         }
 
         if self.handle_stop_keyword_editor_key(key) {
+            return true;
+        }
+
+        if self.handle_session_search_query_editor_key(key) {
             return true;
         }
 
@@ -572,6 +719,15 @@ impl NativeTuiApp {
             KeyCode::Char('n') if key.modifiers.is_empty() => {
                 self.open_new_conversation_shell();
             }
+            KeyCode::Char('/') if key.modifiers.is_empty() => {
+                self.start_session_search_query_edit()
+            }
+            KeyCode::Tab if key.modifiers.is_empty() => self.cycle_session_project_filter(1),
+            KeyCode::BackTab => self.cycle_session_project_filter(-1),
+            KeyCode::PageUp if key.modifiers.is_empty() => self.move_session_page(-1),
+            KeyCode::PageDown if key.modifiers.is_empty() => self.move_session_page(1),
+            KeyCode::Char('[') if key.modifiers.is_empty() => self.move_session_page(-1),
+            KeyCode::Char(']') if key.modifiers.is_empty() => self.move_session_page(1),
             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                 self.move_selection(1)

@@ -167,13 +167,14 @@ mod tests {
         ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
         ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand,
         MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin, RecordedAutoFollowupActivity,
-        SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
-        TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
-        build_followup_template_overlay_view, build_followup_template_preview_lines,
-        build_followup_template_status_lines, build_input_title, build_ready_input_lines,
-        build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
-        build_status_title, build_transcript_panel_view, build_transcript_title,
-        format_conversation_lines, shell_layout,
+        SessionOverlayUiState, SessionState, ShellActionAvailability, ShellFrontendMode,
+        ShellOverlay, StartupState, TurnActivityState, build_conversation_shell_frame_view,
+        build_conversation_shell_view, build_followup_template_overlay_view,
+        build_followup_template_preview_lines, build_followup_template_status_lines,
+        build_input_title, build_ready_input_lines, build_session_overlay_view,
+        build_shell_footer_lines, build_startup_overlay_view, build_status_title,
+        build_transcript_panel_view, build_transcript_title, format_conversation_lines,
+        shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -988,7 +989,8 @@ mod tests {
         assert!(list.contains("thread-2"));
         assert!(detail.contains("id: thread-2"));
         assert!(detail.contains("/tmp/root/thread-2.json"));
-        assert!(keys.contains("Enter: open thread"));
+        assert!(keys.contains("/: query"));
+        assert!(keys.contains("Enter: open"));
     }
 
     #[test]
@@ -1024,6 +1026,129 @@ mod tests {
         assert_eq!(view.list_view.items.len(), 1);
         assert!(detail.contains("id: thread-3"));
         assert!(detail.contains("browser: page 1 of 1  |  matches: 1"));
+    }
+
+    #[test]
+    fn session_query_edit_commit_filters_results_and_surfaces_browser_state() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session("thread-1"),
+                sample_session_with_workspace("thread-2", "/tmp/docs", "docs refresh"),
+                sample_session_with_workspace("thread-3", "/tmp/docs", "docs release"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE,))
+        );
+        assert!(app.is_session_search_query_editing());
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE,))
+        );
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE,))
+        );
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE,))
+        );
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE,))
+        );
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        let view = build_session_overlay_view(&app);
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            "docs"
+        );
+        assert!(!app.is_session_search_query_editing());
+        assert_eq!(view.list_view.items.len(), 2);
+        assert!(detail.contains("query: docs"));
+        assert!(detail.contains("filter: all projects (3 sessions)"));
+        assert!(detail.contains("browser: page 1 of 1  |  matches: 2"));
+    }
+
+    #[test]
+    fn session_query_edit_cancel_restores_saved_query() {
+        let (mut app, _) = make_test_app();
+        app.session_overlay_ui_state.set_search_query("release");
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE,))
+        );
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE,))
+        );
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE,))
+        );
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            "release"
+        );
+        assert!(!app.is_session_search_query_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.search_query_editor_buffer(),
+            "release"
+        );
+    }
+
+    #[test]
+    fn session_overlay_tab_cycles_recent_project_filters() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session_with_workspace("thread-1", "/tmp/docs", "docs refresh"),
+                sample_session_with_workspace("thread-2", "/tmp/docs", "docs release"),
+                sample_session("thread-3"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
+
+        let view = build_session_overlay_view(&app);
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().project_filter,
+            crate::application::service::session_service::SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            }
+        );
+        assert_eq!(view.list_view.items.len(), 2);
+        assert!(detail.contains("filter: /tmp/docs (2 sessions)"));
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT,))
+        );
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().project_filter,
+            crate::application::service::session_service::SessionProjectFilter::AllProjects
+        );
     }
 
     #[test]
@@ -1332,6 +1457,50 @@ mod tests {
             conversation
                 .status_text
                 .contains("wait for completion before switching sessions")
+        );
+    }
+
+    #[test]
+    fn sessions_overlay_page_controls_open_selected_filtered_page_session() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.session_overlay_ui_state = SessionOverlayUiState::new(1);
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session("thread-1"),
+                sample_session_with_workspace("thread-2", "/tmp/docs", "docs refresh"),
+                sample_session_with_workspace("thread-3", "/tmp/docs", "docs release"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.session_overlay_ui_state.set_search_query("docs");
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,))
+        );
+
+        let view = build_session_overlay_view(&app);
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(view.list_view.selected_index, Some(0));
+        assert!(detail.contains("id: thread-3"));
+        assert!(detail.contains("browser: page 2 of 2  |  matches: 2"));
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .map(|session| session.id.as_str()),
+            Some("thread-3")
         );
     }
 

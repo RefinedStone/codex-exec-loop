@@ -178,10 +178,10 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(block_height_for_lines(&header_lines, 3, 4)),
             Constraint::Min(12),
-            Constraint::Length(4),
-            Constraint::Length(3),
+            Constraint::Length(block_height_for_lines(&warning_lines, 4, 6)),
+            Constraint::Length(block_height_for_lines(&key_lines, 3, 5)),
         ])
         .split(popup_area);
 

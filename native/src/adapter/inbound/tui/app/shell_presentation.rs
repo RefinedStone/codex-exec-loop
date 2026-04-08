@@ -1,4 +1,4 @@
-use super::session_browser::build_session_browser_view;
+use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 
@@ -236,10 +236,7 @@ pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
         list_view,
         detail_lines,
         warning_lines: build_session_warning_lines(app),
-        key_lines: vec![
-            Line::from("Up/Down or j/k: move    Enter: open thread"),
-            Line::from("n: new draft    r: reload    Esc/Ctrl+C: close    Ctrl+d: diagnostics"),
-        ],
+        key_lines: build_session_key_lines(app),
     }
 }
 
@@ -881,25 +878,33 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
             },
             vec![Line::from(message.clone())],
         ),
-        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => (
-            OverlayListView {
-                message_lines: Some(vec![Line::from("(no sessions found)")]),
-                items: Vec::new(),
-                selected_index: None,
-            },
-            vec![Line::from("no session detail to show")],
-        ),
         SessionState::Ready(recent_sessions) => {
             let browser_view = build_session_browser_view(
                 recent_sessions,
                 app.session_overlay_ui_state.browser_state(),
-                recent_sessions
-                    .items
-                    .get(app.selected_session_index)
-                    .map(|session| session.id.as_str()),
+                app.session_overlay_ui_state.selected_session_id(),
                 app.selected_session_index,
             );
+            if recent_sessions.items.is_empty() {
+                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                lines.push(Line::from(""));
+                lines.push(Line::from("no session detail to show"));
+                return (
+                    OverlayListView {
+                        message_lines: Some(vec![Line::from("(no sessions found)")]),
+                        items: Vec::new(),
+                        selected_index: None,
+                    },
+                    lines,
+                );
+            }
+
             if browser_view.visible_sessions.is_empty() {
+                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                lines.push(Line::from(""));
+                lines.push(Line::from(
+                    "no session detail to show for the current browser state",
+                ));
                 return (
                     OverlayListView {
                         message_lines: Some(vec![Line::from(
@@ -908,13 +913,16 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
                         items: Vec::new(),
                         selected_index: None,
                     },
-                    vec![Line::from(
-                        "no session detail to show for the current browser state",
-                    )],
+                    lines,
                 );
             }
 
             let Some(selected_session) = browser_view.selected_session() else {
+                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                lines.push(Line::from(""));
+                lines.push(Line::from(
+                    "no session detail to show for the current browser state",
+                ));
                 return (
                     OverlayListView {
                         message_lines: None,
@@ -925,9 +933,7 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
                             .collect(),
                         selected_index: None,
                     },
-                    vec![Line::from(
-                        "no session detail to show for the current browser state",
-                    )],
+                    lines,
                 );
             };
 
@@ -947,12 +953,7 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
                 lines.push(Line::from(format!("git branch: {branch}")));
             }
 
-            lines.push(Line::from(format!(
-                "browser: page {} of {}  |  matches: {}",
-                browser_view.projection.page_index + 1,
-                browser_view.projection.total_pages.max(1),
-                browser_view.projection.filtered_session_count,
-            )));
+            lines.extend(build_session_browser_summary_lines(app, &browser_view));
 
             if recent_sessions.next_cursor.is_some() {
                 lines.push(Line::from("more threads are available in the next cursor"));
@@ -976,6 +977,78 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
                 lines,
             )
         }
+    }
+}
+
+fn build_session_browser_summary_lines(
+    app: &NativeTuiApp,
+    browser_view: &SessionBrowserView<'_>,
+) -> Vec<Line<'static>> {
+    let active_filter_option = browser_view
+        .projection
+        .project_filter_options
+        .iter()
+        .find(|option| option.filter == browser_view.projection.active_project_filter);
+    let filter_label = active_filter_option
+        .map(|option| option.label.clone())
+        .unwrap_or_else(|| "all projects".to_string());
+    let filter_session_count = active_filter_option
+        .map(|option| option.session_count)
+        .unwrap_or(browser_view.projection.filtered_session_count);
+    let mut lines = vec![
+        Line::from(format!(
+            "{}: {}",
+            if app.session_overlay_ui_state.is_search_query_editing() {
+                "query edit"
+            } else {
+                "query"
+            },
+            format_session_query_label(if app.session_overlay_ui_state.is_search_query_editing() {
+                app.session_overlay_ui_state.search_query_editor_buffer()
+            } else {
+                &app.session_overlay_ui_state.browser_state().search_query
+            })
+        )),
+        Line::from(format!(
+            "filter: {} ({} sessions)",
+            filter_label, filter_session_count
+        )),
+        Line::from(format!(
+            "browser: page {} of {}  |  matches: {}",
+            browser_view.projection.page_index + 1,
+            browser_view.projection.total_pages.max(1),
+            browser_view.projection.filtered_session_count,
+        )),
+    ];
+
+    if app.session_overlay_ui_state.is_search_query_editing() {
+        lines.push(Line::from(
+            "Enter applies the query. Esc keeps the saved browser state.",
+        ));
+    }
+
+    lines
+}
+
+fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if app.session_overlay_ui_state.is_search_query_editing() {
+        return vec![
+            Line::from("Type the session query directly. Spaces match multiple tokens."),
+            Line::from("Enter: apply query    Esc/Ctrl+C: cancel    Backspace: delete"),
+        ];
+    }
+
+    vec![
+        Line::from("/: query    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
+        Line::from("Up/Down: move    Enter: open    n: draft    r: reload    Ctrl+d: diagnostics"),
+    ]
+}
+
+fn format_session_query_label(search_query: &str) -> String {
+    if search_query.is_empty() {
+        "(all text)".to_string()
+    } else {
+        search_query.to_string()
     }
 }
 
