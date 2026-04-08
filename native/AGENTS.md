@@ -38,7 +38,9 @@ Use the repo-local RefinedStone identity for PR operations.
 
 - use `bash ../scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies
 - do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
-- if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
+- prefer the repo-local `.git/refinedstone-credentials` token first
+- if the repo-local token is unavailable, let `bash ../scripts/gh-refinedstone.sh` fall back to a Windows `/mnt/c/Users/*/.git-credentials` entry for `RefinedStone` when one exists
+- if neither the repo-local token nor the Windows RefinedStone credential is available, push code only and do not leave GitHub comments from the wrong account
 - once a change reaches a reviewable milestone, the default is `commit -> push -> PR`; do not stop at a local commit unless the user explicitly says to hold
 - after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
 - for final integration, do not use GitHub merge-commit flow; rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits

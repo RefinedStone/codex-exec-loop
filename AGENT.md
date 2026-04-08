@@ -46,7 +46,9 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 - Use the repo-local RefinedStone GitHub path for PR operations.
   - PR creation, PR edits, and review replies must run through `bash scripts/gh-refinedstone.sh`
   - do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
-  - if the local RefinedStone token is unavailable, push code only and do not leave GitHub comments from the wrong account
+  - prefer the repo-local `.git/refinedstone-credentials` token first
+  - if the repo-local token is unavailable, let `bash scripts/gh-refinedstone.sh` fall back to a Windows `/mnt/c/Users/*/.git-credentials` entry for `RefinedStone` when one exists
+  - if neither the repo-local token nor the Windows RefinedStone credential is available, push code only and do not leave GitHub comments from the wrong account
 - Keep commits small and milestone-based.
 - Default delivery rule:
   - once a task reaches a reviewable milestone, do not stop at a local commit
