@@ -10,10 +10,37 @@ pub(super) struct SessionBrowserView<'a> {
     pub selected_index: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SessionBrowserSelection {
+    pub index: usize,
+    pub session_id: Option<String>,
+}
+
 impl<'a> SessionBrowserView<'a> {
     pub fn selected_session(&self) -> Option<&'a SessionSummary> {
         self.selected_index
             .and_then(|selected_index| self.visible_sessions.get(selected_index).copied())
+    }
+
+    pub fn selection_after_delta(&self, delta: isize) -> SessionBrowserSelection {
+        if self.visible_sessions.is_empty() {
+            return SessionBrowserSelection {
+                index: 0,
+                session_id: None,
+            };
+        }
+
+        let current_index = self.selected_index.unwrap_or(0) as isize;
+        let max_index = self.visible_sessions.len().saturating_sub(1) as isize;
+        let next_index = (current_index + delta).clamp(0, max_index) as usize;
+
+        SessionBrowserSelection {
+            index: next_index,
+            session_id: self
+                .visible_sessions
+                .get(next_index)
+                .map(|session| session.id.clone()),
+        }
     }
 }
 
@@ -121,6 +148,32 @@ mod tests {
                 .selected_session()
                 .map(|session| session.id.as_str()),
             Some("thread-3")
+        );
+    }
+
+    #[test]
+    fn browser_view_selection_after_delta_clamps_and_preserves_session_id() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_session("thread-1", "/tmp/root-a", "alpha"),
+                sample_session("thread-2", "/tmp/root-a", "beta"),
+                sample_session("thread-3", "/tmp/root-b", "gamma"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let browser_state = SessionBrowserState::default();
+        let browser_view =
+            build_session_browser_view(&recent_sessions, &browser_state, Some("thread-2"), 0);
+
+        let selection = browser_view.selection_after_delta(5);
+
+        assert_eq!(
+            selection,
+            SessionBrowserSelection {
+                index: 2,
+                session_id: Some("thread-3".to_string()),
+            }
         );
     }
 

@@ -90,6 +90,24 @@ impl SessionBrowserProjection {
         (!self.page_session_indexes.is_empty())
             .then(|| selected_session_index.min(self.page_session_indexes.len().saturating_sub(1)))
     }
+
+    pub fn cycled_project_filter(&self, delta: isize) -> Option<SessionProjectFilter> {
+        let option_count = self.project_filter_options.len() as isize;
+        if option_count == 0 {
+            return None;
+        }
+
+        let current_index = self
+            .project_filter_options
+            .iter()
+            .position(|option| option.filter == self.active_project_filter)
+            .unwrap_or(0) as isize;
+        let next_index = (current_index + delta).rem_euclid(option_count) as usize;
+
+        self.project_filter_options
+            .get(next_index)
+            .map(|option| option.filter.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -427,6 +445,51 @@ mod tests {
         let projection = project_recent_sessions(&recent_sessions, &browser_state);
 
         assert_eq!(projection.page_session_indexes, vec![0]);
+    }
+
+    #[test]
+    fn cycled_project_filter_wraps_across_available_options() {
+        let projection = SessionBrowserProjection {
+            active_project_filter: SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root-b".to_string(),
+            },
+            project_filter_options: vec![
+                SessionProjectFilterOption {
+                    filter: SessionProjectFilter::AllProjects,
+                    label: "all projects".to_string(),
+                    session_count: 3,
+                },
+                SessionProjectFilterOption {
+                    filter: SessionProjectFilter::RecentProject {
+                        workspace_directory: "/tmp/root-a".to_string(),
+                    },
+                    label: "/tmp/root-a".to_string(),
+                    session_count: 2,
+                },
+                SessionProjectFilterOption {
+                    filter: SessionProjectFilter::RecentProject {
+                        workspace_directory: "/tmp/root-b".to_string(),
+                    },
+                    label: "/tmp/root-b".to_string(),
+                    session_count: 1,
+                },
+            ],
+            filtered_session_count: 1,
+            page_index: 0,
+            total_pages: 1,
+            page_session_indexes: vec![2],
+        };
+
+        assert_eq!(
+            projection.cycled_project_filter(1),
+            Some(SessionProjectFilter::AllProjects)
+        );
+        assert_eq!(
+            projection.cycled_project_filter(-1),
+            Some(SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root-a".to_string(),
+            })
+        );
     }
 
     fn sample_session(id: &str, cwd: &str, preview: &str) -> SessionSummary {

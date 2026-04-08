@@ -165,29 +165,16 @@ impl NativeTuiApp {
     }
 
     pub(super) fn move_selection(&mut self, delta: isize) {
-        let Some((next_index, selected_session_id)) =
-            self.current_session_browser_view().map(|browser_view| {
-                if browser_view.visible_sessions.is_empty() {
-                    return (0, None);
-                }
-
-                let current_index = browser_view.selected_index.unwrap_or(0) as isize;
-                let max_index = browser_view.visible_sessions.len().saturating_sub(1) as isize;
-                let next_index = (current_index + delta).clamp(0, max_index) as usize;
-                let selected_session_id = browser_view
-                    .visible_sessions
-                    .get(next_index)
-                    .map(|session| session.id.clone());
-
-                (next_index, selected_session_id)
-            })
+        let Some(next_selection) = self
+            .current_session_browser_view()
+            .map(|browser_view| browser_view.selection_after_delta(delta))
         else {
             return;
         };
 
-        self.selected_session_index = next_index;
+        self.selected_session_index = next_selection.index;
         self.session_overlay_ui_state
-            .set_selected_session_id(selected_session_id);
+            .set_selected_session_id(next_selection.session_id);
     }
 
     pub(super) fn push_input_character(&mut self, character: char) {
@@ -570,18 +557,9 @@ impl NativeTuiApp {
             recent_sessions,
             self.session_overlay_ui_state.browser_state(),
         );
-        let option_count = projection.project_filter_options.len() as isize;
-        if option_count == 0 {
+        let Some(next_filter) = projection.cycled_project_filter(delta) else {
             return;
-        }
-
-        let current_index = projection
-            .project_filter_options
-            .iter()
-            .position(|option| option.filter == projection.active_project_filter)
-            .unwrap_or(0) as isize;
-        let next_index = (current_index + delta).rem_euclid(option_count) as usize;
-        let next_filter = projection.project_filter_options[next_index].filter.clone();
+        };
 
         self.session_overlay_ui_state
             .set_project_filter(next_filter);
