@@ -243,7 +243,11 @@ impl CodexAppServerAdapter {
         )
     }
 
-    fn with_shared_runtime<T, F>(&self, mut operation: F) -> Result<SharedRuntimeOutput<T>>
+    fn with_shared_runtime<T, F>(
+        &self,
+        request_kind: SharedRuntimeRequestKind,
+        mut operation: F,
+    ) -> Result<SharedRuntimeOutput<T>>
     where
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
@@ -253,46 +257,33 @@ impl CodexAppServerAdapter {
                     RequestRuntimeMode::Shared,
                     self.run_request_on_locked_runtime(&mut runtime, &mut operation),
                 ),
-                Err(TryLockError::WouldBlock) => {
-                    (
-                        RequestRuntimeMode::IsolatedFallback,
-                        self.with_isolated_runtime(
-                            Some(
-                                "shared runtime busy with an active turn stream; request used an isolated app-server connection"
-                                    .to_string(),
-                            ),
-                            &mut operation,
-                        ),
-                    )
-                }
-                Err(TryLockError::Poisoned(_)) => {
-                    (
-                        RequestRuntimeMode::Shared,
-                        Err(anyhow!("shared app-server runtime mutex was poisoned")),
-                    )
-                }
+                Err(TryLockError::WouldBlock) => (
+                    RequestRuntimeMode::IsolatedFallback,
+                    self.with_isolated_runtime(
+                        Some(request_kind.isolated_fallback_notice()),
+                        &mut operation,
+                    ),
+                ),
+                Err(TryLockError::Poisoned(_)) => (
+                    RequestRuntimeMode::Shared,
+                    Err(anyhow!("shared app-server runtime mutex was poisoned")),
+                ),
             };
 
             match result {
                 Ok(output) => return Ok(output),
                 Err(error) => match request_failure_outcome(mode, attempt) {
                     RequestFailureOutcome::RetryAfterSharedReset => {
-                        self.reset_shared_runtime(Some(format!(
-                            "shared runtime reset after request failure; retrying with a fresh app-server connection ({error})"
-                        )));
+                        self.reset_shared_runtime(Some(request_kind.retry_reset_notice(&error)));
                         continue;
                     }
                     RequestFailureOutcome::RetryWithoutReset => continue,
                     RequestFailureOutcome::ReturnSharedFailure => {
                         self.reset_shared_runtime(None);
-                        return Err(error.context(
-                            "shared runtime retry also failed; open diagnostics and rerun the request",
-                        ));
+                        return Err(error.context(request_kind.shared_retry_failure_context()));
                     }
                     RequestFailureOutcome::ReturnIsolatedFailure => {
-                        return Err(error.context(
-                            "isolated fallback retry also failed while the shared turn stream was busy; rerun the request after the active turn completes",
-                        ));
+                        return Err(error.context(request_kind.isolated_retry_failure_context()));
                     }
                 },
             }
@@ -391,9 +382,12 @@ impl CodexAppServerAdapter {
 
 impl CodexAppServerPort for CodexAppServerAdapter {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
-        let output = self.with_shared_runtime(|connection, initialize_detail| {
-            Ok((initialize_detail.to_string(), connection.read_account()?))
-        })?;
+        let output = self.with_shared_runtime(
+            SharedRuntimeRequestKind::StartupChecks,
+            |connection, initialize_detail| {
+                Ok((initialize_detail.to_string(), connection.read_account()?))
+            },
+        )?;
         let (initialize_detail, account_response) = output.value;
 
         Ok(AppServerStartupContext {
@@ -405,12 +399,13 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 
     fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
-        let output = self.with_shared_runtime(|connection, _| {
-            connection.list_threads(ThreadListParams {
-                limit: Some(limit),
-                ..ThreadListParams::default()
-            })
-        })?;
+        let output =
+            self.with_shared_runtime(SharedRuntimeRequestKind::RecentSessions, |connection, _| {
+                connection.list_threads(ThreadListParams {
+                    limit: Some(limit),
+                    ..ThreadListParams::default()
+                })
+            })?;
         let ThreadListResponse { data, next_cursor } = output.value;
 
         let items = data
@@ -426,8 +421,10 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
-        let output =
-            self.with_shared_runtime(|connection, _| connection.read_thread(thread_id, true))?;
+        let output = self.with_shared_runtime(
+            SharedRuntimeRequestKind::ConversationSnapshot,
+            |connection, _| connection.read_thread(thread_id, true),
+        )?;
         Ok(Self::to_conversation_snapshot(
             output.value.thread,
             output.warnings,
@@ -576,6 +573,51 @@ enum RequestFailureOutcome {
     RetryWithoutReset,
     ReturnSharedFailure,
     ReturnIsolatedFailure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SharedRuntimeRequestKind {
+    StartupChecks,
+    RecentSessions,
+    ConversationSnapshot,
+}
+
+impl SharedRuntimeRequestKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::StartupChecks => "startup checks request",
+            Self::RecentSessions => "recent sessions request",
+            Self::ConversationSnapshot => "conversation snapshot request",
+        }
+    }
+
+    fn isolated_fallback_notice(self) -> String {
+        format!(
+            "{} used an isolated app-server connection while a turn stream was active",
+            self.label()
+        )
+    }
+
+    fn retry_reset_notice(self, error: &anyhow::Error) -> String {
+        format!(
+            "shared runtime reset after {} failure; retrying with a fresh app-server connection ({error})",
+            self.label()
+        )
+    }
+
+    fn shared_retry_failure_context(self) -> String {
+        format!(
+            "{} still failed after resetting the shared runtime; open diagnostics and rerun the request",
+            self.label()
+        )
+    }
+
+    fn isolated_retry_failure_context(self) -> String {
+        format!(
+            "{} still failed on isolated retry while the shared turn stream was busy; rerun the request after the active turn completes",
+            self.label()
+        )
+    }
 }
 
 fn request_failure_outcome(mode: RequestRuntimeMode, attempt: usize) -> RequestFailureOutcome {
@@ -1223,11 +1265,12 @@ struct ThreadGitInfo {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
     use serde_json::json;
 
     use super::{
         AppServerConnection, RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime,
-        request_failure_outcome, sort_and_dedup_warnings,
+        SharedRuntimeRequestKind, request_failure_outcome, sort_and_dedup_warnings,
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
@@ -1292,6 +1335,32 @@ mod tests {
         assert_eq!(
             request_failure_outcome(RequestRuntimeMode::IsolatedFallback, 1),
             RequestFailureOutcome::ReturnIsolatedFailure
+        );
+    }
+
+    #[test]
+    fn request_kind_messages_include_the_request_label() {
+        assert_eq!(
+            SharedRuntimeRequestKind::RecentSessions.isolated_fallback_notice(),
+            "recent sessions request used an isolated app-server connection while a turn stream was active"
+        );
+        assert_eq!(
+            SharedRuntimeRequestKind::StartupChecks.shared_retry_failure_context(),
+            "startup checks request still failed after resetting the shared runtime; open diagnostics and rerun the request"
+        );
+        assert_eq!(
+            SharedRuntimeRequestKind::ConversationSnapshot.isolated_retry_failure_context(),
+            "conversation snapshot request still failed on isolated retry while the shared turn stream was busy; rerun the request after the active turn completes"
+        );
+    }
+
+    #[test]
+    fn request_kind_reset_notice_preserves_the_request_label_and_error() {
+        let notice = SharedRuntimeRequestKind::RecentSessions.retry_reset_notice(&anyhow!("boom"));
+
+        assert_eq!(
+            notice,
+            "shared runtime reset after recent sessions request failure; retrying with a fresh app-server connection (boom)"
         );
     }
 
