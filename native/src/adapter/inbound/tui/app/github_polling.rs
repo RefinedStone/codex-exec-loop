@@ -356,7 +356,11 @@ fn parse_pull_request_target(value: &str) -> Result<GithubPullRequestTarget> {
         bail!("{GITHUB_PULL_REQUEST_ENV_VAR} must look like owner/repo#123, got {value}");
     };
     let repository = repository.trim();
-    if repository.is_empty() || !repository.contains('/') {
+    let repository_parts = repository.split('/').collect::<Vec<_>>();
+    if repository_parts.len() != 2
+        || repository_parts[0].is_empty()
+        || repository_parts[1].is_empty()
+    {
         bail!("{GITHUB_PULL_REQUEST_ENV_VAR} must look like owner/repo#123, got {value}");
     }
 
@@ -391,10 +395,7 @@ fn truncate_status_detail(message: &str) -> String {
         return message.to_string();
     }
 
-    let mut truncated = String::new();
-    for character in message.chars().take(MAX_STATUS_DETAIL_LENGTH - 3) {
-        truncated.push(character);
-    }
+    let mut truncated: String = message.chars().take(MAX_STATUS_DETAIL_LENGTH - 3).collect();
     truncated.push_str("...");
     truncated
 }
@@ -446,6 +447,24 @@ mod tests {
     fn bootstrap_surfaces_invalid_pull_request_value() {
         let bootstrap = GithubReviewPollingBootstrap::from_env_values(
             Some("not-a-pr".to_string()),
+            None,
+            || unreachable!("service loader should not run"),
+            Instant::now(),
+        );
+
+        match bootstrap.state {
+            GithubReviewPollingState::SetupError { target, message } => {
+                assert!(target.is_none());
+                assert!(message.contains("owner/repo#123"));
+            }
+            other => panic!("expected setup error state, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bootstrap_rejects_pull_request_value_with_invalid_repository_shape() {
+        let bootstrap = GithubReviewPollingBootstrap::from_env_values(
+            Some("owner/repo/extra#42".to_string()),
             None,
             || unreachable!("service loader should not run"),
             Instant::now(),

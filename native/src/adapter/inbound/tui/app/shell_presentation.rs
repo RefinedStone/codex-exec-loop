@@ -341,13 +341,10 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
 
             vec![
                 Line::from(format!(
-                    "startup: {}  |  sessions: {}  |  github: {}",
+                    "startup: {}  |  sessions: {}  |  github: {}  |  turn: {}  |  input: {}",
                     shell_action_availability_label(app),
                     recent_session_status_label(app),
                     github_review_polling_status_label(app),
-                )),
-                Line::from(format!(
-                    "turn: {}  |  input: {}",
                     turn_status_label(conversation),
                     conversation.input_state.label(),
                 )),

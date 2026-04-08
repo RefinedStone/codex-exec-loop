@@ -1,8 +1,10 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -17,6 +19,29 @@ const GITHUB_API_VERSION: &str = "2022-11-28";
 const PER_PAGE: usize = 100;
 const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
 const CURL_MAX_TIME_SECONDS: &str = "30";
+const WINDOWS_USERS_ROOT: &str = "/mnt/c/Users";
+const GITHUB_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'&')
+    .add(b'+')
+    .add(b'/')
+    .add(b':')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
 
 pub struct GithubReviewPollerAdapter {
     curl_path: String,
@@ -155,7 +180,7 @@ impl GithubReviewPollerAdapter {
         }
 
         bail!(
-            "missing {} and no Windows RefinedStone credential was found under /mnt/c/Users/*/.git-credentials",
+            "missing {} and no Windows RefinedStone credential was found in the current user's home directory",
             credential_path.display()
         );
     }
@@ -171,28 +196,85 @@ impl GithubReviewPollerAdapter {
     }
 
     fn find_windows_refinedstone_credential_line() -> Result<Option<String>> {
-        let users_root = Path::new("/mnt/c/Users");
+        let Some(credential_path) = Self::resolve_windows_credential_path_for_current_user()?
+        else {
+            return Ok(None);
+        };
+        let contents = match fs::read_to_string(&credential_path) {
+            Ok(contents) => contents,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read {}", credential_path.display()));
+            }
+        };
+
+        Ok(contents.lines().map(str::trim).find_map(|line| {
+            (line.starts_with("https://RefinedStone:") && line.contains("@github.com"))
+                .then(|| line.to_string())
+        }))
+    }
+
+    fn resolve_windows_credential_path_for_current_user() -> Result<Option<PathBuf>> {
+        let users_root = Path::new(WINDOWS_USERS_ROOT);
         if !users_root.exists() {
             return Ok(None);
         }
 
-        let mut credential_paths = fs::read_dir(users_root)?
-            .filter_map(|entry| {
-                entry
-                    .ok()
-                    .map(|entry| entry.path().join(".git-credentials"))
-            })
-            .filter(|path| path.is_file())
-            .collect::<Vec<_>>();
-        credential_paths.sort();
+        let Some(current_user) = Self::current_user_name() else {
+            return Ok(None);
+        };
+        let Some(user_home) =
+            Self::resolve_current_user_windows_home(users_root, current_user.as_str())?
+        else {
+            return Ok(None);
+        };
 
-        for credential_path in credential_paths {
-            let contents = fs::read_to_string(&credential_path)
-                .with_context(|| format!("failed to read {}", credential_path.display()))?;
-            if let Some(line) = contents.lines().map(str::trim).find(|line| {
-                line.starts_with("https://RefinedStone:") && line.contains("@github.com")
-            }) {
-                return Ok(Some(line.to_string()));
+        Ok(Some(user_home.join(".git-credentials")))
+    }
+
+    fn current_user_name() -> Option<String> {
+        std::env::var("USER")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn resolve_current_user_windows_home(
+        users_root: &Path,
+        current_user: &str,
+    ) -> Result<Option<PathBuf>> {
+        let direct_match = users_root.join(current_user);
+        if direct_match.is_dir() {
+            return Ok(Some(direct_match));
+        }
+
+        let entries = match fs::read_dir(users_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read {}", users_root.display()));
+            }
+        };
+
+        for entry in entries.flatten() {
+            let entry_name = entry.file_name();
+            if entry_name
+                .to_string_lossy()
+                .eq_ignore_ascii_case(current_user)
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    return Ok(Some(path));
+                }
             }
         }
 
@@ -213,15 +295,7 @@ impl GithubReviewPollerAdapter {
     }
 
     fn encode_query_value(value: &str) -> String {
-        value
-            .bytes()
-            .flat_map(|byte| match byte {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                    vec![byte as char]
-                }
-                _ => format!("%{byte:02X}").chars().collect::<Vec<_>>(),
-            })
-            .collect()
+        utf8_percent_encode(value, GITHUB_QUERY_ENCODE_SET).to_string()
     }
 
     fn fetch_pull_request_details(
@@ -493,6 +567,9 @@ struct GitHubUser {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::{
         GithubReviewPollerAdapter, IssueCommentResponse, PullRequestLocatorResponse,
         PullRequestResponse, PullRequestReviewCommentResponse, PullRequestReviewResponse,
@@ -535,6 +612,19 @@ mod tests {
             GithubReviewPollerAdapter::encode_query_value("RefinedStone:feature/native-shell");
 
         assert_eq!(encoded, "RefinedStone%3Afeature%2Fnative-shell");
+    }
+
+    #[test]
+    fn resolves_windows_home_for_current_user_case_insensitively() {
+        let users_root = unique_temp_dir("users-root");
+        fs::create_dir_all(users_root.join("Akra")).expect("user home should be created");
+
+        let resolved =
+            GithubReviewPollerAdapter::resolve_current_user_windows_home(&users_root, "akra")
+                .expect("user home lookup should succeed");
+
+        assert_eq!(resolved, Some(users_root.join("Akra")));
+        let _ = fs::remove_dir_all(&users_root);
     }
 
     #[test]
@@ -678,5 +768,13 @@ mod tests {
         );
 
         assert!(snapshot.events.is_empty());
+    }
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
     }
 }
