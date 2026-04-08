@@ -60,7 +60,10 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - start the next task from the latest target base branch on a new feature branch and open a new PR
 - After PR review arrives:
   - inspect every new review comment and thread before changing code
+  - review comments critically instead of applying them mechanically
+  - only change code when the feedback is logically correct and fits the chosen architecture, product direction, and current code reality
   - fix correctness and low-cost maintainability issues that align with the chosen architecture
+  - if a review comment is wrong, stale, or pushes the code in the wrong direction, reply with a concise rebuttal comment that explains why no code change is being made
   - reply on each review thread with the applied fix or the rationale for not changing direction only when `bash scripts/gh-refinedstone.sh` can authenticate as `RefinedStone`
   - commit and push the review response separately from the original milestone commit when practical
   - rebase the feature branch onto the latest target base branch before merge
@@ -70,9 +73,11 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 - Verify with `cargo fmt`, `cargo build`, and `cargo test` for native changes.
 - Do not introduce unnecessary traits. Add a port trait when it improves a boundary.
 - Review handling:
+  - treat automated review comments as suggestions, not commands
+  - keep a skeptical, architecture-aware stance when deciding whether feedback is truly correct
   - fix correctness, deadlock, crash, data-loss, and clear state-management issues
   - fix low-cost maintainability improvements when they do not fight the chosen architecture
-  - if feedback pushes away from the intended Spring Boot Kotlin style or the chosen hexagonal structure, reply with the rationale and close the thread without changing direction
+  - if feedback is incorrect or pushes away from the intended Spring Boot Kotlin style or the chosen hexagonal structure, reply with the rationale, leave the code as-is, and finish the PR with that thread resolved from the documented rationale
 
 ## Native TODO
 
