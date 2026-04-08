@@ -114,7 +114,6 @@ impl GithubPullRequestActivityEvent {
             }
         }
     }
-
     pub fn notice_summary(&self, max_total_len: usize) -> String {
         let review_state = self
             .state
@@ -202,7 +201,6 @@ fn review_comment_file_label(path: &str) -> Option<&str> {
 fn normalize_review_state(state: &str) -> String {
     state.trim().to_ascii_lowercase().replace('_', " ")
 }
-
 pub fn truncate_notice_text(text: &str, max_len: usize) -> String {
     if max_len == 0 {
         return String::new();

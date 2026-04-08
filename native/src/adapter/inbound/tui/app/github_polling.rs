@@ -302,7 +302,6 @@ impl GithubReviewPollingRuntimeState {
             latest_change.notice_label()
         ))
     }
-
     fn recent_change_summary(&self, max_total_len: usize) -> Option<String> {
         let latest_change = self.recent_changes.last()?;
         if self.recent_changes.len() == 1 {
@@ -374,10 +373,10 @@ impl NativeTuiApp {
 
     pub(super) fn github_review_recent_changes_summary(
         &self,
-        max_body_len: usize,
+        max_total_len: usize,
     ) -> Option<String> {
         self.github_review_polling_state
-            .recent_change_summary(max_body_len)
+            .recent_change_summary(max_total_len)
     }
 
     pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) {

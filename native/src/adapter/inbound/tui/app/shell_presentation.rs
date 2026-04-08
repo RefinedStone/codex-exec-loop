@@ -400,15 +400,16 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     conversation.auto_follow_state.template_count(),
                 )),
                 Line::from(format!(
-                    "template source: {}  |  auto activity: {}  |  {}: {}",
-                    conversation.auto_follow_state.template_source_label(),
-                    activity_summary,
-                    if github_review_summary.is_some() {
-                        "github"
+                    "{}",
+                    if let Some(github_review_summary) = github_review_summary.as_deref() {
+                        format!("gh update: {github_review_summary}  |  auto: {activity_summary}")
                     } else {
-                        "detail"
+                        format!(
+                            "template source: {}  |  auto activity: {}  |  detail: {activity_detail}",
+                            conversation.auto_follow_state.template_source_label(),
+                            activity_summary,
+                        )
                     },
-                    github_review_summary.as_deref().unwrap_or(activity_detail),
                 )),
             ]
         }

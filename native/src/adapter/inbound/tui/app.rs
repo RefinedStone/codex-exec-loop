@@ -550,7 +550,7 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("github: updates acme/widgets#42 (1 new)"));
-        assert!(rendered.contains("github: review commented by reviewer: Looks good"));
+        assert!(rendered.contains("gh update: review commented by reviewer: Looks good"));
     }
 
     #[test]
@@ -1989,7 +1989,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("github: review commented by reviewer: Looks good"));
+        assert!(rendered.contains("github: review commented by r..."));
     }
 
     #[test]
