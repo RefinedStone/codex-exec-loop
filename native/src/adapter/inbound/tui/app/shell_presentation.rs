@@ -11,6 +11,20 @@ pub(super) struct ConversationShellView {
     pub(super) input_lines: Vec<Line<'static>>,
 }
 
+pub(super) struct ConversationShellFrameView {
+    pub(super) shell_title: Line<'static>,
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) header_area: Rect,
+    pub(super) transcript_view: TranscriptPanelView,
+    pub(super) transcript_area: Rect,
+    pub(super) status_title: Line<'static>,
+    pub(super) footer_lines: Vec<Line<'static>>,
+    pub(super) footer_area: Rect,
+    pub(super) input_title: Line<'static>,
+    pub(super) input_lines: Vec<Line<'static>>,
+    pub(super) input_area: Rect,
+}
+
 pub(super) struct TranscriptPanelView {
     pub(super) title: Line<'static>,
     pub(super) lines: Vec<Line<'static>>,
@@ -124,6 +138,59 @@ pub(super) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
             Line::from("Esc/Ctrl+C: close    r: rerun checks"),
             Line::from("Ctrl+o: recent sessions"),
         ],
+    }
+}
+
+pub(super) fn build_conversation_shell_frame_view(
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+    area: Rect,
+) -> ConversationShellFrameView {
+    let shell_view = build_conversation_shell_view(app, mode);
+    let ConversationShellView {
+        shell_title,
+        header_lines,
+        conversation_lines,
+        status_title,
+        footer_lines,
+        input_title,
+        input_lines,
+    } = shell_view;
+    let header_height = block_height_for_lines(&header_lines, 4, 6);
+    let footer_height = build_shell_footer_height(&footer_lines);
+    let input_height = build_input_block_height(&input_lines);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(12),
+            Constraint::Length(footer_height),
+            Constraint::Length(input_height),
+        ])
+        .split(area);
+
+    let transcript_view = build_transcript_panel_view(
+        app,
+        mode,
+        conversation_lines,
+        layout[1].width.saturating_sub(2),
+        layout[1].height.saturating_sub(2),
+    );
+
+    ConversationShellFrameView {
+        shell_title,
+        header_lines,
+        header_area: layout[0],
+        transcript_view,
+        transcript_area: layout[1],
+        status_title,
+        footer_lines,
+        footer_area: layout[2],
+        input_title,
+        input_lines,
+        input_area: layout[3],
     }
 }
 

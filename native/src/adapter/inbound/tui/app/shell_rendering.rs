@@ -1,4 +1,8 @@
-use super::shell_presentation::OverlayListView;
+use super::shell_presentation::{
+    ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
+    StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view,
+};
 use super::*;
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
@@ -64,43 +68,26 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<
 fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     let area = frame.area();
     frame.render_widget(Clear, area);
-    let shell_view = build_conversation_shell_view(app, mode);
-    let ConversationShellView {
+    let shell_frame_view = build_conversation_shell_frame_view(app, mode, area);
+    let ConversationShellFrameView {
         shell_title,
         header_lines,
-        conversation_lines,
+        header_area,
+        transcript_view,
+        transcript_area,
         status_title,
         footer_lines,
+        footer_area,
         input_title,
         input_lines,
-    } = shell_view;
-    let header_height = block_height_for_lines(&header_lines, 4, 6);
-    let footer_height = build_shell_footer_height(&footer_lines);
-    let input_height = build_input_block_height(&input_lines);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(12),
-            Constraint::Length(footer_height),
-            Constraint::Length(input_height),
-        ])
-        .split(area);
+        input_area,
+    } = shell_frame_view;
 
     let header = Paragraph::new(header_lines)
         .block(Block::default().borders(Borders::ALL).title(shell_title))
         .wrap(Wrap { trim: true });
-    frame.render_widget(header, layout[0]);
+    frame.render_widget(header, header_area);
 
-    let transcript_view = build_transcript_panel_view(
-        app,
-        mode,
-        conversation_lines,
-        layout[1].width.saturating_sub(2),
-        layout[1].height.saturating_sub(2),
-    );
     let conversation = Paragraph::new(transcript_view.lines)
         .block(
             Block::default()
@@ -109,17 +96,17 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
         )
         .scroll((transcript_view.scroll_offset, 0))
         .wrap(Wrap { trim: false });
-    frame.render_widget(conversation, layout[1]);
+    frame.render_widget(conversation, transcript_area);
 
     let footer = Paragraph::new(footer_lines)
         .block(Block::default().borders(Borders::ALL).title(status_title))
         .wrap(Wrap { trim: true });
-    frame.render_widget(footer, layout[2]);
+    frame.render_widget(footer, footer_area);
 
     let input = Paragraph::new(input_lines)
         .block(Block::default().borders(Borders::ALL).title(input_title))
         .wrap(Wrap { trim: false });
-    frame.render_widget(input, layout[3]);
+    frame.render_widget(input, input_area);
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {

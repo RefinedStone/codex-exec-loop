@@ -100,16 +100,14 @@ use shell_layout::{
     block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
     build_shell_footer_height,
 };
-use shell_presentation::{
-    ConversationShellView, FollowupTemplateOverlayView, SessionOverlayView, StartupOverlayView,
-    build_conversation_shell_view, build_followup_template_overlay_view,
-    build_session_overlay_view, build_startup_overlay_view, build_transcript_panel_view,
-    format_conversation_lines,
-};
+use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{
-    build_followup_template_preview_lines, build_followup_template_status_lines, build_input_title,
-    build_ready_input_lines, build_shell_footer_lines, build_status_title, build_transcript_title,
+    build_conversation_shell_frame_view, build_conversation_shell_view,
+    build_followup_template_overlay_view, build_followup_template_preview_lines,
+    build_followup_template_status_lines, build_input_title, build_ready_input_lines,
+    build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
+    build_status_title, build_transcript_panel_view, build_transcript_title,
 };
 use transcript_viewport::TranscriptViewportState;
 
@@ -144,6 +142,7 @@ mod tests {
 
     use anyhow::Result;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
     use ratatui::text::Line;
 
     use super::{
@@ -153,12 +152,12 @@ mod tests {
         FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
         NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
         ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
-        build_conversation_shell_view, build_followup_template_overlay_view,
-        build_followup_template_preview_lines, build_followup_template_status_lines,
-        build_input_title, build_ready_input_lines, build_session_overlay_view,
-        build_shell_footer_lines, build_startup_overlay_view, build_status_title,
-        build_transcript_panel_view, build_transcript_title, format_conversation_lines,
-        shell_layout,
+        build_conversation_shell_frame_view, build_conversation_shell_view,
+        build_followup_template_overlay_view, build_followup_template_preview_lines,
+        build_followup_template_status_lines, build_input_title, build_ready_input_lines,
+        build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
+        build_status_title, build_transcript_panel_view, build_transcript_title,
+        format_conversation_lines, shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -847,6 +846,32 @@ mod tests {
         assert!(!view.conversation_lines.is_empty());
         assert!(!view.footer_lines.is_empty());
         assert!(!view.input_lines.is_empty());
+    }
+
+    #[test]
+    fn conversation_shell_frame_view_collects_layout_and_transcript_panel() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let view = build_conversation_shell_frame_view(
+            &mut app,
+            ShellFrontendMode::AlternateScreen,
+            Rect::new(0, 0, 100, 36),
+        );
+
+        assert!(view.shell_title.to_string().contains("Shell /"));
+        assert_eq!(view.header_area.y, 1);
+        assert!(view.transcript_area.height >= 12);
+        assert!(view.footer_area.y > view.transcript_area.y);
+        assert!(view.input_area.y > view.footer_area.y);
+        assert!(
+            view.transcript_view
+                .title
+                .to_string()
+                .contains("Transcript /")
+        );
+        assert!(!view.transcript_view.lines.is_empty());
     }
 
     #[test]
