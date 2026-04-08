@@ -144,8 +144,8 @@ impl NativeTuiApp {
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
-            InlineShellCommand::TranscriptTop => self.scroll_transcript_to_top(),
-            InlineShellCommand::TranscriptTail => self.scroll_transcript_to_tail(),
+            InlineShellCommand::TranscriptTopLegacy => {}
+            InlineShellCommand::TranscriptTailLegacy => {}
             InlineShellCommand::Help => {}
         }
 

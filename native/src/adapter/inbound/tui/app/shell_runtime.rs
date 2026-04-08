@@ -6,13 +6,15 @@ use super::*;
 
 pub(super) struct ShellRuntime {
     app: NativeTuiApp,
+    frontend_mode: ShellFrontendMode,
     should_quit: bool,
 }
 
 impl ShellRuntime {
-    pub(super) fn new(app: NativeTuiApp) -> Self {
+    pub(super) fn new(app: NativeTuiApp, frontend_mode: ShellFrontendMode) -> Self {
         Self {
             app,
+            frontend_mode,
             should_quit: false,
         }
     }
@@ -120,10 +122,30 @@ impl ShellRuntime {
         }
 
         match key.code {
-            KeyCode::PageUp if key.modifiers.is_empty() => self.app.scroll_transcript_page_up(),
-            KeyCode::PageDown if key.modifiers.is_empty() => self.app.scroll_transcript_page_down(),
-            KeyCode::Home if key.modifiers.is_empty() => self.app.scroll_transcript_to_top(),
-            KeyCode::End if key.modifiers.is_empty() => self.app.scroll_transcript_to_tail(),
+            KeyCode::PageUp
+                if key.modifiers.is_empty()
+                    && self.frontend_mode == ShellFrontendMode::AlternateScreen =>
+            {
+                self.app.scroll_transcript_page_up()
+            }
+            KeyCode::PageDown
+                if key.modifiers.is_empty()
+                    && self.frontend_mode == ShellFrontendMode::AlternateScreen =>
+            {
+                self.app.scroll_transcript_page_down()
+            }
+            KeyCode::Home
+                if key.modifiers.is_empty()
+                    && self.frontend_mode == ShellFrontendMode::AlternateScreen =>
+            {
+                self.app.scroll_transcript_to_top()
+            }
+            KeyCode::End
+                if key.modifiers.is_empty()
+                    && self.frontend_mode == ShellFrontendMode::AlternateScreen =>
+            {
+                self.app.scroll_transcript_to_tail()
+            }
             KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.toggle_auto_followup()
             }
@@ -287,7 +309,7 @@ mod tests {
         }
     }
 
-    fn make_test_runtime() -> ShellRuntime {
+    fn make_test_runtime(frontend_mode: ShellFrontendMode) -> ShellRuntime {
         let codex_port = Arc::new(FakeCodexAppServerPort);
         let followup_port = Arc::new(FakeFollowupTemplatePort);
         let app = NativeTuiApp::new(
@@ -297,7 +319,7 @@ mod tests {
             FollowupTemplateService::new(followup_port),
         );
 
-        ShellRuntime::new(app)
+        ShellRuntime::new(app, frontend_mode)
     }
 
     fn sample_startup_diagnostics(workspace_path: &str) -> StartupDiagnostics {
@@ -319,7 +341,7 @@ mod tests {
 
     #[test]
     fn ctrl_q_requests_quit() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
 
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('q'),
@@ -331,7 +353,7 @@ mod tests {
 
     #[test]
     fn non_press_key_events_are_ignored() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
 
         runtime.handle_terminal_event(Event::Key(KeyEvent {
             code: KeyCode::Char('q'),
@@ -345,7 +367,7 @@ mod tests {
 
     #[test]
     fn startup_background_message_updates_app_state() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
         runtime
             .app
             .tx
@@ -366,7 +388,7 @@ mod tests {
 
     #[test]
     fn plain_character_input_uses_empty_modifier_check() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
 
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
@@ -380,8 +402,37 @@ mod tests {
     }
 
     #[test]
+    fn inline_mode_ignores_transcript_navigation_keys() {
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.app_mut().sync_transcript_viewport_metrics(24, 6);
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::NONE,
+        )));
+
+        assert_eq!(runtime.app().transcript_viewport_status_label(), "tail");
+    }
+
+    #[test]
+    fn alternate_screen_keeps_transcript_navigation_keys() {
+        let mut runtime = make_test_runtime(ShellFrontendMode::AlternateScreen);
+        runtime.app_mut().sync_transcript_viewport_metrics(24, 6);
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::NONE,
+        )));
+
+        assert_eq!(
+            runtime.app().transcript_viewport_status_label(),
+            "manual 19/24"
+        );
+    }
+
+    #[test]
     fn ctrl_l_starts_max_auto_turns_editing() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
         runtime.app_mut().conversation_state =
             ConversationState::Ready(ConversationViewModel::new_draft(
                 "/tmp/root".to_string(),
@@ -399,7 +450,7 @@ mod tests {
 
     #[test]
     fn ctrl_u_clears_buffered_input() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
         runtime.app_mut().push_input_character('s');
         runtime.app_mut().push_input_character('h');
         runtime.app_mut().push_input_character('i');
@@ -418,7 +469,7 @@ mod tests {
 
     #[test]
     fn ctrl_w_deletes_previous_buffered_word() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
         for character in "ship this next".chars() {
             runtime.app_mut().push_input_character(character);
         }
@@ -436,7 +487,7 @@ mod tests {
 
     #[test]
     fn poll_background_messages_starts_github_review_polling_when_due() {
-        let mut runtime = make_test_runtime();
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
         runtime.app_mut().configure_github_review_polling(
             super::super::github_polling::GithubReviewPollingBootstrap {
                 service: Some(GithubReviewPollerService::new(Arc::new(

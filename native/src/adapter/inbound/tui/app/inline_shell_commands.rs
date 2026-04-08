@@ -4,14 +4,13 @@ pub(super) enum InlineShellCommand {
     Sessions,
     Templates,
     NewDraft,
-    TranscriptTop,
-    TranscriptTail,
+    TranscriptTopLegacy,
+    TranscriptTailLegacy,
     Help,
 }
 
 impl InlineShellCommand {
-    const COMMAND_LIST_LINE: &str =
-        "Shell commands: :diag  :sessions  :templates  :new  :top  :tail  :help";
+    const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :templates  :new  :help";
 
     pub(super) fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
@@ -28,9 +27,9 @@ impl InlineShellCommand {
         } else if trimmed.eq_ignore_ascii_case(":new") {
             Some(Self::NewDraft)
         } else if trimmed.eq_ignore_ascii_case(":top") || trimmed.eq_ignore_ascii_case(":home") {
-            Some(Self::TranscriptTop)
+            Some(Self::TranscriptTopLegacy)
         } else if trimmed.eq_ignore_ascii_case(":tail") || trimmed.eq_ignore_ascii_case(":end") {
-            Some(Self::TranscriptTail)
+            Some(Self::TranscriptTailLegacy)
         } else if trimmed.eq_ignore_ascii_case(":help") {
             Some(Self::Help)
         } else {
@@ -48,8 +47,9 @@ impl InlineShellCommand {
             Self::Sessions => "Press Enter to open the recent-sessions inspection.",
             Self::Templates => "Press Enter to open the template inspection.",
             Self::NewDraft => "Press Enter to open a new draft in the shell.",
-            Self::TranscriptTop => "Press Enter to jump the transcript viewport to the top.",
-            Self::TranscriptTail => "Press Enter to jump the transcript viewport to the tail.",
+            Self::TranscriptTopLegacy | Self::TranscriptTailLegacy => {
+                "Press Enter to see where transcript jump controls moved."
+            }
             Self::Help => "Press Enter to show the available shell commands.",
         }
     }
@@ -60,8 +60,9 @@ impl InlineShellCommand {
             Self::Sessions => Some("opened recent sessions inspection"),
             Self::Templates => Some("opened template inspection"),
             Self::NewDraft => None,
-            Self::TranscriptTop => Some("jumped transcript viewport to top"),
-            Self::TranscriptTail => Some("jumped transcript viewport to tail"),
+            Self::TranscriptTopLegacy | Self::TranscriptTailLegacy => Some(
+                "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
+            ),
             Self::Help => Some(Self::command_list_line()),
         }
     }
@@ -82,10 +83,10 @@ mod tests {
             (":template", Some(InlineShellCommand::Templates)),
             (":templates", Some(InlineShellCommand::Templates)),
             (":new", Some(InlineShellCommand::NewDraft)),
-            (":top", Some(InlineShellCommand::TranscriptTop)),
-            (":home", Some(InlineShellCommand::TranscriptTop)),
-            (":tail", Some(InlineShellCommand::TranscriptTail)),
-            (":end", Some(InlineShellCommand::TranscriptTail)),
+            (":top", Some(InlineShellCommand::TranscriptTopLegacy)),
+            (":home", Some(InlineShellCommand::TranscriptTopLegacy)),
+            (":tail", Some(InlineShellCommand::TranscriptTailLegacy)),
+            (":end", Some(InlineShellCommand::TranscriptTailLegacy)),
             (":help", Some(InlineShellCommand::Help)),
             ("  :help  ", Some(InlineShellCommand::Help)),
             (":unknown", None),
@@ -120,12 +121,16 @@ mod tests {
                 Some("opened template inspection"),
             ),
             (
-                InlineShellCommand::TranscriptTop,
-                Some("jumped transcript viewport to top"),
+                InlineShellCommand::TranscriptTopLegacy,
+                Some(
+                    "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
+                ),
             ),
             (
-                InlineShellCommand::TranscriptTail,
-                Some("jumped transcript viewport to tail"),
+                InlineShellCommand::TranscriptTailLegacy,
+                Some(
+                    "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
+                ),
             ),
         ];
 

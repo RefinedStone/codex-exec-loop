@@ -543,7 +543,8 @@ fn draft_workspace_sync_preserves_buffered_input() {
 #[test]
 fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() {
     let (app, _) = make_test_app();
-    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+    let mut runtime =
+        super::shell_runtime::ShellRuntime::new(app, ShellFrontendMode::InlineMainBuffer);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("app should start with a draft conversation");
     };
@@ -571,7 +572,8 @@ fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() 
 #[test]
 fn background_conversation_loaded_resets_followup_overlay_state() {
     let (app, _) = make_test_app();
-    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+    let mut runtime =
+        super::shell_runtime::ShellRuntime::new(app, ShellFrontendMode::InlineMainBuffer);
     runtime.app_mut().followup_overlay_ui_state.preview_scroll = 12;
     runtime
         .app_mut()
@@ -871,7 +873,7 @@ fn inline_help_command_updates_status_and_clears_input() {
 }
 
 #[test]
-fn inline_jump_commands_jump_transcript_and_clear_input() {
+fn inline_jump_commands_show_terminal_scroll_guidance_and_clear_input() {
     struct TestCase<'a> {
         command: &'a str,
         initial_scroll: fn(&mut NativeTuiApp),
@@ -883,14 +885,14 @@ fn inline_jump_commands_jump_transcript_and_clear_input() {
         TestCase {
             command: ":top",
             initial_scroll: NativeTuiApp::scroll_transcript_page_up,
-            expected_viewport_status: "manual 0/18",
-            expected_status_text: "jumped transcript viewport to top",
+            expected_viewport_status: "manual 13/18",
+            expected_status_text: "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
         },
         TestCase {
             command: ":tail",
             initial_scroll: NativeTuiApp::scroll_transcript_to_top,
-            expected_viewport_status: "tail",
-            expected_status_text: "jumped transcript viewport to tail",
+            expected_viewport_status: "manual 0/18",
+            expected_status_text: "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
         },
     ];
 
@@ -1061,11 +1063,33 @@ fn conversation_shell_view_collects_inline_snapshot_content() {
     assert!(view.input_title.to_string().contains("Prompt / ready"));
     assert!(header.contains("thread: thread-1"));
     assert!(header.contains("frontend: inline main buffer"));
-    assert!(header.contains("transcript: terminal scrollback-first"));
+    assert!(header.contains("history: host terminal scrollback"));
     assert!(header.contains("startup: "));
     assert!(!view.conversation_lines.is_empty());
     assert!(!view.footer_lines.is_empty());
     assert!(!view.input_lines.is_empty());
+}
+
+#[test]
+fn inline_transcript_panel_stays_pinned_to_tail_even_after_manual_viewport_state() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.sync_transcript_viewport_metrics(18, 6);
+    app.scroll_transcript_page_up();
+    let transcript_lines = (1..=24)
+        .map(|index| Line::from(format!("line {index}")))
+        .collect::<Vec<_>>();
+
+    let view = build_transcript_panel_view(
+        &mut app,
+        ShellFrontendMode::InlineMainBuffer,
+        transcript_lines,
+        20,
+        6,
+    );
+
+    assert_eq!(view.scroll_offset, 18);
 }
 
 #[test]

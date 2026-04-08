@@ -226,7 +226,11 @@ pub(super) fn build_transcript_panel_view(
     visible_height: u16,
 ) -> TranscriptPanelView {
     let max_scroll_offset = build_conversation_scroll_offset(&lines, content_width, visible_height);
-    let scroll_offset = app.sync_transcript_viewport_metrics(max_scroll_offset, visible_height);
+    let scroll_offset = if mode == ShellFrontendMode::InlineMainBuffer {
+        max_scroll_offset
+    } else {
+        app.sync_transcript_viewport_metrics(max_scroll_offset, visible_height)
+    };
 
     TranscriptPanelView {
         title: build_transcript_title(app, mode),
@@ -945,7 +949,7 @@ pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> 
 fn build_frontend_summary_line(mode: ShellFrontendMode) -> Line<'static> {
     match mode {
         ShellFrontendMode::InlineMainBuffer => Line::from(
-            "frontend: inline main buffer  |  transcript: terminal scrollback-first  |  keys: PageUp/PageDown/Home/End",
+            "frontend: inline main buffer  |  history: host terminal scrollback  |  tail: prompt anchored",
         ),
         ShellFrontendMode::AlternateScreen => Line::from(
             "frontend: alternate screen  |  transcript: framed viewport  |  keys: PageUp/PageDown/Home/End",
