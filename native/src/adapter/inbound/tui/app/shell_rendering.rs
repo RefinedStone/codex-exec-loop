@@ -86,9 +86,7 @@ fn draw_inline_conversation_shell(
     let layout = build_inline_terminal_flow_layout(app, frame.area());
     let shell_view = build_conversation_shell_view(app, mode);
     let ConversationShellView {
-        conversation_lines,
-        input_title,
-        ..
+        conversation_lines, ..
     } = shell_view;
     let tail_lines = build_inline_tail_lines(app);
 
@@ -106,12 +104,12 @@ fn draw_inline_conversation_shell(
         transcript_view.lines,
         transcript_view.scroll_offset,
     );
-    render_inline_section(frame, layout[1], input_title, tail_lines, false);
+    render_inline_body(frame, layout[1], tail_lines, false);
 }
 
 fn build_inline_terminal_flow_layout(app: &NativeTuiApp, area: Rect) -> Rc<[Rect]> {
     let tail_lines = build_inline_tail_lines(app);
-    let tail_height = inline_section_height(&tail_lines, MAX_INLINE_TAIL_HEIGHT);
+    let tail_height = inline_body_height(&tail_lines, MAX_INLINE_TAIL_HEIGHT);
 
     Layout::default()
         .direction(Direction::Vertical)
@@ -178,6 +176,10 @@ fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
         .min(max_height as usize) as u16
 }
 
+fn inline_body_height(lines: &[Line<'_>], max_height: u16) -> u16 {
+    lines.len().max(1).min(max_height as usize) as u16
+}
+
 fn split_inline_section(area: Rect) -> Rc<[Rect]> {
     Layout::default()
         .direction(Direction::Vertical)
@@ -195,6 +197,10 @@ fn render_inline_section(
     let section_layout = split_inline_section(area);
     frame.render_widget(Paragraph::new(vec![title]), section_layout[0]);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), section_layout[1]);
+}
+
+fn render_inline_body(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<'static>>, trim: bool) {
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), area);
 }
 
 fn render_inline_scrolled_section(
