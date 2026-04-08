@@ -160,6 +160,12 @@ Set-Location C:\path\to\codex-exec-loop
 
 Keep the recorded files under `native/docs/validation/` so later platform follow-ups can point to a checked-in row instead of a transient comment.
 
+Check current matrix coverage from the repository root:
+
+```bash
+./scripts/summarize_native_validation.sh
+```
+
 ## Release Handoff Notes
 
 - keep package creation deterministic by running from a clean checkout

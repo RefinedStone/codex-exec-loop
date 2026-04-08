@@ -108,6 +108,12 @@ Set-Location <path-to-repo>
 
 Committed validation records live under [`../validation/`](../validation/).
 
+Summarize recorded coverage before closing a platform-facing PR:
+
+```bash
+./scripts/summarize_native_validation.sh
+```
+
 ## Environment Capture
 
 Record this before marking a matrix row complete:
@@ -251,6 +257,8 @@ notes:
 ```
 
 The helper scripts above emit this template with the current commit, detected host info, the standard checklist already filled in, and a slugged filename when `output-dir` is used.
+
+Use `./scripts/summarize_native_validation.sh --fail-on-incomplete` when you want the shell to fail fast unless every required matrix row is recorded as `pass`.
 
 ## Exit Criteria
 

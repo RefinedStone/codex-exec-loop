@@ -9,6 +9,7 @@ Rules:
 - record only real validation passes or blockers; do not add speculative or placeholder rows
 - keep one file per terminal/frontend row that was exercised
 - keep the emitted checklist intact so later readers can compare rows quickly
+- use `./scripts/summarize_native_validation.sh` to see which required rows are still missing before calling the matrix complete
 - if a row finds a real Windows-specific issue, open the focused `F2` follow-up from the latest `origin/prerelease` instead of broadening the validation commit
 
 Recommended filename shape:
@@ -35,4 +36,10 @@ Windows PowerShell:
   -Terminal "Windows Terminal 1.22" `
   -Result pass `
   -OutputDir native\docs\validation
+```
+
+Coverage summary from the repository root:
+
+```bash
+./scripts/summarize_native_validation.sh
 ```

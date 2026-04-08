@@ -50,6 +50,12 @@ Capture a validation report scaffold after a manual terminal pass:
   --output-dir native/docs/validation
 ```
 
+Summarize the checked-in validation coverage:
+
+```bash
+./scripts/summarize_native_validation.sh
+```
+
 Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.
 
 Operator-facing packaging notes live in [`docs/plan/13-native-packaging-and-operator-runbook.md`](./docs/plan/13-native-packaging-and-operator-runbook.md).

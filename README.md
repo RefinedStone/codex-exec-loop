@@ -74,6 +74,12 @@ validation 결과 템플릿 캡처:
   --output-dir native/docs/validation
 ```
 
+기록된 validation row 요약:
+
+```bash
+./scripts/summarize_native_validation.sh
+```
+
 운영자 runbook 과 플랫폼 검증 기준:
 
 - [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md)
