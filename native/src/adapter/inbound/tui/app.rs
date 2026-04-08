@@ -912,20 +912,7 @@ mod tests {
 
         assert_eq!(
             build_transcript_title(&app, ShellFrontendMode::AlternateScreen).to_string(),
-            "Transcript / manual 13/18 / PageUp PageDown / Home End"
-        );
-    }
-
-    #[test]
-    fn inline_history_title_prefers_scrollback_copy() {
-        let (mut app, _) = make_test_app();
-        app.conversation_state = ConversationState::Ready(ready_conversation());
-        app.sync_transcript_viewport_metrics(18, 6);
-        app.scroll_transcript_page_up();
-
-        assert_eq!(
-            build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer).to_string(),
-            "History / manual 13/18 / scrollback-first"
+            "Transcript / manual 13/18"
         );
     }
 
@@ -948,38 +935,35 @@ mod tests {
         );
 
         assert_eq!(view.scroll_offset, 13);
-        assert_eq!(
-            view.title.to_string(),
-            "Transcript / manual 13/18 / PageUp PageDown / Home End"
-        );
+        assert_eq!(view.title.to_string(), "Transcript / manual 13/18");
         assert_eq!(view.lines.len(), 24);
     }
 
     #[test]
-    fn composer_title_includes_submit_and_newline_hints() {
+    fn input_title_includes_submit_and_newline_hints() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
 
         let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
 
-        assert!(rendered.contains("Composer / ready"));
+        assert!(rendered.contains("Input / ready"));
         assert!(rendered.contains("Enter send"));
         assert!(rendered.contains("Ctrl+j newline"));
     }
 
     #[test]
-    fn inline_prompt_title_uses_prompt_label() {
+    fn input_title_stays_neutral_in_inline_mode() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
 
         let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
-        assert!(rendered.contains("Prompt / ready"));
+        assert!(rendered.contains("Input / ready"));
         assert!(rendered.contains("Enter send"));
     }
 
     #[test]
-    fn composer_title_shows_readiness_gated_submit_hint() {
+    fn input_title_shows_readiness_gated_submit_hint() {
         let (mut app, _) = make_test_app();
         app.startup_state = StartupState::Loading;
         app.conversation_state = ConversationState::Ready(ready_conversation());
@@ -993,18 +977,14 @@ mod tests {
     fn status_title_surfaces_overlay_and_followup_controls() {
         let rendered = build_status_title(ShellFrontendMode::AlternateScreen).to_string();
 
-        assert!(rendered.contains("Ctrl+o sessions"));
-        assert!(rendered.contains("Ctrl+d diag"));
-        assert!(rendered.contains("Ctrl+p templ"));
-        assert!(rendered.contains("Ctrl+a auto"));
+        assert_eq!(rendered, "Controls / shell shortcuts and live status");
     }
 
     #[test]
-    fn inline_status_title_uses_inline_controls_copy() {
+    fn inline_status_title_matches_alternate_copy() {
         let rendered = build_status_title(ShellFrontendMode::InlineMainBuffer).to_string();
 
-        assert!(rendered.contains("Inline Controls"));
-        assert!(rendered.contains("Ctrl+o sessions"));
+        assert_eq!(rendered, "Controls / shell shortcuts and live status");
     }
 
     #[test]
@@ -1023,11 +1003,13 @@ mod tests {
             .join("\n");
         let transcript_title = build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer);
 
-        assert!(view.shell_title.to_string().contains("Inline Shell"));
-        assert!(transcript_title.to_string().contains("History /"));
-        assert!(view.status_title.to_string().contains("Inline Controls"));
-        assert!(view.input_title.to_string().contains("Prompt / ready"));
+        assert!(view.shell_title.to_string().contains("Shell /"));
+        assert!(transcript_title.to_string().contains("Transcript /"));
+        assert!(view.status_title.to_string().contains("Controls /"));
+        assert!(view.input_title.to_string().contains("Input / ready"));
         assert!(header.contains("thread: thread-1"));
+        assert!(header.contains("frontend: inline main buffer"));
+        assert!(header.contains("transcript: terminal scrollback-first"));
         assert!(header.contains("startup: "));
         assert!(!view.conversation_lines.is_empty());
         assert!(!view.footer_lines.is_empty());
@@ -1056,6 +1038,11 @@ mod tests {
                 .title
                 .to_string()
                 .contains("Transcript /")
+        );
+        assert!(
+            view.header_lines
+                .iter()
+                .any(|line| line.to_string().contains("frontend: alternate screen"))
         );
         assert!(!view.transcript_view.lines.is_empty());
     }
