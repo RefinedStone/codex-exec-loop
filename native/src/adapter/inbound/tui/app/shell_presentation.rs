@@ -335,7 +335,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                 .as_ref()
                 .map(|activity| activity.detail.as_str())
                 .unwrap_or("none");
-            let warning_summary = conversation.latest_warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
+            let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
 
             vec![
                 Line::from(format!(
@@ -602,7 +602,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 format!(
                     "status: {}  |  {}",
                     conversation.status_text,
-                    conversation.latest_warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
+                    conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
                 ),
                 Style::default().fg(Color::Yellow),
             )));

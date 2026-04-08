@@ -620,7 +620,14 @@ impl ConversationViewModel {
     }
 
     fn compact_warning_text(warning: &str) -> String {
-        warning.split_whitespace().collect::<Vec<_>>().join(" ")
+        let mut compact = String::with_capacity(warning.len());
+        for segment in warning.split_whitespace() {
+            if !compact.is_empty() {
+                compact.push(' ');
+            }
+            compact.push_str(segment);
+        }
+        compact
     }
 
     fn truncate_warning_text(warning: &str, max_detail_len: usize) -> String {
@@ -639,20 +646,18 @@ impl ConversationViewModel {
         format!("{truncated}{TRUNCATION_SUFFIX}")
     }
 
-    pub(crate) fn latest_warning_summary(&self, max_detail_len: usize) -> String {
-        let Some(latest_warning) = self.warnings.last() else {
+    // Warning order is normalized differently across sources, so this surfaces
+    // a compact warning summary without claiming chronological order.
+    pub(crate) fn warning_summary(&self, max_detail_len: usize) -> String {
+        let Some(selected_warning) = self.warnings.last() else {
             return "warning: none".to_string();
         };
 
-        let summary = Self::truncate_warning_text(latest_warning, max_detail_len);
+        let summary = Self::truncate_warning_text(selected_warning, max_detail_len);
         if self.warnings.len() == 1 {
             format!("warning: {summary}")
         } else {
-            format!(
-                "warning {}/{}: {summary}",
-                self.warnings.len(),
-                self.warnings.len()
-            )
+            format!("warnings ({}): {summary}", self.warnings.len())
         }
     }
 
@@ -912,16 +917,19 @@ mod tests {
     }
 
     #[test]
-    fn latest_warning_summary_uses_latest_warning_and_truncates() {
+    fn warning_summary_uses_selected_warning_and_truncates() {
         let mut conversation = ready_conversation();
         conversation.warnings = vec![
             "first warning".to_string(),
             "shared runtime busy with an active turn stream; request used an isolated app-server connection".to_string(),
         ];
 
-        let summary = conversation.latest_warning_summary(36);
+        let summary = conversation.warning_summary(36);
 
-        assert_eq!(summary, "warning 2/2: shared runtime busy with an activ...");
+        assert_eq!(
+            summary,
+            "warnings (2): shared runtime busy with an activ..."
+        );
     }
 
     #[test]

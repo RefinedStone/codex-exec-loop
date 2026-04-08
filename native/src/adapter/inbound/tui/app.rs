@@ -1731,7 +1731,7 @@ mod tests {
     }
 
     #[test]
-    fn followup_template_status_lines_include_latest_warning_detail() {
+    fn followup_template_status_lines_include_warning_summary_detail() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
         conversation.warnings = vec![
@@ -1746,7 +1746,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("warning 2/2: workspace template missing"));
+        assert!(rendered.contains("warnings (2): workspace template missing"));
     }
 
     #[test]
@@ -1930,7 +1930,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_footer_surfaces_latest_warning_detail() {
+    fn shell_footer_surfaces_warning_summary_detail() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
         conversation.warnings = vec!["workspace template missing".to_string()];
