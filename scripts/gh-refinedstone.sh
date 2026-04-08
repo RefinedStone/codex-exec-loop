@@ -94,6 +94,12 @@ extract_json_field() {
   printf '%s' "${body}" | tr -d '\n' | sed -n "s/.*\"${field_name}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n 1
 }
 
+extract_pull_request_url() {
+  local body
+  body="$1"
+  printf '%s' "${body}" | grep -o 'https://github\.com/[^"]*/pull/[0-9]\+' | head -n 1
+}
+
 api_request() {
   local method
   local endpoint
@@ -207,7 +213,7 @@ create_pr_with_api() {
     if grep -q 'A pull request already exists' /tmp/gh-refinedstone-create-pr-error.$$; then
       response_body="$(api_request GET "/repos/${repo_full_name}/pulls?state=open&head=RefinedStone:${head_branch}&base=${base_branch}")"
       local existing_url
-      existing_url="$(extract_json_field "${response_body}" "html_url")"
+      existing_url="$(extract_pull_request_url "${response_body}")"
       if [[ -n "${existing_url}" ]]; then
         printf '%s\n' "${existing_url}"
         rm -f /tmp/gh-refinedstone-create-pr-error.$$
@@ -221,7 +227,7 @@ create_pr_with_api() {
   rm -f /tmp/gh-refinedstone-create-pr-error.$$
 
   local pr_url
-  pr_url="$(extract_json_field "${response_body}" "html_url")"
+  pr_url="$(extract_pull_request_url "${response_body}")"
   if [[ -n "${pr_url}" ]]; then
     printf '%s\n' "${pr_url}"
     return 0
