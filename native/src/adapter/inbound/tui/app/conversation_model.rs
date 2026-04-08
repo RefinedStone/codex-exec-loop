@@ -1009,7 +1009,8 @@ mod tests {
     #[test]
     fn runtime_notice_summary_is_separate_from_warning_summary() {
         let mut conversation = ready_conversation();
-        conversation.warnings = vec!["workspace template warning".to_string()];
+        conversation.template_warnings = vec!["workspace template warning".to_string()];
+        conversation.warnings = conversation.template_warnings.clone();
         conversation.runtime_notices = vec![
             "shared runtime reset after recent sessions request failure; retrying with a fresh app-server connection (boom)"
                 .to_string(),
@@ -1017,7 +1018,7 @@ mod tests {
 
         assert_eq!(
             conversation.warning_summary(40),
-            "warning: workspace template warning"
+            "template warning: workspace template warning"
         );
         let runtime_summary = conversation
             .runtime_notice_summary(40)
@@ -1105,7 +1106,10 @@ mod tests {
                 title: "Existing session".to_string(),
                 cwd: "/tmp/workspace".to_string(),
                 messages: Vec::new(),
-                warnings: vec!["shared runtime reset after startup checks failure".to_string()],
+                warnings: Vec::new(),
+                runtime_notices: vec![
+                    "shared runtime reset after startup checks failure".to_string(),
+                ],
             },
             FollowupTemplateCatalogLoadResult {
                 catalog: sample_template_catalog(),
@@ -1115,7 +1119,13 @@ mod tests {
 
         assert_eq!(
             conversation.status_text,
-            "thread loaded / templates: 3 / warnings: runtime 1, template 1"
+            "thread loaded / templates: 3 / template warning"
+        );
+        assert!(
+            conversation
+                .runtime_notice_summary(48)
+                .expect("runtime summary should exist")
+                .starts_with("runtime: shared runtime reset after startup checks")
         );
     }
 
