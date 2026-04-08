@@ -94,23 +94,20 @@ fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: 
         .wrap(Wrap { trim: true });
     frame.render_widget(header, layout[0]);
 
-    let conversation_max_scroll = build_conversation_scroll_offset(
-        &conversation_lines,
+    let transcript_view = build_transcript_panel_view(
+        app,
+        mode,
+        conversation_lines,
         layout[1].width.saturating_sub(2),
         layout[1].height.saturating_sub(2),
     );
-    let conversation_scroll = app.sync_transcript_viewport_metrics(
-        conversation_max_scroll,
-        layout[1].height.saturating_sub(2),
-    );
-    let transcript_title = build_transcript_title(app, mode);
-    let conversation = Paragraph::new(conversation_lines)
+    let conversation = Paragraph::new(transcript_view.lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(transcript_title),
+                .title(transcript_view.title),
         )
-        .scroll((conversation_scroll, 0))
+        .scroll((transcript_view.scroll_offset, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(conversation, layout[1]);
 

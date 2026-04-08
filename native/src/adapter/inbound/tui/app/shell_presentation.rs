@@ -11,6 +11,12 @@ pub(super) struct ConversationShellView {
     pub(super) input_lines: Vec<Line<'static>>,
 }
 
+pub(super) struct TranscriptPanelView {
+    pub(super) title: Line<'static>,
+    pub(super) lines: Vec<Line<'static>>,
+    pub(super) scroll_offset: u16,
+}
+
 pub(super) struct StartupOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
     pub(super) summary_lines: Vec<Line<'static>>,
@@ -118,6 +124,23 @@ pub(super) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
             Line::from("Esc/Ctrl+C: close    r: rerun checks"),
             Line::from("Ctrl+o: recent sessions"),
         ],
+    }
+}
+
+pub(super) fn build_transcript_panel_view(
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+    lines: Vec<Line<'static>>,
+    content_width: u16,
+    visible_height: u16,
+) -> TranscriptPanelView {
+    let max_scroll_offset = build_conversation_scroll_offset(&lines, content_width, visible_height);
+    let scroll_offset = app.sync_transcript_viewport_metrics(max_scroll_offset, visible_height);
+
+    TranscriptPanelView {
+        title: build_transcript_title(app, mode),
+        lines,
+        scroll_offset,
     }
 }
 
