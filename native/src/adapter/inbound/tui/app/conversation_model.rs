@@ -535,6 +535,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) cached_conversation_lines: Vec<Line<'static>>,
     pub(crate) live_agent_message: Option<ConversationMessage>,
+    pub(crate) buffered_tool_messages: Vec<ConversationMessage>,
     pub(crate) base_warnings: Vec<String>,
     pub(crate) template_warnings: Vec<String>,
     pub(crate) warnings: Vec<String>,
@@ -566,6 +567,7 @@ impl ConversationViewModel {
             messages: Vec::new(),
             cached_conversation_lines: Vec::new(),
             live_agent_message: None,
+            buffered_tool_messages: Vec::new(),
             base_warnings: Vec::new(),
             template_warnings: template_load_result.warnings.clone(),
             warnings: template_load_result.warnings,
@@ -605,6 +607,7 @@ impl ConversationViewModel {
             messages: snapshot.messages,
             cached_conversation_lines: Vec::new(),
             live_agent_message: None,
+            buffered_tool_messages: Vec::new(),
             base_warnings,
             template_warnings,
             warnings,
@@ -793,6 +796,29 @@ impl ConversationViewModel {
         true
     }
 
+    pub(crate) fn buffer_tool_message(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return;
+        }
+
+        self.buffered_tool_messages.push(ConversationMessage::new(
+            ConversationMessageKind::Tool,
+            text,
+            None,
+            None,
+        ));
+    }
+
+    pub(crate) fn flush_buffered_tool_messages(&mut self) -> bool {
+        if self.buffered_tool_messages.is_empty() {
+            return false;
+        }
+
+        self.messages.append(&mut self.buffered_tool_messages);
+        true
+    }
+
     pub(crate) fn push_live_agent_delta(
         &mut self,
         item_id: String,
@@ -919,6 +945,7 @@ impl ConversationViewModel {
         self.input_state = ConversationInputState::StreamingTurn;
         self.turn_activity.start_new_turn();
         self.approval_review = None;
+        self.buffered_tool_messages.clear();
     }
 
     pub(crate) fn mark_turn_finished(&mut self) {
