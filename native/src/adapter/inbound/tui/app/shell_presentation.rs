@@ -78,9 +78,12 @@ pub(super) fn build_conversation_shell_view(
     app: &NativeTuiApp,
     mode: ShellFrontendMode,
 ) -> ConversationShellView {
+    let mut header_lines = build_shell_header_lines(app);
+    header_lines.push(build_frontend_summary_line(mode));
+
     ConversationShellView {
         shell_title: build_shell_title(mode),
-        header_lines: build_shell_header_lines(app),
+        header_lines,
         conversation_lines: build_conversation_lines(app),
         status_title: build_status_title(mode),
         footer_lines: build_shell_footer_lines(app),
@@ -744,47 +747,26 @@ fn build_shell_header_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 }
 
 fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => {
-            Line::from("Inline Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
-        }
-        ShellFrontendMode::AlternateScreen => {
-            Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
-        }
-    }
+    let _ = mode;
+    Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
 }
 
 pub(super) fn build_transcript_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => Line::from(vec![
-            Span::raw("History / "),
-            Span::raw(app.transcript_viewport_status_label()),
-            Span::raw(" / scrollback-first"),
-        ]),
-        ShellFrontendMode::AlternateScreen => Line::from(vec![
-            Span::raw("Transcript / "),
-            Span::raw(app.transcript_viewport_status_label()),
-            Span::raw(" / PageUp PageDown / Home End"),
-        ]),
-    }
+    let _ = mode;
+    Line::from(vec![
+        Span::raw("Transcript / "),
+        Span::raw(app.transcript_viewport_status_label()),
+    ])
 }
 
 pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => Line::from(
-            "Inline Controls / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g stop-edit / Ctrl+l limit",
-        ),
-        ShellFrontendMode::AlternateScreen => Line::from(
-            "Status / Ctrl+o sessions / Ctrl+d diag / Ctrl+p templ / Ctrl+a auto / Ctrl+k stop / Ctrl+n no-files / Ctrl+g stop-edit / Ctrl+l limit",
-        ),
-    }
+    let _ = mode;
+    Line::from("Controls / shell shortcuts and live status")
 }
 
 pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    let prompt_label = match mode {
-        ShellFrontendMode::InlineMainBuffer => "Prompt",
-        ShellFrontendMode::AlternateScreen => "Composer",
-    };
+    let _ = mode;
+    let prompt_label = "Input";
 
     match &app.conversation_state {
         ConversationState::Loading => {
@@ -812,6 +794,17 @@ pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> 
                 Span::raw(" / Ctrl+j newline"),
             ])
         }
+    }
+}
+
+fn build_frontend_summary_line(mode: ShellFrontendMode) -> Line<'static> {
+    match mode {
+        ShellFrontendMode::InlineMainBuffer => Line::from(
+            "frontend: inline main buffer  |  transcript: terminal scrollback-first  |  keys: PageUp/PageDown/Home/End",
+        ),
+        ShellFrontendMode::AlternateScreen => Line::from(
+            "frontend: alternate screen  |  transcript: framed viewport  |  keys: PageUp/PageDown/Home/End",
+        ),
     }
 }
 

@@ -526,15 +526,15 @@ mod tests {
         let rendered_lines = rendered.lines().collect::<Vec<_>>();
         let inline_shell_line = rendered_lines
             .iter()
-            .position(|line| line.contains("Inline Shell"))
+            .position(|line| line.contains("Shell / Ctrl+t new draft"))
             .expect("inline shell title should render");
         let header_line = rendered_lines
             .iter()
-            .position(|line| line.contains("Conversation Shell"))
+            .position(|line| line.contains("thread:"))
             .expect("header content should render");
 
-        assert!(rendered.contains("Inline Shell"));
-        assert!(rendered.contains("History"));
+        assert!(rendered.contains("Shell / Ctrl+t new draft"));
+        assert!(rendered.contains("Transcript"));
         assert_ne!(inline_shell_line, header_line);
         assert!(!rendered.contains("┌"));
         assert!(!rendered.contains("│"));
@@ -551,7 +551,7 @@ mod tests {
 
         let rendered = format!("{}", terminal.backend());
 
-        assert!(rendered.contains("Shell"));
+        assert!(rendered.contains("Shell / Ctrl+t new draft"));
         assert!(rendered.contains("Transcript"));
         assert!(rendered.contains("┌"));
         assert!(rendered.contains("│"));
