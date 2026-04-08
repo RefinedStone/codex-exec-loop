@@ -4,8 +4,8 @@ This document is intentionally compact. The current shell shape is useful contex
 
 ## Current Shell Shape
 - the app opens directly into a conversation draft on the main screen by default
-- inline mode still reserves a `Transcript / tail` region as the primary surface
-- the composer stays at the bottom, but the current layout still behaves like one shell frame
+- inline mode is slimmer than before, but it still redraws a transcript region plus one tail prompt region inside one ratatui frame
+- the tail prompt is more compact now, but the current layout can still replay redraws in terminal scrollback
 - startup diagnostics, recent sessions, and template preview are overlay surfaces opened from shell commands or shortcuts
 - input can be buffered before startup finishes, but send and session actions still wait for startup diagnostics to pass
 - lightweight transcript navigation exists through `PageUp`, `PageDown`, `Home`, and `End`
@@ -23,4 +23,4 @@ This document is intentionally compact. The current shell shape is useful contex
 4. Streamed turn events update transcript, status, and follow-up state inside the shell.
 
 ## Design Note
-This is the implemented form, not the final UX commitment. Phase 2 can replace or remove overlays, raw-mode assumptions, the `Transcript / tail` viewport, and parts of the current shell chrome as long as the live shell baseline stays intact.
+This is the implemented form, not the final UX commitment. Phase 2 can replace or remove overlays, raw-mode assumptions, the current inline repaint loop, and parts of the remaining shell chrome as long as the live shell baseline stays intact.

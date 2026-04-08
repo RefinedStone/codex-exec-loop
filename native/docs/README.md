@@ -13,10 +13,11 @@ The docs now optimize for phase-2 work:
 2. Read [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md).
 3. Read [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md).
 4. If you are working on the remaining terminal-flow shell target, read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) next.
-5. Use [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md), [plan/02-todo-backlog.md](plan/02-todo-backlog.md), and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) for the current remaining-work baseline.
-6. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting active work across multiple git worktrees.
-7. Read [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md) when a PR changes terminal restore, frontend mode, or platform-facing shell behavior.
-8. Use [validation/README.md](validation/README.md) when recording real macOS or Windows matrix runs.
+5. Read [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md) immediately after that when the question is "why does inline mode still look like redraw replay in some terminals?"
+6. Use [plan/02-todo-backlog.md](plan/02-todo-backlog.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) for the compact remaining-work baseline.
+7. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting active work across multiple git worktrees.
+8. Read [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md) when a PR changes terminal restore, frontend mode, or platform-facing shell behavior.
+9. Use [validation/README.md](validation/README.md) when recording real macOS or Windows matrix runs.
 
 ## Compaction Rule
 - Core logic docs should keep stable contracts, ownership boundaries, lifecycle notes, and stop-rule behavior.
@@ -36,7 +37,7 @@ The docs now optimize for phase-2 work:
 - [plan/02-todo-backlog.md](plan/02-todo-backlog.md): current open change buckets that still matter across PRs
 - [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture and how future feature docs should take over detail
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch and worktree rules for concurrent native delivery
-- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): active reference doc for the remaining terminal-flow shell target and the `Transcript / tail` reset
-- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): compact completion snapshot plus detailed notes for the remaining terminal-flow and platform-validation slices
+- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): active reference doc for the remaining terminal-flow shell target, with the current repeated-redraw blocker called out explicitly
+- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): compact completion snapshot plus the remaining terminal-flow and platform-validation slices
 - [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): canonical manual validation matrix for macOS and Windows terminal behavior
 - [validation/README.md](validation/README.md): canonical location and naming rules for checked-in validation result rows

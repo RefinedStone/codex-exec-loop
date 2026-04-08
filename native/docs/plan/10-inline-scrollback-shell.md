@@ -21,9 +21,10 @@ Landed on `prerelease`:
 - inline live-region renderer and inline-main-buffer baseline
 - inline inspection surfaces for diagnostics, sessions, and templates
 - stable streaming-history buffering that keeps live agent output separate from committed transcript history until completion
+- inline shell chrome collapsed toward one tail prompt region, with transcript pinned to tail, compact prompt guidance, and no dedicated tail title row
 
 Still remaining:
-- remove the dedicated middle transcript viewport as the primary reading surface in inline mode
+- remove the remaining repeated inline redraw path so stable shell output is not repainted as one visible frame
 - make host terminal scrollback the primary history mechanism for prior conversation output
 - keep only a tail-anchored prompt/live region in inline mode
 - terminal validation and default-switch follow-through after that terminal-flow target is stable
@@ -38,6 +39,8 @@ If inline mode still reads like:
 then the workstream is not done.
 
 The `Transcript / tail` panel is not the target. It is a transitional artifact that still encourages fullscreen-frame thinking.
+
+The more important current blocker is now redraw behavior, not labeling. Even after the shell chrome reductions already landed, inline mode still runs through a `terminal.draw(...)` loop and still repaints transcript plus tail as one ratatui frame.
 
 The target is closer to:
 - a Spring Boot application log running in a terminal
@@ -61,8 +64,8 @@ The current shell is usable, but `MainScreen` is still not a true scrollback-fri
 
 Observed problems:
 - startup can visually overlap with prior terminal content in some terminal programs
-- scrolling the terminal can make the shell feel like it is being redrawn as one moving screen instead of leaving stable history behind
-- modal overlays and fixed panel assumptions still make the shell feel like a fullscreen TUI even when alternate-screen is off
+- scrolling the terminal can still make the shell feel like it is being redrawn as one moving screen instead of leaving stable history behind
+- modal overlays and remaining repaint assumptions still make the shell feel like a fullscreen TUI even when alternate-screen is off
 
 This is a product problem, not just a cosmetic problem. The current behavior weakens the "CLI shell" feel and makes long-running usage less trustworthy across terminals.
 
@@ -91,18 +94,17 @@ This means the refactor is not "remove TUI." It is "stop treating the main buffe
 - still calls `terminal.draw(...)` on every loop iteration
 - owns input polling, background message handling, effect execution, and rendering together
 
-This means `MainScreen` is only "alternate-screen off." It is not architecturally different from the fullscreen renderer.
+This means `MainScreen` is only "alternate-screen off." It is not yet architecturally different enough from the fullscreen renderer to stop repeated redraw in the host terminal.
 
 ### 3.2 Rendering Diagnosis
 
-`src/adapter/inbound/tui/app/shell_rendering.rs` currently assumes one composited frame:
-- `draw_conversation_shell` clears the whole area with `Clear`
-- layout is rebuilt as header + transcript + footer + composer
-- inline mode still renders `Transcript / tail` as a named middle panel between other shell sections
-- overlays are rendered as modal layers on top of that frame
-- transcript scrolling is handled as an in-frame viewport, not terminal scrollback
+`src/adapter/inbound/tui/app/shell_rendering.rs` still assumes one composited frame for inline mode:
+- inline shell chrome is slimmer than before, but the visible shell is still rebuilt as transcript region plus tail region
+- inline mode still routes history through `build_transcript_panel_view(...)` and an in-frame viewport
+- overlays are still rendered as ratatui layers on top of that frame
+- stable shell output is therefore still vulnerable to repeated repaint in host terminal scrollback
 
-This is the exact shape that causes the main-buffer mode to feel like an inline fullscreen app rather than a flow-oriented shell.
+This remaining repaint model is what still causes the main-buffer mode to feel like an inline fullscreen app rather than a true flow-oriented shell.
 
 ### 3.3 Presentation Diagnosis
 
@@ -176,7 +178,7 @@ The new main-buffer shell is successful only if all of the following are true.
 
 ### 6.1 Scrollback Contract
 
-- once transcript-worthy output reaches the terminal history, the shell should not repaint it as part of a whole-frame redraw
+- once transcript-worthy output reaches the terminal history, the shell should not repaint it through the shared `terminal.draw(...)` loop as part of a whole-frame redraw
 - terminal scrollback should read like one coherent session
 - scrolling the terminal should not feel like the application itself is being replayed downward
 

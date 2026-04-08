@@ -1,7 +1,7 @@
 # Known Gaps And Risk Areas
 
 ## Current Gaps
-- inline mode is closer to the target "flow shell" contract, but the shell still keeps a dedicated `Transcript / tail` region and a full-frame redraw mindset, so it is not yet a true top-to-bottom terminal flow
+- inline mode is closer to the target "flow shell" contract, but `ratatui_frontend.rs` still drives `terminal.draw(...)` on each loop and inline rendering still repaints transcript plus tail together, so some terminals still show repeated redraw or replay-like scrollback
 - real terminal validation is still missing on macOS and Windows, so Windows fixes should stay conditional on recorded findings
 - recent-session loading and blocked startup still gate shell actions, even though manual prompt submission can now queue while startup checks are running
 - the shared runtime is better than the old action-scoped model, but concurrent requests still need a fallback path while a streaming turn holds the shared runtime
@@ -9,7 +9,7 @@
 - input and long-session ergonomics are still limited compared with a mature CLI shell
 
 ## Risk Rule
-Do not restart from a blank-shell rewrite. The main missing work is terminal-flow rendering, validation, and ergonomics, not missing protocol coverage.
+Do not restart from a blank-shell rewrite. The main missing work is redraw elimination in inline mode, terminal-flow validation, and ergonomics, not missing protocol coverage.
 
 ## Documentation Rule
 When adding new docs, preserve the gaps above only if they still affect phase-2 decisions. Avoid turning this file into a rolling bug list.

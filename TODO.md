@@ -9,7 +9,7 @@
 ## Current Focus
 
 - Make native the real "agent loop" product, not just a conversation shell
-- Reset inline mode from a middle `Transcript / tail` viewport to a terminal-flow shell with one tail prompt box
+- Finish the inline terminal-flow reset by removing repeated full-frame redraw from main-buffer mode
 - Run real terminal validation on macOS and Windows from the published matrix
 - Land only focused Windows compatibility fixes when the validation matrix produces concrete findings
 - Keep the flow understandable for a Spring Boot Kotlin developer
@@ -51,13 +51,15 @@
 - inline shell parity
   - inline inspection surfaces for diagnostics, recent sessions, and follow-up templates
   - stable streaming-history buffering for inline mode, with live output kept separate from committed transcript history and lifecycle markers committed into stable history
+  - inline shell chrome collapsed toward one tail prompt region, with transcript pinned to tail, compact prompt guidance, and no dedicated tail title row
 - migration docs
   - repository root README now presents native as the main product path
   - Python CLI instructions are reduced to compatibility guidance
 
 ## Next
 
-- replace the inline `Transcript / tail` viewport with top-to-bottom terminal flow where host terminal scroll is the primary history mechanism
+- remove the remaining inline repeated redraw path so host terminal scrollback stops replaying shell frames
+- keep moving inline mode toward top-to-bottom terminal flow where host terminal scroll is the primary history mechanism
 - run real terminal validation on macOS and Windows and land only focused compatibility fixes when findings exist
 
 ## Migration
