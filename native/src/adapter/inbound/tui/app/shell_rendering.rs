@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use super::shell_presentation::{
     ConversationShellFrameView, ConversationShellView, FollowupTemplateOverlayView,
     OverlayListView, SessionOverlayView, StartupOverlayView, build_conversation_shell_frame_view,
@@ -113,34 +115,16 @@ fn draw_inline_conversation_shell(
         layout[1].height.saturating_sub(1).max(1),
     );
 
-    frame.render_widget(
-        Paragraph::new(header_lines)
-            .block(Block::default().title(shell_title))
-            .wrap(Wrap { trim: true }),
-        layout[0],
-    );
-
-    frame.render_widget(
-        Paragraph::new(transcript_view.lines)
-            .block(Block::default().title(transcript_view.title))
-            .scroll((transcript_view.scroll_offset, 0))
-            .wrap(Wrap { trim: false }),
+    render_inline_section(frame, layout[0], shell_title, header_lines, true);
+    render_inline_scrolled_section(
+        frame,
         layout[1],
+        transcript_view.title,
+        transcript_view.lines,
+        transcript_view.scroll_offset,
     );
-
-    frame.render_widget(
-        Paragraph::new(footer_lines)
-            .block(Block::default().title(status_title))
-            .wrap(Wrap { trim: true }),
-        layout[2],
-    );
-
-    frame.render_widget(
-        Paragraph::new(input_lines)
-            .block(Block::default().title(input_title))
-            .wrap(Wrap { trim: false }),
-        layout[3],
-    );
+    render_inline_section(frame, layout[2], status_title, footer_lines, true);
+    render_inline_section(frame, layout[3], input_title, input_lines, false);
 }
 
 fn draw_framed_conversation_shell(
@@ -192,7 +176,47 @@ fn draw_framed_conversation_shell(
 }
 
 fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
-    lines.len().saturating_add(1).clamp(2, max_height as usize) as u16
+    lines
+        .len()
+        .saturating_add(1)
+        .max(2)
+        .min(max_height as usize) as u16
+}
+
+fn split_inline_section(area: Rect) -> Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(area)
+}
+
+fn render_inline_section(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+    trim: bool,
+) {
+    let section_layout = split_inline_section(area);
+    frame.render_widget(Paragraph::new(vec![title]), section_layout[0]);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), section_layout[1]);
+}
+
+fn render_inline_scrolled_section(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+    scroll_offset: u16,
+) {
+    let section_layout = split_inline_section(area);
+    frame.render_widget(Paragraph::new(vec![title]), section_layout[0]);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_offset, 0))
+            .wrap(Wrap { trim: false }),
+        section_layout[1],
+    );
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
@@ -499,9 +523,19 @@ mod tests {
             .expect("inline render succeeds");
 
         let rendered = format!("{}", terminal.backend());
+        let rendered_lines = rendered.lines().collect::<Vec<_>>();
+        let inline_shell_line = rendered_lines
+            .iter()
+            .position(|line| line.contains("Inline Shell"))
+            .expect("inline shell title should render");
+        let header_line = rendered_lines
+            .iter()
+            .position(|line| line.contains("Conversation Shell"))
+            .expect("header content should render");
 
         assert!(rendered.contains("Inline Shell"));
         assert!(rendered.contains("History"));
+        assert_ne!(inline_shell_line, header_line);
         assert!(!rendered.contains("┌"));
         assert!(!rendered.contains("│"));
     }
