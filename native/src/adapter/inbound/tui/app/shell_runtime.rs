@@ -234,6 +234,7 @@ mod tests {
                 cwd: "/tmp/root".to_string(),
                 messages: Vec::new(),
                 warnings: Vec::new(),
+                runtime_notices: Vec::new(),
             })
         }
 

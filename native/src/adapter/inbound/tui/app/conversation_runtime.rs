@@ -624,6 +624,7 @@ mod tests {
             base_warnings: Vec::new(),
             template_warnings: Vec::new(),
             warnings: Vec::new(),
+            runtime_notices: Vec::new(),
             input_buffer: "ship it".to_string(),
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,

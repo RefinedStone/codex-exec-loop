@@ -5,6 +5,8 @@ use crate::domain::followup_template::FollowupTemplateDefinition;
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
+const FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 48;
+const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOOTER_GITHUB_REVIEW_DETAIL_LIMIT: usize = 44;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 
@@ -341,6 +343,8 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                 .map(|activity| activity.detail.as_str())
                 .unwrap_or("none");
             let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
+            let runtime_notice_summary =
+                conversation.runtime_notice_summary(FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT);
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
                 app.github_review_recent_changes_summary(FOOTER_GITHUB_REVIEW_DETAIL_LIMIT);
@@ -388,10 +392,16 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     conversation.auto_follow_state.progress_label(),
                     conversation.auto_follow_state.template_label()
                 )),
-                Line::from(format!(
-                    "status: {}  |  {}",
-                    conversation.status_text, warning_summary,
-                )),
+                Line::from(match runtime_notice_summary.as_deref() {
+                    Some(runtime_notice_summary) => format!(
+                        "status: {}  |  {}  |  {}",
+                        conversation.status_text, warning_summary, runtime_notice_summary,
+                    ),
+                    None => format!(
+                        "status: {}  |  {}",
+                        conversation.status_text, warning_summary,
+                    ),
+                }),
                 Line::from(tool_activity_line),
                 Line::from(format!(
                     "input detail: {}  |  template slot: {}/{}",
@@ -640,11 +650,22 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 ));
             }
             lines.push(Line::from(Span::styled(
-                format!(
-                    "status: {}  |  {}",
-                    conversation.status_text,
-                    conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
-                ),
+                match conversation
+                    .runtime_notice_summary(FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT)
+                    .as_deref()
+                {
+                    Some(runtime_notice_summary) => format!(
+                        "status: {}  |  {}  |  {}",
+                        conversation.status_text,
+                        conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
+                        runtime_notice_summary,
+                    ),
+                    None => format!(
+                        "status: {}  |  {}",
+                        conversation.status_text,
+                        conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
+                    ),
+                },
                 Style::default().fg(Color::Yellow),
             )));
 

@@ -537,6 +537,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) base_warnings: Vec<String>,
     pub(crate) template_warnings: Vec<String>,
     pub(crate) warnings: Vec<String>,
+    pub(crate) runtime_notices: Vec<String>,
     pub(crate) input_buffer: String,
     pub(crate) active_turn_id: Option<String>,
     pub(crate) input_state: ConversationInputState,
@@ -565,6 +566,7 @@ impl ConversationViewModel {
             base_warnings: Vec::new(),
             template_warnings: template_load_result.warnings.clone(),
             warnings: template_load_result.warnings,
+            runtime_notices: Vec::new(),
             input_buffer: String::new(),
             active_turn_id: None,
             input_state: ConversationInputState::DraftReady,
@@ -584,6 +586,7 @@ impl ConversationViewModel {
         template_load_result: FollowupTemplateCatalogLoadResult,
     ) -> Self {
         let base_warnings = snapshot.warnings;
+        let runtime_notices = snapshot.runtime_notices;
         let template_warnings = template_load_result.warnings;
         let warnings = Self::merge_warnings(&base_warnings, &template_warnings);
         let base_status = format!(
@@ -600,6 +603,7 @@ impl ConversationViewModel {
             base_warnings,
             template_warnings,
             warnings,
+            runtime_notices,
             input_buffer: String::new(),
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
@@ -697,6 +701,19 @@ impl ConversationViewModel {
                 format!("warnings: runtime {runtime_count}, template {template_count} / {summary}")
             }
         }
+    }
+
+    pub(crate) fn runtime_notice_summary(&self, max_detail_len: usize) -> Option<String> {
+        let selected_notice = self.runtime_notices.last()?;
+        let summary = Self::truncate_warning_text(selected_notice, max_detail_len);
+        Some(if self.runtime_notices.len() == 1 {
+            format!("runtime: {summary}")
+        } else {
+            format!(
+                "runtime notices ({}): {summary}",
+                self.runtime_notices.len()
+            )
+        })
     }
 
     pub(crate) fn approval_summary(&self) -> Option<String> {
@@ -940,6 +957,7 @@ mod tests {
             base_warnings: Vec::new(),
             template_warnings: Vec::new(),
             warnings: Vec::new(),
+            runtime_notices: Vec::new(),
             input_buffer: String::new(),
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
@@ -985,6 +1003,54 @@ mod tests {
         assert_eq!(
             summary,
             "runtime warnings (2): shared runtime busy with an activ..."
+        );
+    }
+
+    #[test]
+    fn runtime_notice_summary_is_separate_from_warning_summary() {
+        let mut conversation = ready_conversation();
+        conversation.warnings = vec!["workspace template warning".to_string()];
+        conversation.runtime_notices = vec![
+            "shared runtime reset after recent sessions request failure; retrying with a fresh app-server connection (boom)"
+                .to_string(),
+        ];
+
+        assert_eq!(
+            conversation.warning_summary(40),
+            "warning: workspace template warning"
+        );
+        let runtime_summary = conversation
+            .runtime_notice_summary(40)
+            .expect("runtime summary should exist");
+        assert!(runtime_summary.starts_with("runtime: shared runtime reset"));
+    }
+
+    #[test]
+    fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
+        let conversation = ConversationViewModel::from_snapshot(
+            ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Existing session".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: vec![
+                    "shared runtime reconnected after the previous app-server process exited"
+                        .to_string(),
+                ],
+            },
+            FollowupTemplateCatalogLoadResult {
+                catalog: sample_template_catalog(),
+                warnings: Vec::new(),
+            },
+        );
+
+        assert_eq!(conversation.status_text, "thread loaded / templates: 3");
+        assert!(
+            conversation
+                .runtime_notice_summary(36)
+                .expect("runtime summary should exist")
+                .starts_with("runtime: shared runtime reconnected")
         );
     }
 

@@ -579,6 +579,7 @@ mod tests {
                 cwd: "/tmp/root".to_string(),
                 messages: Vec::new(),
                 warnings: Vec::new(),
+                runtime_notices: Vec::new(),
             })
         }
 
@@ -700,6 +701,7 @@ mod tests {
                     Some("msg-1".to_string()),
                 )],
                 warnings: Vec::new(),
+                runtime_notices: Vec::new(),
             })),
         );
 

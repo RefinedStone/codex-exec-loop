@@ -96,6 +96,7 @@ impl CodexAppServerAdapter {
         thread_record: ThreadRecord,
         warnings: Vec<String>,
     ) -> ConversationSnapshot {
+        let (warnings, runtime_notices) = partition_runtime_notices(warnings);
         let title = Self::thread_title(&thread_record);
 
         let messages = thread_record
@@ -111,6 +112,7 @@ impl CodexAppServerAdapter {
             cwd: thread_record.cwd,
             messages,
             warnings,
+            runtime_notices,
         }
     }
 
@@ -1109,6 +1111,26 @@ fn sort_and_dedup_warnings(warnings: &mut Vec<String>) {
     warnings.dedup();
 }
 
+fn partition_runtime_notices(warnings: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let mut conversation_warnings = Vec::new();
+    let mut runtime_notices = Vec::new();
+
+    for warning in warnings {
+        if is_runtime_notice(&warning) {
+            runtime_notices.push(warning);
+        } else {
+            conversation_warnings.push(warning);
+        }
+    }
+
+    (conversation_warnings, runtime_notices)
+}
+
+fn is_runtime_notice(warning: &str) -> bool {
+    warning.starts_with("shared runtime ")
+        || warning.contains("app-server connection while a turn stream was active")
+}
+
 fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
     pipe: T,
     tx: mpsc::Sender<AppServerLine>,
@@ -1270,7 +1292,8 @@ mod tests {
 
     use super::{
         AppServerConnection, RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime,
-        SharedRuntimeRequestKind, request_failure_outcome, sort_and_dedup_warnings,
+        SharedRuntimeRequestKind, partition_runtime_notices, request_failure_outcome,
+        sort_and_dedup_warnings,
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
@@ -1310,6 +1333,27 @@ mod tests {
             vec![
                 "shared runtime reset".to_string(),
                 "stream warning".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn partition_runtime_notices_keeps_runtime_messages_out_of_warning_bucket() {
+        let (warnings, runtime_notices) = partition_runtime_notices(vec![
+            "workspace template missing".to_string(),
+            "shared runtime reconnected after the previous app-server process exited".to_string(),
+            "recent sessions request used an isolated app-server connection while a turn stream was active"
+                .to_string(),
+        ]);
+
+        assert_eq!(warnings, vec!["workspace template missing".to_string()]);
+        assert_eq!(
+            runtime_notices,
+            vec![
+                "shared runtime reconnected after the previous app-server process exited"
+                    .to_string(),
+                "recent sessions request used an isolated app-server connection while a turn stream was active"
+                    .to_string(),
             ]
         );
     }

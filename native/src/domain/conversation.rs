@@ -5,6 +5,7 @@ pub struct ConversationSnapshot {
     pub cwd: String,
     pub messages: Vec<ConversationMessage>,
     pub warnings: Vec<String>,
+    pub runtime_notices: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
