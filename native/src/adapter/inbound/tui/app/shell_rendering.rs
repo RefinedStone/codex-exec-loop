@@ -11,11 +11,12 @@ use super::*;
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     draw_conversation_shell(frame, app, mode);
 
-    match app.shell_overlay {
-        ShellOverlay::Hidden => {}
-        ShellOverlay::Startup => draw_startup_overlay(frame, app),
-        ShellOverlay::Sessions => draw_session_overlay(frame, app),
-        ShellOverlay::FollowupTemplates => draw_followup_template_overlay(frame, app),
+    match (mode, app.shell_overlay) {
+        (_, ShellOverlay::Hidden) => {}
+        (ShellFrontendMode::InlineMainBuffer, _) => draw_inline_shell_inspection(frame, app, mode),
+        (_, ShellOverlay::Startup) => draw_startup_overlay(frame, app),
+        (_, ShellOverlay::Sessions) => draw_session_overlay(frame, app),
+        (_, ShellOverlay::FollowupTemplates) => draw_followup_template_overlay(frame, app),
     }
 
     if app.is_exit_confirmation_visible() {
@@ -82,7 +83,7 @@ fn draw_inline_conversation_shell(
     app: &mut NativeTuiApp,
     mode: ShellFrontendMode,
 ) {
-    let area = frame.area();
+    let layout = build_inline_shell_layout(app, mode, frame.area());
     let shell_view = build_conversation_shell_view(app, mode);
     let ConversationShellView {
         shell_title,
@@ -93,19 +94,6 @@ fn draw_inline_conversation_shell(
         input_title,
         input_lines,
     } = shell_view;
-    let header_height = inline_section_height(&header_lines, MAX_SHELL_HEADER_HEIGHT);
-    let footer_height = inline_section_height(&footer_lines, MAX_SHELL_STATUS_HEIGHT);
-    let input_height = inline_section_height(&input_lines, MAX_COMPOSER_HEIGHT);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6)),
-            Constraint::Length(footer_height),
-            Constraint::Length(input_height),
-        ])
-        .split(area);
 
     let transcript_view = build_transcript_panel_view(
         app,
@@ -125,6 +113,27 @@ fn draw_inline_conversation_shell(
     );
     render_inline_section(frame, layout[2], status_title, footer_lines, true);
     render_inline_section(frame, layout[3], input_title, input_lines, false);
+}
+
+fn build_inline_shell_layout(
+    app: &NativeTuiApp,
+    mode: ShellFrontendMode,
+    area: Rect,
+) -> Rc<[Rect]> {
+    let shell_view = build_conversation_shell_view(app, mode);
+    let header_height = inline_section_height(&shell_view.header_lines, MAX_SHELL_HEADER_HEIGHT);
+    let footer_height = inline_section_height(&shell_view.footer_lines, MAX_SHELL_STATUS_HEIGHT);
+    let input_height = inline_section_height(&shell_view.input_lines, MAX_COMPOSER_HEIGHT);
+
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6)),
+            Constraint::Length(footer_height),
+            Constraint::Length(input_height),
+        ])
+        .split(area)
 }
 
 fn draw_framed_conversation_shell(
@@ -219,12 +228,180 @@ fn render_inline_scrolled_section(
     );
 }
 
+fn take_panel_title(
+    mut header_lines: Vec<Line<'static>>,
+    fallback: &str,
+) -> (Line<'static>, Vec<Line<'static>>) {
+    let title = if header_lines.is_empty() {
+        Line::from(fallback.to_string())
+    } else {
+        header_lines.remove(0)
+    };
+    (title, header_lines)
+}
+
+fn draw_inline_shell_inspection(
+    frame: &mut Frame<'_>,
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+) {
+    let inspection_area = build_inline_shell_layout(app, mode, frame.area())[1];
+    frame.render_widget(Clear, inspection_area);
+
+    match app.shell_overlay {
+        ShellOverlay::Hidden => {}
+        ShellOverlay::Startup => draw_inline_startup_inspection(frame, inspection_area, app),
+        ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
+        ShellOverlay::FollowupTemplates => {
+            draw_inline_followup_template_inspection(frame, inspection_area, app)
+        }
+    }
+}
+
+fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_startup_overlay_view(app);
+    let StartupOverlayView {
+        header_lines,
+        summary_lines,
+        check_lines,
+        warning_lines,
+        key_lines,
+    } = overlay_view;
+    let (title, body_lines) = take_panel_title(header_lines, "Startup Diagnostics");
+    let check_height = inline_section_height(&check_lines, 10).max(4);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 4)),
+            Constraint::Min(check_height),
+            Constraint::Length(inline_section_height(&warning_lines, 5)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(frame, layout[0], title, body_lines, true);
+    render_inline_section(frame, layout[1], Line::from("Startup"), summary_lines, true);
+    render_inline_section(frame, layout[2], Line::from("Checks"), check_lines, false);
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Warnings"),
+        warning_lines,
+        true,
+    );
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
+    let overlay_view = build_session_overlay_view(app);
+    let SessionOverlayView {
+        header_lines,
+        list_view,
+        detail_lines,
+        warning_lines,
+        key_lines,
+    } = overlay_view;
+    let (title, body_lines) = take_panel_title(header_lines, "Recent Sessions");
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&warning_lines, 5)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(frame, layout[0], title, body_lines, true);
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(layout[1]);
+
+    draw_inline_session_list_panel(frame, content_layout[0], app, list_view);
+    render_inline_section(
+        frame,
+        content_layout[1],
+        Line::from("Selected Session"),
+        detail_lines,
+        false,
+    );
+
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Session Warnings"),
+        warning_lines,
+        true,
+    );
+    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_followup_template_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut NativeTuiApp,
+) {
+    let overlay_view = build_followup_template_overlay_view(app);
+    let FollowupTemplateOverlayView {
+        header_lines,
+        list_view,
+        preview_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let (title, body_lines) = take_panel_title(header_lines, "Follow-Up Templates");
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Min(10),
+            Constraint::Length(inline_section_height(&status_lines, 11)),
+            Constraint::Length(inline_section_height(&key_lines, 6)),
+        ])
+        .split(area);
+
+    render_inline_section(frame, layout[0], title, body_lines, true);
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
+        .split(layout[1]);
+    let preview_content_area = split_inline_section(content_layout[1])[1];
+    let preview_scroll = clamp_scroll_offset(
+        app.followup_overlay_ui_state.preview_scroll,
+        &preview_lines,
+        preview_content_area.width,
+        preview_content_area.height,
+    );
+    app.followup_overlay_ui_state.preview_scroll = preview_scroll;
+
+    draw_inline_followup_template_list_panel(frame, content_layout[0], app, list_view);
+    render_inline_scrolled_section(
+        frame,
+        content_layout[1],
+        Line::from("Preview"),
+        preview_lines,
+        preview_scroll,
+    );
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Auto Follow-Up State"),
+        status_lines,
+        false,
+    );
+    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let overlay_view = build_startup_overlay_view(app);
     let StartupOverlayView {
         header_lines,
         summary_lines,
-        check_items,
+        check_lines,
         warning_lines,
         key_lines,
     } = overlay_view;
@@ -255,7 +432,7 @@ fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 
     frame.render_widget(
-        List::new(check_items).block(Block::default().borders(Borders::ALL).title("Checks")),
+        List::new(check_lines).block(Block::default().borders(Borders::ALL).title("Checks")),
         layout[2],
     );
 
@@ -449,6 +626,93 @@ fn draw_followup_template_list_panel(
     frame.render_stateful_widget(list, area, &mut app.followup_overlay_ui_state.list_state);
 }
 
+fn draw_inline_session_list_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut NativeTuiApp,
+    list_view: OverlayListView,
+) {
+    let section_layout = split_inline_section(area);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from("Threads")]),
+        section_layout[0],
+    );
+
+    if let Some(message_lines) = list_view.message_lines {
+        frame.render_widget(
+            Paragraph::new(message_lines).wrap(Wrap { trim: true }),
+            section_layout[1],
+        );
+        return;
+    }
+
+    let list = List::new(
+        list_view
+            .items
+            .into_iter()
+            .map(|item| ListItem::new(item.lines)),
+    )
+    .highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
+
+    app.session_overlay_ui_state
+        .sync_selected_session(list_view.selected_index);
+    frame.render_stateful_widget(
+        list,
+        section_layout[1],
+        &mut app.session_overlay_ui_state.list_state,
+    );
+}
+
+fn draw_inline_followup_template_list_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut NativeTuiApp,
+    list_view: OverlayListView,
+) {
+    let section_layout = split_inline_section(area);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from("Template List")]),
+        section_layout[0],
+    );
+
+    if let Some(message_lines) = list_view.message_lines {
+        frame.render_widget(
+            Paragraph::new(message_lines).wrap(Wrap { trim: true }),
+            section_layout[1],
+        );
+        return;
+    }
+
+    let list = List::new(
+        list_view
+            .items
+            .into_iter()
+            .map(|item| ListItem::new(item.lines)),
+    )
+    .highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
+
+    app.followup_overlay_ui_state
+        .list_state
+        .select(list_view.selected_index);
+    frame.render_stateful_widget(
+        list,
+        section_layout[1],
+        &mut app.followup_overlay_ui_state.list_state,
+    );
+}
+
 fn clamp_scroll_offset(
     current_scroll: u16,
     lines: &[Line<'static>],
@@ -505,6 +769,8 @@ mod tests {
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
     use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::session_summary::SessionSummary;
+    use crate::domain::startup_diagnostics::StartupDiagnostics;
 
     #[test]
     fn centered_rect_clamps_percentages_above_hundred() {
@@ -555,6 +821,72 @@ mod tests {
         assert!(rendered.contains("Transcript"));
         assert!(rendered.contains("┌"));
         assert!(rendered.contains("│"));
+    }
+
+    #[test]
+    fn inline_startup_inspection_replaces_transcript_panel() {
+        let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+        let mut app = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.shell_overlay = ShellOverlay::Startup;
+
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+            .expect("inline inspection render succeeds");
+
+        let rendered = format!("{}", terminal.backend());
+
+        assert!(rendered.contains("Startup Diagnostics / shell inspection"));
+        assert!(rendered.contains("Checks"));
+        assert!(rendered.contains("schema snapshot: snapshot.json"));
+        assert!(!rendered.contains("Transcript /"));
+        assert!(!rendered.contains("┌"));
+    }
+
+    #[test]
+    fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
+        let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+        let mut app = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![sample_session("thread-1"), sample_session("thread-2")],
+            warnings: vec!["cache is stale".to_string()],
+            next_cursor: None,
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+            .expect("inline session inspection render succeeds");
+
+        let rendered = format!("{}", terminal.backend());
+
+        assert!(rendered.contains("Recent Sessions / shell inspection"));
+        assert!(rendered.contains("Threads"));
+        assert!(rendered.contains("Selected Session"));
+        assert!(rendered.contains("Session Warnings"));
+        assert!(!rendered.contains("Transcript /"));
+        assert!(!rendered.contains("┌"));
+    }
+
+    #[test]
+    fn inline_followup_inspection_renders_preview_inside_shell_frame() {
+        let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+        let mut app = make_test_app();
+        app.show_followup_template_overlay();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+            .expect("inline followup inspection render succeeds");
+
+        let rendered = format!("{}", terminal.backend());
+
+        assert!(rendered.contains("Follow-Up Templates / shell inspection"));
+        assert!(rendered.contains("Template List"));
+        assert!(rendered.contains("Preview"));
+        assert!(rendered.contains("auto follow-up: on"));
+        assert!(!rendered.contains("Transcript /"));
+        assert!(!rendered.contains("┌"));
     }
 
     struct FakeCodexAppServerPort;
@@ -627,5 +959,37 @@ mod tests {
             ConversationService::new(codex_port),
             FollowupTemplateService::new(followup_port),
         )
+    }
+
+    fn sample_startup_diagnostics() -> StartupDiagnostics {
+        StartupDiagnostics {
+            cwd: "/tmp/root".to_string(),
+            codex_binary_ok: true,
+            codex_binary_detail: "codex".to_string(),
+            workspace_ok: true,
+            workspace_path: "/tmp/root".to_string(),
+            workspace_detail: "workspace found".to_string(),
+            initialize_ok: true,
+            initialize_detail: "app-server initialize ok".to_string(),
+            account_ok: true,
+            account_detail: "account ok".to_string(),
+            warnings: Vec::new(),
+            schema_snapshot: "snapshot.json".to_string(),
+        }
+    }
+
+    fn sample_session(id: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.to_string(),
+            name: Some(format!("Session {id}")),
+            preview: "Preview line".to_string(),
+            cwd: "/tmp/root".to_string(),
+            source: "native".to_string(),
+            model_provider: "openai".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: format!("/tmp/root/{id}.json"),
+            git_branch: Some("feature/demo".to_string()),
+        }
     }
 }

@@ -42,10 +42,11 @@
   - validation matrix for terminal behavior
   - packaging runbook
   - release checksum helpers
+- inline shell parity
+  - inline inspection surfaces for diagnostics, recent sessions, and follow-up templates
 
 ## Next
 
-- finish inline main-buffer inspection surfaces for diagnostics, sessions, and templates
 - make streaming output scrollback-safe without replaying the whole shell frame
 - run real terminal validation on macOS and Windows and land only focused compatibility fixes when findings exist
 

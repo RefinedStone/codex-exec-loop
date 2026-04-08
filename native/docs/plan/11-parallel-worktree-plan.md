@@ -38,6 +38,7 @@ The slices below are already landed on `prerelease` and should stay compact in t
 - [x] A1 Runtime and Frontend Split: shared shell runtime and frontend setup are separated, frontend selection is explicit, and terminal restore behavior has follow-up coverage.
 - [x] A2 Presentation Neutralization: shared shell presentation copy was neutralized so inline and alternate-screen frontends can share more status and title helpers.
 - [x] A3 Inline Live Region Renderer: inline main-buffer rendering landed while alternate-screen remains available as fallback.
+- [x] A4 Inline Inspection Surfaces: inline mode now renders diagnostics, sessions, and follow-up templates as in-shell inspection surfaces while alternate-screen keeps popup overlays.
 - [x] B1 Editable Max Auto Turns: the shell can edit max auto turns with bounded validation.
 - [x] B2 Template Reload Action: workspace follow-up templates can reload from the shell without restarting.
 - [x] B3 Auto-Follow Activity Clarity: queue, submit, stop, and skip outcomes are surfaced as clearer operator-visible activity.
@@ -60,21 +61,6 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 - [x] native package checksum and verification helper follow-ups
 
 ## 4. Remaining Slices
-
-### A4. Inline Inspection Surfaces
-
-- status: remaining
-- branch: `feature/native-shell-inline-inspection`
-- goal: replace modal diagnostics, sessions, and template overlays in inline mode with inline inspection surfaces
-- ownership: `src/adapter/inbound/tui/app/session_overlay_ui.rs`, `src/adapter/inbound/tui/app/followup_overlay_ui.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`, and `src/adapter/inbound/tui/app/shell_rendering.rs`
-- depends on: A3
-- done when:
-  - inline mode no longer depends on popup-first interaction for diagnostics, sessions, or templates
-  - current shell capabilities remain accessible without switching back to alternate-screen mode
-- verify with:
-  - `cargo fmt`
-  - `cargo build`
-  - `cargo test`
 
 ### A5. Scrollback-Safe Streaming History
 
@@ -116,10 +102,9 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 
 Keep these guardrails for the remaining slices:
 
-- do not run A4 in parallel with another shell slice that touches `shell_rendering.rs`, `session_overlay_ui.rs`, or `followup_overlay_ui.rs`
 - do not run A5 in parallel with another slice that changes transcript rendering or shell presentation hotspots
 - do not start F2 until the validation matrix produces concrete Windows findings
-- docs-only migration cleanup can run alongside A4 or A5 because it does not touch runtime hotspots
+- docs-only migration cleanup can run alongside A5 because it does not touch runtime hotspots
 
 ## 6. Handoff Rule
 

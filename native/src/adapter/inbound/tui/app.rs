@@ -488,7 +488,7 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains(":templates"));
-        assert!(rendered.contains("Press Enter to open the template overlay."));
+        assert!(rendered.contains("Press Enter to open the template inspection."));
     }
 
     #[test]
@@ -885,7 +885,7 @@ mod tests {
         assert!(
             conversation
                 .status_text
-                .contains("opened diagnostics overlay")
+                .contains("opened diagnostics inspection")
         );
         assert!(
             codex_port
@@ -1208,7 +1208,7 @@ mod tests {
         );
         assert!(summary.contains("status: ready"));
         assert!(summary.contains("/tmp/root"));
-        assert!(!view.check_items.is_empty());
+        assert!(!view.check_lines.is_empty());
         assert!(keys.contains("rerun checks"));
     }
 

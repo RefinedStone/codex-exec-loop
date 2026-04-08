@@ -43,7 +43,7 @@ pub(super) struct TranscriptPanelView {
 pub(super) struct StartupOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
     pub(super) summary_lines: Vec<Line<'static>>,
-    pub(super) check_items: Vec<ListItem<'static>>,
+    pub(super) check_lines: Vec<Line<'static>>,
     pub(super) warning_lines: Vec<Line<'static>>,
     pub(super) key_lines: Vec<Line<'static>>,
 }
@@ -102,7 +102,7 @@ pub(super) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / shell overlay"),
+                Span::raw(" / shell inspection"),
             ]),
             Line::from("Inspect readiness without leaving the live shell."),
         ],
@@ -144,7 +144,7 @@ pub(super) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
                 Line::from(message.clone()),
             ],
         },
-        check_items: build_startup_check_items(app),
+        check_lines: build_startup_check_lines(app),
         warning_lines: build_startup_warning_lines(app),
         key_lines: vec![
             Line::from("Esc/Ctrl+C: close    r: rerun checks"),
@@ -240,7 +240,7 @@ pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / shell overlay"),
+                Span::raw(" / shell inspection"),
             ]),
             Line::from("Resume a thread without leaving the shell view."),
         ],
@@ -263,7 +263,7 @@ pub(super) fn build_followup_template_overlay_view(
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / shell overlay"),
+                Span::raw(" / shell inspection"),
             ]),
             Line::from("Inspect the selected strategy before the next auto follow-up turn."),
         ],
@@ -868,13 +868,13 @@ fn github_review_polling_status_label(app: &NativeTuiApp) -> String {
     app.github_review_polling_status_label()
 }
 
-fn build_startup_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {
+fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.startup_state {
-        StartupState::Idle => vec![ListItem::new("startup check has not started")],
+        StartupState::Idle => vec![Line::from("startup check has not started")],
         StartupState::Loading => vec![
-            ListItem::new("checking codex binary"),
-            ListItem::new("opening codex app-server"),
-            ListItem::new("reading account state"),
+            Line::from("checking codex binary"),
+            Line::from("opening codex app-server"),
+            Line::from("reading account state"),
         ],
         StartupState::Ready(diagnostics) => vec![
             diagnostic_item(
@@ -897,9 +897,9 @@ fn build_startup_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {
                 diagnostics.account_ok,
                 &diagnostics.account_detail,
             ),
-            ListItem::new(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
+            Line::from(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
         ],
-        StartupState::Failed(message) => vec![ListItem::new(format!("startup error: {message}"))],
+        StartupState::Failed(message) => vec![Line::from(format!("startup error: {message}"))],
     }
 }
 
@@ -1138,8 +1138,8 @@ fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 
     vec![
         Line::from("/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
-        Line::from("Up/Down or Home/End or g/G: move    Enter: open    n: draft    r: reload"),
-        Line::from("Ctrl+d: diagnostics"),
+        Line::from("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
+        Line::from("n: draft    r: reload    Ctrl+d: diagnostics"),
     ]
 }
 
@@ -1361,9 +1361,9 @@ fn build_followup_template_list_view(app: &NativeTuiApp) -> OverlayListView {
     }
 }
 
-fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {
+fn diagnostic_item(title: &str, ok: bool, detail: &str) -> Line<'static> {
     let marker = if ok { "[ok]" } else { "[warn]" };
-    ListItem::new(format!("{marker} {title}: {detail}"))
+    Line::from(format!("{marker} {title}: {detail}"))
 }
 
 fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {

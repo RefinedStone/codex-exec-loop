@@ -44,9 +44,9 @@ impl InlineShellCommand {
 
     pub(super) fn buffered_hint(self) -> &'static str {
         match self {
-            Self::Diagnostics => "Press Enter to open the diagnostics overlay.",
-            Self::Sessions => "Press Enter to open the recent-sessions overlay.",
-            Self::Templates => "Press Enter to open the template overlay.",
+            Self::Diagnostics => "Press Enter to open the diagnostics inspection.",
+            Self::Sessions => "Press Enter to open the recent-sessions inspection.",
+            Self::Templates => "Press Enter to open the template inspection.",
             Self::NewDraft => "Press Enter to open a new draft in the shell.",
             Self::TranscriptTop => "Press Enter to jump the transcript viewport to the top.",
             Self::TranscriptTail => "Press Enter to jump the transcript viewport to the tail.",
@@ -56,9 +56,9 @@ impl InlineShellCommand {
 
     pub(super) fn execution_status(self) -> Option<&'static str> {
         match self {
-            Self::Diagnostics => Some("opened diagnostics overlay"),
-            Self::Sessions => Some("opened recent sessions overlay"),
-            Self::Templates => Some("opened template overlay"),
+            Self::Diagnostics => Some("opened diagnostics inspection"),
+            Self::Sessions => Some("opened recent sessions inspection"),
+            Self::Templates => Some("opened template inspection"),
             Self::NewDraft => None,
             Self::TranscriptTop => Some("jumped transcript viewport to top"),
             Self::TranscriptTail => Some("jumped transcript viewport to tail"),
@@ -109,15 +109,15 @@ mod tests {
         let cases = [
             (
                 InlineShellCommand::Diagnostics,
-                Some("opened diagnostics overlay"),
+                Some("opened diagnostics inspection"),
             ),
             (
                 InlineShellCommand::Sessions,
-                Some("opened recent sessions overlay"),
+                Some("opened recent sessions inspection"),
             ),
             (
                 InlineShellCommand::Templates,
-                Some("opened template overlay"),
+                Some("opened template inspection"),
             ),
             (
                 InlineShellCommand::TranscriptTop,
