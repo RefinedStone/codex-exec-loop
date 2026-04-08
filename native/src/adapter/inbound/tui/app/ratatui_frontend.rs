@@ -15,28 +15,35 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
+use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
+
 use super::shell_frontend::ShellFrontend;
+use super::shell_presentation::build_inline_tail_lines;
 use super::shell_rendering::draw;
 use super::shell_runtime::ShellRuntime;
-use super::{ConversationState, INLINE_VIEWPORT_HEIGHT, NativeTuiApp, ShellFrontendMode};
+use super::{
+    ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT,
+    NativeTuiApp, ShellFrontendMode,
+};
 
 pub(super) fn run(mut runtime: ShellRuntime, frontend: ShellFrontend) -> Result<()> {
     let _restore_guard = TerminalRestoreGuard::activate(frontend)?;
     let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = build_terminal(backend, frontend.mode())?;
-    let mut inline_history = InlineHistoryState::default();
-    run_event_loop(&mut terminal, &mut runtime, frontend, &mut inline_history)
+    let mut inline_viewport = InlineViewportState::default();
+    let mut terminal = build_terminal(backend, frontend.mode(), inline_viewport.height)?;
+    run_event_loop(&mut terminal, &mut runtime, frontend, &mut inline_viewport)
 }
 
 fn build_terminal(
     backend: CrosstermBackend<io::Stdout>,
     mode: ShellFrontendMode,
+    inline_height: u16,
 ) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     match mode {
         ShellFrontendMode::InlineMainBuffer => Terminal::with_options(
             backend,
             TerminalOptions {
-                viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+                viewport: Viewport::Inline(inline_height),
             },
         ),
         ShellFrontendMode::AlternateScreen => Terminal::new(backend),
@@ -47,12 +54,12 @@ fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     frontend: ShellFrontend,
-    inline_history: &mut InlineHistoryState,
+    inline_viewport: &mut InlineViewportState,
 ) -> Result<()> {
     while !runtime.should_quit() {
         runtime.poll_background_messages();
         if runtime.take_redraw_request() {
-            sync_inline_history(terminal, runtime, frontend.mode(), inline_history)?;
+            sync_inline_viewport(terminal, runtime, frontend.mode(), inline_viewport)?;
             terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
         }
 
@@ -66,24 +73,45 @@ fn run_event_loop(
     Ok(())
 }
 
-fn sync_inline_history(
+fn sync_inline_viewport(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     mode: ShellFrontendMode,
-    inline_history: &mut InlineHistoryState,
+    inline_viewport: &mut InlineViewportState,
 ) -> io::Result<()> {
     if mode != ShellFrontendMode::InlineMainBuffer {
         return Ok(());
     }
 
+    ensure_inline_viewport_height(terminal, runtime.app_mut(), inline_viewport)?;
     let current_lines = current_inline_history_lines(runtime.app_mut());
-    inline_history.sync(terminal, &current_lines)
+    inline_viewport.history.sync(terminal, &current_lines)
 }
 
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
         ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),
+    }
+}
+
+struct InlineViewportState {
+    history: InlineHistoryState,
+    height: u16,
+}
+
+impl InlineViewportState {
+    fn default_height() -> u16 {
+        INLINE_VIEWPORT_HEIGHT
+    }
+}
+
+impl Default for InlineViewportState {
+    fn default() -> Self {
+        Self {
+            history: InlineHistoryState::default(),
+            height: Self::default_height(),
+        }
     }
 }
 
@@ -144,6 +172,43 @@ fn insert_inline_history_lines(
     })
 }
 
+fn ensure_inline_viewport_height(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut NativeTuiApp,
+    inline_viewport: &mut InlineViewportState,
+) -> io::Result<()> {
+    let terminal_width = terminal.size()?.width;
+    let desired_height = desired_inline_viewport_height(app, terminal_width);
+    if desired_height == inline_viewport.height {
+        return Ok(());
+    }
+
+    terminal.clear()?;
+    *terminal = build_terminal(
+        CrosstermBackend::new(io::stdout()),
+        ShellFrontendMode::InlineMainBuffer,
+        desired_height,
+    )?;
+    inline_viewport.height = desired_height;
+    Ok(())
+}
+
+fn desired_inline_viewport_height(app: &NativeTuiApp, terminal_width: u16) -> u16 {
+    if app.shell_overlay != ShellOverlay::Hidden || app.is_exit_confirmation_visible() {
+        return INLINE_VIEWPORT_HEIGHT;
+    }
+
+    let tail_lines = build_inline_tail_lines(app);
+    clamp_inline_viewport_height(count_rendered_history_rows(&tail_lines, terminal_width))
+}
+
+fn clamp_inline_viewport_height(rendered_row_count: usize) -> u16 {
+    rendered_row_count.clamp(
+        MIN_INLINE_VIEWPORT_HEIGHT as usize,
+        MAX_INLINE_TAIL_HEIGHT as usize,
+    ) as u16
+}
+
 fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -> usize {
     if width == 0 {
         return 0;
@@ -196,9 +261,28 @@ impl Drop for TerminalRestoreGuard {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use anyhow::Result;
     use ratatui::text::Line;
 
-    use super::InlineHistoryState;
+    use super::{InlineHistoryState, clamp_inline_viewport_height, desired_inline_viewport_height};
+    use crate::adapter::inbound::tui::app::{
+        INLINE_VIEWPORT_HEIGHT, MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp,
+    };
+    use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
+    use crate::application::port::outbound::codex_app_server_port::{
+        AppServerStartupContext, CodexAppServerPort,
+    };
+    use crate::application::port::outbound::followup_template_port::{
+        FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
+    };
+    use crate::application::service::conversation_service::ConversationService;
+    use crate::application::service::followup_template_service::FollowupTemplateService;
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
+    use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+    use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
     fn pending_lines_returns_only_new_suffix_for_appended_history() {
@@ -248,5 +332,96 @@ mod tests {
         let pending = state.pending_lines(&current_lines);
 
         assert_eq!(pending, current_lines);
+    }
+
+    #[test]
+    fn inline_viewport_height_clamps_hidden_tail_region() {
+        assert_eq!(clamp_inline_viewport_height(0), MIN_INLINE_VIEWPORT_HEIGHT);
+        assert_eq!(clamp_inline_viewport_height(4), MIN_INLINE_VIEWPORT_HEIGHT);
+        assert_eq!(clamp_inline_viewport_height(7), 7);
+        assert_eq!(clamp_inline_viewport_height(24), MAX_INLINE_TAIL_HEIGHT);
+    }
+
+    #[test]
+    fn inline_viewport_height_uses_full_budget_for_overlay() {
+        let mut app = make_test_app();
+        app.shell_overlay = ShellOverlay::Startup;
+
+        assert_eq!(
+            desired_inline_viewport_height(&app, 80),
+            INLINE_VIEWPORT_HEIGHT
+        );
+    }
+
+    struct FakeCodexAppServerPort;
+
+    impl CodexAppServerPort for FakeCodexAppServerPort {
+        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+            Ok(AppServerStartupContext {
+                initialize_detail: "ok".to_string(),
+                account_detail: "ok".to_string(),
+                account_ok: true,
+                warnings: Vec::new(),
+            })
+        }
+
+        fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
+            Ok(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            })
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FakeFollowupTemplatePort;
+
+    impl FollowupTemplatePort for FakeFollowupTemplatePort {
+        fn load_workspace_templates(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn make_test_app() -> NativeTuiApp {
+        let codex_port = Arc::new(FakeCodexAppServerPort);
+        let followup_port = Arc::new(FakeFollowupTemplatePort);
+        NativeTuiApp::new(
+            StartupService::new(codex_port.clone()),
+            SessionService::new(codex_port.clone()),
+            ConversationService::new(codex_port),
+            FollowupTemplateService::new(followup_port),
+        )
     }
 }
