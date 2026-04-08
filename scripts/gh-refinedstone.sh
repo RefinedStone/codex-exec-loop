@@ -98,19 +98,20 @@ json_string_field() {
   body="$1"
   field_name="$2"
 
-  printf '%s' "${body}" | python3 - "${field_name}" <<'PY'
+  JSON_BODY="${body}" python3 -c '
 import json
+import os
 import sys
 
 field_name = sys.argv[1]
-data = json.load(sys.stdin)
+data = json.loads(os.environ["JSON_BODY"])
 if isinstance(data, list):
     data = data[0] if data else None
 if isinstance(data, dict):
     value = data.get(field_name)
     if isinstance(value, str):
         print(value)
-PY
+' "${field_name}"
 }
 
 api_request() {
