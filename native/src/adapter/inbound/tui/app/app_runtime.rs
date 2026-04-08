@@ -17,12 +17,13 @@ use anyhow::Result;
 use super::shell_frontend::{ShellFrontendMode, run as run_shell_frontend};
 use super::shell_runtime::ShellRuntime;
 use super::{
-    ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
-    ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
-    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
-    ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
-    FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState,
-    InlineShellCommand, NativeTuiApp, PromptOrigin, SESSION_PAGE_SIZE, SessionOverlayUiState,
+    AutoFollowupSubmitContext, ConversationInputEvent, ConversationIntentEffect,
+    ConversationIntentEvent, ConversationIntentMode, ConversationIntentState,
+    ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    ExitConfirmationState, FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent,
+    FollowupOverlayUiState, InlineShellCommand, NativeTuiApp, PromptOrigin, SESSION_PAGE_SIZE,
+    SessionOverlayUiState,
     SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
     StartupState, TranscriptViewportState, reduce_conversation_input, reduce_conversation_intents,
     reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
@@ -334,8 +335,18 @@ impl NativeTuiApp {
                     let _ = service_thread.join();
                 });
             }
-            ConversationRuntimeEffect::QueueAutoPrompt { prompt } => {
-                self.submit_prompt(prompt, PromptOrigin::AutoFollow);
+            ConversationRuntimeEffect::QueueAutoPrompt {
+                prompt,
+                queued_from_turn_id,
+                template_label,
+            } => {
+                self.submit_prompt(
+                    prompt,
+                    PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                        queued_from_turn_id,
+                        template_label,
+                    }),
+                );
             }
         }
     }

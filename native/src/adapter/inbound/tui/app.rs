@@ -88,12 +88,15 @@ use conversation_lifecycle::{
     ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
     reduce_conversation_lifecycle,
 };
+#[allow(unused_imports)]
 pub(super) use conversation_model::{
     AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
     ConversationState, ConversationViewModel, StopKeywordRule,
 };
 #[cfg(test)]
-pub(super) use conversation_model::{RecordedAutoFollowupSkip, TurnActivityState};
+pub(super) use conversation_model::{
+    RecordedAutoFollowupActivity, RecordedAutoFollowupSkip, TurnActivityState,
+};
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
@@ -120,10 +123,16 @@ use shell_presentation::{
 };
 use transcript_viewport::TranscriptViewportState;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoFollowupSubmitContext {
+    queued_from_turn_id: String,
+    template_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptOrigin {
     Manual,
-    AutoFollow,
+    AutoFollow(AutoFollowupSubmitContext),
 }
 
 struct NativeTuiApp {
@@ -155,13 +164,14 @@ mod tests {
     use ratatui::text::Line;
 
     use super::{
-        AutoFollowState, AutoFollowupSkipReason, BackgroundMessage, ConversationInputState,
-        ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-        ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-        ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand,
-        MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin, RecordedAutoFollowupSkip, SessionState,
-        ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
-        build_conversation_shell_frame_view, build_conversation_shell_view,
+        AutoFollowState, AutoFollowupSkipReason, AutoFollowupSubmitContext, BackgroundMessage,
+        ConversationInputState, ConversationMessage, ConversationMessageKind,
+        ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+        DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
+        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
+        NativeTuiApp, PromptOrigin, RecordedAutoFollowupActivity, RecordedAutoFollowupSkip,
+        SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
+        TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
         build_followup_template_overlay_view, build_followup_template_preview_lines,
         build_followup_template_status_lines, build_input_title, build_ready_input_lines,
         build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
@@ -365,6 +375,7 @@ mod tests {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_activity: None,
             last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }
@@ -643,7 +654,13 @@ mod tests {
         conversation.thread_id = "thread-123".to_string();
         conversation.input_state = ConversationInputState::ReadyToContinue;
 
-        app.submit_prompt("continue working".to_string(), PromptOrigin::AutoFollow);
+        app.submit_prompt(
+            "continue working".to_string(),
+            PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                queued_from_turn_id: "turn-0".to_string(),
+                template_label: "builtin next-task".to_string(),
+            }),
+        );
 
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("conversation should remain ready");
@@ -1620,7 +1637,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("last skip: no file changes"));
+        assert!(rendered.contains("auto activity: stopped: no file changes"));
         assert!(rendered.contains("detail: the last completed turn changed 0 files"));
     }
 
@@ -1628,6 +1645,10 @@ mod tests {
     fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
         let (mut app, _) = make_test_app();
         let mut conversation = ready_conversation();
+        conversation.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: "stopped: auto follow-up off".to_string(),
+            detail: "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
+        });
         conversation.last_auto_followup_skip = Some(RecordedAutoFollowupSkip {
             reason: AutoFollowupSkipReason::Disabled,
             detail: "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
@@ -1655,8 +1676,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("last skip: none"));
-        assert!(rendered.contains("detail: none"));
+        assert!(rendered.contains("auto activity: queued auto turn 1/3"));
+        assert!(rendered.contains(
+            "detail: queued after turn turn-2 completed; waiting to submit with template builtin next-task"
+        ));
     }
 
     #[test]
@@ -1690,7 +1713,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("last skip: turn limit reached"));
+        assert!(rendered.contains("auto activity: stopped: turn limit reached"));
         assert!(rendered.contains("detail: reached the configured auto-turn budget (3/3)"));
         assert!(!rendered.contains("detail: reached the configured auto-turn budget (0/3)"));
     }

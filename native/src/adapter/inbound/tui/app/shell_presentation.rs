@@ -321,15 +321,15 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
             Line::from(format!("status: {message}")),
         ],
         ConversationState::Ready(conversation) => {
-            let skip_summary = conversation
-                .last_auto_followup_skip
+            let activity_summary = conversation
+                .last_auto_followup_activity
                 .as_ref()
-                .map(|skip| skip.reason.label())
+                .map(|activity| activity.summary.as_str())
                 .unwrap_or("none");
-            let skip_detail = conversation
-                .last_auto_followup_skip
+            let activity_detail = conversation
+                .last_auto_followup_activity
                 .as_ref()
-                .map(|skip| skip.detail.as_str())
+                .map(|activity| activity.detail.as_str())
                 .unwrap_or("none");
             let warning_summary = if conversation.warnings.is_empty() {
                 "warnings: none".to_string()
@@ -371,10 +371,10 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     conversation.auto_follow_state.template_count(),
                 )),
                 Line::from(format!(
-                    "template source: {}  |  last skip: {}  |  detail: {}",
+                    "template source: {}  |  auto activity: {}  |  detail: {}",
                     conversation.auto_follow_state.template_source_label(),
-                    skip_summary,
-                    skip_detail,
+                    activity_summary,
+                    activity_detail,
                 )),
             ]
         }

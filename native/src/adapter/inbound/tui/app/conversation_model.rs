@@ -73,18 +73,13 @@ pub(crate) struct RecordedAutoFollowupSkip {
     pub(crate) detail: String,
 }
 
-impl AutoFollowupSkipReason {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::ManualInputBuffered => "manual input buffered",
-            Self::LimitReached => "turn limit reached",
-            Self::NoAgentReply => "no agent reply",
-            Self::StopKeywordMatched => "stop keyword matched",
-            Self::NoFileChanges => "no file changes",
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedAutoFollowupActivity {
+    pub(crate) summary: String,
+    pub(crate) detail: String,
+}
 
+impl AutoFollowupSkipReason {
     fn detail(
         self,
         auto_follow_state: &AutoFollowState,
@@ -111,6 +106,46 @@ impl AutoFollowupSkipReason {
                 "the last completed turn changed {} files while the no-file stop rule is on",
                 turn_activity.last_completed_file_change_count()
             ),
+        }
+    }
+
+    pub(crate) fn activity_summary(self) -> &'static str {
+        match self {
+            Self::Disabled => "stopped: auto follow-up off",
+            Self::ManualInputBuffered => "skipped: manual input buffered",
+            Self::LimitReached => "stopped: turn limit reached",
+            Self::NoAgentReply => "skipped: no agent reply",
+            Self::StopKeywordMatched => "stopped: stop keyword matched",
+            Self::NoFileChanges => "stopped: no file changes",
+        }
+    }
+
+    pub(crate) fn runtime_status(
+        self,
+        turn_id: &str,
+        auto_follow_state: &AutoFollowState,
+    ) -> String {
+        match self {
+            Self::Disabled => {
+                format!("turn completed: {turn_id} / auto follow-up stopped: disabled")
+            }
+            Self::ManualInputBuffered => {
+                format!("turn completed: {turn_id} / auto follow-up skipped: manual input buffered")
+            }
+            Self::LimitReached => format!(
+                "turn completed: {turn_id} / auto follow-up stopped: turn limit reached ({})",
+                auto_follow_state.progress_label()
+            ),
+            Self::NoAgentReply => {
+                format!("turn completed: {turn_id} / auto follow-up skipped: no agent reply")
+            }
+            Self::StopKeywordMatched => format!(
+                "turn completed: {turn_id} / auto follow-up stopped: stop keyword matched ({})",
+                auto_follow_state.stop_rules.stop_keyword.value()
+            ),
+            Self::NoFileChanges => {
+                format!("turn completed: {turn_id} / auto follow-up stopped: no file changes")
+            }
         }
     }
 }
@@ -454,6 +489,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
     pub(crate) turn_activity: TurnActivityState,
+    pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
     pub(crate) last_auto_followup_skip: Option<RecordedAutoFollowupSkip>,
     pub(crate) status_text: String,
 }
@@ -481,6 +517,7 @@ impl ConversationViewModel {
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_activity: None,
             last_auto_followup_skip: None,
             status_text,
         };
@@ -518,6 +555,7 @@ impl ConversationViewModel {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_activity: None,
             last_auto_followup_skip: None,
             status_text,
         };
@@ -614,14 +652,52 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
+        let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
         self.last_auto_followup_skip = Some(RecordedAutoFollowupSkip {
             reason,
-            detail: reason.detail(&self.auto_follow_state, &self.turn_activity),
+            detail: detail.clone(),
+        });
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: reason.activity_summary().to_string(),
+            detail,
         });
     }
 
     pub(crate) fn clear_auto_followup_skip(&mut self) {
+        self.last_auto_followup_activity = None;
         self.last_auto_followup_skip = None;
+    }
+
+    pub(crate) fn record_auto_followup_submission(
+        &mut self,
+        queued_from_turn_id: &str,
+        template_label: &str,
+    ) {
+        let progress = self.auto_follow_state.progress_label();
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: format!("submitted auto turn {progress}"),
+            detail: format!(
+                "queued after turn {queued_from_turn_id} completed; submitted with template {template_label}"
+            ),
+        });
+    }
+
+    pub(crate) fn record_auto_followup_queue(
+        &mut self,
+        queued_from_turn_id: &str,
+        template_label: &str,
+    ) {
+        let next_progress = format!(
+            "{}/{}",
+            self.auto_follow_state.next_auto_turn_index(),
+            self.auto_follow_state.max_auto_turns_value()
+        );
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: format!("queued auto turn {next_progress}"),
+            detail: format!(
+                "queued after turn {queued_from_turn_id} completed; waiting to submit with template {template_label}"
+            ),
+        });
     }
 
     pub(crate) fn latest_agent_message_text(&self) -> Option<&str> {
@@ -728,6 +804,7 @@ mod tests {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_activity: None,
             last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }

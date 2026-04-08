@@ -19,6 +19,8 @@ pub(super) enum ConversationRuntimeEffect {
     },
     QueueAutoPrompt {
         prompt: String,
+        queued_from_turn_id: String,
+        template_label: String,
     },
 }
 
@@ -43,12 +45,18 @@ pub(super) fn reduce_conversation_runtime(
 
             let thread_id = state.has_active_thread().then(|| state.thread_id.clone());
             let cwd = state.cwd.clone();
-            match origin {
+            match &origin {
                 PromptOrigin::Manual => {
                     state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_followup_skip();
                 }
-                PromptOrigin::AutoFollow => state.auto_follow_state.mark_auto_turn_submitted(),
+                PromptOrigin::AutoFollow(context) => {
+                    state.auto_follow_state.mark_auto_turn_submitted();
+                    state.record_auto_followup_submission(
+                        &context.queued_from_turn_id,
+                        &context.template_label,
+                    );
+                }
             }
             let auto_follow_progress = state.auto_follow_state.progress_label();
             state.messages.push(ConversationMessage::new(
@@ -62,9 +70,10 @@ pub(super) fn reduce_conversation_runtime(
             state.mark_turn_submitting();
             state.status_text = match origin {
                 PromptOrigin::Manual => "starting turn".to_string(),
-                PromptOrigin::AutoFollow => {
-                    format!("auto follow-up submitted ({auto_follow_progress})")
-                }
+                PromptOrigin::AutoFollow(context) => format!(
+                    "auto follow-up submitted / turn {auto_follow_progress} / queued from {} / template: {}",
+                    context.queued_from_turn_id, context.template_label
+                ),
             };
             effects.push(ConversationRuntimeEffect::StartStream {
                 cwd,
@@ -129,37 +138,22 @@ pub(super) fn reduce_conversation_runtime(
                     match state.decide_auto_followup() {
                         AutoFollowupDecision::QueuePrompt(prompt) => {
                             state.clear_auto_followup_skip();
-                            state.status_text = format!("turn completed: {turn_id}");
-                            effects.push(ConversationRuntimeEffect::QueueAutoPrompt { prompt });
+                            let template_label =
+                                state.auto_follow_state.template_label().to_string();
+                            state.record_auto_followup_queue(&turn_id, &template_label);
+                            state.status_text = format!(
+                                "turn completed: {turn_id} / queued auto follow-up with template {template_label}"
+                            );
+                            effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
+                                prompt,
+                                queued_from_turn_id: turn_id,
+                                template_label,
+                            });
                         }
                         AutoFollowupDecision::Skip(skip_reason) => {
                             state.record_auto_followup_skip(skip_reason);
-                            state.status_text = match skip_reason {
-                                AutoFollowupSkipReason::Disabled => {
-                                    format!("turn completed: {turn_id} / auto follow-up off")
-                                }
-                                AutoFollowupSkipReason::ManualInputBuffered => {
-                                    "manual prompt buffered; auto follow-up skipped".to_string()
-                                }
-                                AutoFollowupSkipReason::LimitReached => format!(
-                                    "turn completed: {turn_id} / auto follow-up limit reached ({})",
-                                    state.auto_follow_state.progress_label()
-                                ),
-                                AutoFollowupSkipReason::NoAgentReply => {
-                                    format!(
-                                        "turn completed: {turn_id} / no agent reply to continue from"
-                                    )
-                                }
-                                AutoFollowupSkipReason::StopKeywordMatched => format!(
-                                    "turn completed: {turn_id} / stop keyword matched ({})",
-                                    state.auto_follow_state.stop_rules.stop_keyword.value()
-                                ),
-                                AutoFollowupSkipReason::NoFileChanges => {
-                                    format!(
-                                        "turn completed: {turn_id} / no file changes in last turn"
-                                    )
-                                }
-                            };
+                            state.status_text =
+                                skip_reason.runtime_status(&turn_id, &state.auto_follow_state);
                         }
                     }
                 }
@@ -274,6 +268,44 @@ mod tests {
     }
 
     #[test]
+    fn auto_follow_submit_records_submission_activity_with_queue_context() {
+        let mut state = sample_conversation();
+        state.input_buffer = "continue from the last result".to_string();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue from the last result".to_string(),
+                origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                    queued_from_turn_id: "turn-1".to_string(),
+                    template_label: "builtin next-task".to_string(),
+                }),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.status_text,
+            "auto follow-up submitted / turn 1/3 / queued from turn-1 / template: builtin next-task"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("submitted auto turn 1/3")
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.detail.as_str()),
+            Some("queued after turn turn-1 completed; submitted with template builtin next-task")
+        );
+    }
+
+    #[test]
     fn turn_completed_queues_auto_prompt_effect_when_allowed() {
         let mut state = sample_conversation();
         state.input_buffer.clear();
@@ -297,7 +329,18 @@ mod tests {
             reduced.state.input_state,
             ConversationInputState::ReadyToContinue
         );
-        assert_eq!(reduced.state.status_text, "turn completed: turn-1");
+        assert_eq!(
+            reduced.state.status_text,
+            "turn completed: turn-1 / queued auto follow-up with template builtin next-task"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("queued auto turn 1/3")
+        );
         assert!(reduced.state.last_auto_followup_skip.is_none());
         assert!(matches!(
             reduced.effects.as_slice(),
@@ -366,7 +409,15 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed: turn-1 / no agent reply to continue from"
+            "turn completed: turn-1 / auto follow-up skipped: no agent reply"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("skipped: no agent reply")
         );
         assert_eq!(
             reduced
@@ -403,7 +454,15 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed: turn-1 / no file changes in last turn"
+            "turn completed: turn-1 / auto follow-up stopped: no file changes"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("stopped: no file changes")
         );
         assert_eq!(
             reduced
@@ -464,6 +523,7 @@ mod tests {
                 }],
             }),
             turn_activity: TurnActivityState::default(),
+            last_auto_followup_activity: None,
             last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }
