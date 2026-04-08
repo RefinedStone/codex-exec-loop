@@ -10,7 +10,7 @@ use crate::application::port::outbound::github_review_poller_port::GithubReviewP
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
-    GithubPullRequestPollState, GithubPullRequestTarget,
+    GithubPullRequestPollState, GithubPullRequestTarget, truncate_notice_text,
 };
 
 use super::{BackgroundMessage, NativeTuiApp};
@@ -212,6 +212,13 @@ impl GithubReviewPollingState {
         }
     }
 
+    pub(super) fn recent_change_summary(&self, max_total_len: usize) -> Option<String> {
+        let Self::Active(state) = self else {
+            return None;
+        };
+        state.recent_change_summary(max_total_len)
+    }
+
     pub(super) fn take_due_request(&mut self, now: Instant) -> Option<GithubReviewPollRequest> {
         let Self::Active(state) = self else {
             return None;
@@ -296,6 +303,22 @@ impl GithubReviewPollingRuntimeState {
         ))
     }
 
+    fn recent_change_summary(&self, max_total_len: usize) -> Option<String> {
+        let latest_change = self.recent_changes.last()?;
+        if self.recent_changes.len() == 1 {
+            Some(latest_change.notice_summary(max_total_len))
+        } else {
+            Some(truncate_notice_text(
+                &format!(
+                    "{} new, latest {}",
+                    self.recent_changes.len(),
+                    latest_change.notice_summary(max_total_len)
+                ),
+                max_total_len,
+            ))
+        }
+    }
+
     fn take_due_request(&mut self, now: Instant) -> Option<GithubReviewPollRequest> {
         if self.poll_in_flight || now < self.next_poll_at {
             return None;
@@ -347,6 +370,14 @@ impl NativeTuiApp {
 
     pub(super) fn github_review_polling_status_label(&self) -> String {
         self.github_review_polling_state.status_label()
+    }
+
+    pub(super) fn github_review_recent_changes_summary(
+        &self,
+        max_body_len: usize,
+    ) -> Option<String> {
+        self.github_review_polling_state
+            .recent_change_summary(max_body_len)
     }
 
     pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) {
@@ -696,6 +727,30 @@ mod tests {
             panic!("expected active state");
         };
         assert_eq!(runtime.status_label(), "watching acme/widgets#42");
+    }
+
+    #[test]
+    fn active_state_exposes_compact_recent_change_summary() {
+        let config = GithubReviewPollingConfig {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+            interval: Duration::from_secs(30),
+        };
+        let start = Instant::now();
+        let mut state = GithubReviewPollingState::active(config, start);
+
+        let _ = state.take_due_request(start);
+        state.record_result(
+            start + Duration::from_secs(1),
+            Ok(sample_poll_result("2026-04-08T09:00:00Z")),
+        );
+
+        let GithubReviewPollingState::Active(runtime) = state else {
+            panic!("expected active state");
+        };
+        assert_eq!(
+            runtime.recent_change_summary(24).as_deref(),
+            Some("review commented by r...")
+        );
     }
 
     #[test]

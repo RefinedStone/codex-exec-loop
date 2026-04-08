@@ -115,6 +115,40 @@ impl GithubPullRequestActivityEvent {
         }
     }
 
+    pub fn notice_summary(&self, max_total_len: usize) -> String {
+        let review_state = self
+            .state
+            .as_deref()
+            .map(str::trim)
+            .filter(|state| !state.is_empty())
+            .map(|state| state.to_ascii_lowercase())
+            .unwrap_or_else(|| "updated".to_string());
+        let label = match self.kind {
+            GithubPullRequestActivityKind::Review => {
+                format!("review {review_state} by {}", self.author_login)
+            }
+            GithubPullRequestActivityKind::ReviewComment => {
+                match self.path.as_deref().and_then(review_comment_file_label) {
+                    Some(file_label) => {
+                        format!("review comment by {} on {file_label}", self.author_login)
+                    }
+                    None => format!("review comment by {}", self.author_login),
+                }
+            }
+            GithubPullRequestActivityKind::IssueComment => {
+                format!("comment by {}", self.author_login)
+            }
+        };
+
+        let mut summary = label;
+        if !self.body.trim().is_empty() {
+            summary.push_str(": ");
+            summary.push_str(&self.body);
+        }
+
+        truncate_notice_text(&summary, max_total_len)
+    }
+
     fn review_notice_label(&self) -> String {
         match self
             .state
@@ -167,6 +201,58 @@ fn review_comment_file_label(path: &str) -> Option<&str> {
 
 fn normalize_review_state(state: &str) -> String {
     state.trim().to_ascii_lowercase().replace('_', " ")
+}
+
+pub fn truncate_notice_text(text: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+
+    let mut compact = String::new();
+    let mut compact_len = 0usize;
+    let mut pending_space = false;
+    let mut truncated = false;
+
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if compact_len > 0 {
+                pending_space = true;
+            }
+            continue;
+        }
+
+        if pending_space {
+            if compact_len == max_len {
+                truncated = true;
+                break;
+            }
+            compact.push(' ');
+            compact_len += 1;
+            pending_space = false;
+        }
+
+        if compact_len == max_len {
+            truncated = true;
+            break;
+        }
+        compact.push(ch);
+        compact_len += 1;
+    }
+
+    if !truncated {
+        return compact;
+    }
+
+    if max_len <= 3 {
+        return ".".repeat(max_len);
+    }
+
+    let mut result: String = compact.chars().take(max_len - 3).collect();
+    while result.ends_with(' ') {
+        result.pop();
+    }
+    result.push_str("...");
+    result
 }
 
 #[cfg(test)]
@@ -231,5 +317,60 @@ mod tests {
             event.notice_label(),
             "review (ready for review) by reviewer"
         );
+    }
+
+    #[test]
+    fn notice_summary_formats_review_state_and_author() {
+        let event = GithubPullRequestActivityEvent {
+            id: 100,
+            kind: GithubPullRequestActivityKind::Review,
+            submitted_at: "2026-04-08T09:00:00Z".to_string(),
+            author_login: "reviewer".to_string(),
+            body: "Looks good to me".to_string(),
+            state: Some("COMMENTED".to_string()),
+            url: "https://example.invalid/review/100".to_string(),
+            path: None,
+        };
+
+        assert_eq!(
+            event.notice_summary(64),
+            "review commented by reviewer: Looks good to me"
+        );
+    }
+
+    #[test]
+    fn notice_summary_includes_review_comment_path_and_respects_total_budget() {
+        let event = GithubPullRequestActivityEvent {
+            id: 101,
+            kind: GithubPullRequestActivityKind::ReviewComment,
+            submitted_at: "2026-04-08T09:00:00Z".to_string(),
+            author_login: "reviewer".to_string(),
+            body: "Please rename this method because the current name is misleading.".to_string(),
+            state: None,
+            url: "https://example.invalid/review-comment/101".to_string(),
+            path: Some("src/app.rs".to_string()),
+        };
+
+        let summary = event.notice_summary(24);
+
+        assert_eq!(summary, "review comment by rev...");
+        assert_eq!(summary.chars().count(), 24);
+    }
+
+    #[test]
+    fn notice_summary_uses_exact_budget_for_small_limits() {
+        let event = GithubPullRequestActivityEvent {
+            id: 102,
+            kind: GithubPullRequestActivityKind::IssueComment,
+            submitted_at: "2026-04-08T09:00:00Z".to_string(),
+            author_login: "reviewer".to_string(),
+            body: "Looks good".to_string(),
+            state: None,
+            url: "https://example.invalid/comment/102".to_string(),
+            path: None,
+        };
+
+        assert_eq!(event.notice_summary(3), "...");
+        assert_eq!(event.notice_summary(2), "..");
     }
 }

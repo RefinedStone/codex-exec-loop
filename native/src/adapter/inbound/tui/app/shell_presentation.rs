@@ -5,6 +5,8 @@ use crate::domain::followup_template::FollowupTemplateDefinition;
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
+const FOOTER_GITHUB_REVIEW_DETAIL_LIMIT: usize = 44;
+const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
@@ -340,6 +342,8 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                 .unwrap_or("none");
             let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
             let approval_summary = conversation.approval_summary();
+            let github_review_summary =
+                app.github_review_recent_changes_summary(FOOTER_GITHUB_REVIEW_DETAIL_LIMIT);
             let tool_activity_line = if let Some(approval_summary) = approval_summary.as_deref() {
                 format!(
                     "tool activity: {}  |  cmd: {}  |  files: {}  |  approval: {approval_summary}",
@@ -396,10 +400,15 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     conversation.auto_follow_state.template_count(),
                 )),
                 Line::from(format!(
-                    "template source: {}  |  auto activity: {}  |  detail: {}",
+                    "template source: {}  |  auto activity: {}  |  {}: {}",
                     conversation.auto_follow_state.template_source_label(),
                     activity_summary,
-                    activity_detail,
+                    if github_review_summary.is_some() {
+                        "github"
+                    } else {
+                        "detail"
+                    },
+                    github_review_summary.as_deref().unwrap_or(activity_detail),
                 )),
             ]
         }
@@ -567,6 +576,8 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 .turn_activity
                 .activity_scope_label(turn_running);
             let approval_summary = conversation.approval_summary();
+            let github_review_summary =
+                app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
             let mut lines = vec![
                 Line::from(format!(
                     "auto follow-up: {}",
@@ -597,19 +608,19 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                         .turn_activity
                         .activity_file_change_count(turn_running)
                 )),
-                Line::from(
+                Line::from({
+                    let mut activity_line = format!(
+                        "{activity_scope} tool activity: {}",
+                        conversation.turn_activity.activity_summary(turn_running)
+                    );
                     if let Some(approval_summary) = approval_summary.as_deref() {
-                        format!(
-                            "{activity_scope} tool activity: {}  |  approval: {approval_summary}",
-                            conversation.turn_activity.activity_summary(turn_running)
-                        )
-                    } else {
-                        format!(
-                            "{activity_scope} tool activity: {}",
-                            conversation.turn_activity.activity_summary(turn_running)
-                        )
-                    },
-                ),
+                        activity_line.push_str(&format!("  |  approval: {approval_summary}"));
+                    }
+                    if let Some(github_review_summary) = github_review_summary.as_deref() {
+                        activity_line.push_str(&format!("  |  github: {github_review_summary}"));
+                    }
+                    activity_line
+                }),
             ];
 
             if app.is_max_auto_turns_editing() {

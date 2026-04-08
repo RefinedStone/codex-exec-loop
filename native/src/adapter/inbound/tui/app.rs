@@ -528,6 +528,32 @@ mod tests {
     }
 
     #[test]
+    fn shell_footer_surfaces_recent_github_review_change_summary() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.github_review_polling_state = GithubReviewPollingState::active(
+            super::github_polling::GithubReviewPollingConfig {
+                target: GithubPullRequestTarget::new("acme/widgets", 42),
+                interval: std::time::Duration::from_secs(30),
+            },
+            std::time::Instant::now(),
+        );
+        app.record_github_review_poll_result(
+            std::time::Instant::now(),
+            Ok(sample_github_review_poll_result()),
+        );
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("github: updates acme/widgets#42 (1 new)"));
+        assert!(rendered.contains("github: review commented by reviewer: Looks good"));
+    }
+
+    #[test]
     fn startup_pending_prompts_wait_before_send() {
         let conversation = ready_conversation();
 
@@ -1939,6 +1965,31 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("approval: reviewing high"));
+    }
+
+    #[test]
+    fn followup_template_status_lines_include_github_review_change_summary() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.github_review_polling_state = GithubReviewPollingState::active(
+            super::github_polling::GithubReviewPollingConfig {
+                target: GithubPullRequestTarget::new("acme/widgets", 42),
+                interval: std::time::Duration::from_secs(30),
+            },
+            std::time::Instant::now(),
+        );
+        app.record_github_review_poll_result(
+            std::time::Instant::now(),
+            Ok(sample_github_review_poll_result()),
+        );
+
+        let rendered = build_followup_template_status_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("github: review commented by reviewer: Looks good"));
     }
 
     #[test]
