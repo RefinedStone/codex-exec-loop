@@ -1,3 +1,4 @@
+use super::shell_presentation::OverlayListView;
 use super::*;
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
@@ -15,62 +16,38 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     }
 }
 
-fn draw_session_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let ready_list = match &app.session_state {
-        SessionState::Idle => {
-            let message = if app.can_open_session_list() {
-                "session list has not loaded yet"
-            } else {
-                "recent sessions unlock after startup diagnostics pass"
-            };
-            let widget = Paragraph::new(message)
-                .block(Block::default().borders(Borders::ALL).title("Threads"))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(widget, area);
-            return;
-        }
-        SessionState::Loading => {
-            let widget = Paragraph::new("loading recent sessions from codex app-server")
-                .block(Block::default().borders(Borders::ALL).title("Threads"))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(widget, area);
-            return;
-        }
-        SessionState::Failed(message) => {
-            let widget = Paragraph::new(message.as_str())
-                .block(Block::default().borders(Borders::ALL).title("Threads"))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(widget, area);
-            return;
-        }
-        SessionState::Ready(recent_sessions) => {
-            let items = if recent_sessions.items.is_empty() {
-                vec![ListItem::new("(no sessions found)")]
-            } else {
-                recent_sessions
-                    .items
-                    .iter()
-                    .map(build_session_list_item)
-                    .collect::<Vec<_>>()
-            };
-            let selected_session_index =
-                (!recent_sessions.items.is_empty()).then_some(app.selected_session_index);
-            (items, selected_session_index)
-        }
-    };
+fn draw_session_list_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut NativeTuiApp,
+    list_view: OverlayListView,
+) {
+    if let Some(message_lines) = list_view.message_lines {
+        let widget = Paragraph::new(message_lines)
+            .block(Block::default().borders(Borders::ALL).title("Threads"))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(widget, area);
+        return;
+    }
 
-    let list = List::new(ready_list.0)
-        .block(Block::default().borders(Borders::ALL).title("Threads"))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
+    let list = List::new(
+        list_view
+            .items
+            .into_iter()
+            .map(|item| ListItem::new(item.lines))
+            .collect::<Vec<_>>(),
+    )
+    .block(Block::default().borders(Borders::ALL).title("Threads"))
+    .highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
 
     app.session_overlay_ui_state
-        .sync_selected_session(ready_list.1);
+        .sync_selected_session(list_view.selected_index);
     frame.render_stateful_widget(list, area, &mut app.session_overlay_ui_state.list_state);
 }
 
@@ -206,6 +183,7 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let overlay_view = build_session_overlay_view(app);
     let SessionOverlayView {
         header_lines,
+        list_view,
         detail_lines,
         warning_lines,
         key_lines,
@@ -233,7 +211,7 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(layout[1]);
 
-    draw_session_list_panel(frame, content_layout[0], app);
+    draw_session_list_panel(frame, content_layout[0], app, list_view);
     draw_session_detail_panel(frame, content_layout[1], detail_lines);
 
     frame.render_widget(
@@ -257,6 +235,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     let overlay_view = build_followup_template_overlay_view(app);
     let FollowupTemplateOverlayView {
         header_lines,
+        list_view,
         preview_lines,
         status_lines,
         key_lines,
@@ -292,7 +271,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     );
     app.followup_overlay_ui_state.preview_scroll = preview_scroll;
 
-    draw_followup_template_list_panel(frame, content_layout[0], app);
+    draw_followup_template_list_panel(frame, content_layout[0], app, list_view);
     frame.render_widget(
         Paragraph::new(preview_lines)
             .block(Block::default().borders(Borders::ALL).title("Preview"))
@@ -334,68 +313,47 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     frame.render_widget(popup, popup_area);
 }
 
-fn draw_followup_template_list_panel(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let ready_list = match &app.conversation_state {
-        ConversationState::Loading => {
-            let widget = Paragraph::new("conversation is still loading")
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Template List"),
-                )
-                .wrap(Wrap { trim: true });
-            frame.render_widget(widget, area);
-            return;
-        }
-        ConversationState::Failed(message) => {
-            let widget = Paragraph::new(message.as_str())
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Template List"),
-                )
-                .wrap(Wrap { trim: true });
-            frame.render_widget(widget, area);
-            return;
-        }
-        ConversationState::Ready(conversation) => {
-            let items = conversation
-                .auto_follow_state
-                .template_state
-                .items
-                .iter()
-                .enumerate()
-                .map(|(index, template)| {
-                    ListItem::new(vec![
-                        Line::from(format!("{}. {}", index + 1, template.label)),
-                        Line::from(format!("   {}", template.source_label())),
-                    ])
-                })
-                .collect::<Vec<_>>();
-            (
-                items,
-                conversation.auto_follow_state.selected_template_index(),
+fn draw_followup_template_list_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut NativeTuiApp,
+    list_view: OverlayListView,
+) {
+    if let Some(message_lines) = list_view.message_lines {
+        let widget = Paragraph::new(message_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Template List"),
             )
-        }
-    };
+            .wrap(Wrap { trim: true });
+        frame.render_widget(widget, area);
+        return;
+    }
 
-    let list = List::new(ready_list.0)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Template List"),
-        )
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
+    let list = List::new(
+        list_view
+            .items
+            .into_iter()
+            .map(|item| ListItem::new(item.lines))
+            .collect::<Vec<_>>(),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Template List"),
+    )
+    .highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
 
     app.followup_overlay_ui_state
         .list_state
-        .select(Some(ready_list.1));
+        .select(list_view.selected_index);
     frame.render_stateful_widget(list, area, &mut app.followup_overlay_ui_state.list_state);
 }
 
@@ -410,23 +368,6 @@ fn clamp_scroll_offset(
         content_width,
         visible_height,
     ))
-}
-
-fn build_session_list_item(session: &SessionSummary) -> ListItem<'static> {
-    ListItem::new(vec![
-        Line::from(format!(
-            "{}  {}  {}",
-            session.short_id(),
-            session.updated_at_label(),
-            session.workspace_label(),
-        )),
-        Line::from(format!(
-            "{} [{} / {}]",
-            session.title(),
-            session.source,
-            session.model_provider,
-        )),
-    ])
 }
 
 fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {

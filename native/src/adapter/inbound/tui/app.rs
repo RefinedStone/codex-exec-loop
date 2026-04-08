@@ -863,6 +863,19 @@ mod tests {
         app.selected_session_index = 1;
 
         let view = build_session_overlay_view(&app);
+        let list = view
+            .list_view
+            .items
+            .iter()
+            .map(|item| {
+                item.lines
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n---\n");
         let detail = view
             .detail_lines
             .iter()
@@ -877,6 +890,9 @@ mod tests {
             .join("\n");
 
         assert!(view.header_lines[0].to_string().contains("Recent Sessions"));
+        assert!(view.list_view.message_lines.is_none());
+        assert_eq!(view.list_view.selected_index, Some(1));
+        assert!(list.contains("thread-2"));
         assert!(detail.contains("id: thread-2"));
         assert!(detail.contains("/tmp/root/thread-2.json"));
         assert!(keys.contains("Enter: open thread"));
@@ -895,6 +911,19 @@ mod tests {
         app.conversation_state = ConversationState::Ready(conversation);
 
         let view = build_followup_template_overlay_view(&app);
+        let list = view
+            .list_view
+            .items
+            .iter()
+            .map(|item| {
+                item.lines
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n---\n");
         let preview = view
             .preview_lines
             .iter()
@@ -919,6 +948,9 @@ mod tests {
                 .to_string()
                 .contains("Follow-Up Templates")
         );
+        assert!(view.list_view.message_lines.is_none());
+        assert_eq!(view.list_view.selected_index, Some(0));
+        assert!(list.contains("builtin next-task"));
         assert!(preview.contains("Rendered Preview"));
         assert!(status.contains("auto follow-up:"));
         assert!(keys.contains("change template"));

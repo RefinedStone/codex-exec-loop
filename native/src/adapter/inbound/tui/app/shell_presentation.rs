@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::followup_template::FollowupTemplateDefinition;
 
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
@@ -18,8 +19,19 @@ pub(super) struct StartupOverlayView {
     pub(super) key_lines: Vec<Line<'static>>,
 }
 
+pub(super) struct OverlayListEntryView {
+    pub(super) lines: Vec<Line<'static>>,
+}
+
+pub(super) struct OverlayListView {
+    pub(super) message_lines: Option<Vec<Line<'static>>>,
+    pub(super) items: Vec<OverlayListEntryView>,
+    pub(super) selected_index: Option<usize>,
+}
+
 pub(super) struct SessionOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) list_view: OverlayListView,
     pub(super) detail_lines: Vec<Line<'static>>,
     pub(super) warning_lines: Vec<Line<'static>>,
     pub(super) key_lines: Vec<Line<'static>>,
@@ -27,6 +39,7 @@ pub(super) struct SessionOverlayView {
 
 pub(super) struct FollowupTemplateOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) list_view: OverlayListView,
     pub(super) preview_lines: Vec<Line<'static>>,
     pub(super) status_lines: Vec<Line<'static>>,
     pub(super) key_lines: Vec<Line<'static>>,
@@ -122,6 +135,7 @@ pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
             ]),
             Line::from("Resume a thread without leaving the shell view."),
         ],
+        list_view: build_session_list_view(app),
         detail_lines: build_session_detail_lines(app),
         warning_lines: build_session_warning_lines(app),
         key_lines: vec![
@@ -147,6 +161,7 @@ pub(super) fn build_followup_template_overlay_view(
             ]),
             Line::from("Inspect the selected strategy before the next auto follow-up turn."),
         ],
+        list_view: build_followup_template_list_view(app),
         preview_lines: build_followup_template_preview_lines(app),
         status_lines: build_followup_template_status_lines(app),
         key_lines: build_followup_template_key_lines(app),
@@ -693,6 +708,48 @@ fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
+fn build_session_list_view(app: &NativeTuiApp) -> OverlayListView {
+    match &app.session_state {
+        SessionState::Idle => OverlayListView {
+            message_lines: Some(vec![Line::from(if app.can_open_session_list() {
+                "session list has not loaded yet"
+            } else {
+                "recent sessions unlock after startup diagnostics pass"
+            })]),
+            items: Vec::new(),
+            selected_index: None,
+        },
+        SessionState::Loading => OverlayListView {
+            message_lines: Some(vec![Line::from(
+                "loading recent sessions from codex app-server",
+            )]),
+            items: Vec::new(),
+            selected_index: None,
+        },
+        SessionState::Failed(message) => OverlayListView {
+            message_lines: Some(vec![Line::from(message.clone())]),
+            items: Vec::new(),
+            selected_index: None,
+        },
+        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => {
+            OverlayListView {
+                message_lines: Some(vec![Line::from("(no sessions found)")]),
+                items: Vec::new(),
+                selected_index: None,
+            }
+        }
+        SessionState::Ready(recent_sessions) => OverlayListView {
+            message_lines: None,
+            items: recent_sessions
+                .items
+                .iter()
+                .map(build_session_list_entry)
+                .collect(),
+            selected_index: Some(app.selected_session_index),
+        },
+    }
+}
+
 fn build_session_detail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.session_state {
         SessionState::Idle => vec![Line::from(if app.can_open_session_list() {
@@ -760,9 +817,73 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
+fn build_followup_template_list_view(app: &NativeTuiApp) -> OverlayListView {
+    match &app.conversation_state {
+        ConversationState::Loading => OverlayListView {
+            message_lines: Some(vec![Line::from("conversation is still loading")]),
+            items: Vec::new(),
+            selected_index: None,
+        },
+        ConversationState::Failed(message) => OverlayListView {
+            message_lines: Some(vec![Line::from(message.clone())]),
+            items: Vec::new(),
+            selected_index: None,
+        },
+        ConversationState::Ready(conversation) => {
+            let items = conversation
+                .auto_follow_state
+                .template_state
+                .items
+                .iter()
+                .enumerate()
+                .map(|(index, template)| build_followup_template_list_entry(index, template))
+                .collect::<Vec<_>>();
+            let selected_index = (!items.is_empty())
+                .then_some(conversation.auto_follow_state.selected_template_index());
+
+            OverlayListView {
+                message_lines: None,
+                items,
+                selected_index,
+            }
+        }
+    }
+}
+
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> ListItem<'static> {
     let marker = if ok { "[ok]" } else { "[warn]" };
     ListItem::new(format!("{marker} {title}: {detail}"))
+}
+
+fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
+    OverlayListEntryView {
+        lines: vec![
+            Line::from(format!(
+                "{}  {}  {}",
+                session.short_id(),
+                session.updated_at_label(),
+                session.workspace_label(),
+            )),
+            Line::from(format!(
+                "{} [{} / {}]",
+                session.title(),
+                session.source,
+                session.model_provider,
+            )),
+        ],
+    }
+}
+
+fn build_followup_template_list_entry(
+    index: usize,
+    template: &FollowupTemplateDefinition,
+) -> OverlayListEntryView {
+    OverlayListEntryView {
+        lines: vec![
+            Line::from(format!("{}. {}", index + 1, template.label)),
+            Line::from(format!("   {}", template.source_label())),
+        ],
+    }
 }
 
 fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
