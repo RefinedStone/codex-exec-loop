@@ -94,6 +94,7 @@ cd /home/akra/codex-exec-loop
 
 - `dist/native/codex-exec-loop-native-<version>-<target>/`
 - `dist/native/codex-exec-loop-native-<version>-<target>.tar.gz`
+- `dist/native/codex-exec-loop-native-<version>-<target>.tar.gz.sha256`
 
 운영자용 실행/배포 메모는 [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md) 에 정리했습니다.
 

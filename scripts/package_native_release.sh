@@ -19,6 +19,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 native_dir="${repo_root}/native"
 runbook_path="${native_dir}/docs/plan/13-native-packaging-and-operator-runbook.md"
 
+checksum_tool=""
 profile="release"
 target=""
 out_dir="${repo_root}/dist/native"
@@ -76,6 +77,17 @@ for cmd in cargo rustc tar; do
   fi
 done
 
+if command -v sha256sum >/dev/null 2>&1; then
+  checksum_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  checksum_tool="shasum"
+elif command -v openssl >/dev/null 2>&1; then
+  checksum_tool="openssl"
+else
+  echo "package_native_release: one of sha256sum, shasum, or openssl is required" >&2
+  exit 1
+fi
+
 host_triple="$(rustc -vV | sed -n 's/^host: //p')"
 artifact_target="${target:-${host_triple}}"
 binary_name="codex-exec-loop-native"
@@ -114,9 +126,12 @@ package_name="${binary_name}-${version}-${artifact_target}"
 mkdir -p "${out_dir}"
 bundle_dir="${out_dir}/${package_name}"
 archive_path="${out_dir}/${package_name}.tar.gz"
+archive_checksum_path="${archive_path}.sha256"
+bundle_checksum_path="${bundle_dir}/SHA256SUMS.txt"
 
 rm -rf "${bundle_dir}"
 rm -f "${archive_path}"
+rm -f "${archive_checksum_path}"
 mkdir -p "${bundle_dir}"
 
 cp "${binary_path}" "${bundle_dir}/${binary_file_name}"
@@ -131,7 +146,42 @@ profile=${profile}
 binary=${binary_file_name}
 EOF
 
+compute_sha256() {
+  local path="$1"
+  local output
+
+  case "${checksum_tool}" in
+    sha256sum)
+      output="$(sha256sum "${path}")"
+      printf '%s\n' "${output%% *}"
+      ;;
+    shasum)
+      output="$(shasum -a 256 "${path}")"
+      printf '%s\n' "${output%% *}"
+      ;;
+    openssl)
+      output="$(openssl dgst -sha256 "${path}")"
+      printf '%s\n' "${output##*= }"
+      ;;
+  esac
+}
+
+write_checksum_entry() {
+  local path="$1"
+  local display_name="$2"
+  printf '%s  %s\n' "$(compute_sha256 "${path}")" "${display_name}"
+}
+
+{
+  write_checksum_entry "${bundle_dir}/${binary_file_name}" "${binary_file_name}"
+  write_checksum_entry "${bundle_dir}/README.md" "README.md"
+  write_checksum_entry "${bundle_dir}/OPERATOR.md" "OPERATOR.md"
+  write_checksum_entry "${bundle_dir}/VERSION.txt" "VERSION.txt"
+} > "${bundle_checksum_path}"
+
 tar -C "${out_dir}" -czf "${archive_path}" "${package_name}"
+write_checksum_entry "${archive_path}" "$(basename "${archive_path}")" > "${archive_checksum_path}"
 
 printf 'bundle_dir=%s\n' "${bundle_dir}"
 printf 'archive=%s\n' "${archive_path}"
+printf 'archive_checksum=%s\n' "${archive_checksum_path}"

@@ -30,7 +30,7 @@ Build a distributable native bundle from the repository root:
 ./scripts/package_native_release.sh
 ```
 
-The script stages a bundle under `dist/native/`, copies this crate README plus an operator runbook, and writes a `.tar.gz` archive for handoff.
+The script stages a bundle under `dist/native/`, copies this crate README plus an operator runbook, writes a `.tar.gz` archive for handoff, and emits checksum files for both the unpacked bundle and the archive.
 
 Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.
 

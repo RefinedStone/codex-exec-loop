@@ -35,6 +35,7 @@ Default output path:
 dist/native/
   codex-exec-loop-native-<version>-<target>/
   codex-exec-loop-native-<version>-<target>.tar.gz
+  codex-exec-loop-native-<version>-<target>.tar.gz.sha256
 ```
 
 Bundle contents:
@@ -43,6 +44,36 @@ Bundle contents:
 - `README.md`
 - `OPERATOR.md`
 - `VERSION.txt`
+- `SHA256SUMS.txt`
+
+Archive sidecar:
+
+- `codex-exec-loop-native-<version>-<target>.tar.gz.sha256`
+
+## Integrity Verification
+
+The packaging script emits two checksum artifacts:
+
+- `SHA256SUMS.txt` inside the bundle directory for the unpacked files
+- `<archive>.tar.gz.sha256` next to the release archive for the tarball itself
+
+Examples:
+
+Linux:
+
+```bash
+cd dist/native
+sha256sum -c codex-exec-loop-native-<version>-<target>.tar.gz.sha256
+```
+
+macOS:
+
+```bash
+cd dist/native
+shasum -a 256 -c codex-exec-loop-native-<version>-<target>.tar.gz.sha256
+```
+
+If the packaging machine only has `openssl`, compare the emitted digest file with `openssl dgst -sha256 <archive>`.
 
 ## Operator Prerequisites
 
@@ -98,4 +129,5 @@ Run this checklist after copying the bundle to a target machine:
 
 - keep package creation deterministic by running from a clean checkout
 - attach the generated archive together with the exact commit SHA used to build it
+- keep the generated `.sha256` file with the archive so the receiver can verify integrity before unpacking
 - when platform-specific validation finds terminal defects, fix those in a focused follow-up branch instead of widening the packaging script
