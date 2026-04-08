@@ -68,12 +68,6 @@ pub(crate) enum AutoFollowupSkipReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RecordedAutoFollowupSkip {
-    pub(crate) reason: AutoFollowupSkipReason,
-    pub(crate) detail: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordedAutoFollowupActivity {
     pub(crate) summary: String,
     pub(crate) detail: String,
@@ -126,9 +120,7 @@ impl AutoFollowupSkipReason {
         auto_follow_state: &AutoFollowState,
     ) -> String {
         match self {
-            Self::Disabled => {
-                format!("turn completed: {turn_id} / auto follow-up stopped: disabled")
-            }
+            Self::Disabled => format!("turn completed: {turn_id} / auto follow-up stopped: off"),
             Self::ManualInputBuffered => {
                 format!("turn completed: {turn_id} / auto follow-up skipped: manual input buffered")
             }
@@ -490,7 +482,6 @@ pub(crate) struct ConversationViewModel {
     pub(crate) auto_follow_state: AutoFollowState,
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
-    pub(crate) last_auto_followup_skip: Option<RecordedAutoFollowupSkip>,
     pub(crate) status_text: String,
 }
 
@@ -518,7 +509,6 @@ impl ConversationViewModel {
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
             last_auto_followup_activity: None,
-            last_auto_followup_skip: None,
             status_text,
         };
         view_model.refresh_conversation_lines();
@@ -556,7 +546,6 @@ impl ConversationViewModel {
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             turn_activity: TurnActivityState::default(),
             last_auto_followup_activity: None,
-            last_auto_followup_skip: None,
             status_text,
         };
         view_model.refresh_conversation_lines();
@@ -653,10 +642,6 @@ impl ConversationViewModel {
 
     pub(crate) fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
         let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
-        self.last_auto_followup_skip = Some(RecordedAutoFollowupSkip {
-            reason,
-            detail: detail.clone(),
-        });
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: reason.activity_summary().to_string(),
             detail,
@@ -665,7 +650,6 @@ impl ConversationViewModel {
 
     pub(crate) fn clear_auto_followup_skip(&mut self) {
         self.last_auto_followup_activity = None;
-        self.last_auto_followup_skip = None;
     }
 
     pub(crate) fn record_auto_followup_submission(
@@ -805,7 +789,6 @@ mod tests {
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
             last_auto_followup_activity: None,
-            last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }
     }

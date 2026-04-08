@@ -230,7 +230,7 @@ mod tests {
             },
         );
 
-        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert!(reduced.state.last_auto_followup_activity.is_none());
         assert!(
             reduced
                 .state
@@ -321,7 +321,7 @@ mod tests {
             reduced.state.auto_follow_state.template_label(),
             "workspace review"
         );
-        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,
             vec![FollowupControlEffect::SyncTemplateOverlayUi]
@@ -497,7 +497,7 @@ mod tests {
         let reduced = reduce_followup_controls(state, FollowupControlEvent::AutoFollowToggled);
 
         assert!(!reduced.state.auto_follow_state.enabled);
-        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(reduced.state.status_text, "auto follow-up off");
     }
 
@@ -517,7 +517,7 @@ mod tests {
         );
 
         assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 5);
-        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,
             vec![FollowupControlEffect::SyncMaxAutoTurnsEditor {
@@ -643,7 +643,7 @@ mod tests {
         );
 
         assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE");
-        assert!(reduced.state.last_auto_followup_skip.is_none());
+        assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,
             vec![FollowupControlEffect::SyncStopKeywordEditor {

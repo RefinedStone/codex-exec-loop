@@ -94,9 +94,7 @@ pub(super) use conversation_model::{
     ConversationState, ConversationViewModel, StopKeywordRule,
 };
 #[cfg(test)]
-pub(super) use conversation_model::{
-    RecordedAutoFollowupActivity, RecordedAutoFollowupSkip, TurnActivityState,
-};
+pub(super) use conversation_model::{RecordedAutoFollowupActivity, TurnActivityState};
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
@@ -164,12 +162,11 @@ mod tests {
     use ratatui::text::Line;
 
     use super::{
-        AutoFollowState, AutoFollowupSkipReason, AutoFollowupSubmitContext, BackgroundMessage,
-        ConversationInputState, ConversationMessage, ConversationMessageKind,
-        ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-        DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
-        FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand, MAX_COMPOSER_HEIGHT,
-        NativeTuiApp, PromptOrigin, RecordedAutoFollowupActivity, RecordedAutoFollowupSkip,
+        AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage, ConversationInputState,
+        ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
+        ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+        ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand,
+        MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin, RecordedAutoFollowupActivity,
         SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
         TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
         build_followup_template_overlay_view, build_followup_template_preview_lines,
@@ -376,7 +373,6 @@ mod tests {
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
             turn_activity: TurnActivityState::default(),
             last_auto_followup_activity: None,
-            last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }
     }
@@ -1647,10 +1643,6 @@ mod tests {
         let mut conversation = ready_conversation();
         conversation.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: "stopped: auto follow-up off".to_string(),
-            detail: "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
-        });
-        conversation.last_auto_followup_skip = Some(RecordedAutoFollowupSkip {
-            reason: AutoFollowupSkipReason::Disabled,
             detail: "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
         });
         conversation

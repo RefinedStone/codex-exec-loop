@@ -341,7 +341,6 @@ mod tests {
                 .map(|activity| activity.summary.as_str()),
             Some("queued auto turn 1/3")
         );
-        assert!(reduced.state.last_auto_followup_skip.is_none());
         assert!(matches!(
             reduced.effects.as_slice(),
             [ConversationRuntimeEffect::QueueAutoPrompt { .. }]
@@ -419,14 +418,6 @@ mod tests {
                 .map(|activity| activity.summary.as_str()),
             Some("skipped: no agent reply")
         );
-        assert_eq!(
-            reduced
-                .state
-                .last_auto_followup_skip
-                .as_ref()
-                .map(|skip| skip.reason),
-            Some(AutoFollowupSkipReason::NoAgentReply)
-        );
         assert!(reduced.effects.is_empty());
     }
 
@@ -463,14 +454,6 @@ mod tests {
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
             Some("stopped: no file changes")
-        );
-        assert_eq!(
-            reduced
-                .state
-                .last_auto_followup_skip
-                .as_ref()
-                .map(|skip| skip.reason),
-            Some(AutoFollowupSkipReason::NoFileChanges)
         );
         assert!(reduced.effects.is_empty());
     }
@@ -524,7 +507,6 @@ mod tests {
             }),
             turn_activity: TurnActivityState::default(),
             last_auto_followup_activity: None,
-            last_auto_followup_skip: None,
             status_text: "thread loaded".to_string(),
         }
     }
