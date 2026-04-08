@@ -42,6 +42,7 @@ Python CLI 는 이전 실험 경로이자 migration/compatibility 용으로만 �
 │   └── src/
 ├── pyproject.toml
 ├── scripts/
+│   ├── package_native_release.sh
 │   └── run_artifact_smoke_test.sh
 └── src/
     └── codex_exec_loop/
@@ -81,6 +82,20 @@ cd /home/akra/codex-exec-loop/native
 . "$HOME/.cargo/env"
 cargo run
 ```
+
+native 배포 번들 생성:
+
+```bash
+cd /home/akra/codex-exec-loop
+./scripts/package_native_release.sh
+```
+
+기본 출력물:
+
+- `dist/native/codex-exec-loop-native-<version>-<target>/`
+- `dist/native/codex-exec-loop-native-<version>-<target>.tar.gz`
+
+운영자용 실행/배포 메모는 [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md) 에 정리했습니다.
 
 현재 native 쪽에서 확인된 흐름:
 
@@ -164,6 +179,14 @@ cd /home/akra/codex-exec-loop/native
 . "$HOME/.cargo/env"
 cargo run
 ```
+
+환경 변수:
+
+- `CODEX_EXEC_LOOP_FRONTEND=inline`
+- `CODEX_EXEC_LOOP_FRONTEND=alternate-screen`
+- `CODEX_EXEC_LOOP_ALT_SCREEN=1`
+- `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
+- `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
 
 조작:
 

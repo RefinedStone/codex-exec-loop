@@ -6,3 +6,4 @@ artifacts/
 .codex
 .idea/
 native/target/
+dist/

@@ -1,0 +1,101 @@
+# Native Packaging and Operator Runbook
+
+This runbook defines the current handoff path for the Rust native client.
+
+The package target is the `codex-exec-loop-native` binary plus the minimum operator docs needed to run it on a machine that already has Codex CLI access.
+
+## Package Command
+
+Build and package the current host target:
+
+```bash
+cd /path/to/codex-exec-loop
+./scripts/package_native_release.sh
+```
+
+Build and package a specific Rust target triple:
+
+```bash
+cd /path/to/codex-exec-loop
+./scripts/package_native_release.sh --target aarch64-apple-darwin
+```
+
+Notes:
+
+- the script builds `native/` with `cargo build --release` by default
+- `--profile debug` is available for local validation bundles
+- `--target` assumes the target toolchain and linker already work on the current machine
+- for Windows bundles, prefer running the script on a Windows Rust toolchain instead of relying on unvalidated cross-linking from Linux or macOS
+
+## Output Layout
+
+Default output path:
+
+```text
+dist/native/
+  codex-exec-loop-native-<version>-<target>/
+  codex-exec-loop-native-<version>-<target>.tar.gz
+```
+
+Bundle contents:
+
+- `codex-exec-loop-native` or `codex-exec-loop-native.exe`
+- `README.md`
+- `OPERATOR.md`
+- `VERSION.txt`
+
+## Operator Prerequisites
+
+The operator machine needs:
+
+- Codex CLI installed and on `PATH`
+- Codex login already completed
+- access to the workspace that Codex should operate on
+- normal access to `~/.codex/history.jsonl` and `~/.codex/sessions/`
+
+Rust is not required on the operator machine when the packaged binary is already built.
+
+## Launch Commands
+
+macOS or Linux:
+
+```bash
+cd /path/to/workspace
+/path/to/codex-exec-loop-native
+```
+
+Windows PowerShell:
+
+```powershell
+Set-Location C:\path\to\workspace
+C:\path\to\codex-exec-loop-native.exe
+```
+
+## Useful Runtime Environment Variables
+
+- `CODEX_EXEC_LOOP_FRONTEND=inline`
+- `CODEX_EXEC_LOOP_FRONTEND=alternate-screen`
+- `CODEX_EXEC_LOOP_ALT_SCREEN=1`
+- `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
+- `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
+
+`CODEX_EXEC_LOOP_FRONTEND` is the preferred frontend selector.
+
+`CODEX_EXEC_LOOP_ALT_SCREEN=1` exists as a legacy fallback for alternate-screen mode.
+
+## Operator Smoke Checklist
+
+Run this checklist after copying the bundle to a target machine:
+
+1. Start the binary from a real workspace.
+2. Confirm startup diagnostics pass.
+3. Open recent sessions or start a new draft.
+4. Send one prompt and confirm streaming output appears.
+5. If the machine should use fullscreen mode, set `CODEX_EXEC_LOOP_FRONTEND=alternate-screen` and repeat the launch.
+6. If GitHub polling is part of the workflow, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the footer shows an active GitHub state instead of a setup error.
+
+## Release Handoff Notes
+
+- keep package creation deterministic by running from a clean checkout
+- attach the generated archive together with the exact commit SHA used to build it
+- when platform-specific validation finds terminal defects, fix those in a focused follow-up branch instead of widening the packaging script

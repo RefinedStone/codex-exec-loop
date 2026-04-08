@@ -22,6 +22,20 @@ Current milestones:
 
 Protocol shape is pinned with a checked-in schema snapshot under `schema/`.
 
+## Packaging
+
+Build a distributable native bundle from the repository root:
+
+```bash
+./scripts/package_native_release.sh
+```
+
+The script stages a bundle under `dist/native/`, copies this crate README plus an operator runbook, and writes a `.tar.gz` archive for handoff.
+
+Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.
+
+Operator-facing packaging notes live in [`docs/plan/13-native-packaging-and-operator-runbook.md`](./docs/plan/13-native-packaging-and-operator-runbook.md).
+
 ## Optional GitHub Polling
 
 The runtime can poll one GitHub pull request in the background and keep the polling state in the shell footer.
@@ -32,6 +46,16 @@ When RefinedStone GitHub credentials are available, the runtime first tries to a
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`: optional polling interval in seconds; defaults to `60`
 
 When the poller is enabled, the footer shows whether polling is starting, running, watching normally, or blocked by a setup/runtime error. Review-change notices are still a later UI slice.
+
+## Frontend Selection
+
+The native shell defaults to inline main-buffer mode.
+
+- `CODEX_EXEC_LOOP_FRONTEND=inline`: explicit inline main-buffer mode
+- `CODEX_EXEC_LOOP_FRONTEND=alternate-screen`: explicit fullscreen mode
+- `CODEX_EXEC_LOOP_ALT_SCREEN=1`: legacy alternate-screen fallback
+
+Prefer `CODEX_EXEC_LOOP_FRONTEND` for new operator docs and launch scripts.
 
 ## Architecture
 
