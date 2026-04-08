@@ -62,6 +62,7 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 - [x] startup-pending manual prompt submission queue
 - [x] transcript jump shell commands
 - [x] native package checksum and verification helper follow-ups
+- [x] platform validation result capture helpers
 
 ## 4. Remaining Slices
 

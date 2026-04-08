@@ -65,6 +65,12 @@ cd /path/to/codex-exec-loop
   --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
 ```
 
+validation 결과 템플릿 캡처:
+
+```bash
+./scripts/capture_native_validation.sh --frontend inline --result pass
+```
+
 운영자 runbook 과 플랫폼 검증 기준:
 
 - [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md)

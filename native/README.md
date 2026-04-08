@@ -41,6 +41,12 @@ Verify a generated package:
   --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
 ```
 
+Capture a validation report scaffold after a manual terminal pass:
+
+```bash
+./scripts/capture_native_validation.sh --frontend inline --result pass
+```
+
 Use `--target <triple>` when the local Rust toolchain already supports that target. For Windows packaging, prefer running the script on Windows instead of assuming cross-linking from another OS.
 
 Operator-facing packaging notes live in [`docs/plan/13-native-packaging-and-operator-runbook.md`](./docs/plan/13-native-packaging-and-operator-runbook.md).
@@ -61,7 +67,7 @@ When the poller is enabled, the footer shows whether polling is starting, runnin
 The native shell defaults to inline main-buffer mode.
 
 - `CODEX_EXEC_LOOP_FRONTEND=inline`: explicit inline main-buffer mode
-- `CODEX_EXEC_LOOP_FRONTEND=alternate-screen`: explicit fullscreen mode
+- `CODEX_EXEC_LOOP_FRONTEND=alternate`: explicit fullscreen mode
 - `CODEX_EXEC_LOOP_ALT_SCREEN=1`: legacy alternate-screen fallback
 
 Prefer `CODEX_EXEC_LOOP_FRONTEND` for new operator docs and launch scripts.

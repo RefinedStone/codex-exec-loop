@@ -84,6 +84,28 @@ $env:CODEX_EXEC_LOOP_FRONTEND = $null
 $env:CODEX_EXEC_LOOP_ALT_SCREEN = "1"; cargo run
 ```
 
+Capture a validation note scaffold in bash:
+
+```bash
+cd <path-to-repo>
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --terminal "iTerm2 3.5" \
+  --result pass \
+  --output native/docs/validation/2026-04-09-macos-iterm2-inline.txt
+```
+
+Capture a validation note scaffold in PowerShell:
+
+```powershell
+Set-Location <path-to-repo>
+.\scripts\capture_native_validation.ps1 `
+  -Frontend inline `
+  -Terminal "Windows Terminal 1.22" `
+  -Result pass `
+  -OutputPath native\docs\validation\2026-04-09-windows-terminal-inline.txt
+```
+
 ## Environment Capture
 
 Record this before marking a matrix row complete:
@@ -207,6 +229,7 @@ Pass condition:
 Use this block when recording a completed row in a PR or issue:
 
 ```text
+date:
 commit:
 os:
 terminal:
@@ -224,6 +247,8 @@ checks:
 result:
 notes:
 ```
+
+The helper scripts above emit this template with the current commit, detected host info, and the standard checklist already filled in.
 
 ## Exit Criteria
 

@@ -41,6 +41,7 @@
   - GitHub PR review polling and review-change notices
 - platform and packaging docs
   - validation matrix for terminal behavior
+  - validation result capture helpers
   - packaging runbook
   - release checksum helpers
 - inline shell parity

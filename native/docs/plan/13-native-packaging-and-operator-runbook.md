@@ -116,7 +116,7 @@ C:\path\to\codex-exec-loop-native.exe
 ## Useful Runtime Environment Variables
 
 - `CODEX_EXEC_LOOP_FRONTEND=inline`
-- `CODEX_EXEC_LOOP_FRONTEND=alternate-screen`
+- `CODEX_EXEC_LOOP_FRONTEND=alternate`
 - `CODEX_EXEC_LOOP_ALT_SCREEN=1`
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
@@ -133,8 +133,24 @@ Run this checklist after copying the bundle to a target machine:
 2. Confirm startup diagnostics pass.
 3. Open recent sessions or start a new draft.
 4. Send one prompt and confirm streaming output appears.
-5. If the machine should use fullscreen mode, set `CODEX_EXEC_LOOP_FRONTEND=alternate-screen` and repeat the launch.
+5. If the machine should use fullscreen mode, set `CODEX_EXEC_LOOP_FRONTEND=alternate` and repeat the launch.
 6. If GitHub polling is part of the workflow, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the footer shows an active GitHub state instead of a setup error.
+
+After a platform-facing validation pass, capture the result block with a helper instead of rewriting the matrix template by hand.
+
+macOS or Linux:
+
+```bash
+cd /path/to/codex-exec-loop
+./scripts/capture_native_validation.sh --frontend inline --result pass
+```
+
+Windows PowerShell:
+
+```powershell
+Set-Location C:\path\to\codex-exec-loop
+.\scripts\capture_native_validation.ps1 -Frontend inline -Result pass
+```
 
 ## Release Handoff Notes
 

@@ -1,0 +1,102 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Frontend,
+
+    [string]$Terminal,
+    [string]$Shell,
+    [string]$Term = $env:TERM,
+    [string]$Result = "pending",
+    [string]$Notes = "",
+    [string]$Commit,
+    [string]$Os,
+    [string]$Date,
+    [string]$OutputPath
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+function Get-DetectedTerminal {
+    if ($Terminal) {
+        return $Terminal
+    }
+
+    if ($env:WT_SESSION) {
+        return "Windows Terminal"
+    }
+
+    if ($env:TERM_PROGRAM) {
+        return $env:TERM_PROGRAM
+    }
+
+    return "unknown"
+}
+
+function Get-DetectedShell {
+    if ($Shell) {
+        return $Shell
+    }
+
+    if ($env:WSL_DISTRO_NAME) {
+        return "WSL bash"
+    }
+
+    if ($PSVersionTable.PSEdition) {
+        return "PowerShell $($PSVersionTable.PSEdition)"
+    }
+
+    return "unknown"
+}
+
+function Get-DetectedOs {
+    if ($Os) {
+        return $Os
+    }
+
+    try {
+        $instance = Get-CimInstance Win32_OperatingSystem
+        return "$($instance.Caption) $($instance.Version)"
+    } catch {
+        return [System.Environment]::OSVersion.VersionString
+    }
+}
+
+$repoRoot = git rev-parse --show-toplevel
+if (-not $Commit) {
+    $Commit = git -C $repoRoot rev-parse HEAD
+}
+
+if (-not $Date) {
+    $Date = Get-Date -Format "yyyy-MM-dd"
+}
+
+$report = @(
+    "date: $Date"
+    "commit: $Commit"
+    "os: $(Get-DetectedOs)"
+    "terminal: $(Get-DetectedTerminal)"
+    "shell: $(Get-DetectedShell)"
+    "frontend: $Frontend"
+    "term: $Term"
+    "checks:"
+    "- launch and exit"
+    "- frontend selection"
+    "- input editing"
+    "- overlay flow"
+    "- streaming visibility"
+    "- resize and scrollback"
+    "- failure and recovery"
+    "result: $Result"
+    "notes: $Notes"
+) -join [Environment]::NewLine
+
+if ($OutputPath) {
+    $parent = Split-Path -Parent $OutputPath
+    if ($parent) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Set-Content -Path $OutputPath -Value $report
+} else {
+    Write-Output $report
+}
