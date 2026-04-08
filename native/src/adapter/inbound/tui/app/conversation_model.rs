@@ -772,6 +772,27 @@ impl ConversationViewModel {
         self.cached_conversation_lines = format_conversation_lines(&self.messages);
     }
 
+    pub(crate) fn append_status_message(&mut self, text: impl Into<String>) -> bool {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return false;
+        }
+
+        if self.messages.last().is_some_and(|message| {
+            message.kind == ConversationMessageKind::Status && message.text == text
+        }) {
+            return false;
+        }
+
+        self.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Status,
+            text,
+            None,
+            None,
+        ));
+        true
+    }
+
     pub(crate) fn push_live_agent_delta(
         &mut self,
         item_id: String,

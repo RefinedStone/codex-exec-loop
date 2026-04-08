@@ -1511,7 +1511,7 @@ fn label_style(kind: ConversationMessageKind) -> Style {
         ConversationMessageKind::User => Style::default().fg(Color::Yellow),
         ConversationMessageKind::Agent => Style::default().fg(Color::Cyan),
         ConversationMessageKind::Tool => Style::default().fg(Color::Magenta),
-        ConversationMessageKind::Status => Style::default().fg(Color::Red),
+        ConversationMessageKind::Status => Style::default().fg(Color::Gray),
     }
 }
 

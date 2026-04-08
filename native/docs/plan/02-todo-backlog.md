@@ -6,7 +6,7 @@ This file now keeps the current open planning surface, not a long implementation
 - live shell-first conversation flow
 - startup diagnostics, recent sessions, and follow-up templates as inline shell inspections in main-buffer mode
 - streamed turn updates, new-thread flow, and thread resume
-- stable inline stream-history buffering with live output separated from committed transcript history
+- stable inline stream-history buffering with thread and turn lifecycle markers while live output stays separate until completion
 - inline shell commands and lightweight transcript navigation
 - builtin and workspace follow-up templates with reload, editable max turns, and stop rules
 - shared adapter runtime reuse across startup, session, snapshot, turn, and GitHub polling paths

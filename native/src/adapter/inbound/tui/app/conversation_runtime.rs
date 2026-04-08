@@ -88,15 +88,19 @@ pub(super) fn reduce_conversation_runtime(
                     title,
                     cwd,
                 } => {
+                    let thread_ready_message = format!("thread opened: {thread_id} / {title}");
                     state.thread_id = thread_id;
                     state.title = title;
                     state.cwd = cwd;
                     state.status_text = "thread started".to_string();
+                    should_refresh_lines = state.append_status_message(thread_ready_message);
                 }
                 ConversationStreamEvent::TurnStarted { turn_id } => {
+                    let turn_started_message = format!("turn started: {turn_id}");
                     state.mark_turn_started(turn_id);
                     state.live_agent_message = None;
                     state.status_text = "turn started".to_string();
+                    should_refresh_lines = state.append_status_message(turn_started_message);
                 }
                 ConversationStreamEvent::StatusUpdated { text } => {
                     state.status_text = text;
@@ -154,18 +158,15 @@ pub(super) fn reduce_conversation_runtime(
                                 skip_reason.runtime_status(&turn_id, &state.auto_follow_state);
                         }
                     }
+                    should_refresh_lines = state.append_status_message(state.status_text.clone())
+                        || should_refresh_lines;
                 }
                 ConversationStreamEvent::Failed { message } => {
                     state.commit_live_agent_message();
                     state.mark_turn_finished();
                     state.status_text = "turn failed".to_string();
-                    state.messages.push(ConversationMessage::new(
-                        ConversationMessageKind::Status,
-                        message,
-                        None,
-                        None,
-                    ));
-                    should_refresh_lines = true;
+                    should_refresh_lines =
+                        state.append_status_message(message) || should_refresh_lines;
                 }
             }
 
@@ -296,6 +297,18 @@ mod tests {
             reduced.effects.as_slice(),
             [ConversationRuntimeEffect::QueueAutoPrompt { .. }]
         ));
+        assert_eq!(
+            reduced.state.messages.last().map(|message| message.kind),
+            Some(ConversationMessageKind::Status)
+        );
+        assert_eq!(
+            reduced
+                .state
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("turn completed: turn-1 / queued auto follow-up with template builtin next-task")
+        );
     }
 
     #[test]
@@ -348,6 +361,53 @@ mod tests {
         );
 
         assert!(reduced.state.approval_review.is_none());
+        assert_eq!(
+            reduced.state.messages.last().map(|message| message.kind),
+            Some(ConversationMessageKind::Status)
+        );
+        assert_eq!(
+            reduced
+                .state
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("turn started: turn-2")
+        );
+    }
+
+    #[test]
+    fn thread_prepared_appends_open_marker_to_history() {
+        let state = sample_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-2".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/loaded".to_string(),
+            }),
+        );
+
+        assert_eq!(reduced.state.thread_id, "thread-2");
+        assert_eq!(reduced.state.title, "Loaded thread");
+        assert_eq!(reduced.state.cwd, "/tmp/loaded");
+        assert_eq!(reduced.state.status_text, "thread started");
+        assert_eq!(
+            reduced.state.messages.last().map(|message| message.kind),
+            Some(ConversationMessageKind::Status)
+        );
+        assert_eq!(
+            reduced
+                .state
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("thread opened: thread-2 / Loaded thread")
+        );
+        assert_eq!(
+            reduced.state.cached_conversation_lines,
+            format_conversation_lines(&reduced.state.messages)
+        );
     }
 
     #[test]
@@ -422,6 +482,18 @@ mod tests {
             Some("skipped: no agent reply")
         );
         assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.state.messages.last().map(|message| message.kind),
+            Some(ConversationMessageKind::Status)
+        );
+        assert_eq!(
+            reduced
+                .state
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("turn completed: turn-1 / auto follow-up skipped: no agent reply")
+        );
     }
 
     #[test]

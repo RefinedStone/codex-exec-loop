@@ -45,7 +45,7 @@
   - release checksum helpers
 - inline shell parity
   - inline inspection surfaces for diagnostics, recent sessions, and follow-up templates
-  - stable streaming-history buffering for inline mode, with live output kept separate from committed transcript history
+  - stable streaming-history buffering for inline mode, with live output kept separate from committed transcript history and lifecycle markers committed into stable history
 - migration docs
   - repository root README now presents native as the main product path
   - Python CLI instructions are reduced to compatibility guidance

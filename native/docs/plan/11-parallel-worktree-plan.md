@@ -40,7 +40,7 @@ The slices below are already landed on `prerelease` and should stay compact in t
 - [x] A2 Presentation Neutralization: shared shell presentation copy was neutralized so inline and alternate-screen frontends can share more status and title helpers.
 - [x] A3 Inline Live Region Renderer: inline main-buffer rendering landed while alternate-screen remains available as fallback.
 - [x] A4 Inline Inspection Surfaces: inline mode now renders diagnostics, sessions, and follow-up templates as in-shell inspection surfaces with focused rendering coverage, while alternate-screen keeps the popup fallback.
-- [x] A5 Scrollback-Safe Streaming History: active streaming output now stays in the live region until completion, then commits into stable transcript history instead of replaying each delta as transcript state.
+- [x] A5 Scrollback-Safe Streaming History: active streaming output stays in the live region until completion, while thread and turn lifecycle markers commit into stable transcript history instead of replaying each delta as transcript state.
 - [x] B1 Editable Max Auto Turns: the shell can edit max auto turns with bounded validation.
 - [x] B2 Template Reload Action: workspace follow-up templates can reload from the shell without restarting.
 - [x] B3 Auto-Follow Activity Clarity: queue, submit, stop, and skip outcomes are surfaced as clearer operator-visible activity.
