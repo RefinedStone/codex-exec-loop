@@ -61,6 +61,8 @@ mod shell_layout;
 mod shell_presentation;
 #[path = "app/shell_rendering.rs"]
 mod shell_rendering;
+#[path = "app/shell_runtime.rs"]
+mod shell_runtime;
 #[path = "app/transcript_viewport.rs"]
 mod transcript_viewport;
 
@@ -610,20 +612,25 @@ mod tests {
 
     #[test]
     fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() {
-        let (mut app, _) = make_test_app();
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let (app, _) = make_test_app();
+        let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+        let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state
+        else {
             panic!("app should start with a draft conversation");
         };
         conversation.cwd = "/tmp/subdir".to_string();
 
-        app.tx
+        runtime
+            .app()
+            .tx
             .send(BackgroundMessage::StartupLoaded(Ok(
                 sample_startup_diagnostics("/tmp/root", false),
             )))
             .expect("background message should enqueue");
 
-        app.poll_background_messages();
+        runtime.poll_background_messages();
 
+        let app = runtime.app();
         assert!(matches!(app.startup_state, StartupState::Ready(_)));
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("conversation should remain ready");
@@ -634,12 +641,23 @@ mod tests {
 
     #[test]
     fn background_conversation_loaded_resets_followup_overlay_state() {
-        let (mut app, _) = make_test_app();
-        app.followup_overlay_ui_state.preview_scroll = 12;
-        app.followup_overlay_ui_state.list_state.select(Some(2));
-        app.followup_overlay_ui_state.stop_keyword_editor.buffer = "STALE".to_string();
+        let (app, _) = make_test_app();
+        let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+        runtime.app_mut().followup_overlay_ui_state.preview_scroll = 12;
+        runtime
+            .app_mut()
+            .followup_overlay_ui_state
+            .list_state
+            .select(Some(2));
+        runtime
+            .app_mut()
+            .followup_overlay_ui_state
+            .stop_keyword_editor
+            .buffer = "STALE".to_string();
 
-        app.tx
+        runtime
+            .app()
+            .tx
             .send(BackgroundMessage::ConversationLoaded(Ok(
                 ConversationSnapshot {
                     thread_id: "thread-123".to_string(),
@@ -651,8 +669,9 @@ mod tests {
             )))
             .expect("background message should enqueue");
 
-        app.poll_background_messages();
+        runtime.poll_background_messages();
 
+        let app = runtime.app();
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("conversation should become ready");
         };

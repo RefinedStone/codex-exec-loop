@@ -156,13 +156,6 @@ impl NativeTuiApp {
         self.dispatch_shell_chrome(ShellChromeEvent::SessionSelectionMoved { delta });
     }
 
-    pub(super) fn conversation_can_accept_input(&self) -> bool {
-        matches!(
-            &self.conversation_state,
-            ConversationState::Ready(conversation) if conversation.can_submit_prompt()
-        )
-    }
-
     pub(super) fn push_input_character(&mut self, character: char) {
         self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
     }

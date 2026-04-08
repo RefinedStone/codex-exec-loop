@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::cursor::MoveToNextLine;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event;
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -26,15 +26,16 @@ use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::shell_rendering::draw;
+use super::shell_runtime::ShellRuntime;
 use super::{
     ALT_SCREEN_ENV_VAR, ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
     ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
     ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
     FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState,
-    InlineShellCommand, NativeTuiApp, PromptOrigin, SESSION_PAGE_SIZE, SessionOverlayUiState,
-    SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
-    StartupState, TranscriptViewportState, reduce_conversation_input, reduce_conversation_intents,
+    InlineShellCommand, NativeTuiApp, PromptOrigin, SessionOverlayUiState, SessionState,
+    ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay, StartupState,
+    TranscriptViewportState, reduce_conversation_input, reduce_conversation_intents,
     reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
     reduce_followup_overlay_ui, reduce_shell_chrome,
 };
@@ -430,53 +431,9 @@ impl NativeTuiApp {
             origin: prompt_origin,
         });
     }
-
-    pub(super) fn poll_background_messages(&mut self) {
-        while let Ok(message) = self.rx.try_recv() {
-            match message {
-                BackgroundMessage::StartupLoaded(result) => {
-                    let workspace_directory = match &result {
-                        Ok(diagnostics) => Some(diagnostics.workspace_path.clone()),
-                        Err(_) => None,
-                    };
-                    self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                        result,
-                        session_page_size: SESSION_PAGE_SIZE,
-                    });
-                    if let Some(workspace_directory) = workspace_directory {
-                        self.sync_draft_shell_workspace(&workspace_directory);
-                    }
-                }
-                BackgroundMessage::SessionsLoaded(result) => {
-                    self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(result));
-                    self.session_overlay_ui_state.reset();
-                }
-                BackgroundMessage::ConversationLoaded(result) => {
-                    let template_load_result = match &result {
-                        Ok(snapshot) => Some(self.load_followup_template_catalog(&snapshot.cwd)),
-                        Err(_) => None,
-                    };
-                    self.dispatch_conversation_lifecycle(
-                        ConversationLifecycleEvent::ConversationLoaded {
-                            result,
-                            template_load_result,
-                        },
-                    );
-                    self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
-                        stop_keyword: self.current_stop_keyword_value(),
-                    });
-                }
-                BackgroundMessage::ConversationStream(event) => {
-                    self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
-                        event,
-                    ));
-                }
-            }
-        }
-    }
 }
 
-fn run_tui(mut app: NativeTuiApp) -> Result<()> {
+fn run_tui(app: NativeTuiApp) -> Result<()> {
     let presentation_mode = TuiPresentationMode::from_environment();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -485,8 +442,9 @@ fn run_tui(mut app: NativeTuiApp) -> Result<()> {
     }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    let mut runtime = ShellRuntime::new(app);
 
-    let result = run_event_loop(&mut terminal, &mut app);
+    let result = run_event_loop(&mut terminal, &mut runtime);
 
     disable_raw_mode()?;
     if presentation_mode.uses_alternate_screen() {
@@ -500,94 +458,17 @@ fn run_tui(mut app: NativeTuiApp) -> Result<()> {
 
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut NativeTuiApp,
+    runtime: &mut ShellRuntime,
 ) -> Result<()> {
-    let mut should_quit = false;
-
-    while !should_quit {
-        app.poll_background_messages();
-        terminal.draw(|frame| draw(frame, app))?;
+    while !runtime.should_quit() {
+        runtime.poll_background_messages();
+        terminal.draw(|frame| draw(frame, runtime.app_mut()))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }
 
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-
-        if let Some(confirmed_exit) = app.handle_exit_confirmation_key(key) {
-            if confirmed_exit {
-                should_quit = true;
-            }
-            continue;
-        }
-
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
-            should_quit = true;
-            continue;
-        }
-
-        if app.handle_shell_overlay_key(key) {
-            continue;
-        }
-
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
-            app.handle_ctrl_c();
-            continue;
-        }
-
-        match key.code {
-            KeyCode::PageUp if key.modifiers.is_empty() => app.scroll_transcript_page_up(),
-            KeyCode::PageDown if key.modifiers.is_empty() => app.scroll_transcript_page_down(),
-            KeyCode::Home if key.modifiers.is_empty() => app.scroll_transcript_to_top(),
-            KeyCode::End if key.modifiers.is_empty() => app.scroll_transcript_to_tail(),
-            KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
-                app.toggle_auto_followup()
-            }
-            KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
-                app.start_stop_keyword_edit()
-            }
-            KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
-                app.cycle_auto_followup_template()
-            }
-            KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
-                app.toggle_stop_keyword()
-            }
-            KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
-                app.toggle_no_file_change_stop()
-            }
-            KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => {
-                app.toggle_startup_overlay()
-            }
-            KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
-                app.toggle_session_overlay()
-            }
-            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
-                app.toggle_followup_template_overlay()
-            }
-            KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
-                app.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested)
-            }
-            KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => {
-                app.open_new_conversation_shell()
-            }
-            KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => {
-                app.insert_input_newline()
-            }
-            KeyCode::Backspace => app.pop_input_character(),
-            KeyCode::Enter if app.conversation_can_accept_input() => app.start_turn_submission(),
-            KeyCode::Enter => app.start_turn_submission(),
-            KeyCode::Char(character)
-                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                app.push_input_character(character);
-            }
-            _ => {}
-        }
+        runtime.handle_terminal_event(event::read()?);
     }
 
     Ok(())
