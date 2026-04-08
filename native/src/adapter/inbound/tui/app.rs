@@ -478,7 +478,7 @@ mod tests {
 
         let rendered = build_shell_footer_lines(&app);
 
-        assert_eq!(shell_layout::build_shell_footer_height(&rendered), 7);
+        assert_eq!(shell_layout::build_shell_footer_height(&rendered), 8);
     }
 
     #[test]
@@ -1574,6 +1574,26 @@ mod tests {
     }
 
     #[test]
+    fn followup_template_status_lines_include_recent_tool_activity() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.turn_activity.last_completed_turn_command_count = 2;
+        conversation.turn_activity.last_completed_turn_last_summary =
+            Some("command: cargo test [completed]".to_string());
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_followup_template_status_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("last turn commands: 2"));
+        assert!(rendered.contains("recent tool activity: command: cargo test [completed]"));
+        assert!(rendered.contains("recent activity scope: last turn"));
+    }
+
+    #[test]
     fn stop_keyword_edit_cancel_restores_saved_value() {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
@@ -1672,6 +1692,52 @@ mod tests {
         assert!(rendered.contains(
             "detail: queued after turn turn-2 completed; waiting to submit with template builtin next-task"
         ));
+    }
+
+    #[test]
+    fn shell_footer_surfaces_recent_tool_activity_summary() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.turn_activity.last_completed_turn_command_count = 1;
+        conversation
+            .turn_activity
+            .last_completed_turn_file_change_count = 3;
+        conversation.turn_activity.last_completed_turn_last_summary =
+            Some("file change: update src/app.rs".to_string());
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("tool activity: file change: update src/app.rs"));
+        assert!(rendered.contains("last turn commands: 1"));
+        assert!(rendered.contains("last turn file changes: 3"));
+    }
+
+    #[test]
+    fn shell_footer_shows_current_turn_activity_while_streaming() {
+        let (mut app, _) = make_test_app();
+        let mut conversation = ready_conversation();
+        conversation.input_state = ConversationInputState::StreamingTurn;
+        conversation.active_turn_id = Some("turn-1".to_string());
+        conversation.turn_activity.current_turn_command_count = 1;
+        conversation.turn_activity.current_turn_file_change_count = 2;
+        conversation.turn_activity.current_turn_last_summary =
+            Some("command: cargo test [running]".to_string());
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("tool activity: command: cargo test [running]"));
+        assert!(rendered.contains("current turn commands: 1"));
+        assert!(rendered.contains("current turn file changes: 2"));
     }
 
     #[test]

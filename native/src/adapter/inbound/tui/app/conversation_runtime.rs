@@ -1,6 +1,4 @@
 use super::*;
-use crate::domain::conversation::ConversationToolActivityKind;
-
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
     SubmitPrompt {
@@ -119,11 +117,7 @@ pub(super) fn reduce_conversation_runtime(
                     should_refresh_lines = true;
                 }
                 ConversationStreamEvent::ToolActivity { activity } => {
-                    if activity.kind == ConversationToolActivityKind::FileChange {
-                        state
-                            .turn_activity
-                            .register_file_change(activity.file_change_count);
-                    }
+                    state.turn_activity.register_tool_activity(&activity);
                     state.messages.push(ConversationMessage::new(
                         ConversationMessageKind::Tool,
                         activity.text,
@@ -234,6 +228,7 @@ fn find_message_by_item_id_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::conversation::{ConversationToolActivity, ConversationToolActivityKind};
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
     };
@@ -456,6 +451,80 @@ mod tests {
             Some("stopped: no file changes")
         );
         assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn tool_activity_updates_recent_summary_and_turn_counters() {
+        let state = sample_active_turn_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::ToolActivity {
+                activity: ConversationToolActivity {
+                    kind: ConversationToolActivityKind::CommandExecution,
+                    text: "command: cargo test [completed]".to_string(),
+                    file_change_count: 0,
+                },
+            }),
+        );
+
+        assert_eq!(reduced.state.turn_activity.current_turn_command_count, 1);
+        assert_eq!(
+            reduced.state.turn_activity.current_turn_file_change_count,
+            0
+        );
+        assert_eq!(
+            reduced.state.turn_activity.activity_summary(true),
+            "command: cargo test [completed]"
+        );
+        assert_eq!(reduced.state.messages.len(), 1);
+        assert_eq!(
+            reduced.state.messages[0].kind,
+            ConversationMessageKind::Tool
+        );
+    }
+
+    #[test]
+    fn turn_completed_carries_command_activity_into_last_turn_summary() {
+        let mut state = sample_active_turn_conversation();
+        state.turn_activity.current_turn_command_count = 1;
+        state.turn_activity.current_turn_file_change_count = 2;
+        state.turn_activity.current_turn_last_summary =
+            Some("file change: update src/app.rs".to_string());
+        state.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+            }),
+        );
+
+        assert_eq!(reduced.state.turn_activity.current_turn_command_count, 0);
+        assert_eq!(
+            reduced.state.turn_activity.current_turn_file_change_count,
+            0
+        );
+        assert_eq!(
+            reduced.state.turn_activity.last_completed_command_count(),
+            1
+        );
+        assert_eq!(
+            reduced
+                .state
+                .turn_activity
+                .last_completed_file_change_count(),
+            2
+        );
+        assert_eq!(
+            reduced.state.turn_activity.activity_summary(false),
+            "file change: update src/app.rs"
+        );
     }
 
     #[test]

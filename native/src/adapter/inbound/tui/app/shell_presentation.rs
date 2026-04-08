@@ -321,6 +321,10 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
             Line::from(format!("status: {message}")),
         ],
         ConversationState::Ready(conversation) => {
+            let turn_running = conversation.has_running_turn();
+            let activity_scope = conversation
+                .turn_activity
+                .activity_scope_label(turn_running);
             let activity_summary = conversation
                 .last_auto_followup_activity
                 .as_ref()
@@ -357,12 +361,18 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     conversation.auto_follow_state.template_label()
                 )),
                 Line::from(format!(
-                    "status: {}  |  file changes: {}  |  {}",
-                    conversation.status_text,
+                    "status: {}  |  {}",
+                    conversation.status_text, warning_summary,
+                )),
+                Line::from(format!(
+                    "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
+                    conversation.turn_activity.activity_summary(turn_running),
                     conversation
                         .turn_activity
-                        .last_completed_file_change_count(),
-                    warning_summary,
+                        .activity_command_count(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_file_change_count(turn_running),
                 )),
                 Line::from(format!(
                     "input detail: {}  |  template slot: {}/{}",
@@ -537,6 +547,10 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
         ConversationState::Loading => vec![Line::from("conversation is still loading")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => {
+            let turn_running = conversation.has_running_turn();
+            let activity_scope = conversation
+                .turn_activity
+                .activity_scope_label(turn_running);
             let mut lines = vec![
                 Line::from(format!(
                     "auto follow-up: {}",
@@ -559,28 +573,34 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     conversation.auto_follow_state.no_file_change_stop_label()
                 )),
                 Line::from(format!(
-                    "last turn file changes: {}",
+                    "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
                     conversation
                         .turn_activity
-                        .last_completed_file_change_count()
+                        .activity_command_count(turn_running),
+                    conversation
+                        .turn_activity
+                        .activity_file_change_count(turn_running)
+                )),
+                Line::from(format!(
+                    "{activity_scope} tool activity: {}",
+                    conversation.turn_activity.activity_summary(turn_running)
                 )),
             ];
 
             if app.is_max_auto_turns_editing() {
                 lines.push(Line::from(format!(
-                    "editing max auto turns: {}",
+                    "editing max auto turns: {}  |  Enter save  |  Esc/Ctrl+C cancel",
                     app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                 )));
-                lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
             } else if app.is_stop_keyword_editing() {
                 lines.push(Line::from(format!(
-                    "editing stop keyword: {}",
+                    "editing stop keyword: {}  |  Enter save  |  Esc/Ctrl+C cancel",
                     app.followup_overlay_ui_state.stop_keyword_editor.buffer
                 )));
-                lines.push(Line::from("save with Enter or cancel with Esc/Ctrl+C"));
             } else {
-                lines.push(Line::from("max auto turns edit: press Ctrl+l"));
-                lines.push(Line::from("stop keyword edit: press Ctrl+g"));
+                lines.push(Line::from(
+                    "edit controls: Ctrl+l max turns  |  Ctrl+g stop keyword",
+                ));
             }
             lines.push(Line::from(Span::styled(
                 format!("status: {}", conversation.status_text),
