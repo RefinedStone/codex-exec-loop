@@ -55,6 +55,8 @@ mod inline_shell_commands;
 mod session_overlay_ui;
 #[path = "app/shell_controller.rs"]
 mod shell_controller;
+#[path = "app/shell_frontend.rs"]
+mod shell_frontend;
 #[path = "app/shell_layout.rs"]
 mod shell_layout;
 #[path = "app/shell_presentation.rs"]

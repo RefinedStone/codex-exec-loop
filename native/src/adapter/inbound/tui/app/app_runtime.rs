@@ -1,18 +1,6 @@
-use std::io;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
-
-use anyhow::Result;
-use crossterm::cursor::MoveToNextLine;
-use crossterm::event;
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 
 use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
 use crate::adapter::outbound::filesystem_followup_template_adapter::FilesystemFollowupTemplateAdapter;
@@ -24,11 +12,12 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
+use anyhow::Result;
 
-use super::shell_rendering::draw;
+use super::shell_frontend::{ShellFrontendMode, run as run_shell_frontend};
 use super::shell_runtime::ShellRuntime;
 use super::{
-    ALT_SCREEN_ENV_VAR, ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
+    ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
     ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
     ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
@@ -61,37 +50,6 @@ pub fn run() -> Result<()> {
     );
     app.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested);
     run_tui(app)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TuiPresentationMode {
-    MainScreen,
-    AlternateScreen,
-}
-
-impl TuiPresentationMode {
-    fn from_environment() -> Self {
-        Self::from_env_value(std::env::var(ALT_SCREEN_ENV_VAR).ok().as_deref())
-    }
-
-    fn from_env_value(value: Option<&str>) -> Self {
-        if value.is_some_and(env_flag_is_truthy) {
-            Self::AlternateScreen
-        } else {
-            Self::MainScreen
-        }
-    }
-
-    fn uses_alternate_screen(self) -> bool {
-        self == Self::AlternateScreen
-    }
-}
-
-fn env_flag_is_truthy(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
 }
 
 #[derive(Debug, Clone)]
@@ -434,87 +392,7 @@ impl NativeTuiApp {
 }
 
 fn run_tui(app: NativeTuiApp) -> Result<()> {
-    let presentation_mode = TuiPresentationMode::from_environment();
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    if presentation_mode.uses_alternate_screen() {
-        execute!(stdout, EnterAlternateScreen)?;
-    }
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    let mut runtime = ShellRuntime::new(app);
-
-    let result = run_event_loop(&mut terminal, &mut runtime);
-
-    disable_raw_mode()?;
-    if presentation_mode.uses_alternate_screen() {
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    } else {
-        execute!(terminal.backend_mut(), MoveToNextLine(1))?;
-    }
-    terminal.show_cursor()?;
-    result
-}
-
-fn run_event_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    runtime: &mut ShellRuntime,
-) -> Result<()> {
-    while !runtime.should_quit() {
-        runtime.poll_background_messages();
-        terminal.draw(|frame| draw(frame, runtime.app_mut()))?;
-
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-
-        runtime.handle_terminal_event(event::read()?);
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TuiPresentationMode;
-
-    #[test]
-    fn tui_presentation_mode_defaults_to_main_screen() {
-        assert_eq!(
-            TuiPresentationMode::from_env_value(None),
-            TuiPresentationMode::MainScreen
-        );
-        assert_eq!(
-            TuiPresentationMode::from_env_value(Some("0")),
-            TuiPresentationMode::MainScreen
-        );
-        assert_eq!(
-            TuiPresentationMode::from_env_value(Some("no")),
-            TuiPresentationMode::MainScreen
-        );
-    }
-
-    #[test]
-    fn tui_presentation_mode_accepts_truthy_alt_screen_flag() {
-        assert_eq!(
-            TuiPresentationMode::from_env_value(Some("1")),
-            TuiPresentationMode::AlternateScreen
-        );
-        assert_eq!(
-            TuiPresentationMode::from_env_value(Some(" true ")),
-            TuiPresentationMode::AlternateScreen
-        );
-        assert_eq!(
-            TuiPresentationMode::from_env_value(Some("ON")),
-            TuiPresentationMode::AlternateScreen
-        );
-    }
-
-    #[test]
-    fn tui_presentation_mode_ignores_unrecognized_flag_values() {
-        assert_eq!(
-            TuiPresentationMode::from_env_value(Some("maybe")),
-            TuiPresentationMode::MainScreen
-        );
-    }
+    let frontend_mode = ShellFrontendMode::from_environment();
+    let runtime = ShellRuntime::new(app);
+    run_shell_frontend(runtime, frontend_mode)
 }
