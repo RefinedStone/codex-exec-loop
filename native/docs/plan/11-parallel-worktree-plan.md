@@ -281,6 +281,7 @@ Lane F is the safest sidecar lane and should stay mostly independent from hot ru
 - branch: `docs/native-platform-validation-matrix`
 - status: ready to start
 - goal: document how native raw-mode, alternate-screen, and inline-shell behavior should be checked on Windows and macOS
+- detail doc: `docs/plan/12-platform-validation-matrix.md`
 - ownership: `docs/`, validation notes under `docs/`, and operator checklists under `docs/`
 - done when:
   - the repo has one canonical validation matrix for terminal behavior
