@@ -7,6 +7,8 @@ pub(super) enum ConversationInputEvent {
     BackspacePressed,
     PreviousWordDeleted,
     InputCleared,
+    StartupSubmitArmed { status_text: String },
+    StartupSubmitDisarmed { status_text: Option<String> },
     StatusMessageShown { status_text: String },
 }
 
@@ -21,19 +23,35 @@ pub(super) fn reduce_conversation_input(
 ) -> ConversationInputReduction {
     match event {
         ConversationInputEvent::CharacterTyped { character } => {
+            clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.push(character);
         }
         ConversationInputEvent::NewlineInserted => {
+            clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.push('\n');
         }
         ConversationInputEvent::BackspacePressed => {
+            clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.pop();
         }
         ConversationInputEvent::PreviousWordDeleted => {
+            clear_startup_submit_after_input_change(&mut state);
             delete_previous_word(&mut state.input_buffer);
         }
         ConversationInputEvent::InputCleared => {
+            clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.clear();
+        }
+        ConversationInputEvent::StartupSubmitArmed { status_text } => {
+            state.arm_startup_submit();
+            state.status_text = status_text;
+        }
+        ConversationInputEvent::StartupSubmitDisarmed { status_text } => {
+            if state.clear_startup_submit() {
+                if let Some(status_text) = status_text {
+                    state.status_text = status_text;
+                }
+            }
         }
         ConversationInputEvent::StatusMessageShown { status_text } => {
             state.status_text = status_text;
@@ -54,6 +72,12 @@ fn delete_previous_word(buffer: &mut String) {
         .map(|index| index + 1)
         .unwrap_or(0);
     buffer.truncate(word_start);
+}
+
+fn clear_startup_submit_after_input_change(state: &mut ConversationViewModel) {
+    if state.clear_startup_submit() {
+        state.status_text = "queued startup send canceled after input changed".to_string();
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +182,48 @@ mod tests {
         );
 
         assert_eq!(reduced.state.status_text, "turn still running");
+    }
+
+    #[test]
+    fn startup_submit_armed_sets_queue_status() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::StartupSubmitArmed {
+                status_text: "prompt queued until startup checks finish".to_string(),
+            },
+        );
+
+        assert!(reduced.state.startup_submit_armed);
+        assert_eq!(
+            reduced.state.status_text,
+            "prompt queued until startup checks finish"
+        );
+    }
+
+    #[test]
+    fn input_change_cancels_armed_startup_submit() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.arm_startup_submit();
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CharacterTyped { character: 'a' },
+        );
+
+        assert!(!reduced.state.startup_submit_armed);
+        assert_eq!(
+            reduced.state.status_text,
+            "queued startup send canceled after input changed"
+        );
+        assert_eq!(reduced.state.input_buffer, "a");
     }
 
     #[test]

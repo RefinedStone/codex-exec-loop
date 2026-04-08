@@ -626,6 +626,7 @@ mod tests {
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
             input_buffer: "ship it".to_string(),
+            startup_submit_armed: false,
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(FollowupTemplateCatalog {

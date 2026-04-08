@@ -502,6 +502,15 @@ pub(super) fn build_ready_input_lines(
     }
 
     match (conversation.input_state, shell_action_availability) {
+        (
+            ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
+            ShellActionAvailability::Pending,
+        ) if conversation.startup_submit_armed => {
+            lines.push(Line::from("Prompt queued until startup checks finish."));
+            lines.push(Line::from(
+                "Ctrl+j inserts a new line. Editing cancels the queued send.",
+            ));
+        }
         (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
             lines.push(Line::from(
                 "Press Enter to create thread and send. Ctrl+j inserts a new line.",
@@ -817,6 +826,9 @@ pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> 
 
 fn build_primary_submit_hint(app: &NativeTuiApp) -> &'static str {
     match &app.conversation_state {
+        ConversationState::Ready(conversation) if conversation.startup_submit_armed => {
+            "queued until ready"
+        }
         ConversationState::Ready(conversation) if conversation.has_running_turn() => {
             "Enter send when idle"
         }

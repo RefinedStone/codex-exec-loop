@@ -165,6 +165,8 @@ struct NativeTuiApp {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     use anyhow::Result;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -397,6 +399,7 @@ mod tests {
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
             input_buffer: String::new(),
+            startup_submit_armed: false,
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),
@@ -566,6 +569,22 @@ mod tests {
 
         assert!(rendered.contains("Startup checks are still running."));
         assert!(rendered.contains("send once diagnostics turn ready"));
+    }
+
+    #[test]
+    fn armed_startup_submit_surfaces_queue_hint() {
+        let mut conversation = ready_conversation();
+        conversation.input_buffer = "ship it".to_string();
+        conversation.startup_submit_armed = true;
+
+        let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Pending)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Prompt queued until startup checks finish."));
+        assert!(rendered.contains("Editing cancels the queued send."));
     }
 
     #[test]
@@ -743,6 +762,109 @@ mod tests {
                 .is_empty()
         );
         assert!(conversation.status_text.contains("auto follow-up paused"));
+    }
+
+    #[test]
+    fn manual_submit_while_startup_pending_arms_queue() {
+        let (mut app, codex_port) = make_test_app();
+        app.startup_state = StartupState::Loading;
+
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should start with a draft conversation");
+        };
+        conversation.input_buffer = "ship it".to_string();
+
+        app.start_turn_submission();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert!(conversation.startup_submit_armed);
+        assert_eq!(conversation.input_buffer, "ship it");
+        assert!(
+            conversation
+                .status_text
+                .contains("prompt queued until startup checks finish")
+        );
+        assert!(
+            codex_port
+                .new_thread_calls
+                .lock()
+                .expect("new-thread call mutex poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn startup_ready_submits_armed_prompt() {
+        let (mut app, codex_port) = make_test_app();
+        app.startup_state = StartupState::Loading;
+
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should start with a draft conversation");
+        };
+        conversation.input_buffer = "ship it".to_string();
+
+        app.start_turn_submission();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.resolve_startup_submit_queue();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert!(!conversation.startup_submit_armed);
+        assert!(matches!(
+            conversation.input_state,
+            ConversationInputState::SubmittingTurn
+        ));
+        let mut submitted = false;
+        for _ in 0..20 {
+            submitted = codex_port
+                .new_thread_calls
+                .lock()
+                .expect("new-thread call mutex poisoned")
+                .iter()
+                .any(|(_, prompt)| prompt == "ship it");
+            if submitted {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(submitted);
+    }
+
+    #[test]
+    fn editing_buffer_cancels_armed_startup_submit() {
+        let (mut app, codex_port) = make_test_app();
+        app.startup_state = StartupState::Loading;
+
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("app should start with a draft conversation");
+        };
+        conversation.input_buffer = "ship".to_string();
+
+        app.start_turn_submission();
+        app.push_input_character('!');
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.resolve_startup_submit_queue();
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        assert!(!conversation.startup_submit_armed);
+        assert_eq!(conversation.input_buffer, "ship!");
+        assert!(
+            conversation
+                .status_text
+                .contains("queued startup send canceled")
+        );
+        assert!(
+            codex_port
+                .new_thread_calls
+                .lock()
+                .expect("new-thread call mutex poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -987,6 +1109,19 @@ mod tests {
         let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
 
         assert!(rendered.contains("Enter send when ready"));
+    }
+
+    #[test]
+    fn composer_title_shows_queued_submit_hint_when_startup_queue_is_armed() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Loading;
+        let mut conversation = ready_conversation();
+        conversation.startup_submit_armed = true;
+        app.conversation_state = ConversationState::Ready(conversation);
+
+        let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
+
+        assert!(rendered.contains("queued until ready"));
     }
 
     #[test]
