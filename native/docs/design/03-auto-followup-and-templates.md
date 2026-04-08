@@ -1,17 +1,14 @@
 # Auto Follow-Up And Templates
 
-## Current Capability
-The `prerelease` branch already includes a meaningful auto follow-up loop. This is now one of the native client's core differentiators and should be treated as a first-class feature in future design work.
+Auto follow-up is now part of the native client's core product behavior and should keep more context than the UI-only docs.
 
-## Builtin Template Strategies
-The app currently exposes builtin template variants for:
+## Template Sources
+- builtin strategies: `next-task`, `plan-queue`, `bugfix`, `docs`
+- workspace templates: `.codex-exec-loop/followups/*.md` and `.codex-exec-loop/followups/*.txt`
+- workspace loading stays sorted, ignores unsupported extensions, and records warnings for empty templates
 
-- next-task
-- plan-queue
-- bugfix
-- docs
-
-These templates are rendered with runtime values such as:
+## Runtime Values
+Templates can render runtime placeholders such as:
 
 - `{auto_turn}`
 - `{max_auto_turns}`
@@ -19,42 +16,27 @@ These templates are rendered with runtime values such as:
 - `{stop_keyword}`
 - `{last_message}`
 
-## Workspace Templates
-Workspace templates are loaded from:
-
-- `.codex-exec-loop/followups/*.md`
-- `.codex-exec-loop/followups/*.txt`
-
-The current adapter sorts files, ignores unsupported extensions, and records warnings for empty templates.
-
 ## Stop Rules
 The current shell can stop auto follow-up when:
 
 - the agent emits the configured stop keyword, default `AUTO_STOP`
-- the "no file changes" rule is enabled and the last completed turn changed nothing
+- the no-file-change rule is enabled and the last completed turn produced no file changes
 
-The activity panel now keeps the last auto follow-up skip reason visible so the operator can tell why the loop did not continue.
+Stop-keyword matching is case-insensitive and token-based, so surrounding punctuation does not block a match.
 
-## Current UI Controls
-Inside the shell:
+The latest skip reason should remain operator-visible after a turn finishes.
 
+## Operator Controls
 - `Ctrl+a`: toggle auto follow-up
-- `Ctrl+f`: cycle templates
-- `Ctrl+p`: open the template preview overlay
-- `:templates`: open the template preview overlay from the composer
-- `Ctrl+g`: edit the stop keyword value
-- `Ctrl+k`: toggle stop keyword rule
-- `Ctrl+n`: toggle no-file-change stop rule
+- `Ctrl+f`: cycle templates forward
+- `Ctrl+p` or `:templates`: open template preview
+- `Ctrl+g`: enter stop-keyword edit mode, opening the template overlay if needed
+- `Ctrl+k`: toggle stop-keyword rule
+- `Ctrl+n`: toggle no-file-change rule
 
-Inside the template preview overlay:
-
-- `Up/Down` or `j/k`: move between templates
-- `Ctrl+g`: enter stop keyword edit mode
-- while editing, type the new keyword directly, `Enter` to save, `Esc` or `Ctrl+c` to cancel
-- `PageUp/PageDown` or `Ctrl+u/Ctrl+d`: scroll long previews
-- `Enter`, `Esc`, or `Ctrl+c`: close the overlay
-
-## Remaining Gaps
-- stop keyword editing still assumes a single token and only supports append/backspace editing
-- template preview is read-only and still cycles through a flat list
-- no richer strategy metadata beyond label and source
+## Durable Behavior To Preserve
+- template selection and stop settings belong to shell state, not to ad hoc render logic
+- follow-up decisions happen after completed turn reduction, not before the turn result is understood
+- stop-keyword values are constrained to non-empty identifier-like tokens using letters, numbers, or underscores
+- workspace templates extend builtin behavior; they should not replace builtin availability
+- future UX work can change how controls are presented, but should not hide why auto follow-up did not continue

@@ -1,26 +1,18 @@
 # Roadmap
 
-## R1. Adopt A Stream-First Shell UX
-- treat the conversation as one vertical transcript instead of a dashboard-style layout
-- keep the prompt composer anchored at the bottom while the transcript flows above it
-- prefer terminal scrollback and append-only output over full-screen page transitions
+This file now records the current planning baseline rather than a future milestone script.
 
-## R2. Stabilize Runtime Lifecycle
-- move from action-scoped app-server processes toward a longer-lived runtime model
-- keep current event mapping and domain contracts intact
-- improve reconnect, reset, and failure recovery behavior
+## Current Product Direction
+- the shipped baseline is a shell-first native client on `prerelease`
+- the core runtime boundary is the current hexagonal split plus the shared app-server adapter runtime
+- auto follow-up, workspace templates, and stop rules are baseline behavior, not optional experiments
+- the present TUI shell shape is an implemented bridge state, not a final UX commitment
 
-## R3. Reduce Full-Screen TUI Surface Area
-- shrink the role of alternate-screen panels and persistent sidebars
-- move diagnostics, session browse, and template inspection toward lighter overlays or command-style entry points
-- ensure the shell can stay primary even when auxiliary information is needed
+## Current Change Axes
+- runtime continuity remains the main technical axis
+- shell ergonomics and surface reduction remain the main UX axis
+- operator visibility around automation remains a product constraint
+- inbound TUI readability remains a maintenance constraint
 
-## R4. Strengthen Auto Follow-Up
-- keep the current builtin and workspace-template support intact
-- add safer controls around stop conditions and operator visibility
-- preserve file-change-based stopping and stop-keyword behavior
-
-## R5. Re-scope Inbound UI Responsibilities
-- keep `app.rs` readable while the shell model changes
-- extract focused shell state and reducer logic when the stream-first UX settles
-- avoid moving protocol or persistence code into the UI layer
+## Document Role
+Keep this file short and current-state-oriented. When a future feature or redesign becomes concrete, create a dedicated feature document instead of expanding this file into a long roadmap.

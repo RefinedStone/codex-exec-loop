@@ -1,55 +1,29 @@
 # TODO Backlog
 
-## Already Completed
-The following are baseline capabilities or planning updates that are already done and should not stay in the active priority list:
+This file now keeps the current open planning surface, not a long implementation backlog.
 
-- live conversation shell
-- new thread flow
-- streamed turn updates
-- auto follow-up loop and strategy picker
-- workspace follow-up template loading
-- stop rules for `AUTO_STOP` and no-file-change turns
-- `Ctrl+C` back navigation
-- explicit workspace path in startup diagnostics
-- [x] align docs with shipped `prerelease` features before drafting new shell plans
-- [x] remove obsolete "placeholder shell" assumptions from the current doc set
-- [x] reframe the roadmap around a scrollback-native shell target instead of a panel-first TUI target
-- [x] move `Home` responsibilities into a shell overlay/panel
-- [x] move recent sessions into a shell overlay instead of a separate screen
-- [x] reduce friction between session browse and live shell entry
-- [x] introduce a shared adapter runtime for startup, session, and snapshot requests
-- [x] preserve current streaming event mapping while changing transport lifecycle
-- [x] add clearer reconnect/reset behavior
-- [x] support richer template inspection and preview in the UI
-- [x] make skip reasons more operator-visible when auto follow-up does not continue
+## Current Baseline
+- live shell-first conversation flow
+- startup diagnostics and recent sessions as shell-adjacent overlays
+- streamed turn updates, new-thread flow, and thread resume
+- inline shell commands and lightweight transcript navigation
+- builtin and workspace follow-up templates with stop rules
+- shared adapter runtime reuse across startup, session, snapshot, and turn paths
+- focused TUI module extraction and targeted shell/runtime tests
 
-These are the current baseline, not the final UX target. The next phase pivots from a full-screen TUI feel toward a stream-first shell.
+## Open Change Buckets
+- runtime continuity
+  - fallback behavior during concurrent work is still part of the current runtime story
+  - reconnect, reset, and warning handling still need to stay visible and predictable
+- shell ergonomics
+  - overlays and raw-mode shell chrome are still transitional
+  - input editing and long-session handling are still weaker than the target shell feel
+- automation ergonomics
+  - auto follow-up must stay understandable and operator-visible while the shell changes
+  - new controls should preserve the current stop-rule model unless that model is explicitly redesigned
+- maintenance
+  - `app.rs` should stay near composition and shared-state ownership
+  - runtime and UX changes should keep shipping with targeted regression coverage
 
-## P1. UX Pivot
-- [x] replace the current panel-heavy shell layout with a single flowing transcript
-- [x] keep the composer anchored at the bottom while transcript output continues above it
-- [x] reduce dependence on alternate-screen navigation for normal conversation flow
-- [x] decide which auxiliary surfaces still deserve overlays versus inline command entry
-
-## P2. Stream Shell Ergonomics
-- [x] improve multiline input editing behavior
-- [x] redesign focus and status affordances for a single-column transcript plus fixed composer
-- [x] decide whether status and tool activity stay inline, move to a slim footer, or remain optional overlays
-- [x] review whether any transcript viewport controls are needed beyond terminal scrollback and lightweight in-app navigation
-
-## P2. Auto Follow-Up
-- [x] consider editable stop keyword value from the shell
-
-## P3. Code Health
-- [x] split large shell state and reducer code into milestone-sized units after the stream-first model settles
-- [x] extract input, lifecycle, runtime, viewport, layout, presentation, rendering, shell controller, and conversation-model responsibilities out of `app.rs`
-- [x] separate the remaining TUI runtime and background message loop from `app.rs` in one larger refactor slice
-- [x] keep the remaining `app.rs` focused on composition, shared state ownership, shell-specific builders, and tests unless a new responsibility boundary appears
-- [x] add focused tests for event reduction and failure paths
-- [x] move auto follow-up/template/state tests with the extracted conversation-model module instead of leaving them in `app.rs`
-- [x] add targeted runtime failure-path coverage for blank prompts, duplicate submits, and failed stream updates
-- [x] add focused controller and shell-chrome tests for overlay navigation, readiness gating, and session-opening behavior
-- [x] add a small integration-style test pass around background event sequencing once the runtime extraction settles
-- [x] add docs or comments only where runtime behavior is otherwise hard to infer
-
-For the remaining P3 work, prefer milestone-sized PRs over micro-refactors. Each PR should remove one coherent responsibility boundary instead of moving one helper at a time.
+## Document Rule
+Only keep items here if they still describe the current state of open work across multiple PRs. Future feature-specific detail should move into separate feature docs.
