@@ -28,7 +28,7 @@ The docs now optimize for phase-2 work:
 - [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md): core automation behavior
 - [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md): stable architectural boundaries and runtime lifecycle
 - [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md): current risks worth preserving in context
-- [design/06-event-driven-ui-poc.md](design/06-event-driven-ui-poc.md): optional design probe, not the current production baseline
+- [design/06-event-driven-ui-poc.md](design/06-event-driven-ui-poc.md): event-driven reference for the final-stage strict UI core, not the current production baseline
 - [plan/01-roadmap.md](plan/01-roadmap.md): current planning baseline, not a future milestone script
 - [plan/02-todo-backlog.md](plan/02-todo-backlog.md): current open change buckets that still matter across PRs
 - [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture and how future feature docs should take over detail

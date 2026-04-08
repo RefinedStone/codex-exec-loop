@@ -24,6 +24,15 @@ The outbound app-server adapter already behaves like a shared runtime boundary:
 - the application layer can evolve orchestration without pulling transport detail into the UI
 - the inbound adapter can change shell structure without forcing domain or outbound rewrites
 
+## Phase-2 UI Direction
+- keep the product-level architecture hexagonal
+- make `adapter/inbound/tui` internally stricter about event-driven ownership as the shell refactor progresses
+- normalize terminal input, background runtime messages, and streaming updates into explicit UI events
+- keep reducer-style state transitions pure where practical, and push async work into explicit effect handling
+- let effect handlers call application services and feed results back into the UI core as new events
+- move renderers toward frontend-neutral presentation data instead of reading mutable shell state objects directly
+- do not push BLoC-style abstractions into `application`, `domain`, or outbound adapters just for symmetry
+
 ## Preserve During Phase 2
 - keep protocol and filesystem concerns inside outbound adapters
 - keep use-case orchestration in application services

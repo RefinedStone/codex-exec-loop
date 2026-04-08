@@ -154,16 +154,22 @@ The migration is incomplete if any of these regress:
 
 ## 7. Target Architecture
 
+The end state is not "strict bloc everywhere."
+
+The system should stay hexagonal overall, while the inbound shell becomes a stricter event-driven UI core inside that boundary.
+
 ## 7.1 High-Level Split
 
-The shell should become three layers:
+The shell should become four layers:
 
 1. Shared shell runtime
-2. Frontend-neutral presentation helpers
-3. Multiple frontends
+2. Strict event-driven UI core
+3. Frontend-neutral presentation helpers
+4. Multiple frontends
 
 The runtime should own behavior.
-The presentation layer should own human-readable summaries.
+The UI core should own event normalization, state transitions, and effect intent.
+The presentation layer should own human-readable summaries and view-model shaping.
 The frontend should own terminal-specific rendering and input interaction.
 
 ## 7.2 Shared Shell Runtime
@@ -187,7 +193,32 @@ The runtime layer should not own:
 
 This is the most important extraction because both frontends should share the same behavior engine.
 
-## 7.3 Frontend-Neutral Presentation
+## 7.3 Strict Event-Driven UI Core
+
+The inbound shell should converge toward an explicit event/effect/reducer structure.
+
+Own here:
+- terminal input events
+- background runtime messages
+- stream lifecycle events
+- pure or mostly pure state transitions
+- explicit effect requests for startup, session, submit, follow-up, and runtime actions
+
+Avoid here:
+- hidden async work directly inside renderer callbacks
+- renderer-owned state mutation
+- ad-hoc cross-calls between popup state and draw code
+- forcing `application` or `domain` into UI-specific event abstractions
+
+Direction:
+- frontends should translate terminal activity into shell events
+- reducers should decide state transitions and effect requests
+- effect handlers should execute async work and feed results back as new events
+- renderers should consume frontend-neutral presentation data rather than reach through the whole mutable app object
+
+This is the shape that best matches the shell's async behavior without widening BLoC concerns across the entire product.
+
+## 7.4 Frontend-Neutral Presentation
 
 `shell_presentation.rs` should move toward reusable text summaries.
 
@@ -205,7 +236,7 @@ Move out of it:
 - popup-first key legends
 - assumptions that input always lives in a boxed composer
 
-## 7.4 Dual Frontend Model
+## 7.5 Dual Frontend Model
 
 The product should explicitly support two frontends during migration.
 
@@ -401,6 +432,7 @@ Primary goal:
 Concrete tasks:
 - isolate event polling, background-message consumption, reducer dispatch, and effect execution from the current draw loop
 - define a controller/runtime object that can drive more than one frontend
+- make the runtime-event boundary explicit enough that async work can re-enter as typed shell events
 - keep behavior identical while the alternate-screen renderer still owns display
 
 Files most affected:
@@ -420,6 +452,7 @@ Concrete tasks:
 - keep the existing fullscreen renderer as alternate-screen fallback
 - introduce a dedicated inline frontend path behind a flag
 - make renderer selection an explicit branch in the runtime instead of a minor alternate-screen toggle
+- begin separating terminal-facing frontend code from reducer/effect handling
 
 Files most affected:
 - `src/adapter/inbound/tui/app/app_runtime.rs`
@@ -439,6 +472,7 @@ Concrete tasks:
 - keep a live region for current input and status
 - support startup state, prompt submission, streaming updates, and thread switching
 - keep diagnostics/sessions/templates minimally usable
+- make inline rendering consume presentation data that is less tied to `NativeTuiApp`
 
 Files most affected:
 - inline renderer module(s)
@@ -504,6 +538,7 @@ Validate:
 - background message handling order
 - state transitions independent of frontend
 - effect execution behavior across startup, resume, submit, stream, and completion paths
+- async results re-enter the shell through explicit events rather than direct UI mutation
 
 ### Presentation Tests
 
@@ -583,6 +618,7 @@ This workstream is ready for default inline mode only when all of the following 
 - main-buffer mode no longer redraws the whole terminal frame
 - scrollback reads as one continuous conversation history
 - the capability floor is preserved
+- async shell work is routed through explicit runtime/effect boundaries rather than renderer-owned mutation paths
 - representative terminals behave acceptably
 - alternate-screen fallback remains available
 
