@@ -304,18 +304,20 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
     match &app.conversation_state {
         ConversationState::Loading => vec![
             Line::from(format!(
-                "startup: {}  |  sessions: {}",
+                "startup: {}  |  sessions: {}  |  github: {}",
                 shell_action_availability_label(app),
-                recent_session_status_label(app)
+                recent_session_status_label(app),
+                github_review_polling_status_label(app),
             )),
             Line::from("conversation state: loading thread metadata"),
             Line::from("status: waiting for thread history from codex app-server"),
         ],
         ConversationState::Failed(message) => vec![
             Line::from(format!(
-                "startup: {}  |  sessions: {}",
+                "startup: {}  |  sessions: {}  |  github: {}",
                 shell_action_availability_label(app),
-                recent_session_status_label(app)
+                recent_session_status_label(app),
+                github_review_polling_status_label(app),
             )),
             Line::from("conversation state: failed"),
             Line::from(format!("status: {message}")),
@@ -339,9 +341,13 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
 
             vec![
                 Line::from(format!(
-                    "startup: {}  |  sessions: {}  |  turn: {}  |  input: {}",
+                    "startup: {}  |  sessions: {}  |  github: {}",
                     shell_action_availability_label(app),
                     recent_session_status_label(app),
+                    github_review_polling_status_label(app),
+                )),
+                Line::from(format!(
+                    "turn: {}  |  input: {}",
                     turn_status_label(conversation),
                     conversation.input_state.label(),
                 )),
@@ -795,6 +801,10 @@ fn recent_session_status_label(app: &NativeTuiApp) -> String {
         SessionState::Failed(_) => "load failed".to_string(),
         SessionState::Ready(recent_sessions) => format!("{} loaded", recent_sessions.items.len()),
     }
+}
+
+fn github_review_polling_status_label(app: &NativeTuiApp) -> String {
+    app.github_review_polling_status_label()
 }
 
 fn build_startup_check_items(app: &NativeTuiApp) -> Vec<ListItem<'static>> {

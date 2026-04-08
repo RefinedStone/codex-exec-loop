@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::*;
@@ -74,8 +76,13 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::StreamUpdated(event),
                     );
                 }
+                BackgroundMessage::GithubReviewPollLoaded(result) => self
+                    .app
+                    .record_github_review_poll_result(Instant::now(), result),
             }
         }
+
+        self.app.maybe_start_github_review_poll(Instant::now());
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: Event) {
@@ -167,6 +174,8 @@ impl ShellRuntime {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
 
     use anyhow::Result;
     use crossterm::event::KeyEventState;
@@ -178,11 +187,16 @@ mod tests {
     use crate::application::port::outbound::followup_template_port::{
         FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
     };
+    use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::followup_template_service::FollowupTemplateService;
+    use crate::application::service::github_review_poller_service::GithubReviewPollerService;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+    use crate::domain::github_review::{
+        GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
+    };
     use crate::domain::recent_sessions::RecentSessions;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -244,6 +258,24 @@ mod tests {
             _workspace_dir: &str,
         ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
             Ok(Vec::new())
+        }
+    }
+
+    struct FakeGithubReviewPollerPort;
+
+    impl GithubReviewPollerPort for FakeGithubReviewPollerPort {
+        fn load_pull_request_activity(
+            &self,
+            target: &GithubPullRequestTarget,
+        ) -> Result<GithubPullRequestActivitySnapshot> {
+            Ok(GithubPullRequestActivitySnapshot {
+                target: target.clone(),
+                title: "Review status".to_string(),
+                url: "https://github.com/acme/widgets/pull/42".to_string(),
+                head_branch: "feature/native-github-poll-scheduling".to_string(),
+                base_branch: "prerelease".to_string(),
+                events: Vec::new(),
+            })
         }
     }
 
@@ -355,5 +387,36 @@ mod tests {
 
         assert!(runtime.app().is_max_auto_turns_editing());
         assert_eq!(runtime.app().shell_overlay, ShellOverlay::FollowupTemplates);
+    }
+
+    #[test]
+    fn poll_background_messages_starts_github_review_polling_when_due() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().configure_github_review_polling(
+            super::super::github_polling::GithubReviewPollingBootstrap {
+                service: Some(GithubReviewPollerService::new(Arc::new(
+                    FakeGithubReviewPollerPort,
+                ))),
+                state: super::super::github_polling::GithubReviewPollingState::active(
+                    super::super::github_polling::GithubReviewPollingConfig {
+                        target: GithubPullRequestTarget::new("acme/widgets", 42),
+                        interval: Duration::from_secs(30),
+                    },
+                    Instant::now(),
+                ),
+            },
+        );
+
+        runtime.poll_background_messages();
+        thread::sleep(Duration::from_millis(20));
+        runtime.poll_background_messages();
+
+        let super::super::github_polling::GithubReviewPollingState::Active(polling_state) =
+            &runtime.app().github_review_polling_state
+        else {
+            panic!("expected active github review polling state");
+        };
+        assert!(polling_state.snapshot.is_some());
+        assert!(polling_state.last_error.is_none());
     }
 }

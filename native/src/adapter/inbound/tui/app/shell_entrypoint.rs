@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 
@@ -11,6 +12,7 @@ use crate::application::service::followup_template_service::FollowupTemplateServ
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 
+use super::github_polling::GithubReviewPollingBootstrap;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
 use super::{NativeTuiApp, ShellChromeEvent};
@@ -32,13 +34,19 @@ fn build_default_app() -> NativeTuiApp {
     let session_service = SessionService::new(codex_app_server_port.clone());
     let conversation_service = ConversationService::new(codex_app_server_port);
     let followup_template_service = FollowupTemplateService::new(followup_template_port);
-
-    NativeTuiApp::new(
+    let mut app = NativeTuiApp::new(
         startup_service,
         session_service,
         conversation_service,
         followup_template_service,
-    )
+    );
+    let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    app.configure_github_review_polling(GithubReviewPollingBootstrap::from_environment(
+        &repo_root,
+        Instant::now(),
+    ));
+
+    app
 }
 
 fn prepare_runtime(mut app: NativeTuiApp) -> ShellRuntime {

@@ -15,6 +15,7 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::{
     FollowupTemplateReloadResult, FollowupTemplateService,
 };
+use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -56,6 +57,8 @@ mod conversation_runtime;
 mod followup_controls;
 #[path = "app/followup_overlay_ui.rs"]
 mod followup_overlay_ui;
+#[path = "app/github_polling.rs"]
+mod github_polling;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
 #[path = "app/ratatui_frontend.rs"]
@@ -105,6 +108,7 @@ use followup_controls::{FollowupControlEffect, FollowupControlEvent, reduce_foll
 use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
+use github_polling::GithubReviewPollingState;
 use inline_shell_commands::InlineShellCommand;
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
@@ -152,6 +156,8 @@ struct NativeTuiApp {
     session_service: SessionService,
     conversation_service: ConversationService,
     followup_template_service: FollowupTemplateService,
+    github_review_poller_service: Option<GithubReviewPollerService>,
+    github_review_polling_state: GithubReviewPollingState,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
 }
@@ -169,16 +175,16 @@ mod tests {
         AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage, ConversationInputState,
         ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
         ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-        ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, InlineShellCommand,
-        MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin, RecordedAutoFollowupActivity,
-        SessionOverlayUiState, SessionState, ShellActionAvailability, ShellFrontendMode,
-        ShellOverlay, StartupState, TurnActivityState, build_conversation_shell_frame_view,
-        build_conversation_shell_view, build_followup_template_overlay_view,
-        build_followup_template_preview_lines, build_followup_template_status_lines,
-        build_input_title, build_ready_input_lines, build_session_overlay_view,
-        build_shell_footer_lines, build_startup_overlay_view, build_status_title,
-        build_transcript_panel_view, build_transcript_title, format_conversation_lines,
-        shell_layout,
+        ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, GithubReviewPollingState,
+        InlineShellCommand, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
+        RecordedAutoFollowupActivity, SessionOverlayUiState, SessionState, ShellActionAvailability,
+        ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
+        build_conversation_shell_frame_view, build_conversation_shell_view,
+        build_followup_template_overlay_view, build_followup_template_preview_lines,
+        build_followup_template_status_lines, build_input_title, build_ready_input_lines,
+        build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
+        build_status_title, build_transcript_panel_view, build_transcript_title,
+        format_conversation_lines, shell_layout,
     };
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -193,6 +199,10 @@ mod tests {
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
+    };
+    use crate::domain::github_review::{
+        GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
+        GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
     };
     use crate::domain::recent_sessions::RecentSessions;
     use crate::domain::session_summary::SessionSummary;
@@ -484,6 +494,24 @@ mod tests {
         let rendered = build_shell_footer_lines(&app);
 
         assert_eq!(shell_layout::build_shell_footer_height(&rendered), 8);
+    }
+
+    #[test]
+    fn shell_footer_shows_github_polling_state_summary() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.github_review_polling_state = GithubReviewPollingState::SetupError {
+            target: Some(GithubPullRequestTarget::new("acme/widgets", 42)),
+            message: "missing RefinedStone credential".to_string(),
+        };
+
+        let rendered = build_shell_footer_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("github: setup failed acme/widgets#42"));
     }
 
     #[test]
@@ -2002,5 +2030,63 @@ mod tests {
         assert!(rendered.contains("auto activity: stopped: turn limit reached"));
         assert!(rendered.contains("detail: reached the configured auto-turn budget (3/3)"));
         assert!(!rendered.contains("detail: reached the configured auto-turn budget (0/3)"));
+    }
+
+    #[test]
+    fn github_review_poll_result_updates_snapshot_and_recent_changes() {
+        let (mut app, _) = make_test_app();
+        app.github_review_polling_state = GithubReviewPollingState::active(
+            super::github_polling::GithubReviewPollingConfig {
+                target: GithubPullRequestTarget::new("acme/widgets", 42),
+                interval: std::time::Duration::from_secs(30),
+            },
+            std::time::Instant::now(),
+        );
+
+        app.record_github_review_poll_result(
+            std::time::Instant::now(),
+            Ok(sample_github_review_poll_result()),
+        );
+
+        let GithubReviewPollingState::Active(polling_state) = &app.github_review_polling_state
+        else {
+            panic!("expected active github review polling state");
+        };
+        assert_eq!(polling_state.recent_changes.len(), 1);
+        assert_eq!(
+            polling_state
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.events.len()),
+            Some(1)
+        );
+        assert!(polling_state.last_error.is_none());
+    }
+
+    fn sample_github_review_poll_result() -> GithubPullRequestPollResult {
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+        let snapshot = GithubPullRequestActivitySnapshot {
+            target,
+            title: "Track review state".to_string(),
+            url: "https://example.invalid/pr/42".to_string(),
+            head_branch: "feature/native-github-poll-scheduling".to_string(),
+            base_branch: "prerelease".to_string(),
+            events: vec![GithubPullRequestActivityEvent {
+                id: 100,
+                kind: GithubPullRequestActivityKind::Review,
+                submitted_at: "2026-04-08T09:00:00Z".to_string(),
+                author_login: "reviewer".to_string(),
+                body: "Looks good".to_string(),
+                state: Some("COMMENTED".to_string()),
+                url: "https://example.invalid/pr/42#review-100".to_string(),
+                path: None,
+            }],
+        };
+
+        GithubPullRequestPollResult {
+            next_state: snapshot.poll_state(),
+            changes: snapshot.events.clone(),
+            snapshot,
+        }
     }
 }

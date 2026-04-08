@@ -11,6 +11,10 @@ impl GithubPullRequestTarget {
             number,
         }
     }
+
+    pub fn display_label(&self) -> String {
+        format!("{}#{}", self.repository, self.number)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

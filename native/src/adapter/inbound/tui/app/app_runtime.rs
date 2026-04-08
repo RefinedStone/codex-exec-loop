@@ -5,6 +5,7 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -28,6 +29,7 @@ pub(super) enum BackgroundMessage {
     SessionsLoaded(Result<RecentSessions, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
+    GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
 
 impl NativeTuiApp {
@@ -60,6 +62,8 @@ impl NativeTuiApp {
             session_service,
             conversation_service,
             followup_template_service,
+            github_review_poller_service: None,
+            github_review_polling_state: super::GithubReviewPollingState::Disabled,
             tx,
             rx,
         }

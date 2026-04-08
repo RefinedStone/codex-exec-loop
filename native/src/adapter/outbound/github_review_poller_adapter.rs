@@ -36,41 +36,167 @@ impl GithubReviewPollerAdapter {
     }
 
     pub fn from_refinedstone_credentials(repo_root: &Path) -> Result<Self> {
-        let credential_path = Self::resolve_git_dir(repo_root)?.join("refinedstone-credentials");
-        let line = fs::read_to_string(&credential_path)
-            .with_context(|| format!("failed to read {}", credential_path.display()))?;
-        let first_line = line
-            .lines()
-            .next()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("missing token line in {}", credential_path.display()))?;
+        let credential_line = Self::read_refinedstone_credential_line(repo_root)?;
+        Ok(Self::new(Self::parse_refinedstone_token(&credential_line)?))
+    }
 
-        Ok(Self::new(Self::parse_refinedstone_token(first_line)?))
+    pub fn find_open_pull_request_for_current_branch(
+        &self,
+        repo_root: &Path,
+        base_branch: &str,
+    ) -> Result<Option<GithubPullRequestTarget>> {
+        let repository = Self::resolve_repository_full_name(repo_root)?;
+        let head_branch = Self::resolve_current_branch_name(repo_root)?;
+        if head_branch == "HEAD" || head_branch.trim().is_empty() || head_branch == base_branch {
+            return Ok(None);
+        }
+
+        self.find_open_pull_request_for_branch(&repository, &head_branch, base_branch)
+    }
+
+    fn find_open_pull_request_for_branch(
+        &self,
+        repository: &str,
+        head_branch: &str,
+        base_branch: &str,
+    ) -> Result<Option<GithubPullRequestTarget>> {
+        let owner = repository
+            .split_once('/')
+            .map(|(owner, _)| owner)
+            .ok_or_else(|| anyhow!("failed to parse repository owner from {repository}"))?;
+        let head = Self::encode_query_value(&format!("{owner}:{head_branch}"));
+        let base = Self::encode_query_value(base_branch);
+        let endpoint =
+            format!("/repos/{repository}/pulls?state=open&head={head}&base={base}&per_page=1");
+        let matches: Vec<PullRequestLocatorResponse> = self.fetch_object(&endpoint)?;
+
+        Ok(matches
+            .into_iter()
+            .next()
+            .map(|pull_request| GithubPullRequestTarget::new(repository, pull_request.number)))
     }
 
     fn resolve_git_dir(repo_root: &Path) -> Result<PathBuf> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(repo_root)
-            .args(["rev-parse", "--path-format=absolute", "--git-dir"])
-            .output()
-            .with_context(|| format!("failed to resolve git dir from {}", repo_root.display()))?;
-
-        if !output.status.success() {
-            bail!(
-                "failed to resolve git dir from {}: {}",
-                repo_root.display(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-
-        let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let git_dir = Self::run_git_command(
+            repo_root,
+            &["rev-parse", "--path-format=absolute", "--git-dir"],
+        )?;
         if git_dir.is_empty() {
             bail!("resolved empty git dir from {}", repo_root.display());
         }
 
         Ok(PathBuf::from(git_dir))
+    }
+
+    fn resolve_repository_full_name(repo_root: &Path) -> Result<String> {
+        let origin_url = Self::run_git_command(repo_root, &["remote", "get-url", "origin"])?;
+        Self::parse_repository_full_name(&origin_url)
+    }
+
+    fn resolve_current_branch_name(repo_root: &Path) -> Result<String> {
+        Self::run_git_command(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+    }
+
+    fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(args)
+            .output()
+            .with_context(|| {
+                format!(
+                    "failed to run git {} from {}",
+                    args.join(" "),
+                    repo_root.display()
+                )
+            })?;
+
+        if !output.status.success() {
+            bail!(
+                "git {} failed from {}: {}",
+                args.join(" "),
+                repo_root.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    fn parse_repository_full_name(origin_url: &str) -> Result<String> {
+        let repository = match origin_url {
+            value if value.starts_with("git@github.com:") => value
+                .trim_start_matches("git@github.com:")
+                .trim_end_matches(".git")
+                .to_string(),
+            value if value.starts_with("https://github.com/") => value
+                .trim_start_matches("https://github.com/")
+                .trim_end_matches(".git")
+                .to_string(),
+            _ => bail!("unsupported GitHub origin URL {origin_url}"),
+        };
+
+        if repository.split('/').count() != 2 {
+            bail!("failed to parse repository from {origin_url}");
+        }
+
+        Ok(repository)
+    }
+
+    fn read_refinedstone_credential_line(repo_root: &Path) -> Result<String> {
+        let credential_path = Self::resolve_git_dir(repo_root)?.join("refinedstone-credentials");
+        if credential_path.is_file() {
+            return Self::read_first_non_empty_line(&credential_path)
+                .with_context(|| format!("failed to read {}", credential_path.display()));
+        }
+
+        if let Some(credential_line) = Self::find_windows_refinedstone_credential_line()? {
+            return Ok(credential_line);
+        }
+
+        bail!(
+            "missing {} and no Windows RefinedStone credential was found under /mnt/c/Users/*/.git-credentials",
+            credential_path.display()
+        );
+    }
+
+    fn read_first_non_empty_line(path: &Path) -> Result<String> {
+        let contents = fs::read_to_string(path)?;
+        contents
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .ok_or_else(|| anyhow!("missing token line in {}", path.display()))
+    }
+
+    fn find_windows_refinedstone_credential_line() -> Result<Option<String>> {
+        let users_root = Path::new("/mnt/c/Users");
+        if !users_root.exists() {
+            return Ok(None);
+        }
+
+        let mut credential_paths = fs::read_dir(users_root)?
+            .filter_map(|entry| {
+                entry
+                    .ok()
+                    .map(|entry| entry.path().join(".git-credentials"))
+            })
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+        credential_paths.sort();
+
+        for credential_path in credential_paths {
+            let contents = fs::read_to_string(&credential_path)
+                .with_context(|| format!("failed to read {}", credential_path.display()))?;
+            if let Some(line) = contents.lines().map(str::trim).find(|line| {
+                line.starts_with("https://RefinedStone:") && line.contains("@github.com")
+            }) {
+                return Ok(Some(line.to_string()));
+            }
+        }
+
+        Ok(None)
     }
 
     fn parse_refinedstone_token(line: &str) -> Result<String> {
@@ -84,6 +210,18 @@ impl GithubReviewPollerAdapter {
         }
 
         Ok(token.to_string())
+    }
+
+    fn encode_query_value(value: &str) -> String {
+        value
+            .bytes()
+            .flat_map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    vec![byte as char]
+                }
+                _ => format!("%{byte:02X}").chars().collect::<Vec<_>>(),
+            })
+            .collect()
     }
 
     fn fetch_pull_request_details(
@@ -309,6 +447,11 @@ struct PullRequestResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct PullRequestLocatorResponse {
+    number: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct PullRequestBranchRef {
     #[serde(rename = "ref")]
     ref_name: String,
@@ -351,8 +494,8 @@ struct GitHubUser {
 #[cfg(test)]
 mod tests {
     use super::{
-        GithubReviewPollerAdapter, IssueCommentResponse, PullRequestResponse,
-        PullRequestReviewCommentResponse, PullRequestReviewResponse,
+        GithubReviewPollerAdapter, IssueCommentResponse, PullRequestLocatorResponse,
+        PullRequestResponse, PullRequestReviewCommentResponse, PullRequestReviewResponse,
     };
     use crate::domain::github_review::{GithubPullRequestActivityKind, GithubPullRequestTarget};
 
@@ -364,6 +507,45 @@ mod tests {
         .expect("token should parse");
 
         assert_eq!(token, "abc123");
+    }
+
+    #[test]
+    fn parses_repository_full_name_from_github_ssh_origin() {
+        let repository = GithubReviewPollerAdapter::parse_repository_full_name(
+            "git@github.com:acme/widgets.git",
+        )
+        .expect("repository should parse");
+
+        assert_eq!(repository, "acme/widgets");
+    }
+
+    #[test]
+    fn parses_repository_full_name_from_github_https_origin() {
+        let repository = GithubReviewPollerAdapter::parse_repository_full_name(
+            "https://github.com/acme/widgets.git",
+        )
+        .expect("repository should parse");
+
+        assert_eq!(repository, "acme/widgets");
+    }
+
+    #[test]
+    fn encodes_branch_head_filter_for_pull_request_lookup() {
+        let encoded =
+            GithubReviewPollerAdapter::encode_query_value("RefinedStone:feature/native-shell");
+
+        assert_eq!(encoded, "RefinedStone%3Afeature%2Fnative-shell");
+    }
+
+    #[test]
+    fn parses_pull_request_locator_response_json() {
+        let body = r#"[{ "number": 64 }]"#;
+
+        let response: Vec<PullRequestLocatorResponse> =
+            GithubReviewPollerAdapter::parse_json(body, "/repos/acme/widgets/pulls")
+                .expect("pull request locator response should parse");
+
+        assert_eq!(response[0].number, 64);
     }
 
     #[test]
