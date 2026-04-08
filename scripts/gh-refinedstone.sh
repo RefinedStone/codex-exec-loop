@@ -7,9 +7,15 @@ if [[ -z "${repo_root}" ]]; then
   exit 1
 fi
 
+git_dir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+if [[ -z "${git_dir}" ]]; then
+  echo "gh-refinedstone: failed to resolve git dir" >&2
+  exit 1
+fi
+
 find_credential_file() {
   local repo_credential_file
-  repo_credential_file="${repo_root}/.git/refinedstone-credentials"
+  repo_credential_file="${git_dir}/refinedstone-credentials"
   if [[ -f "${repo_credential_file}" ]]; then
     printf '%s\n' "${repo_credential_file}"
     return 0
@@ -86,18 +92,25 @@ json_escape() {
   printf '%s' "${value}"
 }
 
-extract_json_field() {
+json_string_field() {
   local body
   local field_name
   body="$1"
   field_name="$2"
-  printf '%s' "${body}" | tr -d '\n' | sed -n "s/.*\"${field_name}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n 1
-}
 
-extract_pull_request_url() {
-  local body
-  body="$1"
-  printf '%s' "${body}" | grep -o 'https://github\.com/[^"]*/pull/[0-9]\+' | head -n 1
+  printf '%s' "${body}" | python3 - "${field_name}" <<'PY'
+import json
+import sys
+
+field_name = sys.argv[1]
+data = json.load(sys.stdin)
+if isinstance(data, list):
+    data = data[0] if data else None
+if isinstance(data, dict):
+    value = data.get(field_name)
+    if isinstance(value, str):
+        print(value)
+PY
 }
 
 api_request() {
@@ -114,20 +127,26 @@ api_request() {
 
   if [[ -n "${payload}" ]]; then
     status_code="$(
-      curl -sS -o "${response_file}" -w '%{http_code}' \
+      curl -sS -L -o "${response_file}" -w '%{http_code}' \
+        --connect-timeout 10 \
+        --max-time 30 \
         -X "${method}" \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer ${token}" \
+        -H "User-Agent: gh-refinedstone.sh" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         -d "${payload}" \
         "https://api.github.com${endpoint}"
     )"
   else
     status_code="$(
-      curl -sS -o "${response_file}" -w '%{http_code}' \
+      curl -sS -L -o "${response_file}" -w '%{http_code}' \
+        --connect-timeout 10 \
+        --max-time 30 \
         -X "${method}" \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer ${token}" \
+        -H "User-Agent: gh-refinedstone.sh" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com${endpoint}"
     )"
@@ -150,6 +169,7 @@ create_pr_with_api() {
   local title
   local body
   local draft
+  local error_log
 
   repo_full_name="$(parse_repo_full_name)"
   base_branch=""
@@ -207,33 +227,112 @@ create_pr_with_api() {
   )
 
   local response_body
-  if response_body="$(api_request POST "/repos/${repo_full_name}/pulls" "${payload}" 2>/tmp/gh-refinedstone-create-pr-error.$$)"; then
+  error_log="$(mktemp)"
+  if response_body="$(api_request POST "/repos/${repo_full_name}/pulls" "${payload}" 2>"${error_log}")"; then
     :
   else
-    if grep -q 'A pull request already exists' /tmp/gh-refinedstone-create-pr-error.$$; then
+    if grep -q 'A pull request already exists' "${error_log}"; then
       response_body="$(api_request GET "/repos/${repo_full_name}/pulls?state=open&head=RefinedStone:${head_branch}&base=${base_branch}")"
       local existing_url
-      existing_url="$(extract_pull_request_url "${response_body}")"
+      existing_url="$(json_string_field "${response_body}" "html_url")"
       if [[ -n "${existing_url}" ]]; then
         printf '%s\n' "${existing_url}"
-        rm -f /tmp/gh-refinedstone-create-pr-error.$$
+        rm -f "${error_log}"
         return 0
       fi
     fi
-    cat /tmp/gh-refinedstone-create-pr-error.$$ >&2
-    rm -f /tmp/gh-refinedstone-create-pr-error.$$
+    cat "${error_log}" >&2
+    rm -f "${error_log}"
     exit 1
   fi
-  rm -f /tmp/gh-refinedstone-create-pr-error.$$
+  rm -f "${error_log}"
 
   local pr_url
-  pr_url="$(extract_pull_request_url "${response_body}")"
+  pr_url="$(json_string_field "${response_body}" "html_url")"
   if [[ -n "${pr_url}" ]]; then
     printf '%s\n' "${pr_url}"
     return 0
   fi
 
   printf '%s\n' "${response_body}"
+}
+
+view_pr_with_api() {
+  local repo_full_name
+  local pr_number
+
+  repo_full_name="$(parse_repo_full_name)"
+  pr_number="${1-}"
+
+  if [[ -z "${pr_number}" ]]; then
+    echo "gh-refinedstone: pr view requires a pull request number" >&2
+    exit 1
+  fi
+
+  api_request GET "/repos/${repo_full_name}/pulls/${pr_number}"
+}
+
+close_pr_with_api() {
+  local repo_full_name
+  local pr_number
+  local response_body
+
+  repo_full_name="$(parse_repo_full_name)"
+  pr_number="${1-}"
+
+  if [[ -z "${pr_number}" ]]; then
+    echo "gh-refinedstone: pr close requires a pull request number" >&2
+    exit 1
+  fi
+
+  response_body="$(api_request PATCH "/repos/${repo_full_name}/pulls/${pr_number}" '{"state":"closed"}')"
+  printf '%s\n' "$(json_string_field "${response_body}" "html_url")"
+}
+
+reply_review_comment_with_api() {
+  local repo_full_name
+  local pr_number
+  local comment_id
+  local body
+  local payload
+
+  repo_full_name="$(parse_repo_full_name)"
+  pr_number=""
+  comment_id=""
+  body=""
+
+  while (($# > 0)); do
+    case "$1" in
+      --pr)
+        pr_number="${2-}"
+        shift 2
+        ;;
+      --comment-id)
+        comment_id="${2-}"
+        shift 2
+        ;;
+      --body)
+        body="${2-}"
+        shift 2
+        ;;
+      --body-file)
+        body="$(cat "${2-}")"
+        shift 2
+        ;;
+      *)
+        echo "gh-refinedstone: unsupported review-reply option ${1}" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -z "${pr_number}" || -z "${comment_id}" || -z "${body}" ]]; then
+    echo "gh-refinedstone: review-reply requires --pr, --comment-id, and --body" >&2
+    exit 1
+  fi
+
+  payload=$(printf '{"body":"%s"}' "$(json_escape "${body}")")
+  api_request POST "/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
 credential_file="$(find_credential_file)"
@@ -249,11 +348,25 @@ if command -v gh >/dev/null 2>&1; then
   GH_TOKEN="${token}" GH_HOST=github.com exec gh "$@"
 fi
 
-if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
-  shift 2
-  create_pr_with_api "$@"
-  exit 0
-fi
-
-echo "gh-refinedstone: gh is not installed and direct fallback currently supports only 'pr create'" >&2
-exit 1
+case "${1-}:${2-}" in
+  pr:create)
+    shift 2
+    create_pr_with_api "$@"
+    ;;
+  pr:view)
+    shift 2
+    view_pr_with_api "$@"
+    ;;
+  pr:close)
+    shift 2
+    close_pr_with_api "$@"
+    ;;
+  review-reply:)
+    shift
+    reply_review_comment_with_api "$@"
+    ;;
+  *)
+    echo "gh-refinedstone: gh is not installed and direct fallback currently supports 'pr create', 'pr view', 'pr close', and 'review-reply'" >&2
+    exit 1
+    ;;
+esac

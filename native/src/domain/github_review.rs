@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubPullRequestTarget {
     pub repository: String,
@@ -27,27 +25,45 @@ pub struct GithubPullRequestActivitySnapshot {
 
 impl GithubPullRequestActivitySnapshot {
     pub fn sort_events(&mut self) {
-        self.events
-            .sort_by(|left, right| left.cursor().cmp(&right.cursor()));
+        self.events.sort_by(|left, right| {
+            left.submitted_at
+                .cmp(&right.submitted_at)
+                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
     }
 
-    pub fn latest_cursor(&self) -> Option<GithubPullRequestActivityCursor> {
-        self.events
-            .last()
-            .map(GithubPullRequestActivityEvent::cursor)
+    pub fn poll_state(&self) -> GithubPullRequestPollState {
+        let Some(latest_submitted_at) = self.events.last().map(|event| event.submitted_at.clone())
+        else {
+            return GithubPullRequestPollState::default();
+        };
+
+        let mut seen_events_at_latest_timestamp = self
+            .events
+            .iter()
+            .filter(|event| event.submitted_at == latest_submitted_at)
+            .map(GithubPullRequestActivityEvent::identity)
+            .collect::<Vec<_>>();
+        seen_events_at_latest_timestamp.sort();
+        seen_events_at_latest_timestamp.dedup();
+
+        GithubPullRequestPollState {
+            latest_submitted_at: Some(latest_submitted_at),
+            seen_events_at_latest_timestamp,
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GithubPullRequestPollState {
-    pub last_seen_event: Option<GithubPullRequestActivityCursor>,
+    pub latest_submitted_at: Option<String>,
+    pub seen_events_at_latest_timestamp: Vec<GithubPullRequestActivityIdentity>,
 }
 
 impl GithubPullRequestPollState {
     pub fn from_snapshot(snapshot: &GithubPullRequestActivitySnapshot) -> Self {
-        Self {
-            last_seen_event: snapshot.latest_cursor(),
-        }
+        snapshot.poll_state()
     }
 }
 
@@ -71,9 +87,8 @@ pub struct GithubPullRequestActivityEvent {
 }
 
 impl GithubPullRequestActivityEvent {
-    pub fn cursor(&self) -> GithubPullRequestActivityCursor {
-        GithubPullRequestActivityCursor {
-            submitted_at: self.submitted_at.clone(),
+    pub fn identity(&self) -> GithubPullRequestActivityIdentity {
+        GithubPullRequestActivityIdentity {
             kind: self.kind,
             event_id: self.id,
         }
@@ -87,24 +102,8 @@ pub enum GithubPullRequestActivityKind {
     IssueComment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GithubPullRequestActivityCursor {
-    pub submitted_at: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GithubPullRequestActivityIdentity {
     pub kind: GithubPullRequestActivityKind,
     pub event_id: u64,
-}
-
-impl Ord for GithubPullRequestActivityCursor {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.submitted_at
-            .cmp(&other.submitted_at)
-            .then_with(|| self.kind.cmp(&other.kind))
-            .then_with(|| self.event_id.cmp(&other.event_id))
-    }
-}
-
-impl PartialOrd for GithubPullRequestActivityCursor {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }

@@ -51,14 +51,23 @@ impl GithubReviewPollerService {
         events: &[GithubPullRequestActivityEvent],
         previous_state: Option<&GithubPullRequestPollState>,
     ) -> Vec<GithubPullRequestActivityEvent> {
-        let Some(last_seen_event) = previous_state.and_then(|state| state.last_seen_event.as_ref())
-        else {
+        let Some(previous_state) = previous_state else {
             return Vec::new();
+        };
+
+        let Some(latest_submitted_at) = previous_state.latest_submitted_at.as_ref() else {
+            return events.to_vec();
         };
 
         events
             .iter()
-            .filter(|event| event.cursor() > last_seen_event.clone())
+            .filter(|event| {
+                event.submitted_at > *latest_submitted_at
+                    || (event.submitted_at == *latest_submitted_at
+                        && !previous_state
+                            .seen_events_at_latest_timestamp
+                            .contains(&event.identity()))
+            })
             .cloned()
             .collect()
     }
@@ -114,10 +123,7 @@ mod tests {
         let result = service.poll(&target, None).expect("poll should succeed");
 
         assert!(result.changes.is_empty());
-        assert_eq!(
-            result.next_state.last_seen_event,
-            result.snapshot.latest_cursor()
-        );
+        assert_eq!(result.next_state, result.snapshot.poll_state());
     }
 
     #[test]
@@ -151,14 +157,15 @@ mod tests {
             ),
         }));
         let previous_state = GithubPullRequestPollState {
-            last_seen_event: Some(
+            latest_submitted_at: Some("2026-04-08T10:00:00Z".to_string()),
+            seen_events_at_latest_timestamp: vec![
                 event(
                     101,
                     GithubPullRequestActivityKind::Review,
                     "2026-04-08T10:00:00Z",
                 )
-                .cursor(),
-            ),
+                .identity(),
+            ],
         };
 
         let result = service
@@ -196,14 +203,15 @@ mod tests {
             ),
         }));
         let previous_state = GithubPullRequestPollState {
-            last_seen_event: Some(
+            latest_submitted_at: Some("2026-04-08T08:00:00Z".to_string()),
+            seen_events_at_latest_timestamp: vec![
                 event(
                     101,
                     GithubPullRequestActivityKind::IssueComment,
                     "2026-04-08T08:00:00Z",
                 )
-                .cursor(),
-            ),
+                .identity(),
+            ],
         };
 
         let result = service
@@ -216,6 +224,69 @@ mod tests {
         assert_eq!(result.changes.len(), 2);
         assert_eq!(result.changes[0].id, 201);
         assert_eq!(result.changes[1].id, 301);
+    }
+
+    #[test]
+    fn poll_surfaces_first_activity_after_empty_baseline() {
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+        let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
+            snapshot: snapshot(
+                target.clone(),
+                vec![event(
+                    201,
+                    GithubPullRequestActivityKind::ReviewComment,
+                    "2026-04-08T10:30:00Z",
+                )],
+            ),
+        }));
+        let previous_state = GithubPullRequestPollState::default();
+
+        let result = service
+            .poll(&target, Some(&previous_state))
+            .expect("poll should succeed");
+
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].id, 201);
+    }
+
+    #[test]
+    fn poll_keeps_new_same_timestamp_events_visible() {
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+        let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
+            snapshot: snapshot(
+                target.clone(),
+                vec![
+                    event(
+                        210,
+                        GithubPullRequestActivityKind::IssueComment,
+                        "2026-04-08T10:30:00Z",
+                    ),
+                    event(
+                        320,
+                        GithubPullRequestActivityKind::ReviewComment,
+                        "2026-04-08T10:30:00Z",
+                    ),
+                ],
+            ),
+        }));
+        let previous_state = GithubPullRequestPollState {
+            latest_submitted_at: Some("2026-04-08T10:30:00Z".to_string()),
+            seen_events_at_latest_timestamp: vec![
+                event(
+                    210,
+                    GithubPullRequestActivityKind::IssueComment,
+                    "2026-04-08T10:30:00Z",
+                )
+                .identity(),
+            ],
+        };
+
+        let result = service
+            .poll(&target, Some(&previous_state))
+            .expect("poll should succeed");
+
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].id, 320);
     }
 
     fn snapshot(

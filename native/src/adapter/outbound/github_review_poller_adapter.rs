@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -15,6 +15,8 @@ use crate::domain::github_review::{
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const PER_PAGE: usize = 100;
+const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
+const CURL_MAX_TIME_SECONDS: &str = "30";
 
 pub struct GithubReviewPollerAdapter {
     curl_path: String,
@@ -34,7 +36,7 @@ impl GithubReviewPollerAdapter {
     }
 
     pub fn from_refinedstone_credentials(repo_root: &Path) -> Result<Self> {
-        let credential_path = repo_root.join(".git").join("refinedstone-credentials");
+        let credential_path = Self::resolve_git_dir(repo_root)?.join("refinedstone-credentials");
         let line = fs::read_to_string(&credential_path)
             .with_context(|| format!("failed to read {}", credential_path.display()))?;
         let first_line = line
@@ -45,6 +47,30 @@ impl GithubReviewPollerAdapter {
             .ok_or_else(|| anyhow!("missing token line in {}", credential_path.display()))?;
 
         Ok(Self::new(Self::parse_refinedstone_token(first_line)?))
+    }
+
+    fn resolve_git_dir(repo_root: &Path) -> Result<PathBuf> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(["rev-parse", "--path-format=absolute", "--git-dir"])
+            .output()
+            .with_context(|| format!("failed to resolve git dir from {}", repo_root.display()))?;
+
+        if !output.status.success() {
+            bail!(
+                "failed to resolve git dir from {}: {}",
+                repo_root.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if git_dir.is_empty() {
+            bail!("resolved empty git dir from {}", repo_root.display());
+        }
+
+        Ok(PathBuf::from(git_dir))
     }
 
     fn parse_refinedstone_token(line: &str) -> Result<String> {
@@ -136,7 +162,13 @@ impl GithubReviewPollerAdapter {
         let user_agent = format!("User-Agent: {}", self.user_agent);
         let api_version = format!("X-GitHub-Api-Version: {}", GITHUB_API_VERSION);
         let output = Command::new(&self.curl_path)
-            .args(["-sSfL"])
+            .args([
+                "-sSfL",
+                "--connect-timeout",
+                CURL_CONNECT_TIMEOUT_SECONDS,
+                "--max-time",
+                CURL_MAX_TIME_SECONDS,
+            ])
             .args(["-H", "Accept: application/vnd.github+json"])
             .args(["-H", api_version.as_str()])
             .args(["-H", authorization.as_str()])
@@ -411,20 +443,20 @@ mod tests {
         );
 
         assert_eq!(snapshot.events.len(), 3);
-        assert_eq!(snapshot.events[0].id, 300);
+        assert_eq!(snapshot.events[0].id, 200);
         assert_eq!(
             snapshot.events[0].kind,
-            GithubPullRequestActivityKind::ReviewComment
+            GithubPullRequestActivityKind::IssueComment
         );
-        assert_eq!(snapshot.events[1].id, 200);
+        assert_eq!(snapshot.events[1].id, 300);
         assert_eq!(
             snapshot.events[1].kind,
-            GithubPullRequestActivityKind::IssueComment
+            GithubPullRequestActivityKind::ReviewComment
         );
         assert_eq!(snapshot.events[2].id, 500);
         assert_eq!(snapshot.events[2].state.as_deref(), Some("APPROVED"));
         assert_eq!(
-            snapshot.events[0].path.as_deref(),
+            snapshot.events[1].path.as_deref(),
             Some("native/src/application/service/github_review_poller_service.rs")
         );
     }
