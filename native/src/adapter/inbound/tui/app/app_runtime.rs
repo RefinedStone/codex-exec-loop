@@ -23,11 +23,10 @@ use super::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
     ExitConfirmationState, FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent,
     FollowupOverlayUiState, InlineShellCommand, NativeTuiApp, PromptOrigin, SESSION_PAGE_SIZE,
-    SessionOverlayUiState,
-    SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
-    StartupState, TranscriptViewportState, reduce_conversation_input, reduce_conversation_intents,
-    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
-    reduce_followup_overlay_ui, reduce_shell_chrome,
+    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
+    ShellOverlay, StartupState, TranscriptViewportState, reduce_conversation_input,
+    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
+    reduce_followup_controls, reduce_followup_overlay_ui, reduce_shell_chrome,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 
