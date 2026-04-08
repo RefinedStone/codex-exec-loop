@@ -1061,6 +1061,8 @@ mod tests {
         assert!(detail.contains("id: thread-2"));
         assert!(detail.contains("/tmp/root/thread-2.json"));
         assert!(keys.contains("/: query"));
+        assert!(keys.contains("c: clear"));
+        assert!(keys.contains("Home/End"));
         assert!(keys.contains("Enter: open"));
     }
 
@@ -1097,6 +1099,141 @@ mod tests {
         assert_eq!(view.list_view.items.len(), 1);
         assert!(detail.contains("id: thread-3"));
         assert!(detail.contains("browser: page 1 of 1 | showing 1-1 of 1 matches"));
+    }
+
+    #[test]
+    fn sessions_overlay_clear_key_resets_browser_state() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session("thread-1"),
+                sample_session_with_workspace("thread-2", "/tmp/docs", "docs refresh"),
+                sample_session("thread-3"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.selected_session_index = 1;
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.session_overlay_ui_state.set_search_query("docs");
+        app.session_overlay_ui_state.set_project_filter(
+            crate::application::service::session_service::SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+        );
+        app.session_overlay_ui_state.move_page(2, 4);
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE,))
+        );
+
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            ""
+        );
+        assert_eq!(app.session_overlay_ui_state.browser_state().page_index, 0);
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().project_filter,
+            crate::application::service::session_service::SessionProjectFilter::AllProjects
+        );
+        assert_eq!(
+            app.session_overlay_ui_state.selected_session_id(),
+            Some("thread-1")
+        );
+        assert!(!app.session_overlay_ui_state.is_search_query_editing());
+
+        let view = build_session_overlay_view(&app);
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(view.list_view.selected_index, Some(0));
+        assert!(detail.contains("id: thread-1"));
+    }
+
+    #[test]
+    fn sessions_overlay_home_and_end_keys_jump_to_browser_edges() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: (1..=12)
+                .map(|index| sample_session(&format!("thread-{index}")))
+                .collect(),
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.session_overlay_ui_state.move_page(1, 2);
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE,)));
+        assert_eq!(app.session_overlay_ui_state.browser_state().page_index, 1);
+        assert_eq!(
+            app.session_overlay_ui_state.selected_session_id(),
+            Some("thread-12")
+        );
+
+        let end_view = build_session_overlay_view(&app);
+        let end_detail = end_view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(end_view.list_view.selected_index, Some(1));
+        assert!(end_detail.contains("id: thread-12"));
+
+        assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE,)));
+        assert_eq!(app.session_overlay_ui_state.browser_state().page_index, 0);
+        assert_eq!(
+            app.session_overlay_ui_state.selected_session_id(),
+            Some("thread-1")
+        );
+
+        let home_view = build_session_overlay_view(&app);
+        let home_detail = home_view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(home_view.list_view.selected_index, Some(0));
+        assert!(home_detail.contains("id: thread-1"));
+    }
+
+    #[test]
+    fn sessions_overlay_g_shortcuts_jump_to_browser_edges() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: (1..=12)
+                .map(|index| sample_session(&format!("thread-{index}")))
+                .collect(),
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT,))
+        );
+        assert_eq!(app.session_overlay_ui_state.browser_state().page_index, 1);
+        assert_eq!(
+            app.session_overlay_ui_state.selected_session_id(),
+            Some("thread-12")
+        );
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE,))
+        );
+        assert_eq!(app.session_overlay_ui_state.browser_state().page_index, 0);
+        assert_eq!(
+            app.session_overlay_ui_state.selected_session_id(),
+            Some("thread-1")
+        );
     }
 
     #[test]
@@ -1665,9 +1802,9 @@ mod tests {
         assert!(list_message.contains("no sessions in /tmp/docs match query \"missing\""));
         assert!(detail.contains("filter: /tmp/docs (2 recent sessions)"));
         assert!(detail.contains("browser: no matches in /tmp/docs across 2 recent sessions"));
-        assert!(
-            detail.contains("Clear the query, cycle filters with Tab/BackTab, or reload with r.")
-        );
+        assert!(detail.contains(
+            "Press c to clear the browser, Tab/BackTab to cycle filters, or r to reload."
+        ));
     }
 
     #[test]

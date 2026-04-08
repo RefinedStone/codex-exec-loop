@@ -22,6 +22,14 @@ impl<'a> SessionBrowserView<'a> {
             .and_then(|selected_index| self.visible_sessions.get(selected_index).copied())
     }
 
+    pub fn first_selection(&self) -> SessionBrowserSelection {
+        self.selection_at_index(0)
+    }
+
+    pub fn last_selection(&self) -> SessionBrowserSelection {
+        self.selection_at_index(self.visible_sessions.len().saturating_sub(1))
+    }
+
     pub fn selection_after_delta(&self, delta: isize) -> SessionBrowserSelection {
         if self.visible_sessions.is_empty() {
             return SessionBrowserSelection {
@@ -34,6 +42,24 @@ impl<'a> SessionBrowserView<'a> {
         let max_index = self.visible_sessions.len().saturating_sub(1) as isize;
         let next_index = (current_index + delta).clamp(0, max_index) as usize;
 
+        SessionBrowserSelection {
+            index: next_index,
+            session_id: self
+                .visible_sessions
+                .get(next_index)
+                .map(|session| session.id.clone()),
+        }
+    }
+
+    fn selection_at_index(&self, index: usize) -> SessionBrowserSelection {
+        if self.visible_sessions.is_empty() {
+            return SessionBrowserSelection {
+                index: 0,
+                session_id: None,
+            };
+        }
+
+        let next_index = index.min(self.visible_sessions.len().saturating_sub(1));
         SessionBrowserSelection {
             index: next_index,
             session_id: self
@@ -170,6 +196,32 @@ mod tests {
             build_session_browser_view(&recent_sessions, &browser_state, None, Some("thread-2"), 0);
 
         let selection = browser_view.selection_after_delta(5);
+
+        assert_eq!(
+            selection,
+            SessionBrowserSelection {
+                index: 2,
+                session_id: Some("thread-3".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn browser_view_last_selection_returns_last_visible_session() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_session("thread-1", "/tmp/root-a", "alpha"),
+                sample_session("thread-2", "/tmp/root-a", "beta"),
+                sample_session("thread-3", "/tmp/root-b", "gamma"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let browser_state = SessionBrowserState::default();
+        let browser_view =
+            build_session_browser_view(&recent_sessions, &browser_state, None, None, 0);
+
+        let selection = browser_view.last_selection();
 
         assert_eq!(
             selection,

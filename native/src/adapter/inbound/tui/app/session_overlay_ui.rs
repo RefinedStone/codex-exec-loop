@@ -92,6 +92,24 @@ impl SessionOverlayUiState {
         self.list_state = ListState::default();
     }
 
+    pub fn jump_to_first_page(&mut self) {
+        self.browser_state.jump_to_first_page();
+        self.list_state = ListState::default();
+    }
+
+    pub fn jump_to_last_page(&mut self, total_pages: usize) {
+        self.browser_state.jump_to_last_page(total_pages);
+        self.list_state = ListState::default();
+    }
+
+    pub fn clear_browser_state(&mut self) {
+        self.browser_state.clear();
+        self.list_state = ListState::default();
+        self.selected_session_id = None;
+        self.search_query_editor.is_editing = false;
+        self.search_query_editor.buffer = self.browser_state.search_query.clone();
+    }
+
     pub fn sync_selected_session(&mut self, selected_session_index: Option<usize>) {
         self.list_state.select(selected_session_index);
     }
@@ -191,6 +209,45 @@ mod tests {
         state.move_page(4, 2);
 
         assert_eq!(state.browser_state().page_index, 1);
+        assert_eq!(state.list_state.selected(), None);
+        assert_eq!(state.list_state.offset(), 0);
+    }
+
+    #[test]
+    fn clear_browser_state_resets_query_filter_selection_and_editor() {
+        let mut state = SessionOverlayUiState::new(10);
+        state.set_search_query("docs");
+        state.set_project_filter(SessionProjectFilter::RecentProject {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        state.move_page(3, 5);
+        state.set_selected_session_id(Some("thread-2".to_string()));
+        state.start_search_query_edit();
+        state.push_search_query_character('x');
+
+        state.clear_browser_state();
+
+        assert_eq!(state.browser_state().search_query, "");
+        assert_eq!(state.browser_state().page_index, 0);
+        assert_eq!(
+            state.browser_state().project_filter,
+            SessionProjectFilter::AllProjects
+        );
+        assert_eq!(state.selected_session_id(), None);
+        assert!(!state.is_search_query_editing());
+        assert_eq!(state.search_query_editor_buffer(), "");
+        assert_eq!(state.list_state.selected(), None);
+        assert_eq!(state.list_state.offset(), 0);
+    }
+
+    #[test]
+    fn jump_to_last_page_clamps_and_clears_list_state() {
+        let mut state = SessionOverlayUiState::new(10);
+        state.list_state = ListState::default().with_offset(2).with_selected(Some(1));
+
+        state.jump_to_last_page(3);
+
+        assert_eq!(state.browser_state().page_index, 2);
         assert_eq!(state.list_state.selected(), None);
         assert_eq!(state.list_state.offset(), 0);
     }

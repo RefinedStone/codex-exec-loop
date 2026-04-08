@@ -54,6 +54,20 @@ impl SessionBrowserState {
         let next_page_index = (self.page_index as isize + delta).clamp(0, max_page_index);
         self.page_index = next_page_index as usize;
     }
+
+    pub fn jump_to_first_page(&mut self) {
+        self.page_index = 0;
+    }
+
+    pub fn jump_to_last_page(&mut self, total_pages: usize) {
+        self.page_index = total_pages.saturating_sub(1);
+    }
+
+    pub fn clear(&mut self) {
+        self.search_query.clear();
+        self.page_index = 0;
+        self.project_filter = SessionProjectFilter::AllProjects;
+    }
 }
 
 impl Default for SessionBrowserState {
@@ -483,6 +497,22 @@ mod tests {
 
         state.move_page(-9, 2);
         assert_eq!(state.page_index, 0);
+    }
+
+    #[test]
+    fn clear_resets_query_filter_and_page_index() {
+        let mut state = SessionBrowserState::new(5);
+        state.set_search_query("docs");
+        state.set_project_filter(SessionProjectFilter::RecentProject {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        state.page_index = 3;
+
+        state.clear();
+
+        assert!(state.search_query.is_empty());
+        assert_eq!(state.page_index, 0);
+        assert_eq!(state.project_filter, SessionProjectFilter::AllProjects);
     }
 
     #[test]

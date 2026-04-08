@@ -1111,8 +1111,9 @@ fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 
     vec![
-        Line::from("/: query    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
-        Line::from("Up/Down: move    Enter: open    n: draft    r: reload    Ctrl+d: diagnostics"),
+        Line::from("/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
+        Line::from("Up/Down or Home/End or g/G: move    Enter: open    n: draft    r: reload"),
+        Line::from("Ctrl+d: diagnostics"),
     ]
 }
 
@@ -1184,9 +1185,9 @@ fn build_session_empty_detail_line(
 
 fn build_session_empty_hint_line(browser_view: &SessionBrowserView<'_>) -> String {
     if browser_view.projection.filtered_session_count == 0 {
-        "Clear the query, cycle filters with Tab/BackTab, or reload with r.".to_string()
+        "Press c to clear the browser, Tab/BackTab to cycle filters, or r to reload.".to_string()
     } else {
-        "Pick another session with Up/Down or reload with r.".to_string()
+        "Use Up/Down or Home/End to pick another session, or reload with r.".to_string()
     }
 }
 
