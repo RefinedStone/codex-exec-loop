@@ -272,8 +272,24 @@ impl GithubReviewPollingRuntimeState {
         if self.snapshot.is_none() {
             return format!("starting {target}");
         }
+        if let Some(notice) = self.recent_change_notice() {
+            return format!("changes {target} ({})", truncate_status_detail(&notice));
+        }
 
         format!("watching {target}")
+    }
+
+    fn recent_change_notice(&self) -> Option<String> {
+        let latest_change = self.recent_changes.last()?;
+        if self.recent_changes.len() == 1 {
+            return Some(latest_change.notice_label());
+        }
+
+        Some(format!(
+            "{} new; latest {}",
+            self.recent_changes.len(),
+            latest_change.notice_label()
+        ))
     }
 
     fn take_due_request(&mut self, now: Instant) -> Option<GithubReviewPollRequest> {
@@ -544,6 +560,138 @@ mod tests {
     }
 
     #[test]
+    fn active_state_surfaces_single_recent_change_notice() {
+        let config = GithubReviewPollingConfig {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+            interval: Duration::from_secs(30),
+        };
+        let start = Instant::now();
+        let mut state = GithubReviewPollingState::active(config, start);
+
+        let _ = state.take_due_request(start);
+        state.record_result(
+            start + Duration::from_secs(1),
+            Ok(poll_result(
+                vec![
+                    event(
+                        201,
+                        GithubPullRequestActivityKind::ReviewComment,
+                        "2026-04-08T10:30:00Z",
+                    )
+                    .with_path("native/src/adapter/inbound/tui/app/shell_presentation.rs"),
+                ],
+                vec![
+                    event(
+                        201,
+                        GithubPullRequestActivityKind::ReviewComment,
+                        "2026-04-08T10:30:00Z",
+                    )
+                    .with_path("native/src/adapter/inbound/tui/app/shell_presentation.rs"),
+                ],
+            )),
+        );
+
+        let GithubReviewPollingState::Active(runtime) = state else {
+            panic!("expected active state");
+        };
+        assert_eq!(
+            runtime.status_label(),
+            "changes acme/widgets#42 (comment on shell_presentation.rs by reviewer)"
+        );
+    }
+
+    #[test]
+    fn active_state_summarizes_multiple_recent_changes() {
+        let config = GithubReviewPollingConfig {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+            interval: Duration::from_secs(30),
+        };
+        let start = Instant::now();
+        let mut state = GithubReviewPollingState::active(config, start);
+
+        let _ = state.take_due_request(start);
+        state.record_result(
+            start + Duration::from_secs(1),
+            Ok(poll_result(
+                vec![
+                    event(
+                        100,
+                        GithubPullRequestActivityKind::IssueComment,
+                        "2026-04-08T09:00:00Z",
+                    ),
+                    event(
+                        101,
+                        GithubPullRequestActivityKind::Review,
+                        "2026-04-08T10:00:00Z",
+                    )
+                    .with_state("APPROVED"),
+                ],
+                vec![
+                    event(
+                        100,
+                        GithubPullRequestActivityKind::IssueComment,
+                        "2026-04-08T09:00:00Z",
+                    ),
+                    event(
+                        101,
+                        GithubPullRequestActivityKind::Review,
+                        "2026-04-08T10:00:00Z",
+                    )
+                    .with_state("APPROVED"),
+                ],
+            )),
+        );
+
+        let GithubReviewPollingState::Active(runtime) = state else {
+            panic!("expected active state");
+        };
+        assert_eq!(
+            runtime.status_label(),
+            "changes acme/widgets#42 (2 new; latest approved review by reviewer)"
+        );
+    }
+
+    #[test]
+    fn active_state_clears_recent_change_notice_after_quiet_poll() {
+        let config = GithubReviewPollingConfig {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+            interval: Duration::from_secs(30),
+        };
+        let start = Instant::now();
+        let mut state = GithubReviewPollingState::active(config, start);
+
+        let _ = state.take_due_request(start);
+        let first_snapshot_event = event(
+            101,
+            GithubPullRequestActivityKind::Review,
+            "2026-04-08T10:00:00Z",
+        )
+        .with_state("APPROVED");
+        state.record_result(
+            start + Duration::from_secs(1),
+            Ok(poll_result(
+                vec![first_snapshot_event.clone()],
+                vec![first_snapshot_event.clone()],
+            )),
+        );
+
+        let second_request = state
+            .take_due_request(start + Duration::from_secs(31))
+            .expect("follow-up poll should be due");
+        assert!(second_request.previous_state.is_some());
+
+        state.record_result(
+            start + Duration::from_secs(32),
+            Ok(poll_result(vec![first_snapshot_event], Vec::new())),
+        );
+
+        let GithubReviewPollingState::Active(runtime) = state else {
+            panic!("expected active state");
+        };
+        assert_eq!(runtime.status_label(), "watching acme/widgets#42");
+    }
+
+    #[test]
     fn bootstrap_creates_service_when_configuration_is_valid() {
         let calls = Arc::new(Mutex::new(0usize));
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
@@ -643,6 +791,60 @@ mod tests {
             next_state: snapshot.poll_state(),
             changes: snapshot.events.clone(),
             snapshot,
+        }
+    }
+
+    fn poll_result(
+        events: Vec<GithubPullRequestActivityEvent>,
+        changes: Vec<GithubPullRequestActivityEvent>,
+    ) -> GithubPullRequestPollResult {
+        let snapshot = GithubPullRequestActivitySnapshot {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+            title: "Track review state".to_string(),
+            url: "https://example.invalid/pr/42".to_string(),
+            head_branch: "feature/test".to_string(),
+            base_branch: "prerelease".to_string(),
+            events,
+        };
+
+        GithubPullRequestPollResult {
+            next_state: snapshot.poll_state(),
+            changes,
+            snapshot,
+        }
+    }
+
+    fn event(
+        id: u64,
+        kind: GithubPullRequestActivityKind,
+        submitted_at: &str,
+    ) -> GithubPullRequestActivityEvent {
+        GithubPullRequestActivityEvent {
+            id,
+            kind,
+            submitted_at: submitted_at.to_string(),
+            author_login: "reviewer".to_string(),
+            body: "Looks good".to_string(),
+            state: None,
+            url: format!("https://example.invalid/pr/42#{id}"),
+            path: None,
+        }
+    }
+
+    trait GithubPullRequestActivityEventTestExt {
+        fn with_path(self, path: &str) -> Self;
+        fn with_state(self, state: &str) -> Self;
+    }
+
+    impl GithubPullRequestActivityEventTestExt for GithubPullRequestActivityEvent {
+        fn with_path(mut self, path: &str) -> Self {
+            self.path = Some(path.to_string());
+            self
+        }
+
+        fn with_state(mut self, state: &str) -> Self {
+            self.state = Some(state.to_string());
+            self
         }
     }
 }
