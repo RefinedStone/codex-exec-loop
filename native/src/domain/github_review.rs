@@ -105,9 +105,7 @@ impl GithubPullRequestActivityEvent {
             GithubPullRequestActivityKind::Review => self.review_notice_label(),
             GithubPullRequestActivityKind::ReviewComment => {
                 match self.path.as_deref().and_then(review_comment_file_label) {
-                    Some(file_label) => {
-                        format!("comment on {file_label} by {}", self.author_login)
-                    }
+                    Some(file_label) => format!("comment on {file_label} by {}", self.author_login),
                     None => format!("review comment by {}", self.author_login),
                 }
             }
@@ -154,7 +152,7 @@ pub struct GithubPullRequestActivityIdentity {
     pub event_id: u64,
 }
 
-fn review_comment_file_label(path: &str) -> Option<String> {
+fn review_comment_file_label(path: &str) -> Option<&str> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return None;
@@ -164,8 +162,7 @@ fn review_comment_file_label(path: &str) -> Option<String> {
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
-        .map(|name| name.to_string())
-        .or_else(|| Some(trimmed.to_string()))
+        .or(Some(trimmed))
 }
 
 fn normalize_review_state(state: &str) -> String {

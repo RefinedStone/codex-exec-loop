@@ -242,6 +242,7 @@ pub(super) struct GithubReviewPollingRuntimeState {
     pub(super) config: GithubReviewPollingConfig,
     pub(super) snapshot: Option<GithubPullRequestActivitySnapshot>,
     pub(super) recent_changes: Vec<GithubPullRequestActivityEvent>,
+    recent_change_notice: Option<String>,
     pub(super) poll_state: Option<GithubPullRequestPollState>,
     pub(super) last_error: Option<String>,
     next_poll_at: Instant,
@@ -254,6 +255,7 @@ impl GithubReviewPollingRuntimeState {
             config,
             snapshot: None,
             recent_changes: Vec::new(),
+            recent_change_notice: None,
             poll_state: None,
             last_error: None,
             next_poll_at: now,
@@ -272,22 +274,24 @@ impl GithubReviewPollingRuntimeState {
         if self.snapshot.is_none() {
             return format!("starting {target}");
         }
-        if let Some(notice) = self.recent_change_notice() {
-            return format!("changes {target} ({})", truncate_status_detail(&notice));
+        if let Some(notice) = self.recent_change_notice.as_deref() {
+            return format!("changes {target} ({})", truncate_status_detail(notice));
         }
 
         format!("watching {target}")
     }
 
-    fn recent_change_notice(&self) -> Option<String> {
-        let latest_change = self.recent_changes.last()?;
-        if self.recent_changes.len() == 1 {
+    fn build_recent_change_notice(
+        recent_changes: &[GithubPullRequestActivityEvent],
+    ) -> Option<String> {
+        let latest_change = recent_changes.last()?;
+        if recent_changes.len() == 1 {
             return Some(latest_change.notice_label());
         }
 
         Some(format!(
             "{} new; latest {}",
-            self.recent_changes.len(),
+            recent_changes.len(),
             latest_change.notice_label()
         ))
     }
@@ -310,13 +314,16 @@ impl GithubReviewPollingRuntimeState {
 
         match result {
             Ok(result) => {
+                let recent_change_notice = Self::build_recent_change_notice(&result.changes);
                 self.snapshot = Some(result.snapshot);
                 self.recent_changes = result.changes;
+                self.recent_change_notice = recent_change_notice;
                 self.poll_state = Some(result.next_state);
                 self.last_error = None;
             }
             Err(error) => {
                 self.recent_changes.clear();
+                self.recent_change_notice = None;
                 self.last_error = Some(error);
             }
         }
