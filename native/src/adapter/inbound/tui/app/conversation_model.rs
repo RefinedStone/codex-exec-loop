@@ -473,20 +473,15 @@ impl TurnActivityState {
     }
 
     pub(crate) fn complete_turn(&mut self) {
-        self.last_completed_turn_file_change_count = self.current_turn_file_change_count;
-        self.last_completed_turn_command_count = self.current_turn_command_count;
-        self.last_completed_turn_last_summary = self.current_turn_last_summary.clone();
-        self.current_turn_file_change_count = 0;
-        self.current_turn_command_count = 0;
-        self.current_turn_last_summary = None;
+        self.last_completed_turn_file_change_count =
+            std::mem::replace(&mut self.current_turn_file_change_count, 0);
+        self.last_completed_turn_command_count =
+            std::mem::replace(&mut self.current_turn_command_count, 0);
+        self.last_completed_turn_last_summary = self.current_turn_last_summary.take();
     }
 
     pub(crate) fn last_completed_file_change_count(&self) -> usize {
         self.last_completed_turn_file_change_count
-    }
-
-    pub(crate) fn last_completed_command_count(&self) -> usize {
-        self.last_completed_turn_command_count
     }
 
     fn has_current_turn_activity(&self) -> bool {

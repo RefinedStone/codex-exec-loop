@@ -1589,8 +1589,28 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("last turn commands: 2"));
-        assert!(rendered.contains("recent tool activity: command: cargo test [completed]"));
-        assert!(rendered.contains("recent activity scope: last turn"));
+        assert!(rendered.contains("last turn tool activity: command: cargo test [completed]"));
+    }
+
+    #[test]
+    fn followup_template_status_lines_fit_default_overlay_budget() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+
+        let lines = build_followup_template_status_lines(&app);
+
+        assert_eq!(lines.len(), 9);
+    }
+
+    #[test]
+    fn followup_template_status_lines_fit_edit_overlay_budget() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.start_max_auto_turns_edit();
+
+        let lines = build_followup_template_status_lines(&app);
+
+        assert_eq!(lines.len(), 9);
     }
 
     #[test]

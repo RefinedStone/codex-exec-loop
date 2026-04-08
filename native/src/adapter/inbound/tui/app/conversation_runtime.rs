@@ -511,7 +511,10 @@ mod tests {
             0
         );
         assert_eq!(
-            reduced.state.turn_activity.last_completed_command_count(),
+            reduced
+                .state
+                .turn_activity
+                .last_completed_turn_command_count,
             1
         );
         assert_eq!(
