@@ -379,12 +379,12 @@ impl NativeTuiApp {
             .recent_change_summary(max_total_len)
     }
 
-    pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) {
+    pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) -> bool {
         let Some(request) = self.github_review_polling_state.take_due_request(now) else {
-            return;
+            return false;
         };
         let Some(service) = self.github_review_poller_service.clone() else {
-            return;
+            return false;
         };
         let tx = self.tx.clone();
         thread::spawn(move || {
@@ -393,6 +393,7 @@ impl NativeTuiApp {
                 .map_err(|error| error.to_string());
             let _ = tx.send(BackgroundMessage::GithubReviewPollLoaded(result));
         });
+        true
     }
 
     pub(super) fn record_github_review_poll_result(

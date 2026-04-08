@@ -8,6 +8,7 @@ pub(super) struct ShellRuntime {
     app: NativeTuiApp,
     frontend_mode: ShellFrontendMode,
     should_quit: bool,
+    redraw_requested: bool,
 }
 
 impl ShellRuntime {
@@ -16,6 +17,7 @@ impl ShellRuntime {
             app,
             frontend_mode,
             should_quit: false,
+            redraw_requested: true,
         }
     }
 
@@ -32,8 +34,19 @@ impl ShellRuntime {
         self.should_quit
     }
 
+    pub(super) fn take_redraw_request(&mut self) -> bool {
+        std::mem::take(&mut self.redraw_requested)
+    }
+
+    fn request_redraw(&mut self) {
+        self.redraw_requested = true;
+    }
+
     pub(super) fn poll_background_messages(&mut self) {
+        let mut redraw_requested = false;
+
         while let Ok(message) = self.app.rx.try_recv() {
+            redraw_requested = true;
             match message {
                 BackgroundMessage::StartupLoaded(result) => {
                     let workspace_directory = match &result {
@@ -85,22 +98,31 @@ impl ShellRuntime {
             }
         }
 
-        self.app.maybe_start_github_review_poll(Instant::now());
+        redraw_requested |= self.app.maybe_start_github_review_poll(Instant::now());
+        if redraw_requested {
+            self.request_redraw();
+        }
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: Event) {
-        let Event::Key(key) = event else {
-            return;
-        };
-        if key.kind != KeyEventKind::Press {
-            return;
-        }
+        match event {
+            Event::Key(key) => {
+                if key.kind != KeyEventKind::Press {
+                    return;
+                }
 
-        self.handle_key_press(key);
+                self.handle_key_press(key);
+            }
+            Event::Resize(_, _) => self.request_redraw(),
+            _ => {}
+        }
     }
 
     fn handle_key_press(&mut self, key: KeyEvent) {
         if let Some(confirmed_exit) = self.app.handle_exit_confirmation_key(key) {
+            if !confirmed_exit {
+                self.request_redraw();
+            }
             if confirmed_exit {
                 self.should_quit = true;
             }
@@ -113,11 +135,13 @@ impl ShellRuntime {
         }
 
         if self.app.handle_shell_overlay_key(key) {
+            self.request_redraw();
             return;
         }
 
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
             self.app.handle_ctrl_c();
+            self.request_redraw();
             return;
         }
 
@@ -193,10 +217,12 @@ impl ShellRuntime {
             KeyCode::Char(character)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.app.push_input_character(character);
+                self.app.push_input_character(character)
             }
-            _ => {}
+            _ => return,
         }
+
+        self.request_redraw();
     }
 }
 
@@ -368,6 +394,7 @@ mod tests {
     #[test]
     fn startup_background_message_updates_app_state() {
         let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.take_redraw_request();
         runtime
             .app
             .tx
@@ -387,8 +414,27 @@ mod tests {
     }
 
     #[test]
+    fn runtime_starts_with_redraw_requested() {
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+
+        assert!(runtime.take_redraw_request());
+        assert!(!runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn idle_background_poll_does_not_request_redraw() {
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.take_redraw_request();
+
+        runtime.poll_background_messages();
+
+        assert!(!runtime.take_redraw_request());
+    }
+
+    #[test]
     fn plain_character_input_uses_empty_modifier_check() {
         let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.take_redraw_request();
 
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
@@ -399,11 +445,13 @@ mod tests {
             panic!("expected ready conversation state");
         };
         assert_eq!(conversation.input_buffer, "a");
+        assert!(runtime.take_redraw_request());
     }
 
     #[test]
     fn inline_mode_ignores_transcript_navigation_keys() {
         let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.take_redraw_request();
         runtime.app_mut().sync_transcript_viewport_metrics(24, 6);
 
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -412,11 +460,13 @@ mod tests {
         )));
 
         assert_eq!(runtime.app().transcript_viewport_status_label(), "tail");
+        assert!(!runtime.take_redraw_request());
     }
 
     #[test]
     fn alternate_screen_keeps_transcript_navigation_keys() {
         let mut runtime = make_test_runtime(ShellFrontendMode::AlternateScreen);
+        runtime.take_redraw_request();
         runtime.app_mut().sync_transcript_viewport_metrics(24, 6);
 
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -428,6 +478,17 @@ mod tests {
             runtime.app().transcript_viewport_status_label(),
             "manual 19/24"
         );
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn resize_event_requests_redraw() {
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Resize(120, 40));
+
+        assert!(runtime.take_redraw_request());
     }
 
     #[test]

@@ -29,7 +29,9 @@ fn run_event_loop(
 ) -> Result<()> {
     while !runtime.should_quit() {
         runtime.poll_background_messages();
-        terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
+        if runtime.take_redraw_request() {
+            terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
+        }
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
