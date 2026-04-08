@@ -20,6 +20,7 @@ impl<'a> SessionBrowserView<'a> {
 pub(super) fn build_session_browser_view<'a>(
     recent_sessions: &'a RecentSessions,
     browser_state: &SessionBrowserState,
+    selected_session_id: Option<&str>,
     selected_session_index: usize,
 ) -> SessionBrowserView<'a> {
     let projection = project_recent_sessions(recent_sessions, browser_state);
@@ -28,13 +29,35 @@ pub(super) fn build_session_browser_view<'a>(
         .iter()
         .filter_map(|session_index| recent_sessions.items.get(*session_index))
         .collect::<Vec<_>>();
-    let selected_index = projection.clamp_selected_index(selected_session_index);
+    let selected_index = resolve_selected_index(
+        &visible_sessions,
+        selected_session_id,
+        selected_session_index,
+    );
 
     SessionBrowserView {
         projection,
         visible_sessions,
         selected_index,
     }
+}
+
+fn resolve_selected_index(
+    visible_sessions: &[&SessionSummary],
+    selected_session_id: Option<&str>,
+    selected_session_index: usize,
+) -> Option<usize> {
+    if let Some(selected_session_id) = selected_session_id {
+        if let Some(selected_index) = visible_sessions
+            .iter()
+            .position(|session| session.id == selected_session_id)
+        {
+            return Some(selected_index);
+        }
+    }
+
+    (!visible_sessions.is_empty())
+        .then(|| selected_session_index.min(visible_sessions.len().saturating_sub(1)))
 }
 
 #[cfg(test)]
@@ -60,7 +83,37 @@ mod tests {
             project_filter: SessionProjectFilter::AllProjects,
         };
 
-        let browser_view = build_session_browser_view(&recent_sessions, &browser_state, 5);
+        let browser_view = build_session_browser_view(&recent_sessions, &browser_state, None, 5);
+
+        assert_eq!(browser_view.selected_index, Some(0));
+        assert_eq!(
+            browser_view
+                .selected_session()
+                .map(|session| session.id.as_str()),
+            Some("thread-3")
+        );
+    }
+
+    #[test]
+    fn browser_view_preserves_selected_session_by_id_after_filtering() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_session("thread-1", "/tmp/root-a", "alpha"),
+                sample_session("thread-2", "/tmp/root-a", "beta"),
+                sample_session("thread-3", "/tmp/root-b", "docs release"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let browser_state = SessionBrowserState {
+            search_query: "docs".to_string(),
+            page_index: 0,
+            page_size: 10,
+            project_filter: SessionProjectFilter::AllProjects,
+        };
+
+        let browser_view =
+            build_session_browser_view(&recent_sessions, &browser_state, Some("thread-3"), 1);
 
         assert_eq!(browser_view.selected_index, Some(0));
         assert_eq!(

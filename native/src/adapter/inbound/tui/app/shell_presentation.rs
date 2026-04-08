@@ -218,6 +218,8 @@ pub(super) fn build_transcript_panel_view(
 }
 
 pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayView {
+    let (list_view, detail_lines) = build_session_overlay_content(app);
+
     SessionOverlayView {
         header_lines: vec![
             Line::from(vec![
@@ -231,8 +233,8 @@ pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
             ]),
             Line::from("Resume a thread without leaving the shell view."),
         ],
-        list_view: build_session_list_view(app),
-        detail_lines: build_session_detail_lines(app),
+        list_view,
+        detail_lines,
         warning_lines: build_session_warning_lines(app),
         key_lines: vec![
             Line::from("Up/Down or j/k: move    Enter: open thread"),
@@ -823,87 +825,90 @@ fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn build_session_list_view(app: &NativeTuiApp) -> OverlayListView {
+fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Line<'static>>) {
     match &app.session_state {
-        SessionState::Idle => OverlayListView {
-            message_lines: Some(vec![Line::from(if app.can_open_session_list() {
-                "session list has not loaded yet"
+        SessionState::Idle => (
+            OverlayListView {
+                message_lines: Some(vec![Line::from(if app.can_open_session_list() {
+                    "session list has not loaded yet"
+                } else {
+                    "recent sessions unlock after startup diagnostics pass"
+                })]),
+                items: Vec::new(),
+                selected_index: None,
+            },
+            vec![Line::from(if app.can_open_session_list() {
+                "session details are not available yet"
             } else {
-                "recent sessions unlock after startup diagnostics pass"
-            })]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        SessionState::Loading => OverlayListView {
-            message_lines: Some(vec![Line::from(
-                "loading recent sessions from codex app-server",
-            )]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        SessionState::Failed(message) => OverlayListView {
-            message_lines: Some(vec![Line::from(message.clone())]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => {
+                "startup diagnostics must pass before recent-session detail is available"
+            })],
+        ),
+        SessionState::Loading => (
+            OverlayListView {
+                message_lines: Some(vec![Line::from(
+                    "loading recent sessions from codex app-server",
+                )]),
+                items: Vec::new(),
+                selected_index: None,
+            },
+            vec![Line::from("waiting for session list response")],
+        ),
+        SessionState::Failed(message) => (
+            OverlayListView {
+                message_lines: Some(vec![Line::from(message.clone())]),
+                items: Vec::new(),
+                selected_index: None,
+            },
+            vec![Line::from(message.clone())],
+        ),
+        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => (
             OverlayListView {
                 message_lines: Some(vec![Line::from("(no sessions found)")]),
                 items: Vec::new(),
                 selected_index: None,
-            }
-        }
+            },
+            vec![Line::from("no session detail to show")],
+        ),
         SessionState::Ready(recent_sessions) => {
             let browser_view = build_session_browser_view(
                 recent_sessions,
                 app.session_overlay_ui_state.browser_state(),
+                recent_sessions
+                    .items
+                    .get(app.selected_session_index)
+                    .map(|session| session.id.as_str()),
                 app.selected_session_index,
             );
             if browser_view.visible_sessions.is_empty() {
-                return OverlayListView {
-                    message_lines: Some(vec![Line::from(
-                        "no sessions match the current browser state",
-                    )]),
-                    items: Vec::new(),
-                    selected_index: None,
-                };
+                return (
+                    OverlayListView {
+                        message_lines: Some(vec![Line::from(
+                            "no sessions match the current browser state",
+                        )]),
+                        items: Vec::new(),
+                        selected_index: None,
+                    },
+                    vec![Line::from(
+                        "no session detail to show for the current browser state",
+                    )],
+                );
             }
 
-            OverlayListView {
-                message_lines: None,
-                items: browser_view
-                    .visible_sessions
-                    .iter()
-                    .map(|session| build_session_list_entry(session))
-                    .collect(),
-                selected_index: browser_view.selected_index,
-            }
-        }
-    }
-}
-
-fn build_session_detail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.session_state {
-        SessionState::Idle => vec![Line::from(if app.can_open_session_list() {
-            "session details are not available yet"
-        } else {
-            "startup diagnostics must pass before recent-session detail is available"
-        })],
-        SessionState::Loading => vec![Line::from("waiting for session list response")],
-        SessionState::Failed(message) => vec![Line::from(message.clone())],
-        SessionState::Ready(recent_sessions) if recent_sessions.items.is_empty() => {
-            vec![Line::from("no session detail to show")]
-        }
-        SessionState::Ready(recent_sessions) => {
-            let browser_view = build_session_browser_view(
-                recent_sessions,
-                app.session_overlay_ui_state.browser_state(),
-                app.selected_session_index,
-            );
             let Some(selected_session) = browser_view.selected_session() else {
-                return vec![Line::from(
-                    "no session detail to show for the current browser state",
-                )];
+                return (
+                    OverlayListView {
+                        message_lines: None,
+                        items: browser_view
+                            .visible_sessions
+                            .iter()
+                            .map(|session| build_session_list_entry(session))
+                            .collect(),
+                        selected_index: None,
+                    },
+                    vec![Line::from(
+                        "no session detail to show for the current browser state",
+                    )],
+                );
             };
 
             let mut lines = vec![
@@ -938,7 +943,18 @@ fn build_session_detail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             lines.push(Line::from(selected_session.preview_block()));
             lines.push(Line::from(""));
             lines.push(Line::from(format!("path: {}", selected_session.path)));
-            lines
+            (
+                OverlayListView {
+                    message_lines: None,
+                    items: browser_view
+                        .visible_sessions
+                        .iter()
+                        .map(|session| build_session_list_entry(session))
+                        .collect(),
+                    selected_index: browser_view.selected_index,
+                },
+                lines,
+            )
         }
     }
 }

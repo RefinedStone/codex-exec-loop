@@ -157,6 +157,10 @@ impl NativeTuiApp {
             SessionState::Ready(recent_sessions) => build_session_browser_view(
                 recent_sessions,
                 self.session_overlay_ui_state.browser_state(),
+                recent_sessions
+                    .items
+                    .get(self.selected_session_index)
+                    .map(|session| session.id.as_str()),
                 self.selected_session_index,
             )
             .selected_session(),

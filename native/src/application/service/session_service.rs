@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -112,6 +113,7 @@ pub fn project_recent_sessions(
     recent_sessions: &RecentSessions,
     browser_state: &SessionBrowserState,
 ) -> SessionBrowserProjection {
+    let search_tokens = tokenize_search_query(&browser_state.search_query);
     let project_filter_options = build_project_filter_options(&recent_sessions.items);
     let active_project_filter =
         resolve_active_project_filter(&browser_state.project_filter, &project_filter_options);
@@ -120,7 +122,7 @@ pub fn project_recent_sessions(
         .iter()
         .enumerate()
         .filter(|(_, session)| matches_project_filter(session, &active_project_filter))
-        .filter(|(_, session)| matches_search_query(session, &browser_state.search_query))
+        .filter(|(_, session)| matches_search_query(session, &search_tokens))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
 
@@ -153,31 +155,33 @@ pub fn project_recent_sessions(
 }
 
 fn build_project_filter_options(sessions: &[SessionSummary]) -> Vec<SessionProjectFilterOption> {
+    let mut workspace_counts = HashMap::new();
+    let mut workspace_order = Vec::new();
+
+    for session in sessions {
+        let workspace_directory = session.cwd.as_str();
+        let count = workspace_counts.entry(workspace_directory).or_insert(0);
+        if *count == 0 {
+            workspace_order.push(workspace_directory);
+        }
+        *count += 1;
+    }
+
     let mut project_filter_options = vec![SessionProjectFilterOption {
         filter: SessionProjectFilter::AllProjects,
         label: "all projects".to_string(),
         session_count: sessions.len(),
     }];
-    let mut seen_workspace_directories = Vec::new();
 
-    for session in sessions {
-        if seen_workspace_directories
-            .iter()
-            .any(|workspace_directory| workspace_directory == &session.cwd)
-        {
-            continue;
-        }
-
-        seen_workspace_directories.push(session.cwd.clone());
+    for workspace_directory in workspace_order {
         project_filter_options.push(SessionProjectFilterOption {
             filter: SessionProjectFilter::RecentProject {
-                workspace_directory: session.cwd.clone(),
+                workspace_directory: workspace_directory.to_string(),
             },
-            label: session.cwd.clone(),
-            session_count: sessions
-                .iter()
-                .filter(|candidate| candidate.cwd == session.cwd)
-                .count(),
+            label: workspace_directory.to_string(),
+            session_count: *workspace_counts
+                .get(workspace_directory)
+                .expect("workspace count should exist"),
         });
     }
 
@@ -207,33 +211,53 @@ fn matches_project_filter(session: &SessionSummary, project_filter: &SessionProj
     }
 }
 
-fn matches_search_query(session: &SessionSummary, search_query: &str) -> bool {
-    let normalized_tokens = search_query
+fn tokenize_search_query(search_query: &str) -> Vec<String> {
+    search_query
         .split_whitespace()
         .map(|token| token.trim().to_ascii_lowercase())
         .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    if normalized_tokens.is_empty() {
+        .collect()
+}
+
+fn matches_search_query(session: &SessionSummary, search_tokens: &[String]) -> bool {
+    if search_tokens.is_empty() {
         return true;
     }
 
-    let search_haystack = build_search_haystack(session);
-    normalized_tokens
+    search_tokens
         .iter()
-        .all(|token| search_haystack.contains(token))
+        .all(|search_token| matches_search_token(session, search_token))
 }
 
-fn build_search_haystack(session: &SessionSummary) -> String {
-    format!(
-        "{} {} {} {} {} {}",
-        session.id,
-        session.title(),
-        session.preview,
-        session.cwd,
-        session.path,
-        session.git_branch.as_deref().unwrap_or_default(),
-    )
-    .to_ascii_lowercase()
+fn matches_search_token(session: &SessionSummary, search_token: &str) -> bool {
+    contains_ascii_case_insensitive(&session.id, search_token)
+        || contains_ascii_case_insensitive(&session.preview, search_token)
+        || contains_ascii_case_insensitive(&session.cwd, search_token)
+        || contains_ascii_case_insensitive(&session.path, search_token)
+        || session
+            .name
+            .as_deref()
+            .is_some_and(|name| contains_ascii_case_insensitive(name, search_token))
+        || session
+            .git_branch
+            .as_deref()
+            .is_some_and(|branch| contains_ascii_case_insensitive(branch, search_token))
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return false;
+    }
+
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
 }
 
 #[cfg(test)]
@@ -385,6 +409,24 @@ mod tests {
         assert_eq!(projection.total_pages, 2);
         assert_eq!(projection.page_index, 1);
         assert_eq!(projection.page_session_indexes, vec![2]);
+    }
+
+    #[test]
+    fn project_recent_sessions_matches_query_without_allocating_title_haystacks() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_session("thread-1", "/tmp/root-a", "Docs release prep"),
+                sample_session("thread-2", "/tmp/root-b", "bugfix queue"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let mut browser_state = SessionBrowserState::new(10);
+        browser_state.set_search_query("docs release");
+
+        let projection = project_recent_sessions(&recent_sessions, &browser_state);
+
+        assert_eq!(projection.page_session_indexes, vec![0]);
     }
 
     fn sample_session(id: &str, cwd: &str, preview: &str) -> SessionSummary {
