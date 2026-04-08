@@ -59,8 +59,11 @@ fn run_event_loop(
     while !runtime.should_quit() {
         runtime.poll_background_messages();
         if runtime.take_redraw_request() {
-            sync_inline_viewport(terminal, runtime, frontend.mode(), inline_viewport)?;
-            terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
+            let should_draw =
+                sync_inline_viewport(terminal, runtime, frontend.mode(), inline_viewport)?;
+            if should_draw {
+                terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
+            }
         }
 
         if !event::poll(Duration::from_millis(100))? {
@@ -78,14 +81,23 @@ fn sync_inline_viewport(
     runtime: &mut ShellRuntime,
     mode: ShellFrontendMode,
     inline_viewport: &mut InlineViewportState,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     if mode != ShellFrontendMode::InlineMainBuffer {
-        return Ok(());
+        return Ok(true);
     }
 
-    ensure_inline_viewport_height(terminal, runtime.app_mut(), inline_viewport)?;
+    let viewport_changed =
+        ensure_inline_viewport_height(terminal, runtime.app_mut(), inline_viewport)?;
     let current_lines = current_inline_history_lines(runtime.app_mut());
-    inline_viewport.history.sync(terminal, &current_lines)
+    inline_viewport.history.sync(terminal, &current_lines)?;
+
+    let terminal_size = terminal.size()?;
+    Ok(inline_viewport.should_draw_inline_frame(
+        runtime.app_mut(),
+        terminal_size.width,
+        terminal_size.height,
+        viewport_changed,
+    ))
 }
 
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -98,6 +110,7 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 struct InlineViewportState {
     history: InlineHistoryState,
     height: u16,
+    last_tail_frame: Option<InlineTailFrameSignature>,
 }
 
 impl InlineViewportState {
@@ -111,8 +124,41 @@ impl Default for InlineViewportState {
         Self {
             history: InlineHistoryState::default(),
             height: Self::default_height(),
+            last_tail_frame: None,
         }
     }
+}
+
+impl InlineViewportState {
+    fn should_draw_inline_frame(
+        &mut self,
+        app: &NativeTuiApp,
+        terminal_width: u16,
+        terminal_height: u16,
+        viewport_changed: bool,
+    ) -> bool {
+        if app.shell_overlay != ShellOverlay::Hidden || app.is_exit_confirmation_visible() {
+            self.last_tail_frame = None;
+            return true;
+        }
+
+        let next_signature = InlineTailFrameSignature {
+            terminal_width,
+            terminal_height,
+            lines: build_inline_tail_lines(app),
+        };
+        let should_draw =
+            viewport_changed || self.last_tail_frame.as_ref() != Some(&next_signature);
+        self.last_tail_frame = Some(next_signature);
+        should_draw
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct InlineTailFrameSignature {
+    terminal_width: u16,
+    terminal_height: u16,
+    lines: Vec<Line<'static>>,
 }
 
 #[derive(Default)]
@@ -176,11 +222,11 @@ fn ensure_inline_viewport_height(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut NativeTuiApp,
     inline_viewport: &mut InlineViewportState,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let terminal_width = terminal.size()?.width;
     let desired_height = desired_inline_viewport_height(app, terminal_width);
     if desired_height == inline_viewport.height {
-        return Ok(());
+        return Ok(false);
     }
 
     terminal.clear()?;
@@ -190,7 +236,7 @@ fn ensure_inline_viewport_height(
         desired_height,
     )?;
     inline_viewport.height = desired_height;
-    Ok(())
+    Ok(true)
 }
 
 fn desired_inline_viewport_height(app: &NativeTuiApp, terminal_width: u16) -> u16 {
@@ -266,7 +312,10 @@ mod tests {
     use anyhow::Result;
     use ratatui::text::Line;
 
-    use super::{InlineHistoryState, clamp_inline_viewport_height, desired_inline_viewport_height};
+    use super::{
+        InlineHistoryState, InlineViewportState, clamp_inline_viewport_height,
+        desired_inline_viewport_height,
+    };
     use crate::adapter::inbound::tui::app::{
         INLINE_VIEWPORT_HEIGHT, MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp,
     };
@@ -351,6 +400,31 @@ mod tests {
             desired_inline_viewport_height(&app, 80),
             INLINE_VIEWPORT_HEIGHT
         );
+    }
+
+    #[test]
+    fn hidden_inline_tail_skips_redundant_frame_draws() {
+        let app = make_test_app();
+        let mut inline_viewport = InlineViewportState::default();
+
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+        assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+        assert!(inline_viewport.should_draw_inline_frame(&app, 96, 24, false));
+    }
+
+    #[test]
+    fn overlay_cycle_resets_hidden_tail_redraw_cache() {
+        let mut app = make_test_app();
+        let mut inline_viewport = InlineViewportState::default();
+
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+        assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+
+        app.shell_overlay = ShellOverlay::Startup;
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+
+        app.shell_overlay = ShellOverlay::Hidden;
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
     }
 
     struct FakeCodexAppServerPort;
