@@ -159,6 +159,12 @@ impl ShellRuntime {
             KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.insert_input_newline()
             }
+            KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                self.app.clear_prompt_input()
+            }
+            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+                self.app.delete_previous_input_word()
+            }
             KeyCode::Backspace => self.app.pop_input_character(),
             KeyCode::Enter => self.app.start_turn_submission(),
             KeyCode::Char(character)
@@ -387,6 +393,43 @@ mod tests {
 
         assert!(runtime.app().is_max_auto_turns_editing());
         assert_eq!(runtime.app().shell_overlay, ShellOverlay::FollowupTemplates);
+    }
+
+    #[test]
+    fn ctrl_u_clears_buffered_input() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().push_input_character('s');
+        runtime.app_mut().push_input_character('h');
+        runtime.app_mut().push_input_character('i');
+        runtime.app_mut().push_input_character('p');
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert!(conversation.input_buffer.is_empty());
+    }
+
+    #[test]
+    fn ctrl_w_deletes_previous_buffered_word() {
+        let mut runtime = make_test_runtime();
+        for character in "ship this next".chars() {
+            runtime.app_mut().push_input_character(character);
+        }
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('w'),
+            KeyModifiers::CONTROL,
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.input_buffer, "ship this ");
     }
 
     #[test]

@@ -189,6 +189,14 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
     }
 
+    pub(super) fn delete_previous_input_word(&mut self) {
+        self.dispatch_conversation_input(ConversationInputEvent::PreviousWordDeleted);
+    }
+
+    pub(super) fn clear_prompt_input(&mut self) {
+        self.clear_input_buffer();
+    }
+
     pub(super) fn toggle_auto_followup(&mut self) {
         self.dispatch_followup_controls(FollowupControlEvent::AutoFollowToggled);
     }
