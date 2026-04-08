@@ -151,7 +151,7 @@ impl ShellRuntime {
             KeyCode::Backspace => self.app.pop_input_character(),
             KeyCode::Enter => self.app.start_turn_submission(),
             KeyCode::Char(character)
-                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
                 self.app.push_input_character(character);
             }
@@ -318,5 +318,20 @@ mod tests {
             }
             other => panic!("expected ready startup state, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plain_character_input_uses_empty_modifier_check() {
+        let mut runtime = make_test_runtime();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.input_buffer, "a");
     }
 }
