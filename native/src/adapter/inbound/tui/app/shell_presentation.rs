@@ -1051,6 +1051,11 @@ fn build_session_browser_summary_lines(
     let filter_session_count = active_filter_option
         .map(|option| option.session_count)
         .unwrap_or(browser_view.projection.filtered_session_count);
+    let browser_query = if app.session_overlay_ui_state.is_search_query_editing() {
+        app.session_overlay_ui_state.search_query_editor_buffer()
+    } else {
+        &app.session_overlay_ui_state.browser_state().search_query
+    };
     let mut lines = vec![
         Line::from(format!(
             "{}: {}",
@@ -1059,25 +1064,20 @@ fn build_session_browser_summary_lines(
             } else {
                 "query"
             },
-            format_session_query_label(if app.session_overlay_ui_state.is_search_query_editing() {
-                app.session_overlay_ui_state.search_query_editor_buffer()
-            } else {
-                &app.session_overlay_ui_state.browser_state().search_query
-            })
+            format_session_query_label(browser_query)
         )),
-        Line::from(format!(
-            "filter: {} ({} sessions)",
-            filter_label, filter_session_count
+        Line::from(format_session_filter_line(
+            &browser_view.projection,
+            &filter_label,
+            filter_session_count,
         )),
         Line::from(build_session_project_context_line(
             &browser_view.projection,
             &app.current_workspace_directory(),
         )),
-        Line::from(format!(
-            "browser: page {} of {}  |  matches: {}",
-            browser_view.projection.page_index + 1,
-            browser_view.projection.total_pages.max(1),
-            browser_view.projection.filtered_session_count,
+        Line::from(format_session_browser_line(
+            &browser_view.projection,
+            &filter_label,
         )),
     ];
 
@@ -1346,6 +1346,80 @@ fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
     }
 }
 
+fn format_session_filter_line(
+    projection: &crate::application::service::session_service::SessionBrowserProjection,
+    filter_label: &str,
+    filter_session_count: usize,
+) -> String {
+    let session_suffix = plural_suffix(filter_session_count);
+    match &projection.active_project_filter {
+        crate::application::service::session_service::SessionProjectFilter::AllProjects => {
+            let workspace_count = projection.project_filter_options.len().saturating_sub(1);
+            let workspace_suffix = plural_suffix(workspace_count);
+            if workspace_count > 1 {
+                format!(
+                    "filter: {filter_label} ({filter_session_count} recent session{session_suffix} across {workspace_count} workspace{workspace_suffix})"
+                )
+            } else {
+                format!(
+                    "filter: {filter_label} ({filter_session_count} recent session{session_suffix})"
+                )
+            }
+        }
+        crate::application::service::session_service::SessionProjectFilter::RecentProject {
+            ..
+        } => {
+            format!(
+                "filter: {filter_label} ({filter_session_count} recent session{session_suffix})"
+            )
+        }
+    }
+}
+
+fn format_session_browser_line(
+    projection: &crate::application::service::session_service::SessionBrowserProjection,
+    filter_label: &str,
+) -> String {
+    if projection.total_session_count == 0 {
+        return "browser: no recent sessions loaded".to_string();
+    }
+
+    if projection.filtered_session_count == 0 {
+        return match &projection.active_project_filter {
+            crate::application::service::session_service::SessionProjectFilter::AllProjects => {
+                format!(
+                    "browser: no matches in {} recent session{}",
+                    projection.project_filtered_session_count,
+                    plural_suffix(projection.project_filtered_session_count)
+                )
+            }
+            crate::application::service::session_service::SessionProjectFilter::RecentProject {
+                ..
+            } => format!(
+                "browser: no matches in {filter_label} across {} recent session{}",
+                projection.project_filtered_session_count,
+                plural_suffix(projection.project_filtered_session_count)
+            ),
+        };
+    }
+
+    let (visible_start, visible_end) = projection
+        .visible_session_range
+        .expect("visible range should exist when filtered sessions are visible");
+    format!(
+        "browser: page {} of {} | showing {}-{} of {} matches",
+        projection.page_index + 1,
+        projection.total_pages.max(1),
+        visible_start,
+        visible_end,
+        projection.filtered_session_count,
+    )
+}
+
+fn plural_suffix(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
+}
+
 fn build_followup_template_list_entry(
     index: usize,
     template: &FollowupTemplateDefinition,
@@ -1471,13 +1545,25 @@ mod tests {
         current_workspace_session_count: usize,
         filtered_session_count: usize,
     ) -> SessionBrowserProjection {
+        let total_session_count = project_filter_options
+            .first()
+            .map(|option| option.session_count)
+            .unwrap_or(filtered_session_count);
+        let project_filtered_session_count = project_filter_options
+            .iter()
+            .find(|option| option.filter == active_project_filter)
+            .map(|option| option.session_count)
+            .unwrap_or(filtered_session_count);
         SessionBrowserProjection {
             active_project_filter,
             project_filter_options,
             current_workspace_session_count,
+            total_session_count,
+            project_filtered_session_count,
             filtered_session_count,
             page_index: 0,
             total_pages: 1,
+            visible_session_range: Some((1, 1)),
             page_session_indexes: vec![0],
         }
     }

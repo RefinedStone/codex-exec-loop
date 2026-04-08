@@ -81,9 +81,12 @@ pub struct SessionBrowserProjection {
     pub active_project_filter: SessionProjectFilter,
     pub project_filter_options: Vec<SessionProjectFilterOption>,
     pub current_workspace_session_count: usize,
+    pub total_session_count: usize,
+    pub project_filtered_session_count: usize,
     pub filtered_session_count: usize,
     pub page_index: usize,
     pub total_pages: usize,
+    pub visible_session_range: Option<(usize, usize)>,
     pub page_session_indexes: Vec<usize>,
 }
 
@@ -154,23 +157,29 @@ pub fn project_recent_sessions(
         .unwrap_or(0);
     let active_project_filter =
         resolve_active_project_filter(&browser_state.project_filter, &project_filter_options);
-    let mut matching_indexes = recent_sessions
+    let total_session_count = recent_sessions.items.len();
+    let project_filtered_sessions = recent_sessions
         .items
         .iter()
         .enumerate()
         .filter(|(_, session)| matches_project_filter(session, &active_project_filter))
-        .filter(|(_, session)| matches_search_query(session, &search_tokens))
-        .map(|(index, session)| {
-            RankedSessionIndex::from_session(
-                index,
-                session,
-                &search_tokens,
-                current_workspace_directory,
-            )
+        .collect::<Vec<_>>();
+    let project_filtered_session_count = project_filtered_sessions.len();
+    let mut ranked_sessions = project_filtered_sessions
+        .into_iter()
+        .filter_map(|(index, session)| {
+            search_query_score(session, &search_tokens, current_workspace_directory).map(|score| {
+                RankedSessionIndex {
+                    index,
+                    updated_at_epoch: session.updated_at_epoch,
+                    score,
+                }
+            })
         })
         .collect::<Vec<_>>();
+
     if !search_tokens.is_empty() {
-        matching_indexes.sort_by(|left, right| {
+        ranked_sessions.sort_by(|left, right| {
             right
                 .score
                 .cmp(&left.score)
@@ -179,7 +188,7 @@ pub fn project_recent_sessions(
         });
     }
 
-    let filtered_session_count = matching_indexes.len();
+    let filtered_session_count = ranked_sessions.len();
     let total_pages = if filtered_session_count == 0 {
         0
     } else {
@@ -191,20 +200,25 @@ pub fn project_recent_sessions(
         browser_state.page_index.min(total_pages.saturating_sub(1))
     };
     let page_start = page_index.saturating_mul(browser_state.page_size);
-    let page_session_indexes = matching_indexes
-        .into_iter()
+    let page_session_indexes = ranked_sessions
+        .iter()
         .skip(page_start)
         .take(browser_state.page_size)
         .map(|ranked_session| ranked_session.index)
         .collect::<Vec<_>>();
+    let visible_session_range = (!page_session_indexes.is_empty())
+        .then_some((page_start + 1, page_start + page_session_indexes.len()));
 
     SessionBrowserProjection {
         active_project_filter,
         project_filter_options,
         current_workspace_session_count,
+        total_session_count,
+        project_filtered_session_count,
         filtered_session_count,
         page_index,
         total_pages,
+        visible_session_range,
         page_session_indexes,
     }
 }
@@ -213,22 +227,7 @@ pub fn project_recent_sessions(
 struct RankedSessionIndex {
     index: usize,
     updated_at_epoch: i64,
-    score: usize,
-}
-
-impl RankedSessionIndex {
-    fn from_session(
-        index: usize,
-        session: &SessionSummary,
-        search_tokens: &[String],
-        current_workspace_directory: Option<&str>,
-    ) -> Self {
-        Self {
-            index,
-            updated_at_epoch: session.updated_at_epoch,
-            score: search_match_score(session, search_tokens, current_workspace_directory),
-        }
-    }
+    score: u32,
 }
 
 fn build_project_filter_options(
@@ -307,78 +306,77 @@ fn tokenize_search_query(search_query: &str) -> Vec<String> {
         .collect()
 }
 
-fn matches_search_query(session: &SessionSummary, search_tokens: &[String]) -> bool {
-    if search_tokens.is_empty() {
-        return true;
-    }
-
-    search_tokens
-        .iter()
-        .all(|search_token| matches_search_token(session, search_token))
-}
-
-fn matches_search_token(session: &SessionSummary, search_token: &str) -> bool {
-    contains_ascii_case_insensitive(&session.id, search_token)
-        || contains_ascii_case_insensitive(&session.preview, search_token)
-        || contains_ascii_case_insensitive(&session.cwd, search_token)
-        || contains_ascii_case_insensitive(&session.path, search_token)
-        || session
-            .name
-            .as_deref()
-            .is_some_and(|name| contains_ascii_case_insensitive(name, search_token))
-        || session
-            .git_branch
-            .as_deref()
-            .is_some_and(|branch| contains_ascii_case_insensitive(branch, search_token))
-}
-
-fn search_match_score(
+fn search_query_score(
     session: &SessionSummary,
     search_tokens: &[String],
     current_workspace_directory: Option<&str>,
-) -> usize {
-    let token_score = search_tokens
-        .iter()
-        .map(|search_token| search_token_score(session, search_token))
-        .sum::<usize>();
-    let current_workspace_bonus = current_workspace_directory
-        .is_some_and(|workspace_directory| session.cwd == workspace_directory)
-        .then_some(4)
-        .unwrap_or(0);
+) -> Option<u32> {
+    let mut score = current_workspace_bonus(session, current_workspace_directory);
+    for search_token in search_tokens {
+        score += search_token_score(session, search_token)?;
+    }
 
-    token_score + current_workspace_bonus
+    Some(score)
 }
 
-fn search_token_score(session: &SessionSummary, search_token: &str) -> usize {
-    let mut score = 0;
-    if session
-        .name
-        .as_deref()
-        .is_some_and(|name| contains_ascii_case_insensitive(name, search_token))
-    {
-        score += 48;
-    }
-    if contains_ascii_case_insensitive(&session.id, search_token) {
-        score += 32;
-    }
-    if session
-        .git_branch
-        .as_deref()
-        .is_some_and(|branch| contains_ascii_case_insensitive(branch, search_token))
-    {
-        score += 24;
-    }
-    if contains_ascii_case_insensitive(&session.cwd, search_token) {
-        score += 16;
-    }
-    if contains_ascii_case_insensitive(&session.path, search_token) {
-        score += 12;
-    }
-    if contains_ascii_case_insensitive(&session.preview, search_token) {
-        score += 8;
+fn current_workspace_bonus(
+    session: &SessionSummary,
+    current_workspace_directory: Option<&str>,
+) -> u32 {
+    current_workspace_directory
+        .is_some_and(|workspace_directory| session.cwd == workspace_directory)
+        .then_some(4)
+        .unwrap_or(0)
+}
+
+fn search_token_score(session: &SessionSummary, search_token: &str) -> Option<u32> {
+    [
+        score_search_field(&session.id, search_token, 220, 200, 140),
+        score_search_field(&session.preview, search_token, 90, 80, 60),
+        score_search_field(&session.cwd, search_token, 150, 135, 100),
+        score_search_field(&session.path, search_token, 130, 115, 90),
+        session
+            .name
+            .as_deref()
+            .and_then(|name| score_search_field(name, search_token, 210, 190, 130)),
+        session
+            .git_branch
+            .as_deref()
+            .and_then(|branch| score_search_field(branch, search_token, 160, 145, 110)),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn score_search_field(
+    haystack: &str,
+    needle: &str,
+    exact_score: u32,
+    prefix_score: u32,
+    contains_score: u32,
+) -> Option<u32> {
+    if haystack.eq_ignore_ascii_case(needle) {
+        return Some(exact_score);
     }
 
-    score.max(1)
+    if starts_with_ascii_case_insensitive(haystack, needle) {
+        return Some(prefix_score);
+    }
+
+    contains_ascii_case_insensitive(haystack, needle).then_some(contains_score)
+}
+
+fn starts_with_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    haystack_bytes
+        .get(..needle_bytes.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(needle_bytes))
 }
 
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -506,8 +504,11 @@ mod tests {
 
         let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
 
+        assert_eq!(projection.total_session_count, 3);
+        assert_eq!(projection.project_filtered_session_count, 1);
         assert_eq!(projection.filtered_session_count, 1);
         assert_eq!(projection.total_pages, 1);
+        assert_eq!(projection.visible_session_range, Some((1, 1)));
         assert_eq!(projection.page_session_indexes, vec![2]);
         assert_eq!(
             projection.active_project_filter,
@@ -543,8 +544,11 @@ mod tests {
             projection.active_project_filter,
             SessionProjectFilter::AllProjects
         );
+        assert_eq!(projection.total_session_count, 3);
+        assert_eq!(projection.project_filtered_session_count, 3);
         assert_eq!(projection.total_pages, 2);
         assert_eq!(projection.page_index, 1);
+        assert_eq!(projection.visible_session_range, Some((3, 3)));
         assert_eq!(projection.page_session_indexes, vec![2]);
     }
 
@@ -611,6 +615,47 @@ mod tests {
     }
 
     #[test]
+    fn project_recent_sessions_reports_visible_match_range_for_ranked_results() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_named_session(
+                    "thread-1",
+                    "/tmp/root-a",
+                    "docs checklist",
+                    Some("alpha"),
+                    Some("main"),
+                    1_700_000_000,
+                ),
+                sample_named_session(
+                    "thread-2",
+                    "/tmp/root-a",
+                    "release prep",
+                    Some("docs launch"),
+                    Some("main"),
+                    1_699_999_900,
+                ),
+                sample_named_session(
+                    "thread-3",
+                    "/tmp/root-a",
+                    "docs rollout",
+                    Some("zeta"),
+                    Some("main"),
+                    1_700_000_100,
+                ),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let mut browser_state = SessionBrowserState::new(10);
+        browser_state.set_search_query("docs");
+
+        let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
+
+        assert_eq!(projection.page_session_indexes, vec![1, 2, 0]);
+        assert_eq!(projection.visible_session_range, Some((1, 3)));
+    }
+
+    #[test]
     fn project_recent_sessions_marks_current_workspace_filter_context() {
         let recent_sessions = RecentSessions {
             items: vec![
@@ -668,9 +713,12 @@ mod tests {
                 },
             ],
             current_workspace_session_count: 1,
+            total_session_count: 3,
+            project_filtered_session_count: 1,
             filtered_session_count: 1,
             page_index: 0,
             total_pages: 1,
+            visible_session_range: Some((1, 1)),
             page_session_indexes: vec![2],
         };
 

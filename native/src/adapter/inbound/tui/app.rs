@@ -361,6 +361,15 @@ mod tests {
     }
 
     fn sample_session_with_workspace(id: &str, cwd: &str, preview: &str) -> SessionSummary {
+        sample_session_with_workspace_at(id, cwd, preview, 1_700_000_000)
+    }
+
+    fn sample_session_with_workspace_at(
+        id: &str,
+        cwd: &str,
+        preview: &str,
+        updated_at_epoch: i64,
+    ) -> SessionSummary {
         SessionSummary {
             id: id.to_string(),
             name: Some(id.to_string()),
@@ -368,7 +377,7 @@ mod tests {
             cwd: cwd.to_string(),
             source: "codex".to_string(),
             model_provider: "openai".to_string(),
-            updated_at_epoch: 1_700_000_000,
+            updated_at_epoch,
             status_type: "ready".to_string(),
             path: format!("{cwd}/{id}.json"),
             git_branch: Some("main".to_string()),
@@ -1061,7 +1070,7 @@ mod tests {
         assert_eq!(view.list_view.selected_index, Some(0));
         assert_eq!(view.list_view.items.len(), 1);
         assert!(detail.contains("id: thread-3"));
-        assert!(detail.contains("browser: page 1 of 1  |  matches: 1"));
+        assert!(detail.contains("browser: page 1 of 1 | showing 1-1 of 1 matches"));
     }
 
     #[test]
@@ -1112,8 +1121,9 @@ mod tests {
         assert!(!app.is_session_search_query_editing());
         assert_eq!(view.list_view.items.len(), 2);
         assert!(detail.contains("query: docs"));
-        assert!(detail.contains("filter: all projects (3 sessions)"));
-        assert!(detail.contains("browser: page 1 of 1  |  matches: 2"));
+        assert!(detail.contains("filter: all projects (3 recent sessions across 2 workspaces)"));
+        assert!(detail.contains("context: current workspace (/tmp/root) has 1 recent session"));
+        assert!(detail.contains("browser: page 1 of 1 | showing 1-2 of 2 matches"));
     }
 
     #[test]
@@ -1176,7 +1186,8 @@ mod tests {
             }
         );
         assert_eq!(view.list_view.items.len(), 2);
-        assert!(detail.contains("filter: /tmp/docs (2 sessions)"));
+        assert!(detail.contains("filter: /tmp/docs (2 recent sessions)"));
+        assert!(detail.contains("context: current workspace (/tmp/root) has 1 recent session"));
 
         assert!(
             app.handle_shell_overlay_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT,))
@@ -1527,7 +1538,7 @@ mod tests {
 
         assert_eq!(view.list_view.selected_index, Some(0));
         assert!(detail.contains("id: thread-3"));
-        assert!(detail.contains("browser: page 2 of 2  |  matches: 2"));
+        assert!(detail.contains("browser: page 2 of 2 | showing 2-2 of 2 matches"));
 
         assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 
@@ -1537,6 +1548,99 @@ mod tests {
                 .as_ref()
                 .map(|session| session.id.as_str()),
             Some("thread-3")
+        );
+    }
+
+    #[test]
+    fn session_overlay_view_surfaces_ranked_query_results() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session_with_workspace_at(
+                    "thread-1",
+                    "/tmp/root",
+                    "docs checklist",
+                    1_700_000_000,
+                ),
+                sample_session_with_workspace_at(
+                    "docs-thread-2",
+                    "/tmp/root",
+                    "release prep",
+                    1_699_999_900,
+                ),
+                sample_session_with_workspace_at(
+                    "thread-3",
+                    "/tmp/root",
+                    "docs rollout",
+                    1_700_000_100,
+                ),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.session_overlay_ui_state.set_search_query("docs");
+
+        let view = build_session_overlay_view(&app);
+        let list = view
+            .list_view
+            .items
+            .iter()
+            .map(|item| {
+                item.lines
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>();
+
+        assert!(list[0].contains("docs-thread-2"));
+        assert!(list[1].contains("thread-3"));
+    }
+
+    #[test]
+    fn session_overlay_view_describes_query_miss_inside_project_filter() {
+        let (mut app, _) = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+        app.session_state = SessionState::Ready(RecentSessions {
+            items: vec![
+                sample_session_with_workspace("thread-1", "/tmp/docs", "docs refresh"),
+                sample_session_with_workspace("thread-2", "/tmp/docs", "docs release"),
+                sample_session("thread-3"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        });
+        app.session_overlay_ui_state.set_project_filter(
+            crate::application::service::session_service::SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+        );
+        app.session_overlay_ui_state.set_search_query("missing");
+
+        let view = build_session_overlay_view(&app);
+        let list_message = view
+            .list_view
+            .message_lines
+            .as_ref()
+            .expect("query miss should show a list message")
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = view
+            .detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(list_message.contains("no sessions in /tmp/docs match query \"missing\""));
+        assert!(detail.contains("filter: /tmp/docs (2 recent sessions)"));
+        assert!(detail.contains("browser: no matches in /tmp/docs across 2 recent sessions"));
+        assert!(
+            detail.contains("Clear the query, cycle filters with Tab/BackTab, or reload with r.")
         );
     }
 
