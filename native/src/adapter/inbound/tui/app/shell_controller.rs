@@ -482,10 +482,12 @@ impl NativeTuiApp {
     }
 
     fn current_session_browser_view(&self) -> Option<SessionBrowserView<'_>> {
+        let current_workspace_directory = self.current_workspace_directory();
         match &self.session_state {
             SessionState::Ready(recent_sessions) => Some(build_session_browser_view(
                 recent_sessions,
                 self.session_overlay_ui_state.browser_state(),
+                Some(current_workspace_directory.as_str()),
                 self.session_overlay_ui_state.selected_session_id(),
                 self.selected_session_index,
             )),
@@ -556,6 +558,7 @@ impl NativeTuiApp {
         let projection = project_recent_sessions(
             recent_sessions,
             self.session_overlay_ui_state.browser_state(),
+            Some(self.current_workspace_directory().as_str()),
         );
         let Some(next_filter) = projection.cycled_project_filter(delta) else {
             return;
@@ -574,6 +577,7 @@ impl NativeTuiApp {
         let total_pages = project_recent_sessions(
             recent_sessions,
             self.session_overlay_ui_state.browser_state(),
+            Some(self.current_workspace_directory().as_str()),
         )
         .total_pages;
         self.session_overlay_ui_state.move_page(delta, total_pages);

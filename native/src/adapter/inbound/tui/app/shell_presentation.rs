@@ -1,5 +1,6 @@
 use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
+use crate::application::service::session_service::SessionProjectFilter;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
@@ -853,6 +854,8 @@ fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 }
 
 fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Line<'static>>) {
+    let current_workspace_directory = app.current_workspace_directory();
+
     match &app.session_state {
         SessionState::Idle => (
             OverlayListView {
@@ -892,33 +895,23 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
             let browser_view = build_session_browser_view(
                 recent_sessions,
                 app.session_overlay_ui_state.browser_state(),
+                Some(current_workspace_directory.as_str()),
                 app.session_overlay_ui_state.selected_session_id(),
                 app.selected_session_index,
             );
             if recent_sessions.items.is_empty() {
                 let mut lines = build_session_browser_summary_lines(app, &browser_view);
                 lines.push(Line::from(""));
-                lines.push(Line::from("no session detail to show"));
-                return (
-                    OverlayListView {
-                        message_lines: Some(vec![Line::from("(no sessions found)")]),
-                        items: Vec::new(),
-                        selected_index: None,
-                    },
-                    lines,
-                );
-            }
-
-            if browser_view.visible_sessions.is_empty() {
-                let mut lines = build_session_browser_summary_lines(app, &browser_view);
-                lines.push(Line::from(""));
                 lines.push(Line::from(
-                    "no session detail to show for the current browser state",
+                    "codex app-server has not returned any recent sessions yet",
+                ));
+                lines.push(Line::from(
+                    "Start a new draft with n, then reload the browser with r.",
                 ));
                 return (
                     OverlayListView {
                         message_lines: Some(vec![Line::from(
-                            "no sessions match the current browser state",
+                            "no recent sessions have been recorded yet",
                         )]),
                         items: Vec::new(),
                         selected_index: None,
@@ -927,12 +920,44 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
                 );
             }
 
-            let Some(selected_session) = browser_view.selected_session() else {
+            if browser_view.visible_sessions.is_empty() {
+                let search_query = app
+                    .session_overlay_ui_state
+                    .browser_state()
+                    .search_query
+                    .as_str();
                 let mut lines = build_session_browser_summary_lines(app, &browser_view);
                 lines.push(Line::from(""));
-                lines.push(Line::from(
-                    "no session detail to show for the current browser state",
-                ));
+                lines.push(Line::from(build_session_empty_detail_line(
+                    &browser_view,
+                    search_query,
+                )));
+                lines.push(Line::from(build_session_empty_hint_line(&browser_view)));
+                return (
+                    OverlayListView {
+                        message_lines: Some(vec![Line::from(build_session_empty_message(
+                            &browser_view,
+                            search_query,
+                        ))]),
+                        items: Vec::new(),
+                        selected_index: None,
+                    },
+                    lines,
+                );
+            }
+
+            let Some(selected_session) = browser_view.selected_session() else {
+                let search_query = app
+                    .session_overlay_ui_state
+                    .browser_state()
+                    .search_query
+                    .as_str();
+                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                lines.push(Line::from(""));
+                lines.push(Line::from(build_session_empty_detail_line(
+                    &browser_view,
+                    search_query,
+                )));
                 return (
                     OverlayListView {
                         message_lines: None,
@@ -994,11 +1019,7 @@ fn build_session_browser_summary_lines(
     app: &NativeTuiApp,
     browser_view: &SessionBrowserView<'_>,
 ) -> Vec<Line<'static>> {
-    let active_filter_option = browser_view
-        .projection
-        .project_filter_options
-        .iter()
-        .find(|option| option.filter == browser_view.projection.active_project_filter);
+    let active_filter_option = browser_view.projection.active_project_filter_option();
     let filter_label = active_filter_option
         .map(|option| option.label.clone())
         .unwrap_or_else(|| "all projects".to_string());
@@ -1022,6 +1043,10 @@ fn build_session_browser_summary_lines(
         Line::from(format!(
             "filter: {} ({} sessions)",
             filter_label, filter_session_count
+        )),
+        Line::from(build_session_project_context_line(
+            &browser_view.projection,
+            &app.current_workspace_directory(),
         )),
         Line::from(format!(
             "browser: page {} of {}  |  matches: {}",
@@ -1060,6 +1085,164 @@ fn format_session_query_label(search_query: &str) -> String {
     } else {
         search_query.to_string()
     }
+}
+
+fn build_session_project_context_line(
+    projection: &crate::application::service::session_service::SessionBrowserProjection,
+    current_workspace_directory: &str,
+) -> String {
+    let current_workspace_label = format!("current workspace ({current_workspace_directory})");
+    let Some(active_filter_option) = projection.active_project_filter_option() else {
+        return format!("context: {current_workspace_label}");
+    };
+
+    if active_filter_option.is_current_workspace {
+        return format!("context: showing only {current_workspace_label}");
+    }
+
+    match projection.current_workspace_session_count {
+        0 => format!("context: {current_workspace_label} has no recent sessions"),
+        1 => format!("context: {current_workspace_label} has 1 recent session"),
+        count => format!("context: {current_workspace_label} has {count} recent sessions"),
+    }
+}
+
+fn build_session_empty_message(
+    browser_view: &SessionBrowserView<'_>,
+    search_query: &str,
+) -> String {
+    format_session_empty_message(
+        &browser_view.projection.active_project_filter,
+        search_query,
+        browser_view
+            .projection
+            .active_project_filter_option()
+            .map(|option| option.label.as_str()),
+        browser_view
+            .projection
+            .active_project_filter_option()
+            .is_some_and(|option| option.is_current_workspace),
+        browser_view.projection.filtered_session_count,
+    )
+}
+
+fn build_session_empty_detail_line(
+    browser_view: &SessionBrowserView<'_>,
+    search_query: &str,
+) -> String {
+    format_session_empty_detail_line(
+        &browser_view.projection.active_project_filter,
+        search_query,
+        browser_view
+            .projection
+            .active_project_filter_option()
+            .map(|option| option.label.as_str()),
+        browser_view
+            .projection
+            .active_project_filter_option()
+            .is_some_and(|option| option.is_current_workspace),
+        browser_view.projection.filtered_session_count,
+    )
+}
+
+fn build_session_empty_hint_line(browser_view: &SessionBrowserView<'_>) -> String {
+    if browser_view.projection.filtered_session_count == 0 {
+        "Clear the query, cycle filters with Tab/BackTab, or reload with r.".to_string()
+    } else {
+        "Pick another session with Up/Down or reload with r.".to_string()
+    }
+}
+
+fn format_session_empty_message(
+    active_project_filter: &SessionProjectFilter,
+    search_query: &str,
+    active_filter_label: Option<&str>,
+    is_current_workspace_filter: bool,
+    filtered_session_count: usize,
+) -> String {
+    if filtered_session_count > 0 {
+        return "the current page has no visible session selection".to_string();
+    }
+
+    match active_project_filter {
+        SessionProjectFilter::AllProjects if search_query.is_empty() => {
+            "no sessions match the current browser state".to_string()
+        }
+        SessionProjectFilter::AllProjects => {
+            format!(
+                "no sessions match query {}",
+                quoted_session_query(search_query)
+            )
+        }
+        SessionProjectFilter::RecentProject { .. }
+            if is_current_workspace_filter && search_query.is_empty() =>
+        {
+            "no current-workspace sessions match the current browser state".to_string()
+        }
+        SessionProjectFilter::RecentProject { .. } if is_current_workspace_filter => {
+            format!(
+                "no current-workspace sessions match query {}",
+                quoted_session_query(search_query)
+            )
+        }
+        SessionProjectFilter::RecentProject { .. } if search_query.is_empty() => format!(
+            "no sessions in {} match the current browser state",
+            active_filter_label.unwrap_or("the selected project")
+        ),
+        SessionProjectFilter::RecentProject { .. } => format!(
+            "no sessions in {} match query {}",
+            active_filter_label.unwrap_or("the selected project"),
+            quoted_session_query(search_query),
+        ),
+    }
+}
+
+fn format_session_empty_detail_line(
+    active_project_filter: &SessionProjectFilter,
+    search_query: &str,
+    active_filter_label: Option<&str>,
+    is_current_workspace_filter: bool,
+    filtered_session_count: usize,
+) -> String {
+    if filtered_session_count > 0 {
+        return "no session detail is available for the current browser page".to_string();
+    }
+
+    match active_project_filter {
+        SessionProjectFilter::AllProjects if search_query.is_empty() => {
+            "no session detail is available for the current browser state".to_string()
+        }
+        SessionProjectFilter::AllProjects => {
+            format!(
+                "no session detail is available for query {}",
+                quoted_session_query(search_query)
+            )
+        }
+        SessionProjectFilter::RecentProject { .. }
+            if is_current_workspace_filter && search_query.is_empty() =>
+        {
+            "no session detail is available for the current workspace filter".to_string()
+        }
+        SessionProjectFilter::RecentProject { .. } if is_current_workspace_filter => {
+            format!(
+                "no current-workspace session detail is available for query {}",
+                quoted_session_query(search_query)
+            )
+        }
+        SessionProjectFilter::RecentProject { .. } if search_query.is_empty() => format!(
+            "no session detail is available for {}",
+            active_filter_label.unwrap_or("the selected project filter")
+        ),
+        SessionProjectFilter::RecentProject { .. } => format!(
+            "no session detail is available for {} and query {}",
+            active_filter_label.unwrap_or("the selected project filter"),
+            quoted_session_query(search_query),
+        ),
+    }
+}
+
+fn quoted_session_query(search_query: &str) -> String {
+    format!("\"{search_query}\"")
 }
 
 fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -1174,5 +1357,103 @@ fn label_style(kind: ConversationMessageKind) -> Style {
         ConversationMessageKind::Agent => Style::default().fg(Color::Cyan),
         ConversationMessageKind::Tool => Style::default().fg(Color::Magenta),
         ConversationMessageKind::Status => Style::default().fg(Color::Red),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::service::session_service::{
+        SessionBrowserProjection, SessionProjectFilter, SessionProjectFilterOption,
+    };
+
+    #[test]
+    fn project_context_line_surfaces_current_workspace_session_count() {
+        let projection = sample_projection(
+            SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+            vec![
+                SessionProjectFilterOption {
+                    filter: SessionProjectFilter::AllProjects,
+                    label: "all projects".to_string(),
+                    session_count: 5,
+                    is_current_workspace: false,
+                },
+                SessionProjectFilterOption {
+                    filter: SessionProjectFilter::RecentProject {
+                        workspace_directory: "/tmp/docs".to_string(),
+                    },
+                    label: "/tmp/docs".to_string(),
+                    session_count: 3,
+                    is_current_workspace: false,
+                },
+                SessionProjectFilterOption {
+                    filter: SessionProjectFilter::RecentProject {
+                        workspace_directory: "/tmp/root".to_string(),
+                    },
+                    label: "current workspace (/tmp/root)".to_string(),
+                    session_count: 2,
+                    is_current_workspace: true,
+                },
+            ],
+            2,
+            3,
+        );
+
+        let line = build_session_project_context_line(&projection, "/tmp/root");
+
+        assert_eq!(
+            line,
+            "context: current workspace (/tmp/root) has 2 recent sessions"
+        );
+    }
+
+    #[test]
+    fn empty_state_messages_include_query_for_current_workspace_filter() {
+        let message = format_session_empty_message(
+            &SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root".to_string(),
+            },
+            "release",
+            Some("current workspace (/tmp/root)"),
+            true,
+            0,
+        );
+        let detail = format_session_empty_detail_line(
+            &SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root".to_string(),
+            },
+            "release",
+            Some("current workspace (/tmp/root)"),
+            true,
+            0,
+        );
+
+        assert_eq!(
+            message,
+            "no current-workspace sessions match query \"release\""
+        );
+        assert_eq!(
+            detail,
+            "no current-workspace session detail is available for query \"release\""
+        );
+    }
+
+    fn sample_projection(
+        active_project_filter: SessionProjectFilter,
+        project_filter_options: Vec<SessionProjectFilterOption>,
+        current_workspace_session_count: usize,
+        filtered_session_count: usize,
+    ) -> SessionBrowserProjection {
+        SessionBrowserProjection {
+            active_project_filter,
+            project_filter_options,
+            current_workspace_session_count,
+            filtered_session_count,
+            page_index: 0,
+            total_pages: 1,
+            page_session_indexes: vec![0],
+        }
     }
 }

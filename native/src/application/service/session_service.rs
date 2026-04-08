@@ -73,12 +73,14 @@ pub struct SessionProjectFilterOption {
     pub filter: SessionProjectFilter,
     pub label: String,
     pub session_count: usize,
+    pub is_current_workspace: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionBrowserProjection {
     pub active_project_filter: SessionProjectFilter,
     pub project_filter_options: Vec<SessionProjectFilterOption>,
+    pub current_workspace_session_count: usize,
     pub filtered_session_count: usize,
     pub page_index: usize,
     pub total_pages: usize,
@@ -108,6 +110,12 @@ impl SessionBrowserProjection {
             .get(next_index)
             .map(|option| option.filter.clone())
     }
+
+    pub fn active_project_filter_option(&self) -> Option<&SessionProjectFilterOption> {
+        self.project_filter_options
+            .iter()
+            .find(|option| option.filter == self.active_project_filter)
+    }
 }
 
 #[derive(Clone)]
@@ -130,19 +138,43 @@ impl SessionService {
 pub fn project_recent_sessions(
     recent_sessions: &RecentSessions,
     browser_state: &SessionBrowserState,
+    current_workspace_directory: Option<&str>,
 ) -> SessionBrowserProjection {
     let search_tokens = tokenize_search_query(&browser_state.search_query);
-    let project_filter_options = build_project_filter_options(&recent_sessions.items);
+    let project_filter_options =
+        build_project_filter_options(&recent_sessions.items, current_workspace_directory);
+    let current_workspace_session_count = current_workspace_directory
+        .map(|workspace_directory| {
+            recent_sessions
+                .items
+                .iter()
+                .filter(|session| session.cwd == workspace_directory)
+                .count()
+        })
+        .unwrap_or(0);
     let active_project_filter =
         resolve_active_project_filter(&browser_state.project_filter, &project_filter_options);
-    let matching_indexes = recent_sessions
+    let mut matching_indexes = recent_sessions
         .items
         .iter()
         .enumerate()
         .filter(|(_, session)| matches_project_filter(session, &active_project_filter))
         .filter(|(_, session)| matches_search_query(session, &search_tokens))
-        .map(|(index, _)| index)
+        .map(|(index, session)| RankedSessionIndex {
+            index,
+            updated_at_epoch: session.updated_at_epoch,
+            score: search_match_score(session, &search_tokens, current_workspace_directory),
+        })
         .collect::<Vec<_>>();
+    if !search_tokens.is_empty() {
+        matching_indexes.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| right.updated_at_epoch.cmp(&left.updated_at_epoch))
+                .then_with(|| left.index.cmp(&right.index))
+        });
+    }
 
     let filtered_session_count = matching_indexes.len();
     let total_pages = if filtered_session_count == 0 {
@@ -160,11 +192,13 @@ pub fn project_recent_sessions(
         .into_iter()
         .skip(page_start)
         .take(browser_state.page_size)
+        .map(|ranked_session| ranked_session.index)
         .collect::<Vec<_>>();
 
     SessionBrowserProjection {
         active_project_filter,
         project_filter_options,
+        current_workspace_session_count,
         filtered_session_count,
         page_index,
         total_pages,
@@ -172,7 +206,17 @@ pub fn project_recent_sessions(
     }
 }
 
-fn build_project_filter_options(sessions: &[SessionSummary]) -> Vec<SessionProjectFilterOption> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RankedSessionIndex {
+    index: usize,
+    updated_at_epoch: i64,
+    score: usize,
+}
+
+fn build_project_filter_options(
+    sessions: &[SessionSummary],
+    current_workspace_directory: Option<&str>,
+) -> Vec<SessionProjectFilterOption> {
     let mut workspace_counts = HashMap::new();
     let mut workspace_order = Vec::new();
 
@@ -189,17 +233,25 @@ fn build_project_filter_options(sessions: &[SessionSummary]) -> Vec<SessionProje
         filter: SessionProjectFilter::AllProjects,
         label: "all projects".to_string(),
         session_count: sessions.len(),
+        is_current_workspace: false,
     }];
 
     for workspace_directory in workspace_order {
+        let is_current_workspace =
+            current_workspace_directory.is_some_and(|current| current == workspace_directory);
         project_filter_options.push(SessionProjectFilterOption {
             filter: SessionProjectFilter::RecentProject {
                 workspace_directory: workspace_directory.to_string(),
             },
-            label: workspace_directory.to_string(),
+            label: if is_current_workspace {
+                format!("current workspace ({workspace_directory})")
+            } else {
+                workspace_directory.to_string()
+            },
             session_count: *workspace_counts
                 .get(workspace_directory)
                 .expect("workspace count should exist"),
+            is_current_workspace,
         });
     }
 
@@ -260,6 +312,55 @@ fn matches_search_token(session: &SessionSummary, search_token: &str) -> bool {
             .git_branch
             .as_deref()
             .is_some_and(|branch| contains_ascii_case_insensitive(branch, search_token))
+}
+
+fn search_match_score(
+    session: &SessionSummary,
+    search_tokens: &[String],
+    current_workspace_directory: Option<&str>,
+) -> usize {
+    let token_score = search_tokens
+        .iter()
+        .map(|search_token| search_token_score(session, search_token))
+        .sum::<usize>();
+    let current_workspace_bonus = current_workspace_directory
+        .is_some_and(|workspace_directory| session.cwd == workspace_directory)
+        .then_some(4)
+        .unwrap_or(0);
+
+    token_score + current_workspace_bonus
+}
+
+fn search_token_score(session: &SessionSummary, search_token: &str) -> usize {
+    let mut score = 0;
+    if session
+        .name
+        .as_deref()
+        .is_some_and(|name| contains_ascii_case_insensitive(name, search_token))
+    {
+        score += 48;
+    }
+    if contains_ascii_case_insensitive(&session.id, search_token) {
+        score += 32;
+    }
+    if session
+        .git_branch
+        .as_deref()
+        .is_some_and(|branch| contains_ascii_case_insensitive(branch, search_token))
+    {
+        score += 24;
+    }
+    if contains_ascii_case_insensitive(&session.cwd, search_token) {
+        score += 16;
+    }
+    if contains_ascii_case_insensitive(&session.path, search_token) {
+        score += 12;
+    }
+    if contains_ascii_case_insensitive(&session.preview, search_token) {
+        score += 8;
+    }
+
+    score.max(1)
 }
 
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -385,7 +486,7 @@ mod tests {
             workspace_directory: "/tmp/root-b".to_string(),
         });
 
-        let projection = project_recent_sessions(&recent_sessions, &browser_state);
+        let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
 
         assert_eq!(projection.filtered_session_count, 1);
         assert_eq!(projection.total_pages, 1);
@@ -418,7 +519,7 @@ mod tests {
             },
         };
 
-        let projection = project_recent_sessions(&recent_sessions, &browser_state);
+        let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
 
         assert_eq!(
             projection.active_project_filter,
@@ -442,9 +543,80 @@ mod tests {
         let mut browser_state = SessionBrowserState::new(10);
         browser_state.set_search_query("docs release");
 
-        let projection = project_recent_sessions(&recent_sessions, &browser_state);
+        let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
 
         assert_eq!(projection.page_session_indexes, vec![0]);
+    }
+
+    #[test]
+    fn project_recent_sessions_ranks_name_and_branch_hits_ahead_of_preview_only_matches() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_named_session(
+                    "thread-preview",
+                    "/tmp/root-a",
+                    "release notes hidden in preview",
+                    None,
+                    Some("main"),
+                    1_700_000_300,
+                ),
+                sample_named_session(
+                    "thread-name",
+                    "/tmp/root-b",
+                    "maintenance",
+                    Some("release prep"),
+                    Some("main"),
+                    1_700_000_100,
+                ),
+                sample_named_session(
+                    "thread-branch",
+                    "/tmp/root-c",
+                    "maintenance",
+                    None,
+                    Some("release/final"),
+                    1_700_000_200,
+                ),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let mut browser_state = SessionBrowserState::new(10);
+        browser_state.set_search_query("release");
+
+        let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
+
+        assert_eq!(
+            projection.page_session_indexes,
+            vec![1, 2, 0],
+            "name hits should outrank branch hits, and branch hits should outrank preview-only hits"
+        );
+    }
+
+    #[test]
+    fn project_recent_sessions_marks_current_workspace_filter_context() {
+        let recent_sessions = RecentSessions {
+            items: vec![
+                sample_session("thread-1", "/tmp/root-a", "alpha"),
+                sample_session("thread-2", "/tmp/root-a", "beta"),
+                sample_session("thread-3", "/tmp/root-b", "gamma"),
+            ],
+            warnings: Vec::new(),
+            next_cursor: None,
+        };
+        let browser_state = SessionBrowserState::default();
+
+        let projection =
+            project_recent_sessions(&recent_sessions, &browser_state, Some("/tmp/root-b"));
+
+        assert_eq!(projection.current_workspace_session_count, 1);
+        assert_eq!(
+            projection
+                .project_filter_options
+                .iter()
+                .find(|option| option.is_current_workspace)
+                .map(|option| option.label.as_str()),
+            Some("current workspace (/tmp/root-b)")
+        );
     }
 
     #[test]
@@ -458,6 +630,7 @@ mod tests {
                     filter: SessionProjectFilter::AllProjects,
                     label: "all projects".to_string(),
                     session_count: 3,
+                    is_current_workspace: false,
                 },
                 SessionProjectFilterOption {
                     filter: SessionProjectFilter::RecentProject {
@@ -465,6 +638,7 @@ mod tests {
                     },
                     label: "/tmp/root-a".to_string(),
                     session_count: 2,
+                    is_current_workspace: false,
                 },
                 SessionProjectFilterOption {
                     filter: SessionProjectFilter::RecentProject {
@@ -472,8 +646,10 @@ mod tests {
                     },
                     label: "/tmp/root-b".to_string(),
                     session_count: 1,
+                    is_current_workspace: true,
                 },
             ],
+            current_workspace_session_count: 1,
             filtered_session_count: 1,
             page_index: 0,
             total_pages: 1,
@@ -493,17 +669,28 @@ mod tests {
     }
 
     fn sample_session(id: &str, cwd: &str, preview: &str) -> SessionSummary {
+        sample_named_session(id, cwd, preview, Some(id), Some("main"), 1_700_000_000)
+    }
+
+    fn sample_named_session(
+        id: &str,
+        cwd: &str,
+        preview: &str,
+        name: Option<&str>,
+        git_branch: Option<&str>,
+        updated_at_epoch: i64,
+    ) -> SessionSummary {
         SessionSummary {
             id: id.to_string(),
-            name: Some(id.to_string()),
+            name: name.map(str::to_string),
             preview: preview.to_string(),
             cwd: cwd.to_string(),
             source: "codex".to_string(),
             model_provider: "openai".to_string(),
-            updated_at_epoch: 1_700_000_000,
+            updated_at_epoch,
             status_type: "ready".to_string(),
             path: format!("{cwd}/{id}.json"),
-            git_branch: Some("main".to_string()),
+            git_branch: git_branch.map(str::to_string),
         }
     }
 }

@@ -47,10 +47,12 @@ impl<'a> SessionBrowserView<'a> {
 pub(super) fn build_session_browser_view<'a>(
     recent_sessions: &'a RecentSessions,
     browser_state: &SessionBrowserState,
+    current_workspace_directory: Option<&str>,
     selected_session_id: Option<&str>,
     selected_session_index: usize,
 ) -> SessionBrowserView<'a> {
-    let projection = project_recent_sessions(recent_sessions, browser_state);
+    let projection =
+        project_recent_sessions(recent_sessions, browser_state, current_workspace_directory);
     let visible_sessions = projection
         .page_session_indexes
         .iter()
@@ -110,7 +112,8 @@ mod tests {
             project_filter: SessionProjectFilter::AllProjects,
         };
 
-        let browser_view = build_session_browser_view(&recent_sessions, &browser_state, None, 5);
+        let browser_view =
+            build_session_browser_view(&recent_sessions, &browser_state, None, None, 5);
 
         assert_eq!(browser_view.selected_index, Some(0));
         assert_eq!(
@@ -140,7 +143,7 @@ mod tests {
         };
 
         let browser_view =
-            build_session_browser_view(&recent_sessions, &browser_state, Some("thread-3"), 1);
+            build_session_browser_view(&recent_sessions, &browser_state, None, Some("thread-3"), 1);
 
         assert_eq!(browser_view.selected_index, Some(0));
         assert_eq!(
@@ -164,7 +167,7 @@ mod tests {
         };
         let browser_state = SessionBrowserState::default();
         let browser_view =
-            build_session_browser_view(&recent_sessions, &browser_state, Some("thread-2"), 0);
+            build_session_browser_view(&recent_sessions, &browser_state, None, Some("thread-2"), 0);
 
         let selection = browser_view.selection_after_delta(5);
 
