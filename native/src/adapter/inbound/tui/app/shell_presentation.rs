@@ -156,27 +156,32 @@ pub(super) fn build_conversation_shell_frame_view(
         input_title,
         input_lines,
     } = shell_view;
-    let header_height = block_height_for_lines(&header_lines, 4, 6);
+    let header_height = block_height_for_lines(
+        &header_lines,
+        MIN_SHELL_HEADER_HEIGHT,
+        MAX_SHELL_HEADER_HEIGHT,
+    );
     let footer_height = build_shell_footer_height(&footer_lines);
     let input_height = build_input_block_height(&input_lines);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
+        .margin(SHELL_FRAME_MARGIN)
         .constraints([
             Constraint::Length(header_height),
-            Constraint::Min(12),
+            Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT),
             Constraint::Length(footer_height),
             Constraint::Length(input_height),
         ])
         .split(area);
+    let transcript_inner = Block::default().borders(Borders::ALL).inner(layout[1]);
 
     let transcript_view = build_transcript_panel_view(
         app,
         mode,
         conversation_lines,
-        layout[1].width.saturating_sub(2),
-        layout[1].height.saturating_sub(2),
+        transcript_inner.width,
+        transcript_inner.height,
     );
 
     ConversationShellFrameView {
