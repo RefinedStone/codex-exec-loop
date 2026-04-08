@@ -539,6 +539,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) warnings: Vec<String>,
     pub(crate) runtime_notices: Vec<String>,
     pub(crate) input_buffer: String,
+    pub(crate) startup_submit_armed: bool,
     pub(crate) active_turn_id: Option<String>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
@@ -568,6 +569,7 @@ impl ConversationViewModel {
             warnings: template_load_result.warnings,
             runtime_notices: Vec::new(),
             input_buffer: String::new(),
+            startup_submit_armed: false,
             active_turn_id: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
@@ -605,6 +607,7 @@ impl ConversationViewModel {
             warnings,
             runtime_notices,
             input_buffer: String::new(),
+            startup_submit_armed: false,
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
@@ -793,7 +796,16 @@ impl ConversationViewModel {
         !self.can_submit_prompt()
     }
 
+    pub(crate) fn arm_startup_submit(&mut self) {
+        self.startup_submit_armed = true;
+    }
+
+    pub(crate) fn clear_startup_submit(&mut self) -> bool {
+        std::mem::replace(&mut self.startup_submit_armed, false)
+    }
+
     pub(crate) fn mark_turn_submitting(&mut self) {
+        self.startup_submit_armed = false;
         self.input_state = ConversationInputState::SubmittingTurn;
     }
 
@@ -959,6 +971,7 @@ mod tests {
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
             input_buffer: String::new(),
+            startup_submit_armed: false,
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(sample_template_catalog()),

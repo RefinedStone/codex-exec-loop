@@ -46,6 +46,7 @@ impl ShellRuntime {
                     if let Some(workspace_directory) = workspace_directory {
                         self.app.sync_draft_shell_workspace(&workspace_directory);
                     }
+                    self.app.resolve_startup_submit_queue();
                 }
                 BackgroundMessage::SessionsLoaded(result) => {
                     self.app

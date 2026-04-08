@@ -176,6 +176,9 @@ impl NativeTuiApp {
             }
             _ => return,
         };
+        if prompt.is_empty() {
+            return;
+        }
         self.submit_prompt(prompt, PromptOrigin::Manual);
     }
 
@@ -373,7 +376,52 @@ impl NativeTuiApp {
         self.followup_overlay_ui_state = reduce_followup_overlay_ui(state, event);
     }
 
+    pub(super) fn resolve_startup_submit_queue(&mut self) {
+        let (startup_submit_armed, prompt) = match &self.conversation_state {
+            ConversationState::Ready(conversation) => (
+                conversation.startup_submit_armed,
+                conversation.input_buffer.trim().to_string(),
+            ),
+            ConversationState::Loading | ConversationState::Failed(_) => return,
+        };
+        if !startup_submit_armed {
+            return;
+        }
+
+        match self.shell_action_availability() {
+            super::ShellActionAvailability::Ready if prompt.is_empty() => {
+                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
+                    status_text: None,
+                });
+            }
+            super::ShellActionAvailability::Ready => {
+                self.submit_prompt(prompt, PromptOrigin::Manual);
+            }
+            super::ShellActionAvailability::Pending => {}
+            super::ShellActionAvailability::Blocked => {
+                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
+                    status_text: Some(format!(
+                        "{}; queued prompt kept in buffer",
+                        self.submission_blocked_status(PromptOrigin::Manual)
+                    )),
+                });
+            }
+        }
+    }
+
     pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
+        if matches!(prompt_origin, PromptOrigin::Manual)
+            && matches!(
+                self.shell_action_availability(),
+                super::ShellActionAvailability::Pending
+            )
+        {
+            self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+                status_text: "prompt queued until startup checks finish".to_string(),
+            });
+            return;
+        }
+
         if !self.shell_action_availability().allows_actions() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: self.submission_blocked_status(prompt_origin),
