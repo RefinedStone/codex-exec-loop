@@ -348,6 +348,12 @@ if command -v gh >/dev/null 2>&1; then
   GH_TOKEN="${token}" GH_HOST=github.com exec gh "$@"
 fi
 
+if [[ "${1-}" == "review-reply" ]]; then
+  shift
+  reply_review_comment_with_api "$@"
+  exit 0
+fi
+
 case "${1-}:${2-}" in
   pr:create)
     shift 2
@@ -360,10 +366,6 @@ case "${1-}:${2-}" in
   pr:close)
     shift 2
     close_pr_with_api "$@"
-    ;;
-  review-reply:)
-    shift
-    reply_review_comment_with_api "$@"
     ;;
   *)
     echo "gh-refinedstone: gh is not installed and direct fallback currently supports 'pr create', 'pr view', 'pr close', and 'review-reply'" >&2
