@@ -70,7 +70,7 @@ pub(super) fn reduce_followup_controls(
         FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
                 state.status_text =
-                    "auto follow-up max turns must be a positive whole number".to_string();
+                    "auto follow-up max turns must be a whole number between 1 and 50".to_string();
                 return FollowupControlReduction { state, effects };
             };
 
@@ -294,7 +294,12 @@ mod tests {
             DEFAULT_AUTO_FOLLOW_MAX_TURNS
         );
         assert!(reduced.effects.is_empty());
-        assert!(reduced.state.status_text.contains("positive whole number"));
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("whole number between 1 and 50")
+        );
     }
 
     #[test]
@@ -316,7 +321,39 @@ mod tests {
             DEFAULT_AUTO_FOLLOW_MAX_TURNS
         );
         assert!(reduced.effects.is_empty());
-        assert!(reduced.state.status_text.contains("positive whole number"));
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("whole number between 1 and 50")
+        );
+    }
+
+    #[test]
+    fn max_auto_turns_above_limit_keeps_existing_limit() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result("builtin next-task", "follow up"),
+        );
+
+        let reduced = reduce_followup_controls(
+            state,
+            FollowupControlEvent::MaxAutoTurnsUpdated {
+                value: "51".to_string(),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.auto_follow_state.max_auto_turns_value(),
+            DEFAULT_AUTO_FOLLOW_MAX_TURNS
+        );
+        assert!(reduced.effects.is_empty());
+        assert!(
+            reduced
+                .state
+                .status_text
+                .contains("whole number between 1 and 50")
+        );
     }
 
     #[test]

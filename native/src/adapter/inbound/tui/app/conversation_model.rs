@@ -8,7 +8,8 @@ use crate::domain::followup_template::{
 };
 
 use super::{
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, format_conversation_lines,
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
+    format_conversation_lines,
 };
 
 #[derive(Debug, Clone)]
@@ -298,7 +299,11 @@ impl AutoFollowState {
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
         let normalized = candidate.trim();
         let value = normalized.parse::<usize>().ok()?;
-        if value == 0 { None } else { Some(value) }
+        if value == 0 || value > MAX_AUTO_FOLLOW_MAX_TURNS {
+            None
+        } else {
+            Some(value)
+        }
     }
 }
 
@@ -764,13 +769,21 @@ mod tests {
     }
 
     #[test]
-    fn max_auto_turn_candidate_requires_positive_whole_number() {
+    fn max_auto_turn_candidate_requires_value_between_one_and_fifty() {
         assert_eq!(
             AutoFollowState::normalize_max_auto_turns_candidate(" 7 "),
             Some(7)
         );
         assert_eq!(
+            AutoFollowState::normalize_max_auto_turns_candidate("50"),
+            Some(50)
+        );
+        assert_eq!(
             AutoFollowState::normalize_max_auto_turns_candidate("0"),
+            None
+        );
+        assert_eq!(
+            AutoFollowState::normalize_max_auto_turns_candidate("51"),
             None
         );
         assert_eq!(

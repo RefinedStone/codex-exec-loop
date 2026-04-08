@@ -24,6 +24,7 @@ use crate::domain::session_summary::SessionSummary;
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
+const MAX_AUTO_FOLLOW_MAX_TURNS: usize = 50;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 const SHELL_FRAME_MARGIN: u16 = 1;
@@ -1281,7 +1282,7 @@ mod tests {
         let (mut app, _) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
         app.start_max_auto_turns_edit();
-        app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "zero".to_string();
+        app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "51".to_string();
 
         assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 
@@ -1293,7 +1294,30 @@ mod tests {
             DEFAULT_AUTO_FOLLOW_MAX_TURNS
         );
         assert!(app.is_max_auto_turns_editing());
-        assert!(conversation.status_text.contains("positive whole number"));
+        assert!(
+            conversation
+                .status_text
+                .contains("whole number between 1 and 50")
+        );
+    }
+
+    #[test]
+    fn max_auto_turns_edit_ignores_non_digit_input() {
+        let (mut app, _) = make_test_app();
+        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.start_max_auto_turns_edit();
+
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE,))
+        );
+        assert!(
+            app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE,))
+        );
+
+        assert_eq!(
+            app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
+            "34"
+        );
     }
 
     #[test]

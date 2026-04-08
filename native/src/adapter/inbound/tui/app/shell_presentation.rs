@@ -594,7 +594,7 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
         return vec![
             Line::from("Type the new max-turn value directly. Backspace deletes."),
             Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use a positive whole number."),
+            Line::from("Use a whole number between 1 and 50."),
         ];
     }
 

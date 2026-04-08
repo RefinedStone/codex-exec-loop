@@ -449,7 +449,9 @@ impl NativeTuiApp {
             }
             KeyCode::Backspace => self.pop_max_auto_turns_character(),
             KeyCode::Char(character)
-                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+                if (key.modifiers == KeyModifiers::NONE
+                    || key.modifiers == KeyModifiers::SHIFT)
+                    && character.is_ascii_digit() =>
             {
                 self.push_max_auto_turns_character(character);
             }
