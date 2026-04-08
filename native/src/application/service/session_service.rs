@@ -160,10 +160,13 @@ pub fn project_recent_sessions(
         .enumerate()
         .filter(|(_, session)| matches_project_filter(session, &active_project_filter))
         .filter(|(_, session)| matches_search_query(session, &search_tokens))
-        .map(|(index, session)| RankedSessionIndex {
-            index,
-            updated_at_epoch: session.updated_at_epoch,
-            score: search_match_score(session, &search_tokens, current_workspace_directory),
+        .map(|(index, session)| {
+            RankedSessionIndex::from_session(
+                index,
+                session,
+                &search_tokens,
+                current_workspace_directory,
+            )
         })
         .collect::<Vec<_>>();
     if !search_tokens.is_empty() {
@@ -211,6 +214,21 @@ struct RankedSessionIndex {
     index: usize,
     updated_at_epoch: i64,
     score: usize,
+}
+
+impl RankedSessionIndex {
+    fn from_session(
+        index: usize,
+        session: &SessionSummary,
+        search_tokens: &[String],
+        current_workspace_directory: Option<&str>,
+    ) -> Self {
+        Self {
+            index,
+            updated_at_epoch: session.updated_at_epoch,
+            score: search_match_score(session, search_tokens, current_workspace_directory),
+        }
+    }
 }
 
 fn build_project_filter_options(
