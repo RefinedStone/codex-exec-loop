@@ -31,7 +31,7 @@ impl FilesystemPlanningWorkspaceAdapter {
         relative_path: &str,
     ) -> Result<Option<String>> {
         let path = Path::new(workspace_dir).join(relative_path);
-        if !path.exists() {
+        if !path.is_file() {
             return Ok(None);
         }
 
@@ -213,6 +213,23 @@ mod tests {
         assert!(result.task_ledger_json.is_none());
         assert!(result.task_ledger_schema_json.is_none());
         assert!(result.result_output_markdown.is_none());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn planning_workspace_loader_ignores_directory_entries_for_expected_files() {
+        let workspace_dir = create_temp_workspace("planning-workspace-directory-entry");
+        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
+        fs::create_dir_all(planning_dir.join("directions.toml"))
+            .expect("directory entry should be created");
+
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let result = adapter
+            .load_planning_workspace_files(&workspace_dir)
+            .expect("directory entries should not fail planning workspace load");
+
+        assert!(result.directions_toml.is_none());
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

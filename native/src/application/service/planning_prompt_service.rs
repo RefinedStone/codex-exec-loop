@@ -267,12 +267,13 @@ fn build_prompt_fragment(
     if queue_snapshot.active_tasks.is_empty() {
         lines.push("- visible_tasks: none".to_string());
     } else {
+        let visible_tasks = queue_snapshot.visible_tasks(MAX_VISIBLE_QUEUE_TASKS);
         lines.push(format!(
             "- visible_tasks: top {} of {}",
-            queue_snapshot.visible_tasks(MAX_VISIBLE_QUEUE_TASKS).len(),
+            visible_tasks.len(),
             queue_snapshot.active_tasks.len()
         ));
-        for task in queue_snapshot.visible_tasks(MAX_VISIBLE_QUEUE_TASKS) {
+        for task in visible_tasks {
             lines.push(format!(
                 "  - rank {} | {} | {} | direction={} | status={} | combined_priority={}",
                 task.rank,
@@ -338,7 +339,9 @@ fn build_prompt_fragment(
 
     lines.push(String::new());
     lines.push("Result Output Prompt".to_string());
-    lines.extend(result_output_markdown.lines().map(str::to_string));
+    if !result_output_markdown.is_empty() {
+        lines.push(result_output_markdown.to_string());
+    }
 
     lines.join("\n")
 }
