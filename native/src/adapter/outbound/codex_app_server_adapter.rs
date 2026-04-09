@@ -197,13 +197,27 @@ impl CodexAppServerAdapter {
     }
 
     fn changed_file_paths(item: &Value) -> Vec<String> {
-        item.get("changes")
+        let mut paths = Vec::new();
+
+        for change in item
+            .get("changes")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|change| change.get("path").and_then(Value::as_str))
-            .map(str::to_string)
-            .collect()
+        {
+            if let Some(path) = change.get("path").and_then(Value::as_str) {
+                paths.push(path.to_string());
+            }
+            if let Some(move_path) = change
+                .get("kind")
+                .and_then(|kind| kind.get("move_path"))
+                .and_then(Value::as_str)
+            {
+                paths.push(move_path.to_string());
+            }
+        }
+
+        paths
     }
 
     fn changed_planning_file_paths(item: &Value) -> Vec<String> {
@@ -1517,8 +1531,11 @@ mod tests {
                     "diff": "@@"
                 },
                 {
-                    "path": "/tmp/workspace/.codex-exec-loop/planning/task-ledger.json",
-                    "kind": { "type": "update" },
+                    "path": "/tmp/workspace/tmp-task-ledger.json",
+                    "kind": {
+                        "type": "update",
+                        "move_path": "/tmp/workspace/.codex-exec-loop/planning/task-ledger.json"
+                    },
                     "diff": "@@"
                 },
                 {

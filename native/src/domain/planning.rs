@@ -302,7 +302,9 @@ pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
         .iter()
         .copied()
         .find(|candidate| {
-            normalized == *candidate || normalized.ends_with(&format!("/{candidate}"))
+            normalized
+                .strip_suffix(candidate)
+                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('/'))
         })
 }
 

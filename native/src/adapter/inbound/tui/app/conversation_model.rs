@@ -172,9 +172,11 @@ pub(crate) struct TurnActivityState {
     pub(crate) current_turn_file_change_count: usize,
     pub(crate) current_turn_command_count: usize,
     pub(crate) current_turn_last_summary: Option<String>,
+    pub(crate) current_turn_changed_planning_file_paths: Vec<String>,
     pub(crate) last_completed_turn_file_change_count: usize,
     pub(crate) last_completed_turn_command_count: usize,
     pub(crate) last_completed_turn_last_summary: Option<String>,
+    pub(crate) last_completed_turn_changed_planning_file_paths: Vec<String>,
 }
 
 impl AutoFollowState {
@@ -478,6 +480,7 @@ impl TurnActivityState {
         self.current_turn_file_change_count = 0;
         self.current_turn_command_count = 0;
         self.current_turn_last_summary = None;
+        self.current_turn_changed_planning_file_paths.clear();
     }
 
     pub(crate) fn register_tool_activity(&mut self, activity: &ConversationToolActivity) {
@@ -498,6 +501,26 @@ impl TurnActivityState {
         self.last_completed_turn_command_count =
             std::mem::replace(&mut self.current_turn_command_count, 0);
         self.last_completed_turn_last_summary = self.current_turn_last_summary.take();
+        self.last_completed_turn_changed_planning_file_paths =
+            std::mem::take(&mut self.current_turn_changed_planning_file_paths);
+    }
+
+    pub(crate) fn register_changed_planning_file_paths(&mut self, paths: &[String]) {
+        for path in paths {
+            if !self
+                .current_turn_changed_planning_file_paths
+                .iter()
+                .any(|existing| existing == path)
+            {
+                self.current_turn_changed_planning_file_paths
+                    .push(path.clone());
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_completed_changed_planning_file_paths(&self) -> &[String] {
+        &self.last_completed_turn_changed_planning_file_paths
     }
 
     pub(crate) fn last_completed_file_change_count(&self) -> usize {

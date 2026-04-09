@@ -366,13 +366,17 @@ impl NativeTuiApp {
     fn evaluate_auto_followup_after_turn(
         &mut self,
         queued_from_turn_id: String,
-        _changed_planning_file_paths: Vec<String>,
+        changed_planning_file_paths: Vec<String>,
     ) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
 
-        let planning_prompt_context = self.load_planning_prompt_context(&conversation.cwd);
+        let planning_prompt_context = if changed_planning_file_paths.is_empty() {
+            conversation.planning_prompt_context.clone()
+        } else {
+            self.load_planning_prompt_context(&conversation.cwd)
+        };
         conversation.replace_planning_prompt_context(planning_prompt_context);
 
         match conversation.decide_auto_followup() {

@@ -137,6 +137,9 @@ pub(super) fn reduce_conversation_runtime(
                     should_refresh_lines = state.commit_live_agent_message()
                         || state.flush_buffered_tool_messages()
                         || should_refresh_lines;
+                    state
+                        .turn_activity
+                        .register_changed_planning_file_paths(&changed_planning_file_paths);
                     state.turn_activity.complete_turn();
                     state.mark_turn_finished();
                     effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
@@ -515,6 +518,16 @@ mod tests {
                     crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
                 ],
             }]
+        );
+        assert_eq!(
+            reduced
+                .state
+                .turn_activity
+                .last_completed_changed_planning_file_paths(),
+            [
+                crate::domain::planning::DIRECTIONS_FILE_PATH.to_string(),
+                crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
+            ]
         );
     }
 
