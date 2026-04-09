@@ -145,9 +145,17 @@ struct AutoFollowupSubmitContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanningRepairSubmitContext {
+    queued_from_turn_id: String,
+    attempt_number: usize,
+    max_attempts: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptOrigin {
     Manual,
     AutoFollow(AutoFollowupSubmitContext),
+    PlanningRepair(PlanningRepairSubmitContext),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

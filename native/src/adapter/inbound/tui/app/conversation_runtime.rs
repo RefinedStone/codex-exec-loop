@@ -24,6 +24,12 @@ pub(super) enum ConversationRuntimeEffect {
         queued_from_turn_id: String,
         template_label: String,
     },
+    QueuePlanningRepairPrompt {
+        prompt: String,
+        queued_from_turn_id: String,
+        attempt_number: usize,
+        max_attempts: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +55,7 @@ pub(super) fn reduce_conversation_runtime(
             let cwd = state.cwd.clone();
             match &origin {
                 PromptOrigin::Manual => {
+                    state.planning_repair_state = None;
                     state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_followup_skip();
                 }
@@ -57,6 +64,12 @@ pub(super) fn reduce_conversation_runtime(
                     state.record_auto_followup_submission(
                         &context.queued_from_turn_id,
                         &context.template_label,
+                    );
+                }
+                PromptOrigin::PlanningRepair(context) => {
+                    state.record_planning_repair_submission(
+                        context.attempt_number,
+                        context.max_attempts,
                     );
                 }
             }
@@ -75,6 +88,10 @@ pub(super) fn reduce_conversation_runtime(
                 PromptOrigin::AutoFollow(context) => format!(
                     "auto follow-up submitted / turn {auto_follow_progress} / template: {}",
                     context.template_label
+                ),
+                PromptOrigin::PlanningRepair(context) => format!(
+                    "planning repair submitted / retry {}/{}",
+                    context.attempt_number, context.max_attempts
                 ),
             };
             effects.push(ConversationRuntimeEffect::StartStream {
@@ -170,7 +187,9 @@ pub(super) fn reduce_conversation_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
     use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+    use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
@@ -246,6 +265,76 @@ mod tests {
                 "queued after the previous turn completed; submitted with template builtin next-task"
             )
         );
+    }
+
+    #[test]
+    fn planning_repair_submit_records_retry_without_advancing_auto_follow_progress() {
+        let mut state = sample_conversation();
+        state.input_buffer = "repair the invalid task ledger".to_string();
+        state.auto_follow_state.completed_auto_turns = 1;
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "repair the invalid task ledger".to_string(),
+                origin: PromptOrigin::PlanningRepair(PlanningRepairSubmitContext {
+                    queued_from_turn_id: "turn-1".to_string(),
+                    attempt_number: 1,
+                    max_attempts: 2,
+                }),
+            },
+        );
+
+        assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 1);
+        assert_eq!(
+            reduced.state.status_text,
+            "planning repair submitted / retry 1/2"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("submitted planning repair 1/2")
+        );
+        assert_eq!(
+            reduced.effects,
+            vec![ConversationRuntimeEffect::StartStream {
+                cwd: "/tmp/workspace".to_string(),
+                thread_id: Some("thread-1".to_string()),
+                prompt: "repair the invalid task ledger".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn manual_submit_clears_pending_planning_repair_state() {
+        let mut state = sample_conversation();
+        state.planning_repair_state = Some(PlanningRepairState {
+            root_turn_id: "turn-root".to_string(),
+            attempts_used: 1,
+            max_attempts: 2,
+            latest_request: PlanningRepairRequest {
+                failure_summary: "failed to parse task-ledger.json".to_string(),
+                validation_errors: vec!["failed to parse task-ledger.json".to_string()],
+                directions_toml: "version = 1".to_string(),
+                task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+                accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+                rejected_task_ledger_json: Some("{ invalid json".to_string()),
+                rejected_archive_path: None,
+            },
+        });
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "operator override".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        );
+
+        assert!(reduced.state.planning_repair_state.is_none());
     }
 
     #[test]
@@ -767,6 +856,7 @@ mod tests {
             input_buffer: "ship it".to_string(),
             startup_submit_armed: false,
             active_turn_id: None,
+            planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(FollowupTemplateCatalog {
                 items: vec![FollowupTemplateDefinition {

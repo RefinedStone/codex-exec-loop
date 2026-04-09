@@ -58,6 +58,7 @@ fn ready_conversation() -> ConversationViewModel {
         input_buffer: String::new(),
         startup_submit_armed: false,
         active_turn_id: None,
+        planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
         planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),

@@ -56,6 +56,12 @@ impl NativeTuiApp {
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
                 "auto follow-up paused because startup diagnostics need attention".to_string()
             }
+            (PromptOrigin::PlanningRepair(_), ShellActionAvailability::Pending) => {
+                "planning repair paused while startup checks are still running".to_string()
+            }
+            (PromptOrigin::PlanningRepair(_), ShellActionAvailability::Blocked) => {
+                "planning repair paused because startup diagnostics need attention".to_string()
+            }
         }
     }
 

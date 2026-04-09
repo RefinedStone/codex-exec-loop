@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
+use super::conversation_model::PlanningRepairState;
 use super::shell_presentation::{
     build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
 };
@@ -35,7 +36,9 @@ use crate::application::port::outbound::followup_template_port::{
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
-use crate::application::service::planning_reconciliation_service::PlanningExecutionSnapshot;
+use crate::application::service::planning_reconciliation_service::{
+    PlanningExecutionSnapshot, PlanningRepairRequest,
+};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -255,6 +258,7 @@ fn ready_conversation() -> ConversationViewModel {
         input_buffer: String::new(),
         startup_submit_armed: false,
         active_turn_id: None,
+        planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
         planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
@@ -445,8 +449,9 @@ fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
 }
 
 #[test]
-fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
-    let (mut app, _) = make_test_app();
+fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-reconcile-app");
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
@@ -479,6 +484,8 @@ fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
 
     let mut conversation = ready_conversation();
     conversation.cwd = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-invalid".to_string());
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -505,11 +512,219 @@ fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
 
     let restored_task_ledger = std::fs::read_to_string(planning_dir.join("task-ledger.json"))
         .expect("restored task ledger should read");
+    let mut repair_prompt = None;
+    for _ in 0..20 {
+        repair_prompt = codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .last()
+            .map(|(_, prompt)| prompt.clone());
+        if repair_prompt.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
 
     assert_eq!(restored_task_ledger, bootstrap_artifacts.task_ledger_json);
+    assert_eq!(
+        conversation.planning_prompt_context.preview_status_label(),
+        "ready"
+    );
+    assert!(
+        repair_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("planning repair 1/2"))
+    );
+    assert!(
+        repair_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("Validation errors:"))
+    );
+    assert!(
+        repair_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("Rejected candidate excerpt"))
+    );
+    assert!(
+        conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| notice.contains("archived rejected task-ledger"))
+    );
+    assert!(
+        conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| notice.contains("planning repair queued retry 1/2"))
+    );
+    assert!(conversation.planning_repair_state.is_some());
+    assert!(
+        conversation
+            .status_text
+            .contains("planning repair submitted / retry 1/2")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn repair_attempt_without_task_ledger_change_queues_next_retry() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-repair-1".to_string());
+    conversation.planning_repair_state = Some(PlanningRepairState {
+        root_turn_id: "turn-root".to_string(),
+        attempts_used: 1,
+        max_attempts: 2,
+        latest_request: PlanningRepairRequest {
+            failure_summary: "failed to parse task-ledger.json".to_string(),
+            validation_errors: vec!["failed to parse task-ledger.json".to_string()],
+            directions_toml: "version = 1".to_string(),
+            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+            rejected_task_ledger_json: Some("{ invalid json".to_string()),
+            rejected_archive_path: Some(
+                "/tmp/workspace/.codex-exec-loop/planning/rejected/turn-root/task-ledger.json"
+                    .to_string(),
+            ),
+        },
+    });
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-repair-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ));
+
+    let mut repair_prompt = None;
+    for _ in 0..20 {
+        repair_prompt = codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .last()
+            .map(|(_, prompt)| prompt.clone());
+        if repair_prompt.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert!(
+        repair_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("planning repair 2/2"))
+    );
+    assert!(repair_prompt.as_deref().is_some_and(|prompt| {
+        prompt.contains("직전 repair 시도에서 `task-ledger.json` 이 바뀌지 않았습니다")
+    }));
+    assert_eq!(
+        conversation
+            .planning_repair_state
+            .as_ref()
+            .map(|state| state.attempts_used),
+        Some(2)
+    );
+}
+
+#[test]
+fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-repair-exhausted");
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    let bootstrap_artifacts =
+        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
+            .build_artifacts();
+    std::fs::write(
+        planning_dir.join("directions.toml"),
+        &bootstrap_artifacts.directions_toml,
+    )
+    .expect("directions should write");
+    std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
+        .expect("invalid task ledger should write");
+    std::fs::write(
+        planning_dir.join("task-ledger.schema.json"),
+        &bootstrap_artifacts.task_ledger_schema_json,
+    )
+    .expect("schema should write");
+    std::fs::write(
+        planning_dir.join("result-output.md"),
+        &bootstrap_artifacts.result_output_markdown,
+    )
+    .expect("result output should write");
+
+    let mut conversation = ready_conversation();
+    conversation.cwd = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-repair-2".to_string());
+    conversation.planning_repair_state = Some(PlanningRepairState {
+        root_turn_id: "turn-root".to_string(),
+        attempts_used: 2,
+        max_attempts: 2,
+        latest_request: PlanningRepairRequest {
+            failure_summary: "failed to parse task-ledger.json".to_string(),
+            validation_errors: vec!["failed to parse task-ledger.json".to_string()],
+            directions_toml: bootstrap_artifacts.directions_toml.clone(),
+            task_ledger_schema_json: bootstrap_artifacts.task_ledger_schema_json.clone(),
+            accepted_task_ledger_json: bootstrap_artifacts.task_ledger_json.clone(),
+            rejected_task_ledger_json: Some("{ invalid json".to_string()),
+            rejected_archive_path: None,
+        },
+    });
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+        PlanningExecutionSnapshot {
+            directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
+            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+        },
+    ));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-repair-2".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(conversation.planning_repair_state.is_none());
     assert_eq!(
         conversation.planning_prompt_context.preview_status_label(),
         "blocked"
@@ -518,13 +733,13 @@ fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
         conversation
             .planning_prompt_context
             .preview_detail()
-            .is_some_and(|detail| detail.contains("rejected task-ledger.json"))
+            .is_some_and(|detail| detail.contains("planning repair exhausted after 2 attempts"))
     );
     assert!(
         conversation
             .runtime_notices
             .iter()
-            .any(|notice| notice.contains("archived rejected task-ledger"))
+            .any(|notice| notice.contains("planning repair exhausted after 2 attempts"))
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");

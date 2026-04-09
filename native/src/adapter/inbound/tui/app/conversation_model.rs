@@ -1,6 +1,7 @@
 use ratatui::text::Line;
 
 use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
     ConversationToolActivity, ConversationToolActivityKind,
@@ -65,6 +66,14 @@ pub(crate) enum AutoFollowupSkipReason {
 pub(crate) struct RecordedAutoFollowupActivity {
     pub(crate) summary: String,
     pub(crate) detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlanningRepairState {
+    pub(crate) root_turn_id: String,
+    pub(crate) attempts_used: usize,
+    pub(crate) max_attempts: usize,
+    pub(crate) latest_request: PlanningRepairRequest,
 }
 
 impl AutoFollowupSkipReason {
@@ -586,6 +595,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) input_buffer: String,
     pub(crate) startup_submit_armed: bool,
     pub(crate) active_turn_id: Option<String>,
+    pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
     pub(crate) planning_prompt_context: PlanningPromptContextLoadResult,
@@ -619,6 +629,7 @@ impl ConversationViewModel {
             input_buffer: String::new(),
             startup_submit_armed: false,
             active_turn_id: None,
+            planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
@@ -660,6 +671,7 @@ impl ConversationViewModel {
             input_buffer: String::new(),
             startup_submit_armed: false,
             active_turn_id: None,
+            planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
             planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
@@ -1007,6 +1019,28 @@ impl ConversationViewModel {
 
     pub(crate) fn clear_auto_followup_skip(&mut self) {
         self.last_auto_followup_activity = None;
+    }
+
+    pub(crate) fn record_planning_repair_submission(
+        &mut self,
+        attempt: usize,
+        max_attempts: usize,
+    ) {
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: format!("submitted planning repair {attempt}/{max_attempts}"),
+            detail: format!(
+                "queued after task-ledger validation failed; submitted retry {attempt}/{max_attempts}"
+            ),
+        });
+    }
+
+    pub(crate) fn record_planning_repair_queue(&mut self, attempt: usize, max_attempts: usize) {
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: format!("queued planning repair {attempt}/{max_attempts}"),
+            detail: format!(
+                "queued after task-ledger validation failed; waiting to submit retry {attempt}/{max_attempts}"
+            ),
+        });
     }
 
     pub(crate) fn record_auto_followup_submission(

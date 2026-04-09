@@ -31,7 +31,19 @@ pub struct PlanningReconciliationResult {
     pub rejected_task_ledger: bool,
     pub rejected_archive_path: Option<String>,
     pub queue_snapshot_rebuilt: bool,
+    pub repair_request: Option<PlanningRepairRequest>,
     pub auto_followup_block_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningRepairRequest {
+    pub failure_summary: String,
+    pub validation_errors: Vec<String>,
+    pub directions_toml: String,
+    pub task_ledger_schema_json: String,
+    pub accepted_task_ledger_json: String,
+    pub rejected_task_ledger_json: Option<String>,
+    pub rejected_archive_path: Option<String>,
 }
 
 impl PlanningReconciliationService {
@@ -192,11 +204,26 @@ impl PlanningReconciliationService {
                 TASK_LEDGER_FILE_PATH,
                 execution_snapshot.task_ledger_json.as_deref(),
             )?;
+        let validation_errors = validation_error_summaries(&validation_result);
         result.rejected_task_ledger = true;
-        result.auto_followup_block_reason = Some(
-            "planning reconciliation rejected task-ledger.json; auto follow-up stays paused until repair flow is wired"
-                .to_string(),
-        );
+        result.repair_request = Some(PlanningRepairRequest {
+            failure_summary: validation_errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown validation failure".to_string()),
+            validation_errors,
+            directions_toml: directions_toml.to_string(),
+            task_ledger_schema_json: workspace_record
+                .task_ledger_schema_json
+                .clone()
+                .unwrap_or_default(),
+            accepted_task_ledger_json: execution_snapshot
+                .task_ledger_json
+                .clone()
+                .unwrap_or_default(),
+            rejected_task_ledger_json: workspace_record.task_ledger_json.clone(),
+            rejected_archive_path: result.rejected_archive_path.clone(),
+        });
         result.notices.push(format!(
             "planning reconciliation rejected task-ledger.json and restored the last accepted ledger ({})",
             first_validation_error_summary(&validation_result)
@@ -214,13 +241,112 @@ impl PlanningReconciliationService {
 fn first_validation_error_summary(
     validation_result: &crate::domain::planning::PlanningValidationResult,
 ) -> String {
+    validation_error_summaries(validation_result)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "unknown validation failure".to_string())
+}
+
+fn validation_error_summaries(
+    validation_result: &crate::domain::planning::PlanningValidationResult,
+) -> Vec<String> {
     validation_result
         .report
         .errors()
         .into_iter()
-        .next()
         .map(|issue| issue.message.clone())
-        .unwrap_or_else(|| "unknown validation failure".to_string())
+        .collect()
+}
+
+pub fn build_planning_repair_prompt(
+    request: &PlanningRepairRequest,
+    attempt_number: usize,
+    max_attempts: usize,
+    retry_note: Option<&str>,
+) -> String {
+    let mut lines = vec![
+        "대리인입니다.".to_string(),
+        format!("planning repair {attempt_number}/{max_attempts} 입니다."),
+        "이전 턴에서 `task-ledger.json` 후보가 validation을 통과하지 못했습니다.".to_string(),
+        "이번 턴에서는 `.codex-exec-loop/planning/task-ledger.json` 하나만 고치세요.".to_string(),
+        "- `directions.toml`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요."
+            .to_string(),
+        "- 현재 작업공간에는 마지막 accepted `task-ledger.json` 이 이미 복원돼 있습니다."
+            .to_string(),
+        "- 아래 validation 오류를 모두 해결하는 유효한 JSON으로 다시 작성하세요.".to_string(),
+        "- 기존 direction frame 밖의 관련 없는 새 작업은 추가하지 마세요.".to_string(),
+    ];
+
+    if let Some(retry_note) = retry_note.map(str::trim).filter(|value| !value.is_empty()) {
+        lines.push(format!("- 추가 지시: {retry_note}"));
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Failure summary: {}", request.failure_summary));
+    lines.push(String::new());
+    lines.push("Validation errors:".to_string());
+    for error in &request.validation_errors {
+        lines.push(format!("- {error}"));
+    }
+    if let Some(rejected_archive_path) = request.rejected_archive_path.as_deref() {
+        lines.push(format!("- rejected archive: {rejected_archive_path}"));
+    }
+
+    lines.push(String::new());
+    lines.push("Accepted directions (`directions.toml`):".to_string());
+    lines.push(prompt_code_block(
+        "toml",
+        truncate_prompt_section(&request.directions_toml, 4_000).as_str(),
+    ));
+
+    lines.push(String::new());
+    lines.push("Allowed schema (`task-ledger.schema.json`):".to_string());
+    lines.push(prompt_code_block(
+        "json",
+        truncate_prompt_section(&request.task_ledger_schema_json, 4_000).as_str(),
+    ));
+
+    lines.push(String::new());
+    lines.push("Current accepted `task-ledger.json` (restored on disk):".to_string());
+    lines.push(prompt_code_block(
+        "json",
+        truncate_prompt_section(&request.accepted_task_ledger_json, 4_000).as_str(),
+    ));
+
+    if let Some(rejected_task_ledger_json) = request
+        .rejected_task_ledger_json
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(String::new());
+        lines.push("Rejected candidate excerpt:".to_string());
+        lines.push(prompt_code_block(
+            "json",
+            truncate_prompt_section(rejected_task_ledger_json, 4_000).as_str(),
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push(
+        "수정이 끝나면 무엇을 고쳤는지 짧게 요약하세요. 더 이상 고칠 것이 없어도 `DONE` 만 단독으로 출력하지 말고 이유를 설명하세요."
+            .to_string(),
+    );
+
+    lines.join("\n")
+}
+
+fn prompt_code_block(language: &str, body: &str) -> String {
+    format!("```{language}\n{body}\n```")
+}
+
+fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
+    let body = body.trim();
+    if body.chars().count() <= max_chars {
+        return body.to_string();
+    }
+
+    let truncated = body.chars().take(max_chars).collect::<String>();
+    format!("{truncated}\n... [truncated]")
 }
 
 #[cfg(test)]
@@ -231,7 +357,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{PlanningExecutionSnapshot, PlanningReconciliationService};
+    use super::{
+        PlanningExecutionSnapshot, PlanningReconciliationService, build_planning_repair_prompt,
+    };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
@@ -367,6 +495,7 @@ mod tests {
 
         assert!(result.rejected_task_ledger);
         assert!(result.rejected_archive_path.is_some());
+        assert!(result.repair_request.is_some());
         assert_eq!(
             restored_task_ledger,
             execution_snapshot
@@ -384,6 +513,35 @@ mod tests {
         );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn repair_prompt_includes_validation_errors_and_rejected_excerpt() {
+        let prompt = build_planning_repair_prompt(
+            &super::PlanningRepairRequest {
+                failure_summary: "failed to parse task-ledger.json: expected value".to_string(),
+                validation_errors: vec![
+                    "failed to parse task-ledger.json: expected value".to_string(),
+                    "task-ledger.schema.json must not be blank".to_string(),
+                ],
+                directions_toml: "version = 1".to_string(),
+                task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+                accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+                rejected_task_ledger_json: Some("{ invalid json".to_string()),
+                rejected_archive_path: Some(
+                    "/tmp/workspace/.codex-exec-loop/planning/rejected/turn-1/task-ledger.json"
+                        .to_string(),
+                ),
+            },
+            1,
+            2,
+            Some("retry now"),
+        );
+
+        assert!(prompt.contains("planning repair 1/2"));
+        assert!(prompt.contains("failed to parse task-ledger.json"));
+        assert!(prompt.contains("rejected archive"));
+        assert!(prompt.contains("Rejected candidate excerpt"));
     }
 
     #[test]
