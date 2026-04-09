@@ -6,7 +6,8 @@ This file is the compact current contract for the inline shell on `prerelease`.
 - inline mode is the default frontend; alternate-screen is explicit opt-in
 - `thread_id` and `turn_id` are protocol values from `codex app-server`, not native-client-generated UI ids
 - committed transcript history is appended into host terminal scrollback separately from tail updates
-- hidden inline mode uses one fixed viewport budget with a bottom-anchored tail
+- startup ASCII art, when enabled, persists in scrollback instead of behaving like a transient frame
+- hidden inline mode uses one fixed viewport budget with the tail rendered from the top of the visible viewport
 
 ## Prompt Contract
 - the active prompt shows a visible cursor in the prompt surface
@@ -25,5 +26,7 @@ This file is the compact current contract for the inline shell on `prerelease`.
 
 ## Layout Contract
 - host terminal scrollback is the primary history surface
-- inline mode keeps one tail-anchored live region for prompt, transient streaming, and inspections
+- blank-draft startup reads as startup context, conversation placeholder, and prompt
+- inline mode keeps one live region for prompt, transient streaming, and inspections
+- once committed history exists, the live region starts at the first visible row of its viewport so it stays attached to the latest scrollback line
 - inline status behaves like a short notice band, not a permanent heavy footer

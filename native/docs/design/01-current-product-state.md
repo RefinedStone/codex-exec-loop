@@ -4,11 +4,13 @@ The `prerelease` branch is a shell-first native client built around `codex app-s
 
 ## Current Baseline
 - shell-first startup into a draft conversation on the main terminal screen by default, with `CODEX_EXEC_LOOP_FRONTEND=alternate` as the explicit fullscreen override and legacy `CODEX_EXEC_LOOP_ALT_SCREEN` still accepted as fallback
+- optional startup ASCII art can persist in scrollback as the first shell surface, controlled by `CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART` and enabled by default
 - startup diagnostics, recent-session browsing, and follow-up template inspection rendered inside the inline shell, with alternate-screen still available as the framed fallback path
 - manual prompt submission can queue while startup checks are still running, then auto-send once startup becomes ready
 - new-thread start, existing-thread resume, snapshot loading, and streamed turn execution through the app-server flow
 - inline shell commands such as `:diag`, `:sessions`, `:templates`, `:new`, and `:help`
 - host terminal scrollback used as the primary history surface in inline mode, with one tail live region for prompt, transient streaming text, and compact notices
+- the startup-ready shell now reads as `logo -> startup context -> conversation placeholder -> prompt`, and after the first committed turn the prompt stays visually attached to the latest history line instead of hanging below a large gap
 - visible cursor ownership in the active inline prompt and visible streamed agent text before completion
 - compact routine status copy that hides raw protocol ids from normal inline flow
 - builtin auto follow-up templates, workspace template loading, inspection-backed stop-keyword editing, and a no-file-change stop rule

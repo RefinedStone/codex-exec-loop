@@ -4,8 +4,10 @@ This file describes the implemented shell shape on `prerelease`.
 
 ## Shell Shape
 - the app opens directly into a conversation draft on the main screen by default
+- when startup ASCII art is enabled, the logo persists in scrollback instead of behaving like a transient splash frame
+- blank-draft startup reads top-to-bottom as startup context, conversation placeholder, and prompt
 - inline mode uses host terminal scrollback as the primary history surface
-- one tail-anchored live region carries the prompt, transient streaming text, and compact notices
+- one live region carries the prompt, transient streaming text, and compact notices
 - diagnostics, recent sessions, and template previews render as in-shell inspection surfaces
 - alternate-screen remains an explicit fallback frontend, not the default path
 
@@ -17,9 +19,10 @@ This file describes the implemented shell shape on `prerelease`.
 
 ## Interaction Model
 1. Startup checks begin in the background.
-2. The shell is visible immediately with the current workspace path.
+2. The shell is visible immediately with startup context and an editable prompt.
 3. Once startup diagnostics pass, recent-session loading, prompt submission, and session actions are enabled.
 4. During a turn, deltas stay in the live region until completion, then the final assistant text commits into normal history.
+5. After committed history exists, the inline tail begins at the first visible row of its viewport so status and prompt stay attached to the latest scrollback line.
 
 ## Boundaries
 - inline mode remains a Ratatui-driven shell, so prompt, streaming, and tail rendering changes still need real-terminal validation
