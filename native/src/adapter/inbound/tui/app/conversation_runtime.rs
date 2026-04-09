@@ -17,6 +17,7 @@ pub(super) enum ConversationRuntimeEffect {
     },
     EvaluateAutoFollowup {
         queued_from_turn_id: String,
+        changed_planning_file_paths: Vec<String>,
     },
     QueueAutoPrompt {
         prompt: String,
@@ -129,7 +130,10 @@ pub(super) fn reduce_conversation_runtime(
                 ConversationStreamEvent::ApprovalReviewUpdated { review } => {
                     state.update_approval_review(review);
                 }
-                ConversationStreamEvent::TurnCompleted { turn_id } => {
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id,
+                    changed_planning_file_paths,
+                } => {
                     should_refresh_lines = state.commit_live_agent_message()
                         || state.flush_buffered_tool_messages()
                         || should_refresh_lines;
@@ -137,6 +141,7 @@ pub(super) fn reduce_conversation_runtime(
                     state.mark_turn_finished();
                     effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
                         queued_from_turn_id: turn_id,
+                        changed_planning_file_paths,
                     });
                 }
                 ConversationStreamEvent::Failed { message } => {
@@ -257,6 +262,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
             }),
         );
 
@@ -266,8 +272,11 @@ mod tests {
         );
         assert!(matches!(
             reduced.effects.as_slice(),
-            [ConversationRuntimeEffect::EvaluateAutoFollowup { queued_from_turn_id }]
-                if queued_from_turn_id == "turn-1"
+            [ConversationRuntimeEffect::EvaluateAutoFollowup {
+                queued_from_turn_id,
+                changed_planning_file_paths,
+            }] if queued_from_turn_id == "turn-1"
+                && changed_planning_file_paths.is_empty()
         ));
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(reduced.state.messages.len(), 1);
@@ -428,6 +437,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
             }),
         );
 
@@ -437,8 +447,11 @@ mod tests {
         );
         assert!(matches!(
             reduced.effects.as_slice(),
-            [ConversationRuntimeEffect::EvaluateAutoFollowup { queued_from_turn_id }]
-                if queued_from_turn_id == "turn-1"
+            [ConversationRuntimeEffect::EvaluateAutoFollowup {
+                queued_from_turn_id,
+                changed_planning_file_paths,
+            }] if queued_from_turn_id == "turn-1"
+                && changed_planning_file_paths.is_empty()
         ));
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert!(reduced.state.messages.is_empty());
@@ -459,6 +472,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
             }),
         );
 
@@ -468,10 +482,40 @@ mod tests {
         );
         assert!(matches!(
             reduced.effects.as_slice(),
-            [ConversationRuntimeEffect::EvaluateAutoFollowup { queued_from_turn_id }]
-                if queued_from_turn_id == "turn-1"
+            [ConversationRuntimeEffect::EvaluateAutoFollowup {
+                queued_from_turn_id,
+                changed_planning_file_paths,
+            }] if queued_from_turn_id == "turn-1"
+                && changed_planning_file_paths.is_empty()
         ));
         assert!(reduced.state.last_auto_followup_activity.is_none());
+    }
+
+    #[test]
+    fn turn_completed_preserves_changed_planning_file_paths_for_followup_evaluation() {
+        let state = sample_active_turn_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec![
+                    crate::domain::planning::DIRECTIONS_FILE_PATH.to_string(),
+                    crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
+                ],
+            }),
+        );
+
+        assert_eq!(
+            reduced.effects,
+            vec![ConversationRuntimeEffect::EvaluateAutoFollowup {
+                queued_from_turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec![
+                    crate::domain::planning::DIRECTIONS_FILE_PATH.to_string(),
+                    crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
+                ],
+            }]
+        );
     }
 
     #[test]
@@ -516,6 +560,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
             }),
         );
 
@@ -610,6 +655,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
             }),
         );
 

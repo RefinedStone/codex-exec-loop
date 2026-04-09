@@ -418,7 +418,7 @@ fn apply_stream_event(state: &mut StreamShellState, event: ConversationStreamEve
         ConversationStreamEvent::ApprovalReviewUpdated { review } => {
             state.status_line = review.status_text();
         }
-        ConversationStreamEvent::TurnCompleted { turn_id } => {
+        ConversationStreamEvent::TurnCompleted { turn_id, .. } => {
             state.thread.turn_phase = StreamTurnPhase::Idle;
             state.status_line = format!("turn completed: {turn_id}");
         }
@@ -608,6 +608,7 @@ mod tests {
                 FakeStreamMode::Succeed => {
                     event_sender.send(ConversationStreamEvent::TurnCompleted {
                         turn_id: "turn-1".to_string(),
+                        changed_planning_file_paths: Vec::new(),
                     })?;
                     Ok(())
                 }
@@ -824,7 +825,7 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(StreamShellEvent::StreamUpdate(
-                ConversationStreamEvent::TurnCompleted { turn_id }
+                ConversationStreamEvent::TurnCompleted { turn_id, .. }
             )) if turn_id == "turn-1"
         ));
     }

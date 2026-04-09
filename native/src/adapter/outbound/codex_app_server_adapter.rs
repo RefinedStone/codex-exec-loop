@@ -18,6 +18,7 @@ use crate::domain::conversation::{
     ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
     ConversationToolActivity, ConversationToolActivityKind,
 };
+use crate::domain::planning::canonical_active_planning_file_path;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 
@@ -193,6 +194,34 @@ impl CodexAppServerAdapter {
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or_default()
+    }
+
+    fn changed_file_paths(item: &Value) -> Vec<String> {
+        item.get("changes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|change| change.get("path").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn changed_planning_file_paths(item: &Value) -> Vec<String> {
+        let mut paths = Vec::new();
+
+        for path in Self::changed_file_paths(item) {
+            if let Some(canonical_path) = canonical_active_planning_file_path(&path) {
+                Self::push_unique_path(&mut paths, canonical_path.to_string());
+            }
+        }
+
+        paths
+    }
+
+    fn push_unique_path(target: &mut Vec<String>, path: String) {
+        if !target.iter().any(|existing| existing == &path) {
+            target.push(path);
+        }
     }
 
     fn format_file_change_summary(item: &Value) -> String {
@@ -728,6 +757,8 @@ impl AppServerConnection {
         turn_id: &str,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<()> {
+        let mut changed_planning_file_paths = Vec::new();
+
         loop {
             if let Some(status) = self.child.try_wait()? {
                 bail!("app-server exited before the turn completed: {status}");
@@ -749,6 +780,7 @@ impl AppServerConnection {
                             value.get("params"),
                             thread_id,
                             turn_id,
+                            &mut changed_planning_file_paths,
                             event_sender,
                         )? {
                             return Ok(());
@@ -769,6 +801,7 @@ impl AppServerConnection {
         params: Option<&Value>,
         thread_id: &str,
         turn_id: &str,
+        changed_planning_file_paths: &mut Vec<String>,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<bool> {
         let Some(params) = params else {
@@ -831,6 +864,10 @@ impl AppServerConnection {
             }
             "item/completed" => {
                 if params.get("turnId").and_then(Value::as_str) == Some(turn_id) {
+                    self.record_changed_planning_file_paths(
+                        params.get("item"),
+                        changed_planning_file_paths,
+                    );
                     self.handle_completed_item(params.get("item"), event_sender);
                 }
             }
@@ -852,6 +889,7 @@ impl AppServerConnection {
                 if completed_thread_id == Some(thread_id) && completed_turn_id == Some(turn_id) {
                     let _ = event_sender.send(ConversationStreamEvent::TurnCompleted {
                         turn_id: turn_id.to_string(),
+                        changed_planning_file_paths: changed_planning_file_paths.clone(),
                     });
                     return Ok(true);
                 }
@@ -965,6 +1003,23 @@ impl AppServerConnection {
                 });
             }
             _ => {}
+        }
+    }
+
+    fn record_changed_planning_file_paths(
+        &self,
+        item: Option<&Value>,
+        changed_planning_file_paths: &mut Vec<String>,
+    ) {
+        let Some(item) = item else {
+            return;
+        };
+        if item.get("type").and_then(Value::as_str) != Some("fileChange") {
+            return;
+        }
+
+        for path in CodexAppServerAdapter::changed_planning_file_paths(item) {
+            CodexAppServerAdapter::push_unique_path(changed_planning_file_paths, path);
         }
     }
 
@@ -1295,12 +1350,15 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AppServerConnection, RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime,
-        SharedRuntimeRequestKind, partition_runtime_notices, request_failure_outcome,
-        sort_and_dedup_warnings,
+        AppServerConnection, CodexAppServerAdapter, RequestFailureOutcome, RequestRuntimeMode,
+        SharedAppServerRuntime, SharedRuntimeRequestKind, partition_runtime_notices,
+        request_failure_outcome, sort_and_dedup_warnings,
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
+    };
+    use crate::domain::planning::{
+        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
 
     #[test]
@@ -1440,6 +1498,49 @@ mod tests {
                     rationale: Some("needs confirmation".to_string()),
                 },
             })
+        );
+    }
+
+    #[test]
+    fn changed_planning_file_paths_filter_and_canonicalize_file_changes() {
+        let paths = CodexAppServerAdapter::changed_planning_file_paths(&json!({
+            "type": "fileChange",
+            "changes": [
+                {
+                    "path": "src/main.rs",
+                    "kind": { "type": "update" },
+                    "diff": "@@"
+                },
+                {
+                    "path": "./.codex-exec-loop/planning/directions.toml",
+                    "kind": { "type": "update" },
+                    "diff": "@@"
+                },
+                {
+                    "path": "/tmp/workspace/.codex-exec-loop/planning/task-ledger.json",
+                    "kind": { "type": "update" },
+                    "diff": "@@"
+                },
+                {
+                    "path": r"C:\workspace\.codex-exec-loop\planning\result-output.md",
+                    "kind": { "type": "update" },
+                    "diff": "@@"
+                },
+                {
+                    "path": TASK_LEDGER_FILE_PATH,
+                    "kind": { "type": "update" },
+                    "diff": "@@"
+                }
+            ]
+        }));
+
+        assert_eq!(
+            paths,
+            vec![
+                DIRECTIONS_FILE_PATH.to_string(),
+                TASK_LEDGER_FILE_PATH.to_string(),
+                RESULT_OUTPUT_FILE_PATH.to_string(),
+            ]
         );
     }
 }

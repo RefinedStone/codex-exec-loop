@@ -164,6 +164,7 @@ pub enum ConversationStreamEvent {
     },
     TurnCompleted {
         turn_id: String,
+        changed_planning_file_paths: Vec<String>,
     },
     Failed {
         message: String,

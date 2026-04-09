@@ -342,7 +342,11 @@ impl NativeTuiApp {
             }
             ConversationRuntimeEffect::EvaluateAutoFollowup {
                 queued_from_turn_id,
-            } => self.evaluate_auto_followup_after_turn(queued_from_turn_id),
+                changed_planning_file_paths,
+            } => self.evaluate_auto_followup_after_turn(
+                queued_from_turn_id,
+                changed_planning_file_paths,
+            ),
             ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt,
                 queued_from_turn_id,
@@ -359,7 +363,11 @@ impl NativeTuiApp {
         }
     }
 
-    fn evaluate_auto_followup_after_turn(&mut self, queued_from_turn_id: String) {
+    fn evaluate_auto_followup_after_turn(
+        &mut self,
+        queued_from_turn_id: String,
+        _changed_planning_file_paths: Vec<String>,
+    ) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };

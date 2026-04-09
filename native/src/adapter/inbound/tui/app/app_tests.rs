@@ -677,6 +677,7 @@ fn tool_activity_stays_out_of_inline_transcript_until_turn_completion() {
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
             turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
         },
     ));
 
@@ -2608,6 +2609,7 @@ fn auto_followup_skip_reason_is_visible_in_status_footer() {
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
             turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
         },
     ));
 
@@ -2644,6 +2646,7 @@ fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
             turn_id: "turn-2".to_string(),
+            changed_planning_file_paths: Vec::new(),
         },
     ));
 
@@ -2676,6 +2679,7 @@ fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
             turn_id: "019d7032-fa43-7a62-a7b4-5328f373bb90".to_string(),
+            changed_planning_file_paths: Vec::new(),
         },
     ));
 
@@ -2841,6 +2845,7 @@ fn recorded_limit_skip_detail_stays_stable_after_progress_resets() {
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
             turn_id: "turn-limit".to_string(),
+            changed_planning_file_paths: Vec::new(),
         },
     ));
 
