@@ -1,43 +1,36 @@
 # Native Docs
 
-This folder is a compact snapshot of the Rust native client after the first development pass on `prerelease`.
-
-The docs now optimize for phase-2 work:
-
-- keep durable context around core logic, runtime boundaries, and automation rules
-- keep completed baseline and shipped-shape docs compact
-- allow concrete large refactor workstreams to carry detailed planning when that detail is useful
+This folder is the compact current-state record for the Rust native client on `prerelease`.
 
 ## Reading Order
 1. Read [design/01-current-product-state.md](design/01-current-product-state.md).
-2. Read [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md).
-3. Read [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md).
-4. If you are working on the remaining terminal-flow shell target, read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) next.
-5. Read [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md) immediately after that when the question is "why does inline mode still look like redraw replay in some terminals?"
-6. Use [plan/02-todo-backlog.md](plan/02-todo-backlog.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) for the compact remaining-work baseline.
-7. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting active work across multiple git worktrees.
+2. Read [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md).
+3. Read [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md).
+4. Read [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md).
+5. Read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) for the current inline-shell contract.
+6. Read [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md) for durable constraints and maintenance risks.
+7. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting work across multiple git worktrees.
 8. Read [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md) when a PR changes terminal restore, frontend mode, or platform-facing shell behavior.
-9. Use [validation/README.md](validation/README.md) when recording real macOS or Windows matrix runs.
+9. Use [validation/README.md](validation/README.md) when recording real macOS or Windows validation runs.
 
 ## Compaction Rule
-- Core logic docs should keep stable contracts, ownership boundaries, lifecycle notes, and stop-rule behavior.
-- UI/UX docs for the current shipped baseline should describe the implemented form at a high level, not preserve every interaction detail.
-- baseline `plan/` docs should stay short and describe the current planning posture.
-- concrete future workstream docs under `plan/` may be detailed when the change is large enough that the detail reduces execution risk.
+- keep durable contracts, ownership boundaries, lifecycle notes, and operator-visible behavior
+- remove stale sprint sequencing, completion logs, and old branch-by-branch history
+- open a dedicated feature doc only when a new sprint or large workstream actually exists
 
 ## Document Map
 - [design/00-main-to-prerelease-delta.md](design/00-main-to-prerelease-delta.md): short baseline delta from `main`
-- [design/01-current-product-state.md](design/01-current-product-state.md): shipped capabilities and current product posture
-- [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): compact summary of the current shell shape
+- [design/01-current-product-state.md](design/01-current-product-state.md): current product posture and shipped baseline
+- [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): current shell shape and interaction model
 - [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md): core automation behavior
 - [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md): stable architectural boundaries and runtime lifecycle
-- [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md): current risks worth preserving in context
-- [design/06-event-driven-ui-poc.md](design/06-event-driven-ui-poc.md): event-driven reference for the final-stage strict UI core, not the current production baseline
-- [plan/01-roadmap.md](plan/01-roadmap.md): current planning baseline, not a future milestone script
-- [plan/02-todo-backlog.md](plan/02-todo-backlog.md): current open change buckets that still matter across PRs
-- [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture and how future feature docs should take over detail
+- [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md): durable constraints and maintenance risks worth preserving
+- [design/06-event-driven-ui-poc.md](design/06-event-driven-ui-poc.md): reference design for a stricter future UI core
+- [plan/01-roadmap.md](plan/01-roadmap.md): short statement of current product direction
+- [plan/02-todo-backlog.md](plan/02-todo-backlog.md): reset marker for the next sprint backlog
+- [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch and worktree rules for concurrent native delivery
-- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): compact source of truth for the remaining terminal-flow shell target, including prompt cursor, visible streaming, and status-compaction contracts
-- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): compact completion snapshot plus the remaining terminal-flow and platform-validation slices
+- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): current inline-shell contract
+- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): current concurrency and hotspot snapshot
 - [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): canonical manual validation matrix for macOS and Windows terminal behavior
 - [validation/README.md](validation/README.md): canonical location and naming rules for checked-in validation result rows

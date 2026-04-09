@@ -81,12 +81,10 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
   - fix low-cost maintainability improvements when they do not fight the chosen architecture
   - if feedback is incorrect or pushes away from the intended Spring Boot Kotlin style or the chosen hexagonal structure, reply with the rationale, leave the code as-is, and finish the PR with that thread resolved from the documented rationale
 
-## Native TODO
+## Native Baseline
 
-- Make native auto-follow-up/template selection the main workflow.
-- Render streamed notifications, activity, and approval states in the shell.
-- Add session search, paging, and recent filter options.
-- Add GitHub PR review/comment change detection.
-  - Start with polling.
-  - Webhook notification can come later.
-- Add Windows-focused validation and packaging.
+- native auto follow-up, workspace templates, and stop rules are baseline behavior
+- streamed turn output, compact notices, and approval or review activity already surface in the shell
+- session query, paging, and recent-project filtering are part of the current baseline
+- GitHub review and comment change detection currently uses polling
+- platform validation and packaging docs exist; new sprint work should open dedicated feature docs instead of expanding this file into a backlog

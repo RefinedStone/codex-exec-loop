@@ -12,7 +12,7 @@ This file refines the root [`AGENT.md`](../AGENT.md) for `native/`. The current 
 - `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
 - `src/adapter/outbound/`: `codex app-server` integration and filesystem adapters
 - `schema/`: checked-in protocol snapshot used to pin app-server shapes
-- `docs/`: current native design notes, roadmap, and backlog
+- `docs/`: current native design notes, state docs, and validation references
 
 Keep mapping logic in adapters, not domain models.
 
@@ -56,7 +56,7 @@ When multiple native slices move in parallel, treat worktree setup as part of th
 - keep `prerelease` checked out in one integration checkout only; feature worktrees should rebase onto `origin/prerelease` without checking out local `prerelease`
 - do not branch a new worktree from another in-flight feature branch unless the dependency is explicitly documented
 - if overlap is intentional, document the expected conflict surface and resolve it consciously during rebase or merge
-- before starting concurrent work, map the slice to [`docs/plan/04-worktree-branch-rules.md`](docs/plan/04-worktree-branch-rules.md) and the active split plan in [`docs/plan/11-parallel-worktree-plan.md`](docs/plan/11-parallel-worktree-plan.md)
+- before starting concurrent work, map the slice to [`docs/plan/04-worktree-branch-rules.md`](docs/plan/04-worktree-branch-rules.md) and the current concurrency snapshot in [`docs/plan/11-parallel-worktree-plan.md`](docs/plan/11-parallel-worktree-plan.md)
 
 ## Working Rules
 Use official Codex interfaces first: `codex app-server`, `codex exec`, and `codex exec resume`. Keep commits small and milestone-based. Do not introduce unnecessary traits; add a port only when it improves a real boundary. For TUI changes, include a screenshot or short terminal capture in the PR when practical.

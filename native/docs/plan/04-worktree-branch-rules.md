@@ -154,7 +154,7 @@ git push origin --delete feature/native-session-query-model
 
 1. Sync `origin/prerelease`.
 2. Inspect active worktrees, unmerged branches, and open PRs.
-3. Pick one slice from the detailed parallel plan.
+3. Pick one slice from the active sprint doc or task note.
 4. Confirm that no other active slice owns the same hotspot files unless the overlap is intentional and documented.
 5. Create a dedicated worktree and branch.
 6. Keep the branch scoped to that slice only.
