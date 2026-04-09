@@ -20,6 +20,35 @@ const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const PROMPT_PRIMARY_PREFIX: &str = "> ";
 const PROMPT_CONTINUATION_PREFIX: &str = "  ";
+const STARTUP_ASCII_ART_DEFAULT: &str = r#"
+.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
+
+.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
+
+
+
+      .:       .::
+     .: ::     .::
+    .:  .::    .::  .::.: .:::   .::
+   .::   .::   .:: .::  .::    .::  .::
+  .:::::: .::  .:.::    .::   .::   .::
+ .::       .:: .:: .::  .::   .::   .::
+.::         .::.::  .::.:::     .:: .:::
+
+    .::::
+  .::    .::
+.::       .::.::  .::   .::    .::  .::   .::
+.::       .::.::  .:: .:   .:: .::  .:: .:   .::
+.::       .::.::  .::.::::: .::.::  .::.::::: .::
+  .:: .: .:: .::  .::.:        .::  .::.:
+    .:: ::     .::.::  .::::     .::.::  .::::
+         .:
+
+
+.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
+
+.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
+"#;
 
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
@@ -89,6 +118,25 @@ pub(super) struct FollowupTemplateOverlayView {
     pub(super) preview_lines: Vec<Line<'static>>,
     pub(super) status_lines: Vec<Line<'static>>,
     pub(super) key_lines: Vec<Line<'static>>,
+}
+
+pub(super) fn build_startup_banner_lines(
+    app: &NativeTuiApp,
+    max_height: Option<u16>,
+) -> Option<Vec<Line<'static>>> {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return None;
+    };
+    if !app.show_startup_ascii_art || !conversation.is_blank_draft() {
+        return None;
+    }
+
+    let max_height = match max_height {
+        Some(0) => return None,
+        value => value,
+    };
+
+    Some(startup_ascii_art_lines(max_height))
 }
 
 pub(super) fn build_conversation_shell_view(
@@ -325,11 +373,42 @@ fn current_live_agent_lines(app: &NativeTuiApp) -> Option<Vec<Line<'static>>> {
 }
 
 fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
+        return startup_banner_lines;
+    }
+
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("Loading thread history...")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
     }
+}
+
+fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
+    let mut art_lines = STARTUP_ASCII_ART_DEFAULT.lines().collect::<Vec<_>>();
+    let start = art_lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(0);
+    let end = art_lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map(|index| index + 1)
+        .unwrap_or(art_lines.len());
+    art_lines = art_lines[start..end].to_vec();
+
+    if let Some(max_height) = max_height {
+        let max_height = max_height as usize;
+        if max_height > 0 && art_lines.len() > max_height {
+            let start = art_lines.len().saturating_sub(max_height) / 2;
+            art_lines = art_lines[start..start + max_height].to_vec();
+        }
+    }
+
+    art_lines
+        .into_iter()
+        .map(|line| Line::from(line.to_string()))
+        .collect()
 }
 
 pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {

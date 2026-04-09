@@ -20,6 +20,7 @@ use super::{
     ShellOverlay, StartupState, TranscriptViewportState, reduce_conversation_input,
     reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
     reduce_followup_controls, reduce_followup_overlay_ui, reduce_shell_chrome,
+    startup_ascii_art_enabled_from_environment,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 
@@ -64,6 +65,7 @@ impl NativeTuiApp {
             followup_template_service,
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
+            show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
             tx,
             rx,
         }

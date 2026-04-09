@@ -6,7 +6,7 @@ use super::shell_presentation::{
     ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
     StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
     build_inline_prompt_cursor_offset, build_inline_tail_lines, build_input_prompt_cursor_offset,
-    build_session_overlay_view, build_startup_overlay_view,
+    build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
 };
 use super::*;
 
@@ -87,12 +87,25 @@ fn draw_inline_conversation_shell(
 ) {
     let tail_lines = build_inline_tail_lines(app);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        let area = inline_body_render_area(frame.area(), &tail_lines);
-        render_inline_body(frame, area, tail_lines, false);
+        let frame_area = frame.area();
+        let tail_area = inline_body_render_area(frame_area, &tail_lines);
+        if let Some(banner_lines) = build_startup_banner_lines(
+            app,
+            Some(frame_area.height.saturating_sub(tail_area.height)),
+        ) {
+            let banner_area = Rect::new(
+                frame_area.x,
+                frame_area.y,
+                frame_area.width,
+                tail_area.y.saturating_sub(frame_area.y),
+            );
+            render_inline_startup_banner(frame, banner_area, banner_lines);
+        }
+        render_inline_body(frame, tail_area, tail_lines, false);
         set_cursor_if_visible(
             frame,
-            area,
-            build_inline_prompt_cursor_offset(app, area.width),
+            tail_area,
+            build_inline_prompt_cursor_offset(app, tail_area.width),
         );
         return;
     }
@@ -235,6 +248,24 @@ fn render_inline_section(
 
 fn render_inline_body(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<'static>>, trim: bool) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), area);
+}
+
+fn render_inline_startup_banner(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<'static>>) {
+    if area.width == 0 || area.height == 0 || lines.is_empty() {
+        return;
+    }
+
+    let banner_area = startup_banner_render_area(area, &lines);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        banner_area,
+    );
+}
+
+fn startup_banner_render_area(area: Rect, lines: &[Line<'static>]) -> Rect {
+    let banner_height = lines.len().min(area.height as usize) as u16;
+    let y = area.y + area.height.saturating_sub(banner_height) / 2;
+    Rect::new(area.x, y, area.width, banner_height)
 }
 
 fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: Option<(u16, u16)>) {

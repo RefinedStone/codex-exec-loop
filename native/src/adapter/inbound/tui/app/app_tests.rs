@@ -24,6 +24,7 @@ use super::{
     build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
     build_startup_overlay_view, build_status_title, build_transcript_panel_view,
     build_transcript_title, format_conversation_lines, shell_layout,
+    startup_ascii_art_enabled_from_value,
 };
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -137,12 +138,13 @@ impl FollowupTemplatePort for FakeFollowupTemplatePort {
 fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
     let codex_port = Arc::new(FakeCodexAppServerPort::default());
     let followup_port = Arc::new(FakeFollowupTemplatePort);
-    let app = NativeTuiApp::new(
+    let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port.clone()),
         FollowupTemplateService::new(followup_port),
     );
+    app.show_startup_ascii_art = false;
 
     (app, codex_port)
 }
@@ -1222,6 +1224,32 @@ fn conversation_shell_view_collects_inline_snapshot_content() {
     assert!(!view.conversation_lines.is_empty());
     assert!(!view.footer_lines.is_empty());
     assert!(!view.input_lines.is_empty());
+}
+
+#[test]
+fn startup_ascii_art_defaults_to_enabled_unless_explicitly_disabled() {
+    assert!(startup_ascii_art_enabled_from_value(None));
+    assert!(startup_ascii_art_enabled_from_value(Some("true")));
+    assert!(!startup_ascii_art_enabled_from_value(Some("false")));
+    assert!(!startup_ascii_art_enabled_from_value(Some("0")));
+}
+
+#[test]
+fn blank_draft_uses_startup_ascii_art_when_enabled() {
+    let (mut app, _) = make_test_app();
+    app.show_startup_ascii_art = true;
+
+    let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+    let rendered = view
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(".::::::.::::::.::::::.::::::"));
+    assert!(rendered.contains(".::       .::.::  .::   .::"));
+    assert!(!rendered.contains("No messages in this thread yet."));
 }
 
 #[test]

@@ -42,6 +42,7 @@ const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const DEFAULT_TRANSCRIPT_PAGE_STEP: u16 = 6;
 const ALT_SCREEN_ENV_VAR: &str = "CODEX_EXEC_LOOP_ALT_SCREEN";
+const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
 
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
@@ -161,10 +162,48 @@ struct NativeTuiApp {
     followup_template_service: FollowupTemplateService,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
+    show_startup_ascii_art: bool,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
+}
+
+fn startup_ascii_art_enabled_from_environment() -> bool {
+    startup_ascii_art_enabled_from_value(std::env::var(STARTUP_ASCII_ART_ENV_VAR).ok().as_deref())
+}
+
+fn startup_ascii_art_enabled_from_value(value: Option<&str>) -> bool {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+
+    !matches!(
+        value.to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+    )
 }
 
 #[cfg(test)]
 #[path = "app/app_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod startup_ascii_art_env_tests {
+    use super::startup_ascii_art_enabled_from_value;
+
+    #[test]
+    fn startup_ascii_art_defaults_to_enabled() {
+        assert!(startup_ascii_art_enabled_from_value(None));
+        assert!(startup_ascii_art_enabled_from_value(Some("")));
+        assert!(startup_ascii_art_enabled_from_value(Some("true")));
+        assert!(startup_ascii_art_enabled_from_value(Some("1")));
+        assert!(startup_ascii_art_enabled_from_value(Some("yes")));
+    }
+
+    #[test]
+    fn startup_ascii_art_turns_off_for_falsey_values() {
+        assert!(!startup_ascii_art_enabled_from_value(Some("false")));
+        assert!(!startup_ascii_art_enabled_from_value(Some("0")));
+        assert!(!startup_ascii_art_enabled_from_value(Some("off")));
+        assert!(!startup_ascii_art_enabled_from_value(Some("no")));
+    }
+}

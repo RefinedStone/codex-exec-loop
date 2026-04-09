@@ -54,6 +54,23 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 }
 
 #[test]
+fn inline_main_buffer_renders_startup_ascii_art_for_blank_draft_when_enabled() {
+    let mut terminal = inline_terminal(80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = true;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(rendered.contains(".:  .::    .::  .::.: .:::   .::"));
+    assert!(rendered.contains(".::.::  .::   .::    .::  .::   .::"));
+    assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
+}
+
+#[test]
 fn inline_render_positions_cursor_on_empty_prompt_line() {
     let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
@@ -230,12 +247,14 @@ impl FollowupTemplatePort for FakeFollowupTemplatePort {
 fn make_test_app() -> NativeTuiApp {
     let codex_port = Arc::new(FakeCodexAppServerPort);
     let followup_port = Arc::new(FakeFollowupTemplatePort);
-    NativeTuiApp::new(
+    let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
         FollowupTemplateService::new(followup_port),
-    )
+    );
+    app.show_startup_ascii_art = false;
+    app
 }
 
 fn sample_startup_diagnostics() -> StartupDiagnostics {
