@@ -572,12 +572,14 @@ This keeps rollout incremental and avoids blocking today's users.
 
 ## Recommended Initialization Template
 
-Planning initialization should stage:
+Planning initialization should stage draft copies under a path such as:
 
-- `.codex-exec-loop/planning/directions.toml`
-- `.codex-exec-loop/planning/task-ledger.json`
-- `.codex-exec-loop/planning/task-ledger.schema.json`
-- `.codex-exec-loop/planning/result-output.md`
+- `.codex-exec-loop/planning/drafts/<draft-name>/directions.toml`
+- `.codex-exec-loop/planning/drafts/<draft-name>/task-ledger.json`
+- `.codex-exec-loop/planning/drafts/<draft-name>/task-ledger.schema.json`
+- `.codex-exec-loop/planning/drafts/<draft-name>/result-output.md`
+
+The promote step is what copies accepted draft content into the active planning paths under `.codex-exec-loop/planning/`.
 
 Mode-specific expectations:
 
