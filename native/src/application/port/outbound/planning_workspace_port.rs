@@ -19,6 +19,20 @@ pub struct PlanningDraftStageRecord {
     pub staged_files: Vec<PlanningStagedFileRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningDraftLoadFileRecord {
+    pub active_path: String,
+    pub staged_path: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningDraftLoadRecord {
+    pub draft_name: String,
+    pub draft_directory: String,
+    pub staged_files: Vec<PlanningDraftLoadFileRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlanningWorkspaceLoadRecord {
     pub directions_toml: Option<String>,
@@ -43,6 +57,20 @@ pub trait PlanningWorkspacePort: Send + Sync {
         draft_name: &str,
         files: &[PlanningDraftFileRecord],
     ) -> Result<PlanningDraftStageRecord>;
+
+    fn load_planning_draft_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+    ) -> Result<PlanningDraftLoadRecord>;
+
+    fn replace_planning_draft_file(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        active_path: &str,
+        body: &str,
+    ) -> Result<String>;
 
     fn load_planning_workspace_files(
         &self,

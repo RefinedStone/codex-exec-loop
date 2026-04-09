@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::application::port::outbound::planning_workspace_port::{
-    PlanningDraftFileRecord, PlanningDraftStageRecord, PlanningStagedFileRecord,
-    PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
+    PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
+    PlanningWorkspacePort,
 };
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
+    DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY, PlanningFileKind,
     RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
@@ -48,6 +49,33 @@ impl FilesystemPlanningWorkspaceAdapter {
         fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))
             .map(Some)
+    }
+
+    fn staged_draft_file_path(
+        workspace_dir: &str,
+        draft_name: &str,
+        active_path: &str,
+    ) -> Result<PathBuf> {
+        let active_relative_path = Path::new(active_path);
+        let file_name = active_relative_path
+            .file_name()
+            .with_context(|| format!("planning draft file has no file name: {active_path}"))?;
+        Ok(Self::draft_directory(workspace_dir, draft_name).join(file_name))
+    }
+
+    fn read_draft_file(
+        workspace_dir: &str,
+        draft_name: &str,
+        active_path: &str,
+    ) -> Result<PlanningDraftLoadFileRecord> {
+        let staged_path = Self::staged_draft_file_path(workspace_dir, draft_name, active_path)?;
+        let body = fs::read_to_string(&staged_path)
+            .with_context(|| format!("failed to read {}", staged_path.display()))?;
+        Ok(PlanningDraftLoadFileRecord {
+            active_path: active_path.to_string(),
+            staged_path: staged_path.display().to_string(),
+            body,
+        })
     }
 
     fn ensure_parent_directory(path: &Path) -> Result<()> {
@@ -95,6 +123,43 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             draft_directory: draft_directory.display().to_string(),
             staged_files,
         })
+    }
+
+    fn load_planning_draft_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+    ) -> Result<PlanningDraftLoadRecord> {
+        let draft_directory = Self::draft_directory(workspace_dir, draft_name);
+        let staged_files = [
+            PlanningFileKind::Directions.path(),
+            PlanningFileKind::TaskLedger.path(),
+            PlanningFileKind::TaskLedgerSchema.path(),
+            PlanningFileKind::ResultOutput.path(),
+        ]
+        .into_iter()
+        .map(|active_path| Self::read_draft_file(workspace_dir, draft_name, active_path))
+        .collect::<Result<Vec<_>>>()?;
+
+        Ok(PlanningDraftLoadRecord {
+            draft_name: draft_name.to_string(),
+            draft_directory: draft_directory.display().to_string(),
+            staged_files,
+        })
+    }
+
+    fn replace_planning_draft_file(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        active_path: &str,
+        body: &str,
+    ) -> Result<String> {
+        let staged_path = Self::staged_draft_file_path(workspace_dir, draft_name, active_path)?;
+        Self::ensure_parent_directory(&staged_path)?;
+        fs::write(&staged_path, body)
+            .with_context(|| format!("failed to write {}", staged_path.display()))?;
+        Ok(staged_path.display().to_string())
     }
 
     fn load_planning_workspace_files(
@@ -177,7 +242,9 @@ mod tests {
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningWorkspacePort,
     };
-    use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
+    use crate::domain::planning::{
+        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    };
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()
@@ -259,6 +326,94 @@ mod tests {
             Some("{\"type\":\"object\"}")
         );
         assert_eq!(result.result_output_markdown.as_deref(), Some("# result"));
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn loads_staged_planning_draft_files_by_active_contract_path() {
+        let workspace_dir = create_temp_workspace("planning-draft-load");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        adapter
+            .stage_planning_draft_files(
+                &workspace_dir,
+                "bootstrap-20260410T120000Z",
+                &[
+                    PlanningDraftFileRecord {
+                        active_path: DIRECTIONS_FILE_PATH.to_string(),
+                        body: "version = 1".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: TASK_LEDGER_FILE_PATH.to_string(),
+                        body: "{\"version\":1,\"tasks\":[]}".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: ".codex-exec-loop/planning/task-ledger.schema.json"
+                            .to_string(),
+                        body: "{\"type\":\"object\"}".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                        body: "# result".to_string(),
+                    },
+                ],
+            )
+            .expect("draft files should stage");
+
+        let loaded = adapter
+            .load_planning_draft_files(&workspace_dir, "bootstrap-20260410T120000Z")
+            .expect("draft files should load");
+
+        assert_eq!(loaded.staged_files.len(), 4);
+        assert_eq!(loaded.staged_files[0].active_path, DIRECTIONS_FILE_PATH);
+        assert_eq!(loaded.staged_files[1].active_path, TASK_LEDGER_FILE_PATH);
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn replace_planning_draft_file_updates_existing_staged_file() {
+        let workspace_dir = create_temp_workspace("planning-draft-replace");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        adapter
+            .stage_planning_draft_files(
+                &workspace_dir,
+                "bootstrap-20260410T120000Z",
+                &[
+                    PlanningDraftFileRecord {
+                        active_path: DIRECTIONS_FILE_PATH.to_string(),
+                        body: "version = 1".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: TASK_LEDGER_FILE_PATH.to_string(),
+                        body: "{\"version\":1,\"tasks\":[]}".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: ".codex-exec-loop/planning/task-ledger.schema.json"
+                            .to_string(),
+                        body: "{\"type\":\"object\"}".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                        body: "# result".to_string(),
+                    },
+                ],
+            )
+            .expect("draft files should stage");
+
+        let staged_path = adapter
+            .replace_planning_draft_file(
+                &workspace_dir,
+                "bootstrap-20260410T120000Z",
+                DIRECTIONS_FILE_PATH,
+                "version = 2",
+            )
+            .expect("staged draft directions should update");
+
+        assert_eq!(
+            fs::read_to_string(staged_path).expect("updated staged file should read"),
+            "version = 2"
+        );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

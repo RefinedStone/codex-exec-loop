@@ -107,6 +107,7 @@ impl NativeTuiApp {
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
+            planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
             transcript_viewport_state: TranscriptViewportState::default(),
             active_session: None,
             startup_service,

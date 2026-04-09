@@ -1,0 +1,489 @@
+use std::path::Path;
+
+use crate::application::service::planning_init_service::{
+    PlanningDraftEditorFile, PlanningDraftEditorSession,
+};
+use crate::domain::planning::PlanningValidationReport;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct PlanningDraftEditorUiState {
+    session: Option<PlanningDraftEditorSessionState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PlanningDraftEditorSessionState {
+    draft_name: String,
+    draft_directory: String,
+    buffers: Vec<PlanningDraftEditorBufferState>,
+    selected_file_index: usize,
+    validation_report: PlanningValidationReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PlanningDraftEditorBufferState {
+    active_path: String,
+    staged_path: String,
+    lines: Vec<String>,
+    cursor_line_index: usize,
+    cursor_column: usize,
+    preferred_column: usize,
+    dirty: bool,
+}
+
+impl PlanningDraftEditorUiState {
+    pub fn reset(&mut self) {
+        self.session = None;
+    }
+
+    pub fn open_session(&mut self, session: PlanningDraftEditorSession) {
+        self.session = Some(PlanningDraftEditorSessionState::from(session));
+    }
+
+    #[cfg(test)]
+    pub fn is_open(&self) -> bool {
+        self.session.is_some()
+    }
+
+    pub fn draft_name(&self) -> Option<&str> {
+        self.session
+            .as_ref()
+            .map(|session| session.draft_name.as_str())
+    }
+
+    pub fn draft_directory(&self) -> Option<&str> {
+        self.session
+            .as_ref()
+            .map(|session| session.draft_directory.as_str())
+    }
+
+    pub fn selected_file_index(&self) -> Option<usize> {
+        self.session
+            .as_ref()
+            .map(|session| session.selected_file_index)
+    }
+
+    pub fn buffers(&self) -> Option<&[PlanningDraftEditorBufferState]> {
+        self.session
+            .as_ref()
+            .map(|session| session.buffers.as_slice())
+    }
+
+    pub fn selected_buffer(&self) -> Option<&PlanningDraftEditorBufferState> {
+        let session = self.session.as_ref()?;
+        session.buffers.get(session.selected_file_index)
+    }
+
+    pub fn move_file_selection(&mut self, delta: isize) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if session.buffers.is_empty() {
+            session.selected_file_index = 0;
+            return;
+        }
+        let max_index = session.buffers.len().saturating_sub(1) as isize;
+        let next_index = (session.selected_file_index as isize + delta).clamp(0, max_index);
+        session.selected_file_index = next_index as usize;
+    }
+
+    pub fn insert_character(&mut self, character: char) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.insert_character(character);
+        }
+    }
+
+    pub fn insert_newline(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.insert_newline();
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.backspace();
+        }
+    }
+
+    pub fn delete_previous_word(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.delete_previous_word();
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.move_cursor_left();
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.move_cursor_right();
+        }
+    }
+
+    pub fn move_cursor_up(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.move_cursor_up();
+        }
+    }
+
+    pub fn move_cursor_down(&mut self) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.move_cursor_down();
+        }
+    }
+
+    pub fn collect_editable_files(&self) -> Vec<PlanningDraftEditorFile> {
+        self.buffers()
+            .unwrap_or(&[])
+            .iter()
+            .map(|buffer| PlanningDraftEditorFile {
+                active_path: buffer.active_path.clone(),
+                staged_path: buffer.staged_path.clone(),
+                body: buffer.body(),
+            })
+            .collect()
+    }
+
+    pub fn apply_save_result(&mut self, validation_report: PlanningValidationReport) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        session.validation_report = validation_report;
+        for buffer in &mut session.buffers {
+            buffer.dirty = false;
+        }
+    }
+
+    pub fn validation_report(&self) -> Option<&PlanningValidationReport> {
+        self.session
+            .as_ref()
+            .map(|session| &session.validation_report)
+    }
+
+    pub fn has_dirty_buffers(&self) -> bool {
+        self.buffers()
+            .unwrap_or(&[])
+            .iter()
+            .any(PlanningDraftEditorBufferState::is_dirty)
+    }
+
+    pub fn dirty_file_labels(&self) -> Vec<String> {
+        self.buffers()
+            .unwrap_or(&[])
+            .iter()
+            .filter(|buffer| buffer.is_dirty())
+            .map(|buffer| buffer.file_label())
+            .collect()
+    }
+
+    fn selected_buffer_mut(&mut self) -> Option<&mut PlanningDraftEditorBufferState> {
+        let session = self.session.as_mut()?;
+        session.buffers.get_mut(session.selected_file_index)
+    }
+}
+
+impl PlanningDraftEditorSessionState {
+    fn from(session: PlanningDraftEditorSession) -> Self {
+        let buffers = session
+            .editable_files
+            .into_iter()
+            .map(PlanningDraftEditorBufferState::from)
+            .collect::<Vec<_>>();
+        Self {
+            draft_name: session.draft_name,
+            draft_directory: session.draft_directory,
+            buffers,
+            selected_file_index: 0,
+            validation_report: session.validation_report,
+        }
+    }
+}
+
+impl PlanningDraftEditorBufferState {
+    pub fn active_path(&self) -> &str {
+        self.active_path.as_str()
+    }
+
+    pub fn staged_path(&self) -> &str {
+        self.staged_path.as_str()
+    }
+
+    pub fn lines(&self) -> &[String] {
+        self.lines.as_slice()
+    }
+
+    pub fn cursor_line_index(&self) -> usize {
+        self.cursor_line_index
+    }
+
+    pub fn cursor_column(&self) -> usize {
+        self.cursor_column
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn file_label(&self) -> String {
+        Path::new(self.active_path())
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .unwrap_or(self.active_path())
+            .to_string()
+    }
+
+    pub fn body(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    fn insert_character(&mut self, character: char) {
+        let byte_index =
+            char_to_byte_index(&self.lines[self.cursor_line_index], self.cursor_column);
+        self.lines[self.cursor_line_index].insert(byte_index, character);
+        self.cursor_column += 1;
+        self.preferred_column = self.cursor_column;
+        self.dirty = true;
+    }
+
+    fn insert_newline(&mut self) {
+        let byte_index =
+            char_to_byte_index(&self.lines[self.cursor_line_index], self.cursor_column);
+        let remainder = self.lines[self.cursor_line_index].split_off(byte_index);
+        self.lines.insert(self.cursor_line_index + 1, remainder);
+        self.cursor_line_index += 1;
+        self.cursor_column = 0;
+        self.preferred_column = 0;
+        self.dirty = true;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor_column > 0 {
+            let line = &mut self.lines[self.cursor_line_index];
+            let current_byte = char_to_byte_index(line, self.cursor_column);
+            let previous_byte = char_to_byte_index(line, self.cursor_column - 1);
+            line.replace_range(previous_byte..current_byte, "");
+            self.cursor_column -= 1;
+        } else if self.cursor_line_index > 0 {
+            let current_line = self.lines.remove(self.cursor_line_index);
+            self.cursor_line_index -= 1;
+            let previous_line = &mut self.lines[self.cursor_line_index];
+            self.cursor_column = previous_line.chars().count();
+            previous_line.push_str(&current_line);
+        } else {
+            return;
+        }
+
+        self.preferred_column = self.cursor_column;
+        self.dirty = true;
+    }
+
+    fn delete_previous_word(&mut self) {
+        let original_line = self.cursor_line_index;
+        let original_column = self.cursor_column;
+
+        while self.cursor_line_index > 0 || self.cursor_column > 0 {
+            let current_line = &self.lines[self.cursor_line_index];
+            let current_char = current_line
+                .chars()
+                .nth(self.cursor_column.saturating_sub(1));
+            let should_stop = self.cursor_column > 0
+                && current_char.is_some_and(|character| !character.is_whitespace())
+                && has_non_whitespace_before_cursor(
+                    current_line,
+                    self.cursor_column.saturating_sub(1),
+                );
+            self.backspace();
+            if should_stop {
+                break;
+            }
+            let current_line = &self.lines[self.cursor_line_index];
+            let previous_char = current_line
+                .chars()
+                .nth(self.cursor_column.saturating_sub(1));
+            if self.cursor_column == 0 && self.cursor_line_index == 0 {
+                break;
+            }
+            if previous_char.is_some_and(|character| character.is_whitespace()) {
+                while self.cursor_line_index > 0 || self.cursor_column > 0 {
+                    let current_line = &self.lines[self.cursor_line_index];
+                    let previous_char = current_line
+                        .chars()
+                        .nth(self.cursor_column.saturating_sub(1));
+                    if !previous_char.is_some_and(|character| character.is_whitespace()) {
+                        break;
+                    }
+                    self.backspace();
+                }
+                break;
+            }
+        }
+
+        if original_line != self.cursor_line_index || original_column != self.cursor_column {
+            self.dirty = true;
+        }
+    }
+
+    fn move_cursor_left(&mut self) {
+        if self.cursor_column > 0 {
+            self.cursor_column -= 1;
+        } else if self.cursor_line_index > 0 {
+            self.cursor_line_index -= 1;
+            self.cursor_column = self.lines[self.cursor_line_index].chars().count();
+        } else {
+            return;
+        }
+        self.preferred_column = self.cursor_column;
+    }
+
+    fn move_cursor_right(&mut self) {
+        let line_length = self.lines[self.cursor_line_index].chars().count();
+        if self.cursor_column < line_length {
+            self.cursor_column += 1;
+        } else if self.cursor_line_index + 1 < self.lines.len() {
+            self.cursor_line_index += 1;
+            self.cursor_column = 0;
+        } else {
+            return;
+        }
+        self.preferred_column = self.cursor_column;
+    }
+
+    fn move_cursor_up(&mut self) {
+        if self.cursor_line_index == 0 {
+            return;
+        }
+        self.cursor_line_index -= 1;
+        self.cursor_column = self
+            .preferred_column
+            .min(self.lines[self.cursor_line_index].chars().count());
+    }
+
+    fn move_cursor_down(&mut self) {
+        if self.cursor_line_index + 1 >= self.lines.len() {
+            return;
+        }
+        self.cursor_line_index += 1;
+        self.cursor_column = self
+            .preferred_column
+            .min(self.lines[self.cursor_line_index].chars().count());
+    }
+}
+
+impl From<PlanningDraftEditorFile> for PlanningDraftEditorBufferState {
+    fn from(file: PlanningDraftEditorFile) -> Self {
+        let lines = if file.body.is_empty() {
+            vec![String::new()]
+        } else {
+            file.body.split('\n').map(|line| line.to_string()).collect()
+        };
+
+        Self {
+            active_path: file.active_path,
+            staged_path: file.staged_path,
+            lines,
+            cursor_line_index: 0,
+            cursor_column: 0,
+            preferred_column: 0,
+            dirty: false,
+        }
+    }
+}
+
+fn char_to_byte_index(line: &str, column: usize) -> usize {
+    line.char_indices()
+        .nth(column)
+        .map(|(index, _)| index)
+        .unwrap_or(line.len())
+}
+
+fn has_non_whitespace_before_cursor(line: &str, column: usize) -> bool {
+    line.chars()
+        .take(column)
+        .any(|character| !character.is_whitespace())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlanningDraftEditorUiState;
+    use crate::application::service::planning_init_service::{
+        PlanningDraftEditorFile, PlanningDraftEditorSession,
+    };
+    use crate::domain::planning::{
+        PlanningFileKind, PlanningValidationReport, PlanningValidationSeverity,
+    };
+
+    fn sample_session() -> PlanningDraftEditorSession {
+        PlanningDraftEditorSession {
+            draft_name: "bootstrap-test".to_string(),
+            draft_directory: "/tmp/bootstrap-test".to_string(),
+            editable_files: vec![
+                PlanningDraftEditorFile {
+                    active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
+                    staged_path: "/tmp/bootstrap-test/directions.toml".to_string(),
+                    body: "version = 1".to_string(),
+                },
+                PlanningDraftEditorFile {
+                    active_path: ".codex-exec-loop/planning/task-ledger.json".to_string(),
+                    staged_path: "/tmp/bootstrap-test/task-ledger.json".to_string(),
+                    body: "{\n  \"version\": 1,\n  \"tasks\": []\n}".to_string(),
+                },
+            ],
+            validation_report: PlanningValidationReport::default(),
+        }
+    }
+
+    #[test]
+    fn editing_buffer_marks_it_dirty_and_preserves_file_switching() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(sample_session());
+
+        state.insert_character('#');
+        assert!(state.selected_buffer().expect("buffer").is_dirty());
+        assert_eq!(
+            state.selected_buffer().expect("buffer").body(),
+            "#version = 1"
+        );
+
+        state.move_file_selection(1);
+        assert_eq!(
+            state.selected_buffer().expect("buffer").active_path(),
+            ".codex-exec-loop/planning/task-ledger.json"
+        );
+        assert!(!state.selected_buffer().expect("buffer").is_dirty());
+
+        let files = state.collect_editable_files();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].body, "#version = 1");
+    }
+
+    #[test]
+    fn save_result_clears_dirty_flags_and_updates_validation_report() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(sample_session());
+        state.insert_character('#');
+
+        let mut report = PlanningValidationReport::default();
+        report.push_warning(
+            PlanningFileKind::Directions,
+            "test-warning",
+            "directions summary still needs review",
+        );
+
+        state.apply_save_result(report.clone());
+
+        assert!(!state.has_dirty_buffers());
+        assert_eq!(state.validation_report(), Some(&report));
+        assert_eq!(
+            state
+                .validation_report()
+                .expect("validation")
+                .issues
+                .first()
+                .expect("issue")
+                .severity,
+            PlanningValidationSeverity::Warning
+        );
+    }
+}

@@ -122,6 +122,7 @@ impl NativeTuiApp {
 
     pub(super) fn show_planning_init_overlay(&mut self) {
         self.planning_init_overlay_ui_state.reset();
+        self.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
     }
 
@@ -144,6 +145,10 @@ impl NativeTuiApp {
     }
 
     pub(super) fn close_shell_overlay(&mut self) {
+        if self.shell_overlay == ShellOverlay::PlanningInit {
+            self.planning_init_overlay_ui_state.reset();
+            self.planning_draft_editor_ui_state.reset();
+        }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
     }
 
@@ -171,17 +176,59 @@ impl NativeTuiApp {
         self.clear_input_buffer();
     }
 
-    pub(super) fn stage_planning_init_draft(&mut self) {
+    pub(super) fn open_planning_manual_editor(&mut self) {
         let workspace_directory = self.current_workspace_directory();
         let status_text = match self
             .planning_init_service
-            .stage_bootstrap_draft(&workspace_directory)
+            .stage_manual_editor_session(&workspace_directory)
         {
-            Ok(result) => {
-                self.close_shell_overlay();
-                result.status_text()
+            Ok(session) => {
+                let draft_name = session.draft_name.clone();
+                let validation_ok = session.validation_report.is_valid();
+                self.planning_draft_editor_ui_state.open_session(session);
+                self.planning_init_overlay_ui_state.open_manual_editor();
+                format!(
+                    "planning draft editor ready / draft: {draft_name} / validation: {}",
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                )
             }
             Err(error) => format!("planning init failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    pub(super) fn save_planning_manual_editor(&mut self) {
+        let Some(draft_name) = self.planning_draft_editor_ui_state.draft_name() else {
+            return;
+        };
+        let workspace_directory = self.current_workspace_directory();
+        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
+        let status_text = match self.planning_init_service.save_draft_editor_files(
+            &workspace_directory,
+            draft_name,
+            &editable_files,
+        ) {
+            Ok(result) => {
+                let validation_ok = result.validation_report.is_valid();
+                self.planning_draft_editor_ui_state
+                    .apply_save_result(result.validation_report.clone());
+                format!(
+                    "planning draft saved / draft: {} / validation: {}",
+                    result.draft_name,
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                )
+            }
+            Err(error) => format!("planning draft save failed: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -746,7 +793,19 @@ impl NativeTuiApp {
         if key.code == KeyCode::Esc
             || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'))
         {
+            let discarded_unsaved_planning_changes = self.shell_overlay
+                == ShellOverlay::PlanningInit
+                && self.planning_init_overlay_ui_state.step()
+                    == PlanningInitOverlayStep::ManualEditor
+                && self.planning_draft_editor_ui_state.has_dirty_buffers();
             self.close_shell_overlay();
+            if discarded_unsaved_planning_changes {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text:
+                        "planning draft editor closed; unsaved in-memory edits were discarded"
+                            .to_string(),
+                });
+            }
             return true;
         }
 
@@ -866,7 +925,7 @@ impl NativeTuiApp {
                     KeyCode::Enter if key.modifiers.is_empty() => {
                         match self.planning_init_overlay_ui_state.selected_detail() {
                             PlanningInitDetailSelection::Manual => {
-                                self.stage_planning_init_draft();
+                                self.open_planning_manual_editor();
                             }
                             PlanningInitDetailSelection::LlmAssisted => {
                                 self.dispatch_conversation_input(
@@ -878,6 +937,43 @@ impl NativeTuiApp {
                                 );
                             }
                         }
+                    }
+                    _ => {}
+                },
+                PlanningInitOverlayStep::ManualEditor => match key.code {
+                    KeyCode::Tab if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.move_file_selection(1)
+                    }
+                    KeyCode::BackTab => self.planning_draft_editor_ui_state.move_file_selection(-1),
+                    KeyCode::Left if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.move_cursor_left()
+                    }
+                    KeyCode::Right if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.move_cursor_right()
+                    }
+                    KeyCode::Up if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.move_cursor_up()
+                    }
+                    KeyCode::Down if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.move_cursor_down()
+                    }
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.insert_newline()
+                    }
+                    KeyCode::Backspace if key.modifiers.is_empty() => {
+                        self.planning_draft_editor_ui_state.backspace()
+                    }
+                    KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.planning_draft_editor_ui_state.delete_previous_word()
+                    }
+                    KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.save_planning_manual_editor()
+                    }
+                    KeyCode::Char(character)
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.planning_draft_editor_ui_state
+                            .insert_character(character)
                     }
                     _ => {}
                 },

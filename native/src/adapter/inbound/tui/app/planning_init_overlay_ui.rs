@@ -2,6 +2,7 @@
 pub(super) enum PlanningInitOverlayStep {
     ModeSelection,
     DetailSelection,
+    ManualEditor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,12 @@ impl PlanningInitOverlayUiState {
         self.step = PlanningInitOverlayStep::DetailSelection;
     }
 
+    pub fn open_manual_editor(&mut self) {
+        self.mode_selection = PlanningInitModeSelection::Detail;
+        self.detail_selection = PlanningInitDetailSelection::Manual;
+        self.step = PlanningInitOverlayStep::ManualEditor;
+    }
+
     pub fn return_to_mode_selection(&mut self) {
         self.step = PlanningInitOverlayStep::ModeSelection;
     }
@@ -113,6 +120,17 @@ mod tests {
 
         assert_eq!(state.step(), PlanningInitOverlayStep::DetailSelection);
         assert_eq!(state.selected_mode(), PlanningInitModeSelection::Detail);
+    }
+
+    #[test]
+    fn opening_manual_editor_pins_detail_manual_selection() {
+        let mut state = PlanningInitOverlayUiState::default();
+
+        state.open_manual_editor();
+
+        assert_eq!(state.step(), PlanningInitOverlayStep::ManualEditor);
+        assert_eq!(state.selected_mode(), PlanningInitModeSelection::Detail);
+        assert_eq!(state.selected_detail(), PlanningInitDetailSelection::Manual);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
 use crate::application::service::session_service::SessionProjectFilter;
 use crate::domain::followup_template::FollowupTemplateDefinition;
-use crate::domain::planning::PlanningWorkspaceState;
+use crate::domain::planning::{PlanningValidationSeverity, PlanningWorkspaceState};
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
@@ -128,6 +128,17 @@ pub(super) struct PlanningInitOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
     pub(super) summary_lines: Vec<Line<'static>>,
     pub(super) option_lines: Vec<Line<'static>>,
+    pub(super) status_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
+pub(super) struct PlanningDraftEditorOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) file_lines: Vec<Line<'static>>,
+    pub(super) editor_title: String,
+    pub(super) editor_lines: Vec<Line<'static>>,
+    pub(super) editor_scroll: u16,
+    pub(super) editor_cursor_offset: Option<(u16, u16)>,
     pub(super) status_lines: Vec<Line<'static>>,
     pub(super) key_lines: Vec<Line<'static>>,
 }
@@ -443,16 +454,14 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("Choose how detail-mode drafts should be prepared."),
             ],
             summary_lines: vec![
-                Line::from(
-                    "Manual stages the richer scaffold now; embedded terminal editing lands in a later slice.",
-                ),
+                Line::from("Manual opens the staged draft editor inside the shell."),
                 Line::from("LLM-assisted remains visible for the target UX but is still disabled."),
             ],
             option_lines: vec![
                 planning_init_option_line(
                     "A",
                     "manual",
-                    "stage the detail scaffold for direct follow-up editing",
+                    "stage the detail scaffold and keep editing inside the shell",
                     app.planning_init_overlay_ui_state.selected_detail()
                         == PlanningInitDetailSelection::Manual,
                     false,
@@ -474,16 +483,179 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         PlanningInitDetailSelection::LlmAssisted => "llm-assisted (disabled)",
                     }
                 )),
-                Line::from(
-                    "Enter on manual stages the richer scaffold; llm-assisted stays unavailable for now.",
-                ),
+                Line::from("Enter on manual opens the embedded draft editor."),
             ],
             key_lines: vec![
                 Line::from("A/B or arrows: move selection"),
                 Line::from("Backspace/Left: back    Enter: act    Esc/Ctrl+C: cancel"),
             ],
         },
+        PlanningInitOverlayStep::ManualEditor => PlanningInitOverlayView {
+            header_lines: vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Planning Draft Editor",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" / staged detail draft"),
+                ]),
+                Line::from("Edit the staged planning draft and save to re-run validation."),
+            ],
+            summary_lines: vec![Line::from(
+                "This state renders through the dedicated planning draft editor view.",
+            )],
+            option_lines: vec![Line::from(
+                "Use Tab to switch files and Ctrl+S to save + validate.",
+            )],
+            status_lines: vec![Line::from("editor ready")],
+            key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+        },
     }
+}
+
+pub(super) fn build_planning_draft_editor_overlay_view(
+    app: &NativeTuiApp,
+    editor_height: u16,
+) -> Option<PlanningDraftEditorOverlayView> {
+    let buffers = app.planning_draft_editor_ui_state.buffers()?;
+    let selected_index = app.planning_draft_editor_ui_state.selected_file_index()?;
+    let selected_buffer = app.planning_draft_editor_ui_state.selected_buffer()?;
+    let dirty_labels = app.planning_draft_editor_ui_state.dirty_file_labels();
+    let validation_report = app.planning_draft_editor_ui_state.validation_report()?;
+
+    let file_lines = buffers
+        .iter()
+        .enumerate()
+        .map(|(index, buffer)| {
+            let selected = index == selected_index;
+            let dirty_suffix = if buffer.is_dirty() { " *dirty" } else { "" };
+            let style = if selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else if buffer.is_dirty() {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let marker = if selected { ">>" } else { "  " };
+            Line::from(vec![
+                Span::styled(format!("{marker} "), style),
+                Span::styled(buffer.file_label(), style.add_modifier(Modifier::BOLD)),
+                Span::styled(dirty_suffix.to_string(), style),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    let editor_lines = selected_buffer
+        .lines()
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+    let editor_height = editor_height.max(1) as usize;
+    let editor_scroll = selected_buffer
+        .cursor_line_index()
+        .saturating_sub(editor_height.saturating_sub(1))
+        .min(u16::MAX as usize) as u16;
+    let editor_cursor_offset = Some((
+        selected_buffer.cursor_column().min(u16::MAX as usize) as u16,
+        selected_buffer
+            .cursor_line_index()
+            .saturating_sub(editor_scroll as usize)
+            .min(u16::MAX as usize) as u16,
+    ));
+
+    let mut status_lines = vec![
+        Line::from(format!(
+            "draft: {}",
+            app.planning_draft_editor_ui_state
+                .draft_name()
+                .unwrap_or("unknown")
+        )),
+        Line::from(format!(
+            "file: {} ({}/{})",
+            selected_buffer.active_path(),
+            selected_index + 1,
+            buffers.len()
+        )),
+        Line::from(vec![
+            Span::styled("validation: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                if validation_report.is_valid() {
+                    "ok"
+                } else {
+                    "needs attention"
+                },
+                Style::default().fg(if validation_report.is_valid() {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+        ]),
+    ];
+    if let Some(issue) = validation_report.issues.first() {
+        status_lines.push(Line::from(vec![
+            Span::styled(
+                match issue.severity {
+                    PlanningValidationSeverity::Error => "error: ",
+                    PlanningValidationSeverity::Warning => "warning: ",
+                },
+                Style::default().fg(match issue.severity {
+                    PlanningValidationSeverity::Error => Color::Red,
+                    PlanningValidationSeverity::Warning => Color::Yellow,
+                }),
+            ),
+            Span::raw(compact_inline_detail(
+                &issue.message,
+                FOOTER_NOTICE_DETAIL_LIMIT,
+            )),
+        ]));
+    } else {
+        status_lines.push(Line::from(format!(
+            "staged path: {}",
+            compact_inline_detail(selected_buffer.staged_path(), FOOTER_NOTICE_DETAIL_LIMIT)
+        )));
+    }
+    status_lines.push(Line::from(format!(
+        "dirty: {}",
+        if dirty_labels.is_empty() {
+            "none".to_string()
+        } else {
+            compact_inline_detail(&dirty_labels.join(", "), FOOTER_NOTICE_DETAIL_LIMIT)
+        }
+    )));
+
+    Some(PlanningDraftEditorOverlayView {
+        header_lines: vec![
+            Line::from(vec![
+                Span::styled(
+                    "Planning Draft Editor",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" / detail mode manual"),
+            ]),
+            Line::from(format!(
+                "draft dir: {}",
+                app.planning_draft_editor_ui_state
+                    .draft_directory()
+                    .unwrap_or("unknown")
+            )),
+        ],
+        file_lines,
+        editor_title: selected_buffer.file_label(),
+        editor_lines,
+        editor_scroll,
+        editor_cursor_offset,
+        status_lines,
+        key_lines: vec![
+            Line::from("Tab/BackTab: switch file    arrows: move cursor"),
+            Line::from("Enter: newline    Backspace: delete    Ctrl+W: delete previous word"),
+            Line::from("Ctrl+S: save + validate    Esc/Ctrl+C: close"),
+        ],
+    })
 }
 
 fn planning_init_option_line(

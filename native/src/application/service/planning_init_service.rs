@@ -1,12 +1,17 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
 
 use crate::application::port::outbound::planning_workspace_port::{
-    PlanningDraftFileRecord, PlanningWorkspacePort,
+    PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningStagedFileRecord,
+    PlanningWorkspacePort,
 };
-use crate::domain::planning::PlanningValidationReport;
+use crate::domain::planning::{
+    DIRECTIONS_FILE_PATH, PlanningValidationReport, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    TASK_LEDGER_SCHEMA_FILE_PATH,
+};
 
 use super::planning_bootstrap_service::{PlanningBootstrapMode, PlanningBootstrapService};
 use super::planning_validation_service::PlanningValidationService;
@@ -23,6 +28,7 @@ pub struct PlanningInitStageResult {
     pub mode: PlanningBootstrapMode,
     pub draft_name: String,
     pub draft_directory: String,
+    pub staged_files: Vec<PlanningStagedFileRecord>,
     pub staged_file_count: usize,
     pub validation_report: PlanningValidationReport,
 }
@@ -50,6 +56,34 @@ impl PlanningInitStageResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningDraftEditorFile {
+    pub active_path: String,
+    pub staged_path: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningDraftEditorSession {
+    pub draft_name: String,
+    pub draft_directory: String,
+    pub editable_files: Vec<PlanningDraftEditorFile>,
+    pub validation_report: PlanningValidationReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningDraftSaveResult {
+    pub draft_name: String,
+    pub validation_report: PlanningValidationReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningDraftPromoteResult {
+    pub draft_name: String,
+    pub promoted_file_count: usize,
+    pub validation_report: PlanningValidationReport,
+}
+
 impl PlanningInitService {
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -69,6 +103,99 @@ impl PlanningInitService {
 
     pub fn stage_simple_mode_draft(&self, workspace_dir: &str) -> Result<PlanningInitStageResult> {
         self.stage_draft(workspace_dir, PlanningBootstrapMode::Simple)
+    }
+
+    pub fn stage_manual_editor_session(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningDraftEditorSession> {
+        let staged = self.stage_bootstrap_draft(workspace_dir)?;
+        self.load_manual_editor_session(workspace_dir, &staged.draft_name)
+    }
+
+    pub fn load_manual_editor_session(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+    ) -> Result<PlanningDraftEditorSession> {
+        let loaded = self
+            .planning_workspace_port
+            .load_planning_draft_files(workspace_dir, draft_name)?;
+        let validation_report = self.validate_loaded_draft(&loaded);
+
+        Ok(PlanningDraftEditorSession {
+            draft_name: loaded.draft_name,
+            draft_directory: loaded.draft_directory,
+            editable_files: loaded
+                .staged_files
+                .into_iter()
+                .filter(|file| is_operator_editable_draft_path(file.active_path.as_str()))
+                .map(|file| PlanningDraftEditorFile {
+                    active_path: file.active_path,
+                    staged_path: file.staged_path,
+                    body: file.body,
+                })
+                .collect(),
+            validation_report,
+        })
+    }
+
+    pub fn save_draft_editor_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftEditorFile],
+    ) -> Result<PlanningDraftSaveResult> {
+        for file in files {
+            self.planning_workspace_port.replace_planning_draft_file(
+                workspace_dir,
+                draft_name,
+                &file.active_path,
+                &file.body,
+            )?;
+        }
+
+        let loaded = self
+            .planning_workspace_port
+            .load_planning_draft_files(workspace_dir, draft_name)?;
+        Ok(PlanningDraftSaveResult {
+            draft_name: draft_name.to_string(),
+            validation_report: self.validate_loaded_draft(&loaded),
+        })
+    }
+
+    pub fn promote_draft_editor_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftEditorFile],
+    ) -> Result<PlanningDraftPromoteResult> {
+        let save_result = self.save_draft_editor_files(workspace_dir, draft_name, files)?;
+        if !save_result.validation_report.is_valid() {
+            return Ok(PlanningDraftPromoteResult {
+                draft_name: draft_name.to_string(),
+                promoted_file_count: 0,
+                validation_report: save_result.validation_report,
+            });
+        }
+
+        let loaded = self
+            .planning_workspace_port
+            .load_planning_draft_files(workspace_dir, draft_name)?;
+        for file in &loaded.staged_files {
+            self.planning_workspace_port
+                .replace_planning_workspace_file(
+                    workspace_dir,
+                    &file.active_path,
+                    Some(file.body.as_str()),
+                )?;
+        }
+
+        Ok(PlanningDraftPromoteResult {
+            draft_name: draft_name.to_string(),
+            promoted_file_count: loaded.staged_files.len(),
+            validation_report: save_result.validation_report,
+        })
     }
 
     fn stage_draft(
@@ -116,10 +243,47 @@ impl PlanningInitService {
             mode,
             draft_name: stage_record.draft_name,
             draft_directory: stage_record.draft_directory,
+            staged_files: stage_record.staged_files.clone(),
             staged_file_count: stage_record.staged_files.len(),
             validation_report: validation_result.report,
         })
     }
+
+    fn validate_loaded_draft(&self, loaded: &PlanningDraftLoadRecord) -> PlanningValidationReport {
+        let staged_file_map = loaded
+            .staged_files
+            .iter()
+            .map(|file| (file.active_path.as_str(), file.body.as_str()))
+            .collect::<HashMap<_, _>>();
+
+        self.planning_validation_service
+            .validate_workspace_files(crate::domain::planning::PlanningWorkspaceFiles {
+                directions_toml: staged_file_map
+                    .get(DIRECTIONS_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+                task_ledger_json: staged_file_map
+                    .get(TASK_LEDGER_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+                task_ledger_schema_json: staged_file_map
+                    .get(TASK_LEDGER_SCHEMA_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+                result_output_markdown: staged_file_map
+                    .get(RESULT_OUTPUT_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+            })
+            .report
+    }
+}
+
+fn is_operator_editable_draft_path(active_path: &str) -> bool {
+    matches!(
+        active_path,
+        DIRECTIONS_FILE_PATH | TASK_LEDGER_FILE_PATH | RESULT_OUTPUT_FILE_PATH
+    )
 }
 
 fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
@@ -132,6 +296,7 @@ fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use anyhow::Result;
@@ -139,17 +304,24 @@ mod tests {
 
     use super::{PlanningInitService, build_bootstrap_draft_name};
     use crate::application::port::outbound::planning_workspace_port::{
-        PlanningDraftFileRecord, PlanningDraftStageRecord, PlanningStagedFileRecord,
-        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+        PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
+        PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
+        PlanningWorkspacePort,
     };
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
     use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::domain::planning::{
+        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+        TASK_LEDGER_SCHEMA_FILE_PATH,
+    };
 
     #[derive(Default)]
     struct FakePlanningWorkspacePort {
         staged_files: std::sync::Mutex<Vec<PlanningDraftFileRecord>>,
+        draft_file_bodies: std::sync::Mutex<HashMap<String, String>>,
+        active_file_bodies: std::sync::Mutex<HashMap<String, String>>,
     }
 
     impl PlanningWorkspacePort for FakePlanningWorkspacePort {
@@ -163,6 +335,14 @@ mod tests {
                 .lock()
                 .expect("staged_files mutex should not be poisoned")
                 .extend(files.iter().cloned());
+            let mut draft_file_bodies = self
+                .draft_file_bodies
+                .lock()
+                .expect("draft_file_bodies mutex should not be poisoned");
+            for file in files {
+                draft_file_bodies.insert(file.active_path.clone(), file.body.clone());
+            }
+
             Ok(PlanningDraftStageRecord {
                 draft_name: draft_name.to_string(),
                 draft_directory: format!("/tmp/{draft_name}"),
@@ -176,6 +356,51 @@ mod tests {
             })
         }
 
+        fn load_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            draft_name: &str,
+        ) -> Result<PlanningDraftLoadRecord> {
+            let draft_file_bodies = self
+                .draft_file_bodies
+                .lock()
+                .expect("draft_file_bodies mutex should not be poisoned");
+            Ok(PlanningDraftLoadRecord {
+                draft_name: draft_name.to_string(),
+                draft_directory: format!("/tmp/{draft_name}"),
+                staged_files: [
+                    DIRECTIONS_FILE_PATH,
+                    TASK_LEDGER_FILE_PATH,
+                    TASK_LEDGER_SCHEMA_FILE_PATH,
+                    RESULT_OUTPUT_FILE_PATH,
+                ]
+                .into_iter()
+                .map(|active_path| PlanningDraftLoadFileRecord {
+                    active_path: active_path.to_string(),
+                    staged_path: format!("/tmp/{draft_name}/{active_path}"),
+                    body: draft_file_bodies
+                        .get(active_path)
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            })
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            _workspace_dir: &str,
+            draft_name: &str,
+            active_path: &str,
+            body: &str,
+        ) -> Result<String> {
+            self.draft_file_bodies
+                .lock()
+                .expect("draft_file_bodies mutex should not be poisoned")
+                .insert(active_path.to_string(), body.to_string());
+            Ok(format!("/tmp/{draft_name}/{active_path}"))
+        }
+
         fn load_planning_workspace_files(
             &self,
             _workspace_dir: &str,
@@ -186,10 +411,17 @@ mod tests {
         fn replace_planning_workspace_file(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
-            _body: Option<&str>,
+            relative_path: &str,
+            body: Option<&str>,
         ) -> Result<()> {
-            unreachable!("file replacement is not used in planning init service tests")
+            self.active_file_bodies
+                .lock()
+                .expect("active_file_bodies mutex should not be poisoned")
+                .insert(
+                    relative_path.to_string(),
+                    body.unwrap_or_default().to_string(),
+                );
+            Ok(())
         }
 
         fn archive_rejected_planning_file(
@@ -219,6 +451,7 @@ mod tests {
         assert_eq!(result.mode, PlanningBootstrapMode::Detail);
         assert!(result.draft_name.starts_with("bootstrap-"));
         assert_eq!(result.staged_file_count, 4);
+        assert_eq!(result.staged_files.len(), 4);
         assert!(result.is_valid(), "{:?}", result.validation_report.issues);
         let staged_files = workspace_port
             .staged_files
@@ -252,6 +485,73 @@ mod tests {
             .map(|file| file.body.as_str())
             .expect("directions.toml should be staged");
         assert!(directions_body.contains("general-workstream"));
+    }
+
+    #[test]
+    fn stage_manual_editor_session_returns_only_editable_files() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        let service = PlanningInitService::new(
+            workspace_port,
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let session = service
+            .stage_manual_editor_session("/tmp/workspace")
+            .expect("manual editor session should stage");
+
+        assert_eq!(session.editable_files.len(), 3);
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path == DIRECTIONS_FILE_PATH)
+        );
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path == TASK_LEDGER_FILE_PATH)
+        );
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
+        );
+    }
+
+    #[test]
+    fn promote_draft_editor_files_writes_active_planning_files_when_valid() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let session = service
+            .stage_manual_editor_session("/tmp/workspace")
+            .expect("manual editor session should stage");
+
+        let result = service
+            .promote_draft_editor_files(
+                "/tmp/workspace",
+                &session.draft_name,
+                &session.editable_files,
+            )
+            .expect("valid staged draft should promote");
+
+        assert!(result.validation_report.is_valid());
+        assert_eq!(result.promoted_file_count, 4);
+        let active_files = workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned");
+        assert!(active_files.contains_key(DIRECTIONS_FILE_PATH));
+        assert!(active_files.contains_key(TASK_LEDGER_FILE_PATH));
+        assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
+        assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
     }
 
     #[test]

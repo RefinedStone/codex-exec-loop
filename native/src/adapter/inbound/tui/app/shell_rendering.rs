@@ -4,11 +4,11 @@ use ratatui::layout::Position;
 
 use super::shell_presentation::{
     ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView,
-    PlanningInitOverlayView, SessionOverlayView, StartupOverlayView,
-    build_conversation_shell_frame_view, build_followup_template_overlay_view,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, SessionOverlayView,
+    StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
     build_inline_prompt_cursor_offset, build_inline_tail_lines, build_input_prompt_cursor_offset,
-    build_planning_init_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    startup_screen_is_active,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, startup_screen_is_active,
 };
 use super::*;
 
@@ -465,6 +465,11 @@ fn draw_inline_followup_template_inspection(
 }
 
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    if app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor {
+        draw_inline_planning_draft_editor_inspection(frame, area, app);
+        return;
+    }
+
     let overlay_view = build_planning_init_overlay_view(app);
     let PlanningInitOverlayView {
         header_lines,
@@ -494,6 +499,58 @@ fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: 
     );
     render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
     render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_planning_draft_editor_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+) {
+    let editor_height = area.height.saturating_sub(14).max(6);
+    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_height) else {
+        return;
+    };
+    let PlanningDraftEditorOverlayView {
+        header_lines,
+        file_lines,
+        editor_title,
+        editor_lines,
+        editor_scroll,
+        editor_cursor_offset,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&file_lines, 5)),
+            Constraint::Min(editor_height),
+            Constraint::Length(inline_section_height(&status_lines, 6)),
+            Constraint::Length(inline_section_height(&key_lines, 5)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Planning Draft / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
+    render_inline_scrolled_section(
+        frame,
+        layout[2],
+        Line::from(editor_title),
+        editor_lines,
+        editor_scroll,
+    );
+    let editor_content_area = split_inline_section(layout[2])[1];
+    set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
     render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
     render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
@@ -670,6 +727,11 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
 }
 
 fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    if app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor {
+        draw_planning_draft_editor_overlay(frame, app);
+        return;
+    }
+
     let overlay_view = build_planning_init_overlay_view(app);
     let PlanningInitOverlayView {
         header_lines,
@@ -719,6 +781,77 @@ fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     frame.render_widget(
         Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
         layout[4],
+    );
+}
+
+fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let popup_area = centered_rect(92, 82, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let editor_height = popup_area.height.saturating_sub(14).max(8);
+    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_height) else {
+        return;
+    };
+    let PlanningDraftEditorOverlayView {
+        header_lines,
+        file_lines,
+        editor_title,
+        editor_lines,
+        editor_scroll,
+        editor_cursor_offset,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(block_height_for_lines(&header_lines, 3, 4)),
+            Constraint::Min(editor_height),
+            Constraint::Length(block_height_for_lines(&status_lines, 5, 8)),
+            Constraint::Length(block_height_for_lines(&key_lines, 4, 6)),
+        ])
+        .split(popup_area);
+
+    frame.render_widget(
+        Paragraph::new(header_lines)
+            .block(Block::default().borders(Borders::ALL).title("Planning")),
+        layout[0],
+    );
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(28), Constraint::Percentage(72)])
+        .split(layout[1]);
+
+    frame.render_widget(
+        Paragraph::new(file_lines)
+            .block(Block::default().borders(Borders::ALL).title("Files"))
+            .wrap(Wrap { trim: false }),
+        content_layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(editor_lines)
+            .block(Block::default().borders(Borders::ALL).title(editor_title))
+            .scroll((editor_scroll, 0))
+            .wrap(Wrap { trim: false }),
+        content_layout[1],
+    );
+    let editor_content_area = Block::default()
+        .borders(Borders::ALL)
+        .inner(content_layout[1]);
+    set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
+
+    frame.render_widget(
+        Paragraph::new(status_lines)
+            .block(Block::default().borders(Borders::ALL).title("Status"))
+            .wrap(Wrap { trim: false }),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        layout[3],
     );
 }
 

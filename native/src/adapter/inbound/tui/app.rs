@@ -69,6 +69,8 @@ mod followup_overlay_ui;
 mod github_polling;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/planning_draft_editor_ui.rs"]
+mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
 #[path = "app/ratatui_frontend.rs"]
@@ -120,6 +122,7 @@ use followup_overlay_ui::{
 };
 use github_polling::GithubReviewPollingState;
 use inline_shell_commands::InlineShellCommand;
+use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningInitOverlayUiState,
@@ -180,6 +183,7 @@ struct NativeTuiApp {
     session_overlay_ui_state: SessionOverlayUiState,
     followup_overlay_ui_state: FollowupOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
+    planning_draft_editor_ui_state: PlanningDraftEditorUiState,
     transcript_viewport_state: TranscriptViewportState,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,

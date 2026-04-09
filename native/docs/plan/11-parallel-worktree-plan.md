@@ -1,18 +1,17 @@
 # Parallel Worktree Plan
 
-No active split plan is carried here.
-
 Unless noted otherwise, file paths below are relative to `native/`.
 
 ## Current Posture
 - reference branch: `origin/prerelease`
-- when a new sprint starts, open a dedicated feature doc instead of expanding this file
-- do not treat earlier slice lists or completion history as live context
+- active feature split: `docs/plan/14-planning-init-manual-editor-rollout.md`
+- treat the feature doc above as the live slice plan for planning-init/manual-editor work
 
 ## Current Hotspots
 - shell flow and rendering: `src/adapter/inbound/tui/app.rs`, `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/ratatui_frontend.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`, `src/adapter/inbound/tui/app/transcript_viewport.rs`
 - inspection and follow-up surfaces: `src/adapter/inbound/tui/app/followup_overlay_ui.rs`, `src/adapter/inbound/tui/app/session_overlay_ui.rs`, and related tests under `src/adapter/inbound/tui/app/`
 - shared runtime and app-server boundary: `src/adapter/inbound/tui/app/conversation_runtime.rs`, outbound app-server adapters, and request-policy docs in `design/04-hexagonal-runtime-architecture.md`
+- planning draft authoring boundary: `src/application/port/outbound/planning_workspace_port.rs`, `src/adapter/outbound/filesystem_planning_workspace_adapter.rs`, `src/application/service/planning_init_service.rs`, and planning-init shell overlays
 - docs and operator contract: `docs/README.md`, `docs/design/*.md`, `docs/plan/10-inline-scrollback-shell.md`, and `docs/plan/12-platform-validation-matrix.md`
 
 ## Worktree Posture
@@ -24,4 +23,4 @@ Unless noted otherwise, file paths below are relative to `native/`.
 
 ## Reset Rule
 - use `04-worktree-branch-rules.md` for push, PR, and linear integration rules
-- replace this placeholder with a feature-specific plan only when a concrete split workstream exists
+- once the planning-init/manual-editor rollout closes, this file can return to the lightweight placeholder posture

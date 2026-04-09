@@ -405,6 +405,26 @@ mod tests {
             Ok(self.load_record.clone())
         }
 
+        fn load_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+        ) -> Result<
+            crate::application::port::outbound::planning_workspace_port::PlanningDraftLoadRecord,
+        > {
+            unreachable!("draft loads are not used in planning prompt service tests")
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            unreachable!("draft replacement is not used in planning prompt service tests")
+        }
+
         fn replace_planning_workspace_file(
             &self,
             _workspace_dir: &str,
