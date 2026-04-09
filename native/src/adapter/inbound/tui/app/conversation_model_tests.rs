@@ -3,6 +3,9 @@ use super::{
     ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
     TurnActivityState, format_conversation_lines,
 };
+use crate::application::service::planning_prompt_service::{
+    PlanningPromptContext, PlanningPromptContextLoadResult,
+};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
 };
@@ -57,6 +60,7 @@ fn ready_conversation() -> ConversationViewModel {
         active_turn_id: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
+        planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
@@ -289,7 +293,7 @@ fn render_prompt_preview_uses_placeholders_for_blank_thread_and_reply() {
     let mut state = AutoFollowState::new(sample_template_catalog());
     state.template_state.items[0].body = "session={session_id}\nlast={last_message}".to_string();
 
-    let preview = state.render_prompt_preview("", Some("   "));
+    let preview = state.render_prompt_preview("", Some("   "), None);
 
     assert!(preview.contains("session=draft-thread"));
     assert!(preview.contains("(waiting for next agent reply)"));
@@ -466,4 +470,48 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     };
 
     assert!(prompt.contains("latest answer"));
+}
+
+#[test]
+fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context\nQueue Summary".to_string(),
+            summary: "next task: task-1".to_string(),
+        },
+    ));
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+
+    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+        panic!("planning-aware auto follow-up prompt should render");
+    };
+
+    assert!(prompt.contains("latest answer"));
+    assert!(prompt.contains("Planning Context"));
+    assert!(prompt.contains("Queue Summary"));
+}
+
+#[test]
+fn auto_followup_skips_when_planning_prompt_context_is_blocked() {
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::blocked(
+        "planning validation failed: task-ledger.json is invalid",
+    ));
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+
+    assert_eq!(
+        conversation.decide_auto_followup(),
+        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
+    );
 }

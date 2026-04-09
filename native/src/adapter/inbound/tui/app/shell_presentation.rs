@@ -1091,9 +1091,11 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                 conversation.thread_id.as_str()
             };
             let latest_agent_message = conversation.latest_agent_message_text();
-            let rendered_preview = conversation
-                .auto_follow_state
-                .render_prompt_preview(&conversation.thread_id, latest_agent_message);
+            let rendered_preview = conversation.auto_follow_state.render_prompt_preview(
+                &conversation.thread_id,
+                latest_agent_message,
+                conversation.planning_prompt_context.prompt_fragment(),
+            );
 
             let mut lines = vec![
                 Line::from(format!("selected: {}", template.label)),
@@ -1109,6 +1111,13 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                 lines.push(Line::from(
                     "preview last_message: placeholder until an agent reply exists",
                 ));
+            }
+            lines.push(Line::from(format!(
+                "planning: {}",
+                conversation.planning_prompt_context.preview_status_label()
+            )));
+            if let Some(detail) = conversation.planning_prompt_context.preview_detail() {
+                lines.push(Line::from(format!("planning detail: {detail}")));
             }
 
             lines.push(Line::from(""));

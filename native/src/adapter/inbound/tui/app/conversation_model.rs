@@ -1,5 +1,6 @@
 use ratatui::text::Line;
 
+use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
     ConversationToolActivity, ConversationToolActivityKind,
@@ -57,6 +58,7 @@ pub(crate) enum AutoFollowupSkipReason {
     NoAgentReply,
     StopKeywordMatched,
     NoFileChanges,
+    PlanningBlocked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +94,10 @@ impl AutoFollowupSkipReason {
                 "the last completed turn changed {} files while the no-file stop rule is on",
                 turn_activity.last_completed_file_change_count()
             ),
+            Self::PlanningBlocked => {
+                "planning files are invalid or incomplete; auto follow-up stays paused until they validate"
+                    .to_string()
+            }
         }
     }
 
@@ -103,6 +109,7 @@ impl AutoFollowupSkipReason {
             Self::NoAgentReply => "skipped: no agent reply",
             Self::StopKeywordMatched => "stopped: stop keyword matched",
             Self::NoFileChanges => "stopped: no file changes",
+            Self::PlanningBlocked => "paused: planning files invalid",
         }
     }
 
@@ -125,6 +132,9 @@ impl AutoFollowupSkipReason {
             ),
             Self::NoFileChanges => {
                 "turn completed / auto follow-up stopped: no file changes".to_string()
+            }
+            Self::PlanningBlocked => {
+                "turn completed / auto follow-up paused: planning files invalid".to_string()
             }
         }
     }
@@ -295,8 +305,14 @@ impl AutoFollowState {
         self.template_state.cycle_previous();
     }
 
-    pub(crate) fn render_prompt(&self, thread_id: &str, last_message: &str) -> String {
-        self.template_state
+    pub(crate) fn render_prompt(
+        &self,
+        thread_id: &str,
+        last_message: &str,
+        planning_prompt_fragment: Option<&str>,
+    ) -> String {
+        let rendered_prompt = self
+            .template_state
             .current()
             .body
             .as_str()
@@ -304,13 +320,24 @@ impl AutoFollowState {
             .replace("{max_auto_turns}", &self.max_auto_turns.to_string())
             .replace("{session_id}", thread_id)
             .replace("{stop_keyword}", self.stop_rules.stop_keyword.value())
-            .replace("{last_message}", last_message)
+            .replace("{last_message}", last_message);
+
+        match planning_prompt_fragment
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(planning_prompt_fragment) => {
+                format!("{rendered_prompt}\n\n{planning_prompt_fragment}")
+            }
+            None => rendered_prompt,
+        }
     }
 
     pub(crate) fn render_prompt_preview(
         &self,
         thread_id: &str,
         last_message: Option<&str>,
+        planning_prompt_fragment: Option<&str>,
     ) -> String {
         let preview_thread_id = if thread_id.trim().is_empty() {
             "draft-thread"
@@ -321,7 +348,11 @@ impl AutoFollowState {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("(waiting for next agent reply)");
-        self.render_prompt(preview_thread_id, preview_last_message)
+        self.render_prompt(
+            preview_thread_id,
+            preview_last_message,
+            planning_prompt_fragment,
+        )
     }
 
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
@@ -534,6 +565,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) active_turn_id: Option<String>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
+    pub(crate) planning_prompt_context: PlanningPromptContextLoadResult,
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
@@ -566,6 +598,7 @@ impl ConversationViewModel {
             active_turn_id: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
+            planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
@@ -606,6 +639,7 @@ impl ConversationViewModel {
             active_turn_id: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
+            planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
@@ -728,6 +762,13 @@ impl ConversationViewModel {
     pub(crate) fn replace_template_warnings(&mut self, template_warnings: Vec<String>) {
         self.template_warnings = template_warnings;
         self.warnings = Self::merge_warnings(&self.base_warnings, &self.template_warnings);
+    }
+
+    pub(crate) fn replace_planning_prompt_context(
+        &mut self,
+        planning_prompt_context: PlanningPromptContextLoadResult,
+    ) {
+        self.planning_prompt_context = planning_prompt_context;
     }
 
     pub(crate) fn set_status_with_warnings(&mut self, base_status: String) {
@@ -1021,10 +1062,15 @@ impl ConversationViewModel {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
         }
 
-        AutoFollowupDecision::QueuePrompt(
-            self.auto_follow_state
-                .render_prompt(&self.thread_id, last_message.trim()),
-        )
+        if self.planning_prompt_context.blocks_auto_followup() {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked);
+        }
+
+        AutoFollowupDecision::QueuePrompt(self.auto_follow_state.render_prompt(
+            &self.thread_id,
+            last_message.trim(),
+            self.planning_prompt_context.prompt_fragment(),
+        ))
     }
 }
 

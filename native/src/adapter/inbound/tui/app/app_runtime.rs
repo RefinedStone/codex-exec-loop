@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
@@ -6,7 +7,9 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
 use crate::application::service::planning_init_service::PlanningInitService;
+use crate::application::service::planning_prompt_service::PlanningPromptService;
 use crate::application::service::planning_validation_service::PlanningValidationService;
+use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestPollResult;
@@ -48,16 +51,29 @@ impl NativeTuiApp {
         let workspace_directory = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
-        let initial_conversation = ConversationState::Ready(ConversationViewModel::new_draft(
+        let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let planning_prompt_service = PlanningPromptService::new(
+            planning_workspace_port.clone(),
+            PlanningValidationService::new(),
+            PriorityQueueService::new(),
+        );
+        let mut initial_conversation = ConversationViewModel::new_draft(
             workspace_directory.clone(),
             followup_template_service.load_catalog(&workspace_directory),
-        ));
+        );
+        initial_conversation.replace_planning_prompt_context(
+            planning_prompt_service
+                .load_prompt_context(&workspace_directory)
+                .unwrap_or_else(|error| {
+                    super::shell_controller::planning_prompt_context_load_failed(error.to_string())
+                }),
+        );
         Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
-            conversation_state: initial_conversation,
+            conversation_state: ConversationState::Ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
@@ -68,10 +84,11 @@ impl NativeTuiApp {
             conversation_service,
             followup_template_service,
             planning_init_service: PlanningInitService::new(
-                std::sync::Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                planning_workspace_port.clone(),
                 PlanningBootstrapService::new(),
                 PlanningValidationService::new(),
             ),
+            planning_prompt_service,
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
@@ -193,7 +210,7 @@ impl NativeTuiApp {
         self.submit_prompt(prompt, PromptOrigin::Manual);
     }
 
-    fn take_ready_conversation_state(&mut self) -> Option<ConversationViewModel> {
+    pub(super) fn take_ready_conversation_state(&mut self) -> Option<ConversationViewModel> {
         let state = std::mem::replace(&mut self.conversation_state, ConversationState::Loading);
         match state {
             ConversationState::Ready(conversation) => Some(conversation),
@@ -268,6 +285,7 @@ impl NativeTuiApp {
                     workspace_directory: workspace_directory.clone(),
                     template_load_result,
                 });
+                self.refresh_ready_conversation_planning_prompt_context();
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                     stop_keyword: self.current_stop_keyword_value(),
                     max_auto_turns: self.current_max_auto_turns_value().to_string(),
@@ -322,6 +340,9 @@ impl NativeTuiApp {
                     let _ = service_thread.join();
                 });
             }
+            ConversationRuntimeEffect::EvaluateAutoFollowup {
+                queued_from_turn_id,
+            } => self.evaluate_auto_followup_after_turn(queued_from_turn_id),
             ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt,
                 queued_from_turn_id,
@@ -334,6 +355,50 @@ impl NativeTuiApp {
                         template_label,
                     }),
                 );
+            }
+        }
+    }
+
+    fn evaluate_auto_followup_after_turn(&mut self, queued_from_turn_id: String) {
+        let Some(mut conversation) = self.take_ready_conversation_state() else {
+            return;
+        };
+
+        let planning_prompt_context = self.load_planning_prompt_context(&conversation.cwd);
+        conversation.replace_planning_prompt_context(planning_prompt_context);
+
+        match conversation.decide_auto_followup() {
+            super::AutoFollowupDecision::QueuePrompt(prompt) => {
+                conversation.clear_auto_followup_skip();
+                let template_label = conversation.auto_follow_state.template_label().to_string();
+                conversation.record_auto_followup_queue(&queued_from_turn_id, &template_label);
+                conversation.status_text = format!(
+                    "turn completed / queued auto follow-up with template {template_label}"
+                );
+                let should_refresh_lines =
+                    conversation.append_status_message(conversation.status_text.clone());
+                if should_refresh_lines {
+                    conversation.refresh_conversation_lines();
+                }
+                self.conversation_state = ConversationState::Ready(conversation);
+                self.execute_conversation_runtime_effect(
+                    ConversationRuntimeEffect::QueueAutoPrompt {
+                        prompt,
+                        queued_from_turn_id,
+                        template_label,
+                    },
+                );
+            }
+            super::AutoFollowupDecision::Skip(skip_reason) => {
+                conversation.record_auto_followup_skip(skip_reason);
+                conversation.status_text =
+                    skip_reason.runtime_status(&conversation.auto_follow_state);
+                let should_refresh_lines =
+                    conversation.append_status_message(conversation.status_text.clone());
+                if should_refresh_lines {
+                    conversation.refresh_conversation_lines();
+                }
+                self.conversation_state = ConversationState::Ready(conversation);
             }
         }
     }

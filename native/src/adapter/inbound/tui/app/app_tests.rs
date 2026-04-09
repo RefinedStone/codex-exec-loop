@@ -34,6 +34,7 @@ use crate::application::port::outbound::followup_template_port::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
+use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -254,6 +255,7 @@ fn ready_conversation() -> ConversationViewModel {
         active_turn_id: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
+        planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
@@ -2853,7 +2855,7 @@ fn recorded_limit_skip_detail_stays_stable_after_progress_resets() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("auto activity: stopped: turn limit reached"));
+    assert!(rendered.contains("notice: auto: stopped: turn limit reached"));
     assert!(rendered.contains("detail: reached the configured auto-turn budget (3/3)"));
     assert!(!rendered.contains("detail: reached the configured auto-turn budget (0/3)"));
 }

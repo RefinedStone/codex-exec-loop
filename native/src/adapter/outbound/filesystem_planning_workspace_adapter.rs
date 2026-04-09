@@ -5,9 +5,12 @@ use anyhow::{Context, Result};
 
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftStageRecord, PlanningStagedFileRecord,
-    PlanningWorkspacePort,
+    PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::domain::planning::PLANNING_DRAFTS_DIRECTORY;
+use crate::domain::planning::{
+    DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+};
 
 #[derive(Default)]
 pub struct FilesystemPlanningWorkspaceAdapter;
@@ -21,6 +24,20 @@ impl FilesystemPlanningWorkspaceAdapter {
         Path::new(workspace_dir)
             .join(PLANNING_DRAFTS_DIRECTORY)
             .join(draft_name)
+    }
+
+    fn read_optional_workspace_file(
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>> {
+        let path = Path::new(workspace_dir).join(relative_path);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))
+            .map(Some)
     }
 }
 
@@ -60,6 +77,30 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             draft_name: draft_name.to_string(),
             draft_directory: draft_directory.display().to_string(),
             staged_files,
+        })
+    }
+
+    fn load_planning_workspace_files(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningWorkspaceLoadRecord> {
+        Ok(PlanningWorkspaceLoadRecord {
+            directions_toml: Self::read_optional_workspace_file(
+                workspace_dir,
+                DIRECTIONS_FILE_PATH,
+            )?,
+            task_ledger_json: Self::read_optional_workspace_file(
+                workspace_dir,
+                TASK_LEDGER_FILE_PATH,
+            )?,
+            task_ledger_schema_json: Self::read_optional_workspace_file(
+                workspace_dir,
+                TASK_LEDGER_SCHEMA_FILE_PATH,
+            )?,
+            result_output_markdown: Self::read_optional_workspace_file(
+                workspace_dir,
+                RESULT_OUTPUT_FILE_PATH,
+            )?,
         })
     }
 }
@@ -116,6 +157,62 @@ mod tests {
         for staged_file in result.staged_files {
             assert!(Path::new(&staged_file.staged_path).exists());
         }
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn loads_active_planning_workspace_files_when_present() {
+        let workspace_dir = create_temp_workspace("planning-workspace-load");
+        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
+        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+        fs::write(planning_dir.join("directions.toml"), "version = 1")
+            .expect("directions should write");
+        fs::write(
+            planning_dir.join("task-ledger.json"),
+            "{\"version\":1,\"tasks\":[]}",
+        )
+        .expect("task ledger should write");
+        fs::write(
+            planning_dir.join("task-ledger.schema.json"),
+            "{\"type\":\"object\"}",
+        )
+        .expect("schema should write");
+        fs::write(planning_dir.join("result-output.md"), "# result")
+            .expect("result output should write");
+
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let result = adapter
+            .load_planning_workspace_files(&workspace_dir)
+            .expect("planning workspace files should load");
+
+        assert_eq!(result.directions_toml.as_deref(), Some("version = 1"));
+        assert_eq!(
+            result.task_ledger_json.as_deref(),
+            Some("{\"version\":1,\"tasks\":[]}")
+        );
+        assert_eq!(
+            result.task_ledger_schema_json.as_deref(),
+            Some("{\"type\":\"object\"}")
+        );
+        assert_eq!(result.result_output_markdown.as_deref(), Some("# result"));
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn missing_active_planning_workspace_files_return_none_fields() {
+        let workspace_dir = create_temp_workspace("planning-workspace-empty");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let result = adapter
+            .load_planning_workspace_files(&workspace_dir)
+            .expect("missing planning workspace files should still load");
+
+        assert!(result.directions_toml.is_none());
+        assert!(result.task_ledger_json.is_none());
+        assert!(result.task_ledger_schema_json.is_none());
+        assert!(result.result_output_markdown.is_none());
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

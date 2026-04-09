@@ -82,6 +82,8 @@ impl ShellRuntime {
                         },
                     );
                     self.app
+                        .refresh_ready_conversation_planning_prompt_context();
+                    self.app
                         .dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                             stop_keyword: self.app.current_stop_keyword_value(),
                             max_auto_turns: self.app.current_max_auto_turns_value().to_string(),

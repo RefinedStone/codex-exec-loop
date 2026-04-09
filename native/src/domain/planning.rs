@@ -4,6 +4,7 @@ pub const PLANNING_FORMAT_VERSION: u32 = 1;
 pub const DIRECTIONS_FILE_PATH: &str = ".codex-exec-loop/planning/directions.toml";
 pub const TASK_LEDGER_FILE_PATH: &str = ".codex-exec-loop/planning/task-ledger.json";
 pub const TASK_LEDGER_SCHEMA_FILE_PATH: &str = ".codex-exec-loop/planning/task-ledger.schema.json";
+pub const QUEUE_SNAPSHOT_FILE_PATH: &str = ".codex-exec-loop/planning/queue.snapshot.json";
 pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
 pub const PLANNING_DRAFTS_DIRECTORY: &str = ".codex-exec-loop/planning/drafts";
 

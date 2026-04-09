@@ -120,7 +120,7 @@ mod tests {
     use super::{PlanningInitService, build_bootstrap_draft_name};
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftStageRecord, PlanningStagedFileRecord,
-        PlanningWorkspacePort,
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
@@ -152,6 +152,13 @@ mod tests {
                     })
                     .collect(),
             })
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Ok(PlanningWorkspaceLoadRecord::default())
         }
     }
 
