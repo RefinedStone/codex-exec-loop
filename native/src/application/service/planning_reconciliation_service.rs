@@ -46,6 +46,12 @@ pub struct PlanningRepairRequest {
     pub rejected_archive_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningRepairRetryReason {
+    TaskLedgerUnchanged,
+    TaskLedgerStillInvalid,
+}
+
 impl PlanningReconciliationService {
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -262,7 +268,7 @@ pub fn build_planning_repair_prompt(
     request: &PlanningRepairRequest,
     attempt_number: usize,
     max_attempts: usize,
-    retry_note: Option<&str>,
+    retry_reason: Option<PlanningRepairRetryReason>,
 ) -> String {
     let mut lines = vec![
         "대리인입니다.".to_string(),
@@ -277,8 +283,8 @@ pub fn build_planning_repair_prompt(
         "- 기존 direction frame 밖의 관련 없는 새 작업은 추가하지 마세요.".to_string(),
     ];
 
-    if let Some(retry_note) = retry_note.map(str::trim).filter(|value| !value.is_empty()) {
-        lines.push(format!("- 추가 지시: {retry_note}"));
+    if let Some(retry_reason) = retry_reason {
+        lines.push(format!("- 추가 지시: {}", retry_reason.instruction()));
     }
 
     lines.push(String::new());
@@ -349,6 +355,19 @@ fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
     format!("{truncated}\n... [truncated]")
 }
 
+impl PlanningRepairRetryReason {
+    fn instruction(self) -> &'static str {
+        match self {
+            Self::TaskLedgerUnchanged => {
+                "직전 repair 시도에서 `task-ledger.json` 이 바뀌지 않았습니다. 이번 턴에서는 그 파일을 반드시 다시 작성하세요."
+            }
+            Self::TaskLedgerStillInvalid => {
+                "직전 repair 시도에서 `task-ledger.json` 을 수정했지만 여전히 유효하지 않습니다. 이번 턴에서는 validation 오류를 모두 해결하도록 그 파일을 다시 작성하세요."
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -358,7 +377,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PlanningExecutionSnapshot, PlanningReconciliationService, build_planning_repair_prompt,
+        PlanningExecutionSnapshot, PlanningReconciliationService, PlanningRepairRetryReason,
+        build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
@@ -535,13 +555,14 @@ mod tests {
             },
             1,
             2,
-            Some("retry now"),
+            Some(PlanningRepairRetryReason::TaskLedgerStillInvalid),
         );
 
         assert!(prompt.contains("planning repair 1/2"));
         assert!(prompt.contains("failed to parse task-ledger.json"));
         assert!(prompt.contains("rejected archive"));
         assert!(prompt.contains("Rejected candidate excerpt"));
+        assert!(prompt.contains("수정했지만 여전히 유효하지 않습니다"));
     }
 
     #[test]

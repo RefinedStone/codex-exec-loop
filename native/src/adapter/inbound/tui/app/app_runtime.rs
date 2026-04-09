@@ -9,7 +9,8 @@ use crate::application::service::planning_bootstrap_service::PlanningBootstrapSe
 use crate::application::service::planning_init_service::PlanningInitService;
 use crate::application::service::planning_prompt_service::PlanningPromptService;
 use crate::application::service::planning_reconciliation_service::{
-    PlanningReconciliationResult, PlanningReconciliationService, build_planning_repair_prompt,
+    PlanningReconciliationResult, PlanningReconciliationService, PlanningRepairRetryReason,
+    build_planning_repair_prompt,
 };
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
@@ -463,6 +464,24 @@ impl NativeTuiApp {
         conversation.replace_planning_prompt_context(planning_prompt_context);
 
         if let Some(queued_prompt) = planning_repair_resolution.queued_prompt {
+            if !conversation.input_buffer.trim().is_empty() {
+                let pause_notice = format!(
+                    "planning repair retry {}/{} is waiting because manual input is buffered",
+                    queued_prompt.attempt_number, queued_prompt.max_attempts
+                );
+                if !conversation.runtime_notices.contains(&pause_notice) {
+                    conversation.runtime_notices.push(pause_notice);
+                }
+                conversation.status_text =
+                    "turn completed / planning repair paused: manual input buffered".to_string();
+                let should_refresh_lines =
+                    conversation.append_status_message(conversation.status_text.clone());
+                if should_refresh_lines {
+                    conversation.refresh_conversation_lines();
+                }
+                self.conversation_state = ConversationState::Ready(conversation);
+                return;
+            }
             conversation.record_planning_repair_queue(
                 queued_prompt.attempt_number,
                 queued_prompt.max_attempts,
@@ -605,11 +624,15 @@ impl NativeTuiApp {
         reconciliation_result: &PlanningReconciliationResult,
     ) -> PlanningRepairResolution {
         if let Some(repair_request) = reconciliation_result.repair_request.as_ref() {
+            let retry_reason = conversation
+                .planning_repair_state
+                .as_ref()
+                .map(|_| PlanningRepairRetryReason::TaskLedgerStillInvalid);
             return self.queue_planning_repair_attempt(
                 conversation,
                 queued_from_turn_id,
                 repair_request,
-                None,
+                retry_reason,
             );
         }
 
@@ -640,9 +663,11 @@ impl NativeTuiApp {
             conversation,
             active_repair_state.root_turn_id.as_str(),
             &active_repair_state.latest_request,
-            Some(
-                "직전 repair 시도에서 `task-ledger.json` 이 바뀌지 않았습니다. 이번 턴에서는 그 파일을 반드시 다시 작성하세요.",
-            ),
+            Some(if task_ledger_changed {
+                PlanningRepairRetryReason::TaskLedgerStillInvalid
+            } else {
+                PlanningRepairRetryReason::TaskLedgerUnchanged
+            }),
         )
     }
 
@@ -651,18 +676,14 @@ impl NativeTuiApp {
         conversation: &mut ConversationViewModel,
         root_turn_id: &str,
         repair_request: &crate::application::service::planning_reconciliation_service::PlanningRepairRequest,
-        retry_note: Option<&str>,
+        retry_reason: Option<PlanningRepairRetryReason>,
     ) -> PlanningRepairResolution {
-        let next_attempt = conversation
-            .planning_repair_state
-            .as_ref()
-            .map(|state| state.attempts_used + 1)
-            .unwrap_or(1);
-        let max_attempts = conversation
-            .planning_repair_state
-            .as_ref()
-            .map(|state| state.max_attempts)
-            .unwrap_or(MAX_PLANNING_REPAIR_ATTEMPTS);
+        let (next_attempt, max_attempts) =
+            if let Some(state) = conversation.planning_repair_state.as_ref() {
+                (state.attempts_used + 1, state.max_attempts)
+            } else {
+                (1, MAX_PLANNING_REPAIR_ATTEMPTS)
+            };
 
         if next_attempt > max_attempts {
             conversation.planning_repair_state = None;
@@ -678,7 +699,7 @@ impl NativeTuiApp {
         }
 
         let prompt =
-            build_planning_repair_prompt(repair_request, next_attempt, max_attempts, retry_note);
+            build_planning_repair_prompt(repair_request, next_attempt, max_attempts, retry_reason);
         conversation.planning_repair_state = Some(PlanningRepairState {
             root_turn_id: root_turn_id.to_string(),
             attempts_used: next_attempt,

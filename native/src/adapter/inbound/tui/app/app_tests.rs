@@ -646,6 +646,177 @@ fn repair_attempt_without_task_ledger_change_queues_next_retry() {
 }
 
 #[test]
+fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-repair-still-invalid");
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    let bootstrap_artifacts =
+        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
+            .build_artifacts();
+    std::fs::write(
+        planning_dir.join("directions.toml"),
+        &bootstrap_artifacts.directions_toml,
+    )
+    .expect("directions should write");
+    std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
+        .expect("invalid task ledger should write");
+    std::fs::write(
+        planning_dir.join("task-ledger.schema.json"),
+        &bootstrap_artifacts.task_ledger_schema_json,
+    )
+    .expect("schema should write");
+    std::fs::write(
+        planning_dir.join("result-output.md"),
+        &bootstrap_artifacts.result_output_markdown,
+    )
+    .expect("result output should write");
+
+    let mut conversation = ready_conversation();
+    conversation.cwd = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-repair-2".to_string());
+    conversation.planning_repair_state = Some(PlanningRepairState {
+        root_turn_id: "turn-root".to_string(),
+        attempts_used: 1,
+        max_attempts: 2,
+        latest_request: PlanningRepairRequest {
+            failure_summary: "failed to parse task-ledger.json".to_string(),
+            validation_errors: vec!["failed to parse task-ledger.json".to_string()],
+            directions_toml: bootstrap_artifacts.directions_toml.clone(),
+            task_ledger_schema_json: bootstrap_artifacts.task_ledger_schema_json.clone(),
+            accepted_task_ledger_json: bootstrap_artifacts.task_ledger_json.clone(),
+            rejected_task_ledger_json: Some("{ invalid json".to_string()),
+            rejected_archive_path: None,
+        },
+    });
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+        PlanningExecutionSnapshot {
+            directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
+            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+        },
+    ));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-repair-2".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    let mut repair_prompt = None;
+    for _ in 0..20 {
+        repair_prompt = codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .last()
+            .map(|(_, prompt)| prompt.clone());
+        if repair_prompt.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(repair_prompt.as_deref().is_some_and(|prompt| {
+        prompt.contains(
+            "직전 repair 시도에서 `task-ledger.json` 을 수정했지만 여전히 유효하지 않습니다",
+        )
+    }));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn buffered_manual_input_pauses_planning_repair_submission() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-repair-manual-buffer");
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    let bootstrap_artifacts =
+        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
+            .build_artifacts();
+    std::fs::write(
+        planning_dir.join("directions.toml"),
+        &bootstrap_artifacts.directions_toml,
+    )
+    .expect("directions should write");
+    std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
+        .expect("invalid task ledger should write");
+    std::fs::write(
+        planning_dir.join("task-ledger.schema.json"),
+        &bootstrap_artifacts.task_ledger_schema_json,
+    )
+    .expect("schema should write");
+    std::fs::write(
+        planning_dir.join("result-output.md"),
+        &bootstrap_artifacts.result_output_markdown,
+    )
+    .expect("result output should write");
+
+    let mut conversation = ready_conversation();
+    conversation.cwd = workspace_dir.clone();
+    conversation.input_buffer = "operator override draft".to_string();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-repair-3".to_string());
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+        PlanningExecutionSnapshot {
+            directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
+            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+        },
+    ));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-repair-3".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert_eq!(conversation.input_buffer, "operator override draft");
+    assert!(conversation.planning_repair_state.is_some());
+    assert_eq!(
+        conversation.status_text,
+        "turn completed / planning repair paused: manual input buffered"
+    );
+    assert!(conversation.runtime_notices.iter().any(|notice| {
+        notice.contains("planning repair retry 1/2 is waiting because manual input is buffered")
+    }));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
