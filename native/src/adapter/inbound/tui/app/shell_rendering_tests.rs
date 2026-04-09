@@ -54,6 +54,26 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 }
 
 #[test]
+fn inline_main_buffer_tail_starts_at_top_of_viewport_after_history() {
+    let mut terminal = inline_terminal(80, 24);
+    let mut app = make_test_app();
+    append_stable_history_message(&mut app, "latest reply should stay in scrollback");
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+    let first_non_empty_line = rendered
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .expect("inline viewport should contain visible tail text");
+    let first_non_empty_line = first_non_empty_line.trim_matches('"');
+
+    assert!(first_non_empty_line.starts_with("thread: new draft  |  turn: idle"));
+}
+
+#[test]
 fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently() {
     let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();

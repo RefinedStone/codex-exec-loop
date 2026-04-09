@@ -91,7 +91,7 @@ fn draw_inline_conversation_shell(
         let tail_area = if startup_screen_is_active(app) {
             frame_area
         } else {
-            inline_body_render_area(frame_area, &tail_lines)
+            inline_body_top_render_area(frame_area, &tail_lines)
         };
         render_inline_body(frame, tail_area, tail_lines, false);
         set_cursor_if_visible(
@@ -199,6 +199,11 @@ fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
     let body_height = inline_body_height(lines, area.width, area.height);
     let y = area.y + area.height.saturating_sub(body_height);
     Rect::new(area.x, y, area.width, body_height)
+}
+
+fn inline_body_top_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
+    let body_height = inline_body_height(lines, area.width, area.height);
+    Rect::new(area.x, area.y, area.width, body_height)
 }
 
 fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usize {
