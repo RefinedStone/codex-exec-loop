@@ -515,12 +515,7 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
-#[test]
-fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state() {
-    let (mut app, _) = make_test_app();
-    let workspace_dir = create_temp_workspace("planning-editor-save-app");
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
-
+fn open_planning_manual_editor(app: &mut NativeTuiApp) {
     app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
@@ -529,6 +524,15 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
         app.planning_init_overlay_ui_state.step(),
         PlanningInitOverlayStep::ManualEditor
     );
+}
+
+#[test]
+fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-save-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+
+    open_planning_manual_editor(&mut app);
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
     assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
@@ -562,6 +566,140 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
 }
 
 #[test]
+fn planning_manual_editor_dirty_close_requires_confirmation() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-close-dirty-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    open_planning_manual_editor(&mut app);
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert!(app.planning_draft_editor_ui_state.is_open());
+    assert!(
+        app.planning_draft_editor_ui_state
+            .is_close_confirmation_pending()
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("close pending"));
+    assert!(conversation.status_text.contains("discard unsaved edits"));
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    assert!(!app.planning_draft_editor_ui_state.is_open());
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("unsaved in-memory edits were discarded")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_manual_editor_close_warning_can_be_canceled() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-close-cancel-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    open_planning_manual_editor(&mut app);
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+    assert!(
+        app.planning_draft_editor_ui_state
+            .is_close_confirmation_pending()
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE,)));
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert!(
+        !app.planning_draft_editor_ui_state
+            .is_close_confirmation_pending()
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("keep editing"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_manual_editor_invalid_saved_draft_requires_confirmation_before_close() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-close-invalid-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    open_planning_manual_editor(&mut app);
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
+    assert!(
+        app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL,))
+    );
+    assert!(!app.planning_draft_editor_ui_state.has_dirty_buffers());
+    assert!(
+        !app.planning_draft_editor_ui_state
+            .validation_report()
+            .expect("validation report")
+            .is_valid()
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert!(
+        app.planning_draft_editor_ui_state
+            .is_close_confirmation_pending()
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("invalid staged draft"));
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("invalid staged draft remains in drafts")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_manual_editor_clean_valid_close_remains_immediate() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-close-clean-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    open_planning_manual_editor(&mut app);
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    assert!(!app.planning_draft_editor_ui_state.is_open());
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(!conversation.status_text.contains("close pending"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_context() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-editor-promote-app");
@@ -571,14 +709,7 @@ fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_conte
     };
     conversation.cwd = workspace_dir.clone();
 
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
-    assert_eq!(
-        app.planning_init_overlay_ui_state.step(),
-        PlanningInitOverlayStep::ManualEditor
-    );
+    open_planning_manual_editor(&mut app);
 
     assert!(
         app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL,))
@@ -615,10 +746,7 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
     };
     conversation.cwd = workspace_dir.clone();
 
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    open_planning_manual_editor(&mut app);
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));

@@ -8,6 +8,7 @@ use crate::domain::planning::PlanningValidationReport;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) struct PlanningDraftEditorUiState {
     session: Option<PlanningDraftEditorSessionState>,
+    close_guard: PlanningDraftEditorCloseGuardState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,13 +31,34 @@ pub(super) struct PlanningDraftEditorBufferState {
     dirty: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PlanningDraftEditorCloseRisk {
+    has_dirty_buffers: bool,
+    has_invalid_staged_draft: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum PlanningDraftEditorCloseGuardState {
+    #[default]
+    Inactive,
+    ConfirmationPending(PlanningDraftEditorCloseRisk),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlanningDraftEditorCloseRequest {
+    CloseImmediately,
+    ConfirmationRequired(PlanningDraftEditorCloseRisk),
+    Confirmed(PlanningDraftEditorCloseRisk),
+}
+
 impl PlanningDraftEditorUiState {
     pub fn reset(&mut self) {
-        self.session = None;
+        *self = Self::default();
     }
 
     pub fn open_session(&mut self, session: PlanningDraftEditorSession) {
         self.session = Some(PlanningDraftEditorSessionState::from(session));
+        self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
     }
 
     #[cfg(test)]
@@ -74,6 +96,7 @@ impl PlanningDraftEditorUiState {
     }
 
     pub fn move_file_selection(&mut self, delta: isize) {
+        self.clear_close_confirmation();
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -87,48 +110,56 @@ impl PlanningDraftEditorUiState {
     }
 
     pub fn insert_character(&mut self, character: char) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.insert_character(character);
         }
     }
 
     pub fn insert_newline(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.insert_newline();
         }
     }
 
     pub fn backspace(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.backspace();
         }
     }
 
     pub fn delete_previous_word(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.delete_previous_word();
         }
     }
 
     pub fn move_cursor_left(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.move_cursor_left();
         }
     }
 
     pub fn move_cursor_right(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.move_cursor_right();
         }
     }
 
     pub fn move_cursor_up(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.move_cursor_up();
         }
     }
 
     pub fn move_cursor_down(&mut self) {
+        self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.move_cursor_down();
         }
@@ -151,6 +182,7 @@ impl PlanningDraftEditorUiState {
             return;
         };
         session.validation_report = validation_report;
+        self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
         for buffer in &mut session.buffers {
             buffer.dirty = false;
         }
@@ -169,6 +201,11 @@ impl PlanningDraftEditorUiState {
             .any(PlanningDraftEditorBufferState::is_dirty)
     }
 
+    pub fn has_invalid_staged_draft(&self) -> bool {
+        self.validation_report()
+            .is_some_and(|report| !report.is_valid())
+    }
+
     pub fn dirty_file_labels(&self) -> Vec<String> {
         self.buffers()
             .unwrap_or(&[])
@@ -178,9 +215,66 @@ impl PlanningDraftEditorUiState {
             .collect()
     }
 
+    pub fn close_risk(&self) -> Option<PlanningDraftEditorCloseRisk> {
+        self.current_close_risk()
+    }
+
+    pub fn pending_close_risk(&self) -> Option<PlanningDraftEditorCloseRisk> {
+        match self.close_guard {
+            PlanningDraftEditorCloseGuardState::Inactive => None,
+            PlanningDraftEditorCloseGuardState::ConfirmationPending(risk) => Some(risk),
+        }
+    }
+
+    pub fn is_close_confirmation_pending(&self) -> bool {
+        self.pending_close_risk().is_some()
+    }
+
+    pub fn clear_close_confirmation(&mut self) {
+        self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
+    }
+
+    pub fn request_close(&mut self) -> PlanningDraftEditorCloseRequest {
+        let Some(risk) = self.current_close_risk() else {
+            self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
+            return PlanningDraftEditorCloseRequest::CloseImmediately;
+        };
+
+        if self.pending_close_risk() == Some(risk) {
+            self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
+            PlanningDraftEditorCloseRequest::Confirmed(risk)
+        } else {
+            self.close_guard = PlanningDraftEditorCloseGuardState::ConfirmationPending(risk);
+            PlanningDraftEditorCloseRequest::ConfirmationRequired(risk)
+        }
+    }
+
+    fn current_close_risk(&self) -> Option<PlanningDraftEditorCloseRisk> {
+        let has_dirty_buffers = self.has_dirty_buffers();
+        let has_invalid_staged_draft = self.has_invalid_staged_draft();
+        if !has_dirty_buffers && !has_invalid_staged_draft {
+            return None;
+        }
+
+        Some(PlanningDraftEditorCloseRisk {
+            has_dirty_buffers,
+            has_invalid_staged_draft,
+        })
+    }
+
     fn selected_buffer_mut(&mut self) -> Option<&mut PlanningDraftEditorBufferState> {
         let session = self.session.as_mut()?;
         session.buffers.get_mut(session.selected_file_index)
+    }
+}
+
+impl PlanningDraftEditorCloseRisk {
+    pub fn has_dirty_buffers(&self) -> bool {
+        self.has_dirty_buffers
+    }
+
+    pub fn has_invalid_staged_draft(&self) -> bool {
+        self.has_invalid_staged_draft
     }
 }
 
@@ -406,7 +500,7 @@ fn has_non_whitespace_before_cursor(line: &str, column: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::PlanningDraftEditorUiState;
+    use super::{PlanningDraftEditorCloseRequest, PlanningDraftEditorUiState};
     use crate::application::service::planning_init_service::{
         PlanningDraftEditorFile, PlanningDraftEditorSession,
     };
@@ -485,5 +579,68 @@ mod tests {
                 .severity,
             PlanningValidationSeverity::Warning
         );
+    }
+
+    #[test]
+    fn request_close_requires_confirmation_for_dirty_buffers() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(sample_session());
+        state.insert_character('#');
+
+        let first_request = state.request_close();
+        let second_request = state.request_close();
+
+        assert_eq!(
+            first_request,
+            PlanningDraftEditorCloseRequest::ConfirmationRequired(
+                state.close_risk().expect("close risk should exist")
+            )
+        );
+        assert_eq!(
+            second_request,
+            PlanningDraftEditorCloseRequest::Confirmed(
+                state
+                    .close_risk()
+                    .expect("close risk should remain visible")
+            )
+        );
+    }
+
+    #[test]
+    fn request_close_requires_confirmation_for_invalid_saved_draft() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(sample_session());
+
+        let mut invalid_report = PlanningValidationReport::default();
+        invalid_report.push_error(
+            PlanningFileKind::TaskLedger,
+            "invalid-json",
+            "task-ledger.json must parse as valid json",
+        );
+        state.apply_save_result(invalid_report);
+
+        let request = state.request_close();
+
+        assert_eq!(
+            request,
+            PlanningDraftEditorCloseRequest::ConfirmationRequired(
+                state
+                    .close_risk()
+                    .expect("invalid draft should require confirmation")
+            )
+        );
+        assert!(state.is_close_confirmation_pending());
+    }
+
+    #[test]
+    fn editing_after_close_warning_clears_pending_confirmation() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(sample_session());
+        state.insert_character('#');
+        let _ = state.request_close();
+
+        state.move_cursor_right();
+
+        assert!(!state.is_close_confirmation_pending());
     }
 }

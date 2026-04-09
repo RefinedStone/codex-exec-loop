@@ -524,6 +524,8 @@ pub(super) fn build_planning_draft_editor_overlay_view(
     let selected_buffer = app.planning_draft_editor_ui_state.selected_buffer()?;
     let dirty_labels = app.planning_draft_editor_ui_state.dirty_file_labels();
     let validation_report = app.planning_draft_editor_ui_state.validation_report()?;
+    let pending_close_risk = app.planning_draft_editor_ui_state.pending_close_risk();
+    let close_risk = pending_close_risk.or_else(|| app.planning_draft_editor_ui_state.close_risk());
 
     let file_lines = buffers
         .iter()
@@ -625,6 +627,31 @@ pub(super) fn build_planning_draft_editor_overlay_view(
             compact_inline_detail(&dirty_labels.join(", "), FOOTER_NOTICE_DETAIL_LIMIT)
         }
     )));
+    if !dirty_labels.is_empty() {
+        status_lines.push(Line::from(
+            "validation note: the status above reflects the last saved draft until Ctrl+S re-runs checks",
+        ));
+    }
+    if let Some(risk) = close_risk {
+        status_lines.push(Line::from(vec![
+            Span::styled(
+                if pending_close_risk.is_some() {
+                    "close pending: "
+                } else {
+                    "close guard: "
+                },
+                Style::default().fg(if pending_close_risk.is_some() {
+                    Color::Red
+                } else {
+                    Color::Yellow
+                }),
+            ),
+            Span::raw(planning_draft_close_guard_detail(
+                risk,
+                pending_close_risk.is_some(),
+            )),
+        ]));
+    }
 
     Some(PlanningDraftEditorOverlayView {
         header_lines: vec![
@@ -654,9 +681,54 @@ pub(super) fn build_planning_draft_editor_overlay_view(
             Line::from("Tab/BackTab: switch file    arrows: move cursor"),
             Line::from("Enter: newline    Backspace: delete    Ctrl+W: delete previous word"),
             Line::from("Ctrl+S: save + validate    Ctrl+P: promote"),
-            Line::from("Esc/Ctrl+C: close"),
+            planning_draft_editor_close_key_line(close_risk, pending_close_risk.is_some()),
         ],
     })
+}
+
+fn planning_draft_close_guard_detail(
+    risk: super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk,
+    confirmation_pending: bool,
+) -> String {
+    match (
+        risk.has_dirty_buffers(),
+        risk.has_invalid_staged_draft(),
+        confirmation_pending,
+    ) {
+        (true, true, true) => {
+            "discard unsaved edits or keep editing; the invalid staged draft will remain on disk"
+                .to_string()
+        }
+        (true, false, true) => "discard unsaved edits or press n to keep editing".to_string(),
+        (false, true, true) => {
+            "close now or press n to keep editing; the invalid staged draft will remain on disk"
+                .to_string()
+        }
+        (true, true, false) => {
+            "unsaved edits and an invalid staged draft require confirmation before close"
+                .to_string()
+        }
+        (true, false, false) => "unsaved edits require confirmation before close".to_string(),
+        (false, true, false) => {
+            "an invalid staged draft requires confirmation before close".to_string()
+        }
+        (false, false, _) => "close is available immediately".to_string(),
+    }
+}
+
+fn planning_draft_editor_close_key_line(
+    close_risk: Option<super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk>,
+    confirmation_pending: bool,
+) -> Line<'static> {
+    if confirmation_pending {
+        return Line::from("Enter/Esc/Ctrl+C: confirm close    n: keep editing");
+    }
+
+    if close_risk.is_some() {
+        return Line::from("Esc/Ctrl+C: review close");
+    }
+
+    Line::from("Esc/Ctrl+C: close")
 }
 
 fn planning_init_option_line(

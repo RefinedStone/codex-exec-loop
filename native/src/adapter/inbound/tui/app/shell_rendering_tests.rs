@@ -255,6 +255,36 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
     assert!(!rendered.contains("┌"));
 }
 
+#[test]
+fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning_init_overlay_ui_state.open_manual_editor();
+    app.planning_draft_editor_ui_state
+        .open_session(sample_planning_editor_session());
+    app.planning_draft_editor_ui_state.insert_character('#');
+    let _ = app.planning_draft_editor_ui_state.request_close();
+
+    let view = build_planning_draft_editor_overlay_view(&app, 8)
+        .expect("planning draft editor overlay view should be available");
+    let status = view
+        .status_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let keys = view
+        .key_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(status.contains("close pending"));
+    assert!(keys.contains("Enter/Esc/Ctrl+C: confirm close"));
+    assert!(keys.contains("n: keep editing"));
+}
+
 struct FakeCodexAppServerPort;
 
 impl CodexAppServerPort for FakeCodexAppServerPort {
