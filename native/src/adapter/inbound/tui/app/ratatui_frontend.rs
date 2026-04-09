@@ -22,8 +22,8 @@ use super::shell_presentation::build_inline_tail_lines;
 use super::shell_rendering::draw;
 use super::shell_runtime::ShellRuntime;
 use super::{
-    ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT,
-    NativeTuiApp, ShellFrontendMode,
+    ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES,
+    MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp, ShellFrontendMode,
 };
 
 pub(super) fn run(mut runtime: ShellRuntime, frontend: ShellFrontend) -> Result<()> {
@@ -199,6 +199,12 @@ impl InlineHistoryState {
     }
 
     fn shifted_window_overlap_len(&self, current_lines: &[Line<'static>]) -> Option<usize> {
+        if self.rendered_lines.len() != MAX_CONVERSATION_HISTORY_LINES
+            || current_lines.len() != MAX_CONVERSATION_HISTORY_LINES
+        {
+            return None;
+        }
+
         let max_overlap = self.rendered_lines.len().min(current_lines.len());
         if max_overlap < MIN_SHIFTED_HISTORY_OVERLAP {
             return None;
@@ -337,7 +343,8 @@ mod tests {
         desired_inline_viewport_height,
     };
     use crate::adapter::inbound::tui::app::{
-        INLINE_VIEWPORT_HEIGHT, MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp,
+        INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES, MAX_INLINE_TAIL_HEIGHT,
+        MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp,
     };
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::application::port::outbound::codex_app_server_port::{
@@ -406,42 +413,22 @@ mod tests {
     #[test]
     fn pending_lines_only_inserts_new_suffix_for_shifted_history_window() {
         let state = InlineHistoryState {
-            rendered_lines: vec![
-                Line::from("User:"),
-                Line::from("  first prompt"),
-                Line::from(""),
-                Line::from("Status:"),
-                Line::from("  queued"),
-                Line::from(""),
-                Line::from("Agent:"),
-                Line::from("  first answer"),
-                Line::from(""),
-                Line::from("Status:"),
-                Line::from("  completed"),
-            ],
+            rendered_lines: (0..MAX_CONVERSATION_HISTORY_LINES)
+                .map(|idx| Line::from(format!("line {idx}")))
+                .collect(),
         };
-        let current_lines = vec![
-            Line::from("Status:"),
-            Line::from("  queued"),
-            Line::from(""),
-            Line::from("Agent:"),
-            Line::from("  first answer"),
-            Line::from(""),
-            Line::from("Status:"),
-            Line::from("  completed"),
-            Line::from("User:"),
-            Line::from("  second prompt"),
-            Line::from(""),
-        ];
+        let current_lines = (3..MAX_CONVERSATION_HISTORY_LINES + 3)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect::<Vec<_>>();
 
         let pending = state.pending_lines(&current_lines);
 
         assert_eq!(
             pending,
             vec![
-                Line::from("User:"),
-                Line::from("  second prompt"),
-                Line::from(""),
+                Line::from(format!("line {}", MAX_CONVERSATION_HISTORY_LINES)),
+                Line::from(format!("line {}", MAX_CONVERSATION_HISTORY_LINES + 1)),
+                Line::from(format!("line {}", MAX_CONVERSATION_HISTORY_LINES + 2)),
             ]
         );
     }
@@ -465,6 +452,42 @@ mod tests {
             Line::from("  completed"),
             Line::from("User:"),
             Line::from("  brand new thread"),
+            Line::from(""),
+        ];
+
+        let pending = state.pending_lines(&current_lines);
+
+        assert_eq!(pending, current_lines);
+    }
+
+    #[test]
+    fn pending_lines_does_not_shift_uncapped_history_window_even_with_large_overlap() {
+        let state = InlineHistoryState {
+            rendered_lines: vec![
+                Line::from("Status:"),
+                Line::from("  queued"),
+                Line::from(""),
+                Line::from("Agent:"),
+                Line::from("  first answer"),
+                Line::from(""),
+                Line::from("Status:"),
+                Line::from("  completed"),
+                Line::from("User:"),
+                Line::from("  old tail"),
+                Line::from(""),
+            ],
+        };
+        let current_lines = vec![
+            Line::from("Status:"),
+            Line::from("  queued"),
+            Line::from(""),
+            Line::from("Agent:"),
+            Line::from("  first answer"),
+            Line::from(""),
+            Line::from("Status:"),
+            Line::from("  completed"),
+            Line::from("User:"),
+            Line::from("  replacement thread"),
             Line::from(""),
         ];
 
