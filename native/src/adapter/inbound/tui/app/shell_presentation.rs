@@ -625,13 +625,23 @@ fn build_inline_startup_screen_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         }
         StartupState::Ready(diagnostics) => {
             lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
-            lines.extend(build_startup_check_lines(app));
+            lines.push(Line::from(format!(
+                "diagnostics: codex {}  |  app-server {}  |  account {}",
+                inline_diagnostic_status(diagnostics.codex_binary_ok, "ok", "check"),
+                inline_diagnostic_status(diagnostics.initialize_ok, "ok", "check"),
+                inline_diagnostic_status(diagnostics.account_ok, "ok", "attention"),
+            )));
             if let Some(first_warning) = diagnostics.warnings.first() {
                 lines.push(Line::from(format!(
                     "warning: {}",
                     compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
                 )));
             }
+            lines.push(Line::from("conversation"));
+            lines.push(Line::from(
+                "first reply appears here after you send the opening prompt",
+            ));
+            lines.push(Line::from(format!("starter: {}", inline_starter_copy(app))));
         }
         StartupState::Failed(message) => {
             lines.push(Line::from(format!("status: {message}")));
@@ -650,7 +660,28 @@ fn build_inline_startup_screen_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         }
     }
 
+    lines.push(Line::from(""));
     lines
+}
+
+fn inline_diagnostic_status(
+    ok: bool,
+    ready_label: &'static str,
+    blocked_label: &'static str,
+) -> &'static str {
+    if ok { ready_label } else { blocked_label }
+}
+
+fn inline_starter_copy(app: &NativeTuiApp) -> &'static str {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return "start with a task, file path, or bug summary";
+    };
+
+    if conversation.input_buffer.trim().is_empty() {
+        "start with a task, file path, or bug summary"
+    } else {
+        "opening prompt buffered below"
+    }
 }
 
 fn build_inline_tail_prompt_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

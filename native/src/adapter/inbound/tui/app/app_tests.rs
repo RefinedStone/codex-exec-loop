@@ -332,7 +332,10 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
 
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("schema snapshot: schema"));
+    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("conversation"));
+    assert!(rendered.contains("first reply appears here after you send the opening prompt"));
+    assert!(rendered.contains("starter: start with a task, file path, or bug summary"));
     assert!(rendered.contains("> "));
     assert!(rendered.contains("prompt: new thread ready"));
     assert!(rendered.contains("Ctrl+j nl"));
@@ -1292,7 +1295,10 @@ fn inline_tail_keeps_startup_context_above_buffered_prompt_in_new_draft() {
 
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("schema snapshot: schema"));
+    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("conversation"));
+    assert!(rendered.contains("first reply appears here after you send the opening prompt"));
+    assert!(rendered.contains("starter: opening prompt buffered below"));
     assert!(rendered.contains("> hello"));
     assert!(rendered.contains("buffered prompt"));
 }

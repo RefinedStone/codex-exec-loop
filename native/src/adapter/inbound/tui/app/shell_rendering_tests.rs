@@ -70,7 +70,9 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("schema snapshot: snapshot.json"));
+    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("conversation"));
+    assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("prompt: new thread ready"));
 }
 
