@@ -166,6 +166,8 @@ struct InlineHistoryState {
     rendered_lines: Vec<Line<'static>>,
 }
 
+const MIN_SHIFTED_HISTORY_OVERLAP: usize = 8;
+
 impl InlineHistoryState {
     fn sync(
         &mut self,
@@ -189,7 +191,25 @@ impl InlineHistoryState {
             return current_lines[self.rendered_lines.len()..].to_vec();
         }
 
+        if let Some(overlap_len) = self.shifted_window_overlap_len(current_lines) {
+            return current_lines[overlap_len..].to_vec();
+        }
+
         current_lines.to_vec()
+    }
+
+    fn shifted_window_overlap_len(&self, current_lines: &[Line<'static>]) -> Option<usize> {
+        let max_overlap = self.rendered_lines.len().min(current_lines.len());
+        if max_overlap < MIN_SHIFTED_HISTORY_OVERLAP {
+            return None;
+        }
+
+        (MIN_SHIFTED_HISTORY_OVERLAP..=max_overlap)
+            .rev()
+            .find(|overlap_len| {
+                self.rendered_lines[self.rendered_lines.len() - overlap_len..]
+                    == current_lines[..*overlap_len]
+            })
     }
 }
 
@@ -375,6 +395,76 @@ mod tests {
         let current_lines = vec![
             Line::from("Status:"),
             Line::from("  thread opened: thread-2 / Loaded thread"),
+            Line::from(""),
+        ];
+
+        let pending = state.pending_lines(&current_lines);
+
+        assert_eq!(pending, current_lines);
+    }
+
+    #[test]
+    fn pending_lines_only_inserts_new_suffix_for_shifted_history_window() {
+        let state = InlineHistoryState {
+            rendered_lines: vec![
+                Line::from("User:"),
+                Line::from("  first prompt"),
+                Line::from(""),
+                Line::from("Status:"),
+                Line::from("  queued"),
+                Line::from(""),
+                Line::from("Agent:"),
+                Line::from("  first answer"),
+                Line::from(""),
+                Line::from("Status:"),
+                Line::from("  completed"),
+            ],
+        };
+        let current_lines = vec![
+            Line::from("Status:"),
+            Line::from("  queued"),
+            Line::from(""),
+            Line::from("Agent:"),
+            Line::from("  first answer"),
+            Line::from(""),
+            Line::from("Status:"),
+            Line::from("  completed"),
+            Line::from("User:"),
+            Line::from("  second prompt"),
+            Line::from(""),
+        ];
+
+        let pending = state.pending_lines(&current_lines);
+
+        assert_eq!(
+            pending,
+            vec![
+                Line::from("User:"),
+                Line::from("  second prompt"),
+                Line::from(""),
+            ]
+        );
+    }
+
+    #[test]
+    fn pending_lines_does_not_treat_small_overlap_as_shifted_history() {
+        let state = InlineHistoryState {
+            rendered_lines: vec![
+                Line::from("User:"),
+                Line::from("  old prompt"),
+                Line::from(""),
+                Line::from("Agent:"),
+                Line::from("  old answer"),
+                Line::from(""),
+                Line::from("Status:"),
+                Line::from("  completed"),
+            ],
+        };
+        let current_lines = vec![
+            Line::from("Status:"),
+            Line::from("  completed"),
+            Line::from("User:"),
+            Line::from("  brand new thread"),
             Line::from(""),
         ];
 

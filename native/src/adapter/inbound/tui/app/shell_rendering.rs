@@ -82,8 +82,13 @@ fn draw_inline_conversation_shell(
     app: &mut NativeTuiApp,
     _mode: ShellFrontendMode,
 ) {
-    let layout = build_inline_terminal_flow_layout(app, frame.area());
     let tail_lines = build_inline_tail_lines(app);
+    if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
+        render_inline_body(frame, frame.area(), tail_lines, false);
+        return;
+    }
+
+    let layout = build_inline_terminal_flow_layout(app, frame.area());
     render_inline_body(frame, layout[1], tail_lines, false);
 }
 
