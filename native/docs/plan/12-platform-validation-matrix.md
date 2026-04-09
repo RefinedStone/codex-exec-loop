@@ -188,9 +188,12 @@ Pass condition:
 - use `Ctrl+u` to clear buffered input
 - type multiple words and use `Ctrl+w` to delete the previous word
 - send a prompt with `Enter`
+- confirm the active prompt shows a visible cursor while focused
+- if the host terminal and user settings allow cursor blinking, confirm blinking remains tied to the prompt surface instead of passive status text
 
 Pass condition:
 - editing shortcuts behave predictably
+- the active prompt cursor is visible
 - cursor position remains coherent
 - no duplicated or stale input is left on screen
 
@@ -210,12 +213,16 @@ Pass condition:
 
 - send a prompt that produces a visible streaming turn
 - while streaming, type buffered input without sending it
+- confirm actual agent text changes while the turn is still running instead of only landing at completion
 - confirm footer or overlay status continues to update
+- confirm routine inline completion or auto-follow status does not print raw `turn_id` values
+- confirm the default inline status surface feels compact rather than like a permanent heavy footer
 - confirm warnings, approval status, and GitHub status do not erase the prompt buffer or break layout
 
 Pass condition:
-- streaming updates remain readable
+- streaming updates remain readable before the turn completes
 - buffered input remains intact
+- raw ids stay hidden in normal inline status flow
 - status areas do not collapse into unreadable wrapping
 
 ### 6. Resize and Scrollback

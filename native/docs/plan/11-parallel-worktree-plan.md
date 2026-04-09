@@ -73,7 +73,7 @@ Additional landed follow-ups that were not explicit slices in the original lane 
 ### A6. Tail-Anchored Terminal Flow Shell
 
 - status: remaining
-- branch: `feature/native-shell-terminal-flow`
+- branch pattern: `feature/native-shell-<slice>`
 - goal: remove the dedicated middle `Transcript / tail` viewport from inline mode so the host terminal becomes the primary history surface and the tail prompt/live region becomes the only anchored shell region
 - ownership: `src/adapter/inbound/tui/app/ratatui_frontend.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`, `src/adapter/inbound/tui/app/transcript_viewport.rs`, and shell rendering tests under `src/adapter/inbound/tui/app/`
 - depends on: A1 through A5 foundation
@@ -81,15 +81,21 @@ Additional landed follow-ups that were not explicit slices in the original lane 
   - inline shell chrome collapsed into transcript body plus one tail prompt region
   - inline transcript is pinned to tail and viewport commands no longer steer the inline path
   - tail prompt guidance is compact and no longer prints a dedicated `Prompt / ...` title row
+- next subproblems:
+  - give the active prompt an explicit visible cursor in inline mode
+  - make agent output visibly stream in the live region before completion
+  - hide raw turn ids from routine status copy and reduce footer weight
 - current blocker:
   - `src/adapter/inbound/tui/app/ratatui_frontend.rs` still runs `terminal.draw(...)` every loop
   - `src/adapter/inbound/tui/app/shell_rendering.rs` still redraws inline transcript plus tail as one visible frame
   - the result is that some terminals still show repeated redraw or replay-like scrollback even though most of the old shell chrome has been removed
+  - the prompt currently lacks explicit cursor ownership, and the live/status region still behaves more like heavy footer chrome than a flow shell
 - done when:
   - inline mode no longer repaints stable shell output as one repeated frame
   - sequential history reads top-to-bottom like Codex CLI or a Spring Boot application log
   - host terminal scroll or mouse-wheel behavior is the primary way to inspect older output in inline mode
   - a tail-anchored prompt box remains available for input without replaying the whole shell frame
+  - the active prompt shows a visible cursor, visible streaming text appears before completion, and routine inline status no longer prints raw turn ids
 
 ### F2. Windows Compatibility Fixes
 

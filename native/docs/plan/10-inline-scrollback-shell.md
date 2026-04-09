@@ -1,675 +1,80 @@
 # Inline Scrollback Shell
 
-This document records the inline-shell migration workstream that moves the native client from a redraw-heavy main-buffer TUI toward a Codex-CLI-like inline shell.
+This is the compact source of truth for the remaining inline-shell work.
 
-This file should stay opinionated about one product goal:
-- inline mode should feel like flow-oriented terminal history
-- terminal scrollback should stay meaningful
-- scrolling the terminal should not feel like the app is replaying one fullscreen frame downward
+The goal is still one thing:
+- inline mode should read like terminal flow, not like a fullscreen frame being replayed in the main buffer
 
-Completed prerequisite slices should stay compact here. The detailed planning weight should stay on the work that is still open.
+## Current Stance
 
-## 0. Current Status
+Landed foundation on `prerelease`:
+- explicit inline vs alternate-screen frontend split
+- inline inspection surfaces for diagnostics, sessions, and follow-up templates
+- compact tail prompt guidance
+- scrollback-safe history buffering that separates live output from committed history
 
-Current priority:
-- finish the move from a middle `Transcript / tail` viewport to a real terminal-flow shell
-- treat the current inline shell as landed foundation, not as UX sign-off for the workstream
+Still open:
+- inline mode still repaints committed history through one Ratatui frame in some terminals
+- the active prompt does not yet own an explicit visible cursor in the inline path
+- streamed agent output is still too easy to miss because the live region behaves more like summary/status chrome than a true visible stream
+- completion and auto-follow copy still exposes raw turn ids and keeps too much weight in the bottom status surface
 
-Landed on `prerelease`:
-- shared runtime and explicit frontend split
-- neutralized shell presentation copy
-- inline live-region renderer and inline-main-buffer baseline
-- inline inspection surfaces for diagnostics, sessions, and templates
-- stable streaming-history buffering that keeps live agent output separate from committed transcript history until completion
-- inline shell chrome collapsed toward one tail prompt region, with transcript pinned to tail, compact prompt guidance, and no dedicated tail title row
+## Durable Facts
 
-Still remaining:
-- remove the remaining repeated inline redraw path so stable shell output is not repainted as one visible frame
-- make host terminal scrollback the primary history mechanism for prior conversation output
-- keep only a tail-anchored prompt/live region in inline mode
-- terminal validation and default-switch follow-through after that terminal-flow target is stable
+- `thread_id` and `turn_id` are protocol values from `codex app-server`, not native-client-generated UI ids. The outbound adapter forwards `Thread.id` and `Turn.id` into shell state.
+- the current noisy strings such as `turn completed: <id>` are native-client presentation copy layered on top of those ids
+- the inline frontend currently restores the terminal cursor on exit, but it does not set a focused prompt cursor during normal inline rendering
+- the runtime already receives streamed agent deltas, but the inline shell still compresses too much of that activity into status-oriented output
 
-## 0.1 Design Reset From Current Feedback
+## UX Contract
 
-If inline mode still reads like:
-- controls and status block
-- transcript block in the middle
-- input block at the bottom
+### 1. Prompt Contract
 
-then the workstream is not done.
+- the active prompt must show a visible cursor in the prompt surface
+- cursor blinking is preferred when the host terminal allows it, but visible focus is the required contract
+- non-input surfaces such as inspections, passive status notices, and completed transcript history should not pretend to own the cursor
 
-The `Transcript / tail` panel is not the target. It is a transitional artifact that still encourages fullscreen-frame thinking.
+### 2. Streaming Contract
 
-The more important current blocker is now redraw behavior, not labeling. Even after the shell chrome reductions already landed, inline mode still runs through a `terminal.draw(...)` loop and still repaints transcript plus tail as one ratatui frame.
+- while a turn is running, the operator should see agent text change before completion
+- status-only activity is not a substitute for visible streamed content
+- once the turn completes, the final assistant text should commit into normal scrollback history and the live region can shrink again
 
-The target is closer to:
-- a Spring Boot application log running in a terminal
-- a Codex CLI session in the main terminal buffer
+### 3. Status Contract
 
-That means:
-- conversation history should accumulate from top to bottom in the host terminal
-- host terminal scroll and mouse-wheel behavior should be the primary way to inspect older output
-- the shell may keep one live prompt/status region near the terminal tail
-- inline mode should not depend on a dedicated transcript viewport in the middle of the screen
+- the default inline status surface should be compact and flow-oriented
+- raw `thread_id` and `turn_id` values should stay in state for routing, correlation, and debugging, but remain hidden from routine inline status copy
+- values that only help debugging should move to explicit inspection or debug surfaces instead of occupying the default tail region
 
-If a doc reader only needs the current action:
-- read the success contract in section 6
-- read the overlay strategy in section 10
-- read the implementation sequence in section 12
-- treat phases 1 through 3 as landed foundation, not the current execution frontier
+### 4. Layout Contract
 
-## 1. Why This Work Exists
+- host terminal scrollback is the primary history surface in inline mode
+- inline mode keeps one tail-anchored live region for prompt, transient streaming, and inspections
+- inline status should behave more like a short terminal flow box or notice band than a permanently heavy footer
 
-The current shell is usable, but `MainScreen` is still not a true scrollback-friendly terminal mode.
+## Execution Checkpoints
 
-Observed problems:
-- startup can visually overlap with prior terminal content in some terminal programs
-- scrolling the terminal can still make the shell feel like it is being redrawn as one moving screen instead of leaving stable history behind
-- modal overlays and remaining repaint assumptions still make the shell feel like a fullscreen TUI even when alternate-screen is off
+1. Prompt cursor and focus ownership
+- set cursor position from the active prompt render path
+- keep cursor ownership out of passive inspection and transcript rendering
 
-This is a product problem, not just a cosmetic problem. The current behavior weakens the "CLI shell" feel and makes long-running usage less trustworthy across terminals.
+2. Visible streaming live region
+- render actual agent delta text in the active live region
+- keep buffered input intact while the turn is still running
 
-## 2. Product Target
+3. Compact status and id elision
+- split operator-facing status copy from raw correlation ids
+- remove raw turn ids from routine completion and auto-follow messages
+- reduce persistent footer weight where a transient flow notice is enough
 
-The target is not a Claude-Code-style append-only REPL.
+4. Final redraw elimination
+- stop repainting committed history as one shared frame
+- keep tail updates local so prior output stays visually stable in scrollback
 
-The target is a Codex-CLI-like inline TUI:
-- scrollback should remain meaningful conversation history
-- the shell can still use raw mode
-- the shell can still keep one live interaction region near the terminal tail
-- the shell should preserve the current conversation-shell mental model where practical
-- inline mode should not depend on a dedicated transcript viewport as its primary reading surface
-- alternate-screen fullscreen mode should remain available as fallback during migration
+## Done When
 
-This means the refactor is not "remove TUI." It is "stop treating the main buffer as a fullscreen frame."
-
-## 3. Current Diagnosis
-
-### 3.1 Runtime Diagnosis
-
-`src/adapter/inbound/tui/app/app_runtime.rs` currently does all of the following in one runtime path:
-- creates the terminal backend
-- enables raw mode unconditionally
-- conditionally enters alternate-screen only when the environment flag is enabled
-- still calls `terminal.draw(...)` on every loop iteration
-- owns input polling, background message handling, effect execution, and rendering together
-
-This means `MainScreen` is only "alternate-screen off." It is not yet architecturally different enough from the fullscreen renderer to stop repeated redraw in the host terminal.
-
-### 3.2 Rendering Diagnosis
-
-`src/adapter/inbound/tui/app/shell_rendering.rs` still assumes one composited frame for inline mode:
-- inline shell chrome is slimmer than before, but the visible shell is still rebuilt as transcript region plus tail region
-- inline mode still routes history through `build_transcript_panel_view(...)` and an in-frame viewport
-- overlays are still rendered as ratatui layers on top of that frame
-- stable shell output is therefore still vulnerable to repeated repaint in host terminal scrollback
-
-This remaining repaint model is what still causes the main-buffer mode to feel like an inline fullscreen app rather than a true flow-oriented shell.
-
-### 3.3 Presentation Diagnosis
-
-`src/adapter/inbound/tui/app/shell_presentation.rs` is already partly reusable, but still speaks in fullscreen-shell terms:
-- transcript title assumes in-frame paging
-- status title assumes control legends for overlay-heavy interaction
-- input title assumes a dedicated composer block
-- status summaries are good reusable content, but not yet neutral enough for multiple frontends
-
-### 3.4 State Diagnosis
-
-The state split is better than the old monolith and is worth preserving:
-- `conversation_input.rs`
-- `conversation_intents.rs`
-- `conversation_lifecycle.rs`
-- `conversation_runtime.rs`
-- `followup_controls.rs`
-- `followup_overlay_ui.rs`
-- `session_overlay_ui.rs`
-- `shell_controller.rs`
-- `transcript_viewport.rs`
-
-The problem is not missing state decomposition. The problem is that the runtime and renderer still interpret that state as one fullscreen composition.
-
-## 4. Refactor Boundary
-
-### 4.1 Areas To Keep Stable
-
-These areas should remain mostly intact:
-- `src/domain/*`
-- `src/application/port/*`
-- `src/application/service/*`
-- `src/adapter/outbound/*`
-- stream event reduction inside `conversation_runtime.rs`
-- lifecycle and intent reduction already extracted under `src/adapter/inbound/tui/app/*`
-
-Reason:
-- the problem is terminal rendering behavior, not app-server protocol coverage
-- the current hexagonal split is already useful for this migration
-- rewriting service/domain code would add risk without fixing the terminal issue
-
-### 4.2 Areas To Refactor Heavily
-
-These areas are the real migration surface:
-- `src/adapter/inbound/tui/app/app_runtime.rs`
-- `src/adapter/inbound/tui/app/shell_rendering.rs`
-- `src/adapter/inbound/tui/app/shell_presentation.rs`
-- `src/adapter/inbound/tui/app/shell_controller.rs`
-- `src/adapter/inbound/tui/app/transcript_viewport.rs`
-- `src/adapter/inbound/tui/app/followup_overlay_ui.rs`
-- `src/adapter/inbound/tui/app/session_overlay_ui.rs`
-
-Reason:
-- these files encode the fullscreen assumptions
-- these files decide how transcript, overlays, input, and viewport are presented
-- these files are the right place to split inline mode from alternate-screen mode
-
-## 5. Non-Goals
-
-This work should not do the following:
-- do not turn the product into a plain line-oriented REPL
-- do not remove multiline input just because fullscreen composition is going away
-- do not remove startup diagnostics, recent sessions, auto follow-up, template browsing, stop rules, or warnings
-- do not rewrite outbound adapters unless the inline-shell contract exposes a real boundary problem
-- do not collapse the reducer split back into one runtime object
-- do not delete alternate-screen mode before the inline path is proven across terminals
-
-## 6. Success Contract
-
-The new main-buffer shell is successful only if all of the following are true.
-
-### 6.1 Scrollback Contract
-
-- once transcript-worthy output reaches the terminal history, the shell should not repaint it through the shared `terminal.draw(...)` loop as part of a whole-frame redraw
-- terminal scrollback should read like one coherent session
-- scrolling the terminal should not feel like the application itself is being replayed downward
-
-### 6.2 Interaction Contract
-
-- the shell should still feel like one active conversation surface
-- input should remain available near the tail of the terminal
-- inline mode should not require a titled or framed transcript viewport in the middle of the screen
-- host terminal scroll and mouse-wheel behavior should be the primary way to inspect earlier history
-- multiline entry should remain supported if technically practical
-- current shortcut habits should be preserved where they do not force the fullscreen model back in
-
-### 6.3 Capability Contract
-
-The migration is incomplete if any of these regress:
-- startup diagnostics and gating
-- recent-session loading and selection
-- new-thread flow
-- resume-thread flow
-- snapshot loading
-- streamed delta handling
-- streamed completion handling
-- tool activity visibility
-- warning visibility
-- auto follow-up control
-- template visibility
-- stop keyword control
-- no-file-change stop control
-- skip-reason visibility
-
-## 7. Target Architecture
-
-The end state is not "strict bloc everywhere."
-
-The system should stay hexagonal overall, while the inbound shell becomes a stricter event-driven UI core inside that boundary.
-
-## 7.1 High-Level Split
-
-The shell should become four layers:
-
-1. Shared shell runtime
-2. Strict event-driven UI core
-3. Frontend-neutral presentation helpers
-4. Multiple frontends
-
-The runtime should own behavior.
-The UI core should own event normalization, state transitions, and effect intent.
-The presentation layer should own human-readable summaries and view-model shaping.
-The frontend should own terminal-specific rendering and input interaction.
-
-## 7.2 Shared Shell Runtime
-
-The new runtime layer should own:
-- startup checks
-- recent-session loading
-- conversation snapshot loading
-- turn submission
-- background message polling
-- auto follow-up scheduling
-- reducer dispatch and effect execution
-- state transitions that are independent of ratatui
-
-The runtime layer should not own:
-- `Frame` drawing
-- bordered layout
-- popup geometry
-- transcript viewport layout math
-- inline vs fullscreen rendering choice
-
-This is the most important extraction because both frontends should share the same behavior engine.
-
-## 7.3 Strict Event-Driven UI Core
-
-The inbound shell should converge toward an explicit event/effect/reducer structure.
-
-Own here:
-- terminal input events
-- background runtime messages
-- stream lifecycle events
-- pure or mostly pure state transitions
-- explicit effect requests for startup, session, submit, follow-up, and runtime actions
-
-Avoid here:
-- hidden async work directly inside renderer callbacks
-- renderer-owned state mutation
-- ad-hoc cross-calls between popup state and draw code
-- forcing `application` or `domain` into UI-specific event abstractions
-
-Direction:
-- frontends should translate terminal activity into shell events
-- reducers should decide state transitions and effect requests
-- effect handlers should execute async work and feed results back as new events
-- renderers should consume frontend-neutral presentation data rather than reach through the whole mutable app object
-
-This is the shape that best matches the shell's async behavior without widening BLoC concerns across the entire product.
-
-## 7.4 Frontend-Neutral Presentation
-
-`shell_presentation.rs` should move toward reusable text summaries.
-
-Keep here:
-- status labels
-- input hints
-- warning summaries
-- thread metadata summaries
-- auto follow-up summaries
-- transcript line formatting helpers where still useful
-
-Move out of it:
-- block titles that only make sense with bordered panels
-- pager legends that only make sense with in-frame scrolling
-- popup-first key legends
-- assumptions that input always lives in a boxed composer
-
-## 7.5 Dual Frontend Model
-
-The product should explicitly support two frontends during migration.
-
-### Inline Frontend
-
-Purpose:
-- default main-buffer experience
-- scrollback-friendly rendering
-- no whole-frame redraw of the terminal history region
-
-Expected traits:
-- stable transcript output
-- compact live region near terminal tail
-- inline inspections instead of fullscreen popups
-
-### Alternate Frontend
-
-Purpose:
-- preserve the current fullscreen ratatui behavior as fallback
-- reduce rollout risk while inline mode matures
-
-Expected traits:
-- keep current box layout and overlays as long as needed
-- act as compatibility path, not product target
-
-## 8. Rendering Model
-
-## 8.1 Current Rendering Model To Replace
-
-Current fullscreen assumptions:
-- one root frame
-- one transcript viewport inside that frame
-- one footer panel
-- one composer panel
-- overlays on top
-
-This model is acceptable only for alternate-screen fallback.
-
-## 8.2 Inline Rendering Model
-
-The inline frontend should conceptually split rendering into:
-
-1. Stable transcript history
-2. Live interaction region
-
-### Stable Transcript History
-
-This should contain anything that deserves durable history:
-- thread-open markers
-- user prompts after submission
-- agent output as it becomes stable enough to append
-- tool activity
-- warnings that matter historically
-- auto follow-up decisions
-- session switch markers
-- important diagnostics transitions
-
-### Live Interaction Region
-
-This should contain the temporary surface near the terminal tail:
-- current startup/session/turn state summary
-- current prompt buffer
-- inline inspection content when diagnostics/session/template mode is active
-- short control hints relevant to the current state
-
-The live region may redraw in place. The stable history region should not be treated as a redraw surface.
-
-## 8.3 Streaming Output Strategy
-
-Streaming is the hardest part and must be defined explicitly.
-
-V1 direction:
-- preserve the current runtime semantics around "one active turn at a time"
-- append meaningful stream output into transcript history
-- allow the live region to continue showing input status while streaming
-- allow prompt buffering during streaming
-- keep submit blocked until the current turn completes
-- surface when buffered manual input exists so auto follow-up behavior remains understandable
-
-Do not attempt to solve advanced concurrent editing semantics before the basic scrollback contract is stable.
-
-## 9. Input Model
-
-## 9.1 What Must Be Preserved If Practical
-
-- multiline input
-- `Ctrl+j` or a close equivalent for newline insertion
-- inline commands such as diagnostics/session/template access
-- buffered prompt behavior while a turn is still active
-
-## 9.2 What Must Change
-
-- input can no longer assume a permanent fullscreen composer block
-- control legends must be shorter and state-aware
-- session/template/diagnostics flows cannot require popup ownership in main-buffer mode
-- transcript navigation should stop being the primary way to read prior conversation in inline mode because terminal scrollback becomes the primary history mechanism
-
-## 9.3 Explicit Decision
-
-Do not simplify the shell into a plain one-line prompt just to make rendering easier.
-
-The goal is not "shell minimalism." The goal is "inline terminal behavior without whole-frame redraw."
-
-## 10. Overlay Strategy
-
-The current overlay concept should be split by frontend.
-
-### 10.1 Alternate Frontend
-
-Alternate-screen may continue using overlays during migration.
-
-### 10.2 Inline Frontend
-
-Inline mode should reinterpret overlays as inline inspections or command-driven flows.
-
-Diagnostics:
-- show current diagnostics summary in the live region
-- print important readiness changes to transcript history when useful
-
-Sessions:
-- show session list and selected session detail in the live region
-- print a thread-switch marker after opening a session
-
-Templates:
-- show template selection, source, preview summary, and stop-rule state in the live region
-- keep stop-keyword editing without requiring a popup
-
-Exit confirmation:
-- keep it explicit, but allow a compact inline confirmation state rather than a modal dialog
-
-## 11. State Migration Guidance
-
-Not every current UI state object should survive unchanged.
-
-### 11.1 `transcript_viewport.rs`
-
-Expected change:
-- reduce its importance for inline mode
-- keep it mainly for alternate-screen fallback or for any limited live-region scrolling that remains useful
-
-Reason:
-- terminal scrollback replaces most transcript paging responsibility
-
-### 11.2 `session_overlay_ui.rs`
-
-Expected change:
-- keep selection-state logic if useful
-- remove the assumption that selection exists only inside a popup list
-
-### 11.3 `followup_overlay_ui.rs`
-
-Expected change:
-- preserve stop-keyword editing state
-- reconsider preview scroll as popup-specific state
-- reinterpret list/preview behavior for an inline inspection surface
-
-### 11.4 `shell_controller.rs`
-
-Expected change:
-- stop treating diagnostics/sessions/templates primarily as overlay toggles
-- make command-driven and inline-inspection flows first-class
-
-### 11.5 Presentation Mode Naming
-
-Current naming:
-- `MainScreen`
-- `AlternateScreen`
-
-Target naming direction:
-- explicit inline main-buffer shell
-- explicit alternate-screen shell
-
-Reason:
-- current naming hides the real architectural problem by making main-buffer mode sound more distinct than it actually is
-
-## 12. Proposed Implementation Sequence
-
-## Phase 0: Lock Target And Vocabulary
-
-Status:
-- landed
-
-Delivered:
-- this document became the source of truth for the workstream
-- terminology now centers on inline shell vs alternate-screen shell
-- the target is explicitly a flow-oriented inline shell, not a plain append-only REPL
-
-Exit criteria:
-- docs and implementation discussion use the same target vocabulary
-
-## Phase 1: Extract Shared Runtime
-
-Status:
-- landed
-
-Delivered:
-- behavior orchestration is separated more clearly from frontend-specific rendering setup
-- frontend selection is explicit instead of being only an alternate-screen toggle
-- async runtime handling can drive more than one frontend shape
-
-Exit criteria:
-- alternate-screen path still works
-- shared shell behavior can be driven without directly coupling to `Terminal.draw(...)`
-
-## Phase 2: Split Frontends
-
-Status:
-- landed
-
-Delivered:
-- inline and alternate-screen frontends are explicit runtime choices
-- alternate-screen remains the fallback path
-- the renderer split no longer treats main-buffer mode as only "fullscreen minus one flag"
-
-Exit criteria:
-- both frontends can start and share the same behavior engine
-
-## Phase 3: Inline MVP
-
-Status:
-- landed
-
-Delivered:
-- inline main-buffer mode became the default baseline
-- the shell has a live inline region instead of only fullscreen-style composition
-- startup, submission, streaming, session switching, and basic operator status still work in inline mode
-
-Exit criteria:
-- one can run a normal conversation in inline mode without the current redraw artifact
-
-## Phase 4: Tail-Anchored Terminal Flow
-
-Primary goal:
-- remove the middle transcript viewport so inline mode reads like ordinary terminal flow with one tail prompt region
-
-Concrete tasks:
-- stop treating `Transcript / tail` as the primary reading surface in inline mode
-- keep prior output in the host terminal history instead of a named viewport block
-- preserve one tail-anchored prompt/live region for input, status, and the current turn
-- retain diagnostics/session/template access without forcing the shell back into framed composition
-
-Files most affected:
-- `ratatui_frontend.rs`
-- `shell_rendering.rs`
-- `shell_presentation.rs`
-- `shell_controller.rs`
-- `transcript_viewport.rs`
-
-Exit criteria:
-- inline mode preserves the capability floor listed above
-- inline mode no longer depends on a dedicated transcript panel in the middle of the screen
-
-## Phase 5: Validation And Default Switch
-
-Primary goal:
-- validate the terminal-flow shell across representative terminals and switch defaults only after that behavior is credible
-
-Concrete tasks:
-- validate behavior across representative terminals
-- confirm fallback alternate-screen path still works
-- remove only the old main-buffer fullscreen assumptions, not the fallback renderer itself
-
-Exit criteria:
-- inline mode is stable enough to become default
-
-## 13. Testing Strategy
-
-## 13.1 Automated Tests To Preserve
-
-Keep and extend tests around:
-- reducer behavior
-- startup gating
-- session loading
-- snapshot loading
-- stream reduction
-- auto follow-up decisions
-- stop-rule behavior
-
-These tests protect the product logic that should survive the UI refactor.
-
-## 13.2 New Automated Tests To Add
-
-### Shared Runtime Tests
-
-Validate:
-- background message handling order
-- state transitions independent of frontend
-- effect execution behavior across startup, resume, submit, stream, and completion paths
-- async results re-enter the shell through explicit events rather than direct UI mutation
-
-### Presentation Tests
-
-Validate:
-- inline summaries and hints remain coherent
-- warnings, skip reasons, and thread markers are formatted predictably
-- presentation helpers no longer assume fullscreen-only layout
-
-### Inline Frontend Tests
-
-Validate:
-- transcript-worthy events are appended in the right order
-- live region updates do not require full-frame redraw assumptions
-- key interaction states remain visible during streaming and gating conditions
-
-## 13.3 Manual Validation Matrix
-
-Minimum terminal set:
-- iTerm2
-- Terminal.app
-- Ghostty
-- WezTerm
-
-Optional but valuable:
-- tmux
-- zellij
-
-Checklist:
-- no startup overlap with prior terminal content
-- no "UI replaying downward" feeling when scrolling
-- usable long-session scrollback
-- stable streaming behavior
-- usable session switch flow
-- usable template and stop-rule interaction
-- fallback alternate-screen mode still works
-
-## 14. Rollout Rules
-
-- inline mode should start behind a flag
-- alternate-screen remains fallback until inline mode is proven
-- default should switch only after parity and terminal validation are both acceptable
-- do not delete fallback support just because inline mode becomes default
-
-## 15. Main Risks
-
-### 15.1 Streaming Plus Input Editing
-
-This remains the hardest part.
-
-Risk:
-- maintaining editable input near the terminal tail while output is arriving is terminal-sensitive
-
-Response:
-- keep turn-submission semantics conservative in v1
-- avoid speculative concurrency behavior changes during the rendering migration
-
-### 15.2 Popup-State Leakage
-
-Risk:
-- overlay-first state and language can keep forcing fullscreen assumptions back into inline mode
-
-Response:
-- explicitly reinterpret overlay state in inline mode
-- treat alternate-screen as the only place where popup behavior remains natural
-
-### 15.3 Scope Creep
-
-Risk:
-- the migration can accidentally expand into unrelated service or domain rewrites
-
-Response:
-- hold the refactor boundary around inbound runtime/presentation first
-
-## 16. Acceptance Criteria
-
-This workstream is ready for default inline mode only when all of the following are true:
-- main-buffer mode no longer redraws the whole terminal frame
-- scrollback reads as one continuous conversation history
-- the capability floor is preserved
-- async shell work is routed through explicit runtime/effect boundaries rather than renderer-owned mutation paths
-- representative terminals behave acceptably
-- alternate-screen fallback remains available
-
-## 17. Decision Rule
-
-When old fullscreen behavior conflicts with the new main-buffer contract:
-- prefer the inline-shell contract for main-buffer mode
-- preserve fullscreen behavior only in alternate-screen fallback
-
-If a design choice does not improve scrollback behavior, reduce redraw risk, or preserve a key existing capability, it should not widen the scope of this refactor.
+- inline mode no longer looks like a replayed fullscreen frame
+- the active prompt owns a visible cursor
+- agent text visibly streams before completion
+- default status copy hides raw ids and stays compact
+- the validation matrix passes the prompt, stream, and status checks added for this workstream

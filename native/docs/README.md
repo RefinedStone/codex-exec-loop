@@ -37,7 +37,7 @@ The docs now optimize for phase-2 work:
 - [plan/02-todo-backlog.md](plan/02-todo-backlog.md): current open change buckets that still matter across PRs
 - [plan/03-execution-order.md](plan/03-execution-order.md): current delivery posture and how future feature docs should take over detail
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch and worktree rules for concurrent native delivery
-- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): active reference doc for the remaining terminal-flow shell target, with the current repeated-redraw blocker called out explicitly
+- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): compact source of truth for the remaining terminal-flow shell target, including prompt cursor, visible streaming, and status-compaction contracts
 - [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): compact completion snapshot plus the remaining terminal-flow and platform-validation slices
 - [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): canonical manual validation matrix for macOS and Windows terminal behavior
 - [validation/README.md](validation/README.md): canonical location and naming rules for checked-in validation result rows

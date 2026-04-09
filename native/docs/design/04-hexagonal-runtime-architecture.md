@@ -18,6 +18,7 @@ The outbound app-server adapter already behaves like a shared runtime boundary:
 - reconnects and reset-after-failure behavior are surfaced back to the shell as warnings
 - the shared runtime is held for the duration of a streaming turn, and request-style actions fall back to an isolated connection only while that shared path is busy
 - streamed protocol items are translated into domain-level conversation events before the TUI sees them
+- thread and turn identifiers come from app-server protocol objects such as `Thread.id` and `Turn.id`; the UI should treat them as correlation data, not as default operator-facing copy
 
 ## Why This Boundary Matters
 - protocol parsing and item mapping are already in the right place
