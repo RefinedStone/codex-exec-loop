@@ -7,6 +7,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
+use super::shell_presentation::{
+    build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
+};
 use super::{
     AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage, ConversationInputState,
     ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
@@ -269,12 +272,24 @@ fn empty_existing_session_prompts_for_next_message() {
     let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
         .iter()
         .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect::<Vec<_>>();
 
-    assert!(rendered.contains("Ready to continue this session."));
-    assert!(rendered.contains("Ctrl+j for newline"));
-    assert!(rendered.contains("Shell commands: :diag"));
+    assert!(rendered.iter().any(|line| line == "> "));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Ready to continue this session."))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Ctrl+j for newline"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Shell commands: :diag"))
+    );
 }
 
 #[test]
@@ -289,6 +304,7 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    assert!(rendered.contains("> "));
     assert!(rendered.contains("prompt: session ready"));
     assert!(rendered.contains("Ctrl+j nl"));
     assert!(rendered.contains(":help"));
@@ -312,6 +328,7 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    assert!(rendered.contains("> "));
     assert!(rendered.contains("prompt: new thread ready"));
     assert!(rendered.contains("Ctrl+j nl"));
     assert!(rendered.contains(":help"));
@@ -347,11 +364,19 @@ fn empty_draft_prompts_for_first_message() {
     let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
         .iter()
         .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect::<Vec<_>>();
 
-    assert!(rendered.contains("Ready to start a new thread."));
-    assert!(rendered.contains("Ctrl+j for newline"));
+    assert!(rendered.iter().any(|line| line == "> "));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Ready to start a new thread."))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Ctrl+j for newline"))
+    );
 }
 
 #[test]
@@ -364,13 +389,27 @@ fn multiline_buffer_renders_as_multiple_input_lines() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "first line"));
-    assert!(rendered.iter().any(|line| line == "second line"));
+    assert!(rendered.iter().any(|line| line == "> first line"));
+    assert!(rendered.iter().any(|line| line == "  second line"));
     assert!(
         rendered
             .iter()
             .any(|line| line.contains("Ctrl+j inserts a new line"))
     );
+}
+
+#[test]
+fn trailing_newline_keeps_blank_prompt_line_visible() {
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = "first line\n".to_string();
+
+    let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line == "> first line"));
+    assert!(rendered.iter().any(|line| line == "  "));
 }
 
 #[test]
@@ -384,8 +423,35 @@ fn inline_shell_command_buffer_shows_command_hint() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(":templates"));
+    assert!(rendered.contains("> :templates"));
     assert!(rendered.contains("Press Enter to open the template inspection."));
+}
+
+#[test]
+fn input_prompt_cursor_offset_starts_after_prompt_prefix() {
+    let (mut app, _) = make_test_app();
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+
+    assert_eq!(build_input_prompt_cursor_offset(&app, 80), Some((2, 0)));
+}
+
+#[test]
+fn input_prompt_cursor_offset_tracks_trailing_blank_line() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = "first line\n".to_string();
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    assert_eq!(build_input_prompt_cursor_offset(&app, 80), Some((2, 1)));
+}
+
+#[test]
+fn inline_prompt_cursor_offset_accounts_for_status_lines() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+
+    assert_eq!(build_inline_prompt_cursor_offset(&app, 80), Some((2, 3)));
 }
 
 #[test]

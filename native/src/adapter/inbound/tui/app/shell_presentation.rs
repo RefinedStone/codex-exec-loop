@@ -15,6 +15,8 @@ const INLINE_TAIL_TEMPLATE_LABEL_LIMIT: usize = 16;
 const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
 const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
+const PROMPT_PRIMARY_PREFIX: &str = "> ";
+const PROMPT_CONTINUATION_PREFIX: &str = "  ";
 
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
@@ -44,6 +46,12 @@ pub(super) struct TranscriptPanelView {
     pub(super) title: Line<'static>,
     pub(super) lines: Vec<Line<'static>>,
     pub(super) scroll_offset: u16,
+}
+
+struct PromptBufferView {
+    lines: Vec<Line<'static>>,
+    cursor_line_index: usize,
+    cursor_column: usize,
 }
 
 pub(super) struct StartupOverlayView {
@@ -572,7 +580,8 @@ fn build_inline_ready_prompt_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    let prompt_buffer = build_prompt_buffer_view(conversation);
+    let mut lines = prompt_buffer.lines;
 
     if conversation.input_buffer.is_empty() {
         let line = match (conversation.input_state, shell_action_availability) {
@@ -598,13 +607,6 @@ fn build_inline_ready_prompt_lines(
         lines.push(Line::from(line));
         return lines;
     }
-
-    lines.extend(
-        conversation
-            .input_buffer
-            .lines()
-            .map(|line| Line::from(line.to_string())),
-    );
 
     if let Some(command) = InlineShellCommand::parse(&conversation.input_buffer) {
         lines.push(Line::from(command.buffered_hint()));
@@ -693,7 +695,8 @@ pub(super) fn build_ready_input_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    let prompt_buffer = build_prompt_buffer_view(conversation);
+    let mut lines = prompt_buffer.lines;
 
     if conversation.input_buffer.is_empty() {
         match (conversation.input_state, shell_action_availability) {
@@ -739,13 +742,6 @@ pub(super) fn build_ready_input_lines(
         return lines;
     }
 
-    lines.extend(
-        conversation
-            .input_buffer
-            .lines()
-            .map(|line| Line::from(line.to_string())),
-    );
-
     if let Some(command) = InlineShellCommand::parse(&conversation.input_buffer) {
         lines.push(Line::from(command.buffered_hint()));
         return lines;
@@ -785,6 +781,97 @@ pub(super) fn build_ready_input_lines(
     }
 
     lines
+}
+
+pub(super) fn build_input_prompt_cursor_offset(
+    app: &NativeTuiApp,
+    content_width: u16,
+) -> Option<(u16, u16)> {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return None;
+    };
+
+    build_prompt_cursor_offset(conversation, content_width)
+}
+
+pub(super) fn build_inline_prompt_cursor_offset(
+    app: &NativeTuiApp,
+    content_width: u16,
+) -> Option<(u16, u16)> {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return None;
+    };
+
+    let prompt_lines = build_inline_tail_prompt_lines(app);
+    let tail_lines = build_inline_tail_lines(app);
+    let prompt_start_index = tail_lines.len().saturating_sub(prompt_lines.len());
+    let prompt_start_row = tail_lines[..prompt_start_index]
+        .iter()
+        .map(|line| wrapped_row_count(line.width(), content_width))
+        .sum::<usize>() as u16;
+    let (cursor_x, cursor_y) = build_prompt_cursor_offset(conversation, content_width)?;
+
+    Some((cursor_x, prompt_start_row.saturating_add(cursor_y)))
+}
+
+fn build_prompt_cursor_offset(
+    conversation: &ConversationViewModel,
+    content_width: u16,
+) -> Option<(u16, u16)> {
+    if content_width == 0 {
+        return None;
+    }
+
+    let prompt_buffer = build_prompt_buffer_view(conversation);
+    let wrapped_rows_before_cursor = prompt_buffer.lines[..prompt_buffer.cursor_line_index]
+        .iter()
+        .map(|line| wrapped_row_count(line.width(), content_width))
+        .sum::<usize>();
+    let cursor_row_in_line = prompt_buffer.cursor_column / content_width as usize;
+    let cursor_column = (prompt_buffer.cursor_column % content_width as usize) as u16;
+    let cursor_row = wrapped_rows_before_cursor
+        .saturating_add(cursor_row_in_line)
+        .min(u16::MAX as usize) as u16;
+
+    Some((cursor_column, cursor_row))
+}
+
+fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> PromptBufferView {
+    let buffer_lines = conversation.input_buffer.split('\n').collect::<Vec<_>>();
+    let mut lines = Vec::with_capacity(buffer_lines.len().max(1));
+    let mut cursor_line_index = 0;
+    let mut cursor_column = 0;
+
+    for (index, buffer_line) in buffer_lines.iter().enumerate() {
+        let prefix = if index == 0 {
+            PROMPT_PRIMARY_PREFIX
+        } else {
+            PROMPT_CONTINUATION_PREFIX
+        };
+        let rendered_line = format!("{prefix}{buffer_line}");
+        if index + 1 == buffer_lines.len() {
+            cursor_line_index = index;
+            cursor_column = Line::from(rendered_line.clone()).width();
+        }
+        lines.push(Line::from(rendered_line));
+    }
+
+    PromptBufferView {
+        lines,
+        cursor_line_index,
+        cursor_column,
+    }
+}
+
+fn wrapped_row_count(line_width: usize, content_width: u16) -> usize {
+    if content_width == 0 {
+        return 0;
+    }
+    if line_width == 0 {
+        return 1;
+    }
+
+    line_width.div_ceil(content_width as usize)
 }
 
 pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

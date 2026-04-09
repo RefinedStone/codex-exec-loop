@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::layout::Position;
 
 use super::*;
 use crate::application::port::outbound::codex_app_server_port::{
@@ -48,6 +49,21 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("No messages in this thread yet."));
     assert!(!rendered.contains("┌"));
     assert!(!rendered.contains("│"));
+}
+
+#[test]
+fn inline_render_positions_cursor_on_empty_prompt_line() {
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+
+    terminal
+        .backend_mut()
+        .assert_cursor_position(Position::new(2, 3));
 }
 
 #[test]

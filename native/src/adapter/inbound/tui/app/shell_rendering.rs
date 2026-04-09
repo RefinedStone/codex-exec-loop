@@ -1,9 +1,12 @@
 use std::rc::Rc;
 
+use ratatui::layout::Position;
+
 use super::shell_presentation::{
     ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
     StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
-    build_inline_tail_lines, build_session_overlay_view, build_startup_overlay_view,
+    build_inline_prompt_cursor_offset, build_inline_tail_lines, build_input_prompt_cursor_offset,
+    build_session_overlay_view, build_startup_overlay_view,
 };
 use super::*;
 
@@ -84,7 +87,13 @@ fn draw_inline_conversation_shell(
 ) {
     let tail_lines = build_inline_tail_lines(app);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        render_inline_body(frame, frame.area(), tail_lines, false);
+        let area = frame.area();
+        render_inline_body(frame, area, tail_lines, false);
+        set_cursor_if_visible(
+            frame,
+            area,
+            build_inline_prompt_cursor_offset(app, area.width),
+        );
         return;
     }
 
@@ -151,6 +160,15 @@ fn draw_framed_conversation_shell(
         .block(Block::default().borders(Borders::ALL).title(input_title))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, input_area);
+
+    if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
+        let input_content_area = Block::default().borders(Borders::ALL).inner(input_area);
+        set_cursor_if_visible(
+            frame,
+            input_content_area,
+            build_input_prompt_cursor_offset(app, input_content_area.width),
+        );
+    }
 }
 
 fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
@@ -186,6 +204,19 @@ fn render_inline_section(
 
 fn render_inline_body(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<'static>>, trim: bool) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), area);
+}
+
+fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: Option<(u16, u16)>) {
+    let Some((cursor_x, cursor_y)) = offset else {
+        return;
+    };
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let clamped_x = cursor_x.min(area.width.saturating_sub(1));
+    let clamped_y = cursor_y.min(area.height.saturating_sub(1));
+    frame.set_cursor_position(Position::new(area.x + clamped_x, area.y + clamped_y));
 }
 
 fn render_inline_scrolled_section(
