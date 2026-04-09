@@ -22,28 +22,27 @@ use super::shell_presentation::build_inline_tail_lines;
 use super::shell_rendering::draw;
 use super::shell_runtime::ShellRuntime;
 use super::{
-    ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES,
-    MAX_INLINE_TAIL_HEIGHT, MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp, ShellFrontendMode,
+    ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp,
+    ShellFrontendMode,
 };
 
 pub(super) fn run(mut runtime: ShellRuntime, frontend: ShellFrontend) -> Result<()> {
     let _restore_guard = TerminalRestoreGuard::activate(frontend)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut inline_viewport = InlineViewportState::default();
-    let mut terminal = build_terminal(backend, frontend.mode(), inline_viewport.height)?;
+    let mut terminal = build_terminal(backend, frontend.mode())?;
     run_event_loop(&mut terminal, &mut runtime, frontend, &mut inline_viewport)
 }
 
 fn build_terminal(
     backend: CrosstermBackend<io::Stdout>,
     mode: ShellFrontendMode,
-    inline_height: u16,
 ) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     match mode {
         ShellFrontendMode::InlineMainBuffer => Terminal::with_options(
             backend,
             TerminalOptions {
-                viewport: Viewport::Inline(inline_height),
+                viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
             },
         ),
         ShellFrontendMode::AlternateScreen => Terminal::new(backend),
@@ -86,8 +85,6 @@ fn sync_inline_viewport(
         return Ok(true);
     }
 
-    let viewport_changed =
-        ensure_inline_viewport_height(terminal, runtime.app_mut(), inline_viewport)?;
     let current_lines = current_inline_history_lines(runtime.app_mut());
     inline_viewport.history.sync(terminal, &current_lines)?;
 
@@ -96,7 +93,6 @@ fn sync_inline_viewport(
         runtime.app_mut(),
         terminal_size.width,
         terminal_size.height,
-        viewport_changed,
     ))
 }
 
@@ -109,21 +105,13 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 
 struct InlineViewportState {
     history: InlineHistoryState,
-    height: u16,
     last_tail_frame: Option<InlineTailFrameSignature>,
-}
-
-impl InlineViewportState {
-    fn default_height() -> u16 {
-        INLINE_VIEWPORT_HEIGHT
-    }
 }
 
 impl Default for InlineViewportState {
     fn default() -> Self {
         Self {
             history: InlineHistoryState::default(),
-            height: Self::default_height(),
             last_tail_frame: None,
         }
     }
@@ -135,7 +123,6 @@ impl InlineViewportState {
         app: &NativeTuiApp,
         terminal_width: u16,
         terminal_height: u16,
-        viewport_changed: bool,
     ) -> bool {
         if app.shell_overlay != ShellOverlay::Hidden || app.is_exit_confirmation_visible() {
             self.last_tail_frame = None;
@@ -147,8 +134,7 @@ impl InlineViewportState {
             terminal_height,
             lines: build_inline_tail_lines(app),
         };
-        let should_draw =
-            viewport_changed || self.last_tail_frame.as_ref() != Some(&next_signature);
+        let should_draw = self.last_tail_frame.as_ref() != Some(&next_signature);
         self.last_tail_frame = Some(next_signature);
         should_draw
     }
@@ -244,43 +230,6 @@ fn insert_inline_history_lines(
     })
 }
 
-fn ensure_inline_viewport_height(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut NativeTuiApp,
-    inline_viewport: &mut InlineViewportState,
-) -> io::Result<bool> {
-    let terminal_width = terminal.size()?.width;
-    let desired_height = desired_inline_viewport_height(app, terminal_width);
-    if desired_height == inline_viewport.height {
-        return Ok(false);
-    }
-
-    terminal.clear()?;
-    *terminal = build_terminal(
-        CrosstermBackend::new(io::stdout()),
-        ShellFrontendMode::InlineMainBuffer,
-        desired_height,
-    )?;
-    inline_viewport.height = desired_height;
-    Ok(true)
-}
-
-fn desired_inline_viewport_height(app: &NativeTuiApp, terminal_width: u16) -> u16 {
-    if app.shell_overlay != ShellOverlay::Hidden || app.is_exit_confirmation_visible() {
-        return INLINE_VIEWPORT_HEIGHT;
-    }
-
-    let tail_lines = build_inline_tail_lines(app);
-    clamp_inline_viewport_height(count_rendered_history_rows(&tail_lines, terminal_width))
-}
-
-fn clamp_inline_viewport_height(rendered_row_count: usize) -> u16 {
-    rendered_row_count.clamp(
-        MIN_INLINE_VIEWPORT_HEIGHT as usize,
-        MAX_INLINE_TAIL_HEIGHT as usize,
-    ) as u16
-}
-
 fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -> usize {
     if width == 0 {
         return 0;
@@ -338,14 +287,8 @@ mod tests {
     use anyhow::Result;
     use ratatui::text::Line;
 
-    use super::{
-        InlineHistoryState, InlineViewportState, clamp_inline_viewport_height,
-        desired_inline_viewport_height,
-    };
-    use crate::adapter::inbound::tui::app::{
-        INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES, MAX_INLINE_TAIL_HEIGHT,
-        MIN_INLINE_VIEWPORT_HEIGHT, NativeTuiApp,
-    };
+    use super::{InlineHistoryState, InlineViewportState};
+    use crate::adapter::inbound::tui::app::{MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp};
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -497,32 +440,13 @@ mod tests {
     }
 
     #[test]
-    fn inline_viewport_height_clamps_hidden_tail_region() {
-        assert_eq!(clamp_inline_viewport_height(0), MIN_INLINE_VIEWPORT_HEIGHT);
-        assert_eq!(clamp_inline_viewport_height(4), MIN_INLINE_VIEWPORT_HEIGHT);
-        assert_eq!(clamp_inline_viewport_height(7), 7);
-        assert_eq!(clamp_inline_viewport_height(24), MAX_INLINE_TAIL_HEIGHT);
-    }
-
-    #[test]
-    fn inline_viewport_height_uses_full_budget_for_overlay() {
-        let mut app = make_test_app();
-        app.shell_overlay = ShellOverlay::Startup;
-
-        assert_eq!(
-            desired_inline_viewport_height(&app, 80),
-            INLINE_VIEWPORT_HEIGHT
-        );
-    }
-
-    #[test]
     fn hidden_inline_tail_skips_redundant_frame_draws() {
         let app = make_test_app();
         let mut inline_viewport = InlineViewportState::default();
 
-        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
-        assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
-        assert!(inline_viewport.should_draw_inline_frame(&app, 96, 24, false));
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+        assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
+        assert!(inline_viewport.should_draw_inline_frame(&app, 96, 24));
     }
 
     #[test]
@@ -530,14 +454,14 @@ mod tests {
         let mut app = make_test_app();
         let mut inline_viewport = InlineViewportState::default();
 
-        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
-        assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+        assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
 
         app.shell_overlay = ShellOverlay::Startup;
-        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
 
         app.shell_overlay = ShellOverlay::Hidden;
-        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24, false));
+        assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
     }
 
     struct FakeCodexAppServerPort;

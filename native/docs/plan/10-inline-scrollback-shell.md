@@ -1,30 +1,32 @@
 # Inline Scrollback Shell
 
-This is the compact source of truth for the remaining inline-shell work.
+This is the compact source of truth for the landed inline-shell contract and the remaining validation work.
 
-The goal is still one thing:
+The goal is one thing:
 - inline mode should read like terminal flow, not like a fullscreen frame being replayed in the main buffer
 
 ## Current Stance
 
-Landed foundation on `prerelease`:
+Landed on `prerelease`:
 - explicit inline vs alternate-screen frontend split
 - inline inspection surfaces for diagnostics, sessions, and follow-up templates
 - compact tail prompt guidance
 - scrollback-safe history buffering that separates live output from committed history
+- fixed inline viewport budget with a bottom-anchored hidden tail so normal inline updates no longer rebuild the viewport height
+- visible prompt cursor ownership in the inline path
+- visible streamed agent text before completion
+- compact routine status copy without raw turn ids
 
 Still open:
-- inline mode still repaints committed history through one Ratatui frame in some terminals
-- the active prompt does not yet own an explicit visible cursor in the inline path
-- streamed agent output is still too easy to miss because the live region behaves more like summary/status chrome than a true visible stream
-- completion and auto-follow copy still exposes raw turn ids and keeps too much weight in the bottom status surface
+- real terminal validation on macOS and Windows
+- follow-on ergonomics only if validation finds a concrete issue
 
 ## Durable Facts
 
 - `thread_id` and `turn_id` are protocol values from `codex app-server`, not native-client-generated UI ids. The outbound adapter forwards `Thread.id` and `Turn.id` into shell state.
 - the current noisy strings such as `turn completed: <id>` are native-client presentation copy layered on top of those ids
-- the inline frontend currently restores the terminal cursor on exit, but it does not set a focused prompt cursor during normal inline rendering
-- the runtime already receives streamed agent deltas, but the inline shell still compresses too much of that activity into status-oriented output
+- the inline frontend now keeps one fixed viewport budget in inline mode and appends committed history into scrollback separately from tail redraw
+- the runtime already carried streamed deltas and protocol ids before this pass; the inline frontend now presents them through operator-facing copy instead of routine raw-id status strings
 
 ## UX Contract
 
@@ -52,7 +54,7 @@ Still open:
 - inline mode keeps one tail-anchored live region for prompt, transient streaming, and inspections
 - inline status should behave more like a short terminal flow box or notice band than a permanently heavy footer
 
-## Execution Checkpoints
+## Landed Checkpoints
 
 1. Prompt cursor and focus ownership
 - set cursor position from the active prompt render path
@@ -68,13 +70,10 @@ Still open:
 - reduce persistent footer weight where a transient flow notice is enough
 
 4. Final redraw elimination
-- stop repainting committed history as one shared frame
-- keep tail updates local so prior output stays visually stable in scrollback
+- keep the inline viewport height fixed in hidden mode
+- keep committed history append-only in scrollback while tail updates remain local
 
-## Done When
+## Remaining Validation
 
-- inline mode no longer looks like a replayed fullscreen frame
-- the active prompt owns a visible cursor
-- agent text visibly streams before completion
-- default status copy hides raw ids and stays compact
-- the validation matrix passes the prompt, stream, and status checks added for this workstream
+- confirm the fixed hidden-tail viewport no longer feels replay-like in real terminals
+- pass the prompt, stream, status, and scrollback checks in the validation matrix

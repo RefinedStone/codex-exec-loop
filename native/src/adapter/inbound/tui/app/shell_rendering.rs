@@ -87,7 +87,7 @@ fn draw_inline_conversation_shell(
 ) {
     let tail_lines = build_inline_tail_lines(app);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        let area = frame.area();
+        let area = inline_body_render_area(frame.area(), &tail_lines);
         render_inline_body(frame, area, tail_lines, false);
         set_cursor_if_visible(
             frame,
@@ -98,12 +98,17 @@ fn draw_inline_conversation_shell(
     }
 
     let layout = build_inline_terminal_flow_layout(app, frame.area());
-    render_inline_body(frame, layout[1], tail_lines, false);
+    render_inline_body(
+        frame,
+        inline_body_render_area(layout[1], &tail_lines),
+        tail_lines,
+        false,
+    );
 }
 
 fn build_inline_terminal_flow_layout(app: &NativeTuiApp, area: Rect) -> Rc<[Rect]> {
     let tail_lines = build_inline_tail_lines(app);
-    let tail_height = inline_body_height(&tail_lines, MAX_INLINE_TAIL_HEIGHT);
+    let tail_height = inline_body_height(&tail_lines, area.width, MAX_INLINE_TAIL_HEIGHT);
 
     Layout::default()
         .direction(Direction::Vertical)
@@ -179,8 +184,34 @@ fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
         .min(max_height as usize) as u16
 }
 
-fn inline_body_height(lines: &[Line<'_>], max_height: u16) -> u16 {
-    lines.len().max(1).min(max_height as usize) as u16
+fn inline_body_height(lines: &[Line<'_>], width: u16, max_height: u16) -> u16 {
+    count_rendered_inline_rows(lines, width)
+        .max(1)
+        .min(max_height as usize) as u16
+}
+
+fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
+    let body_height = inline_body_height(lines, area.width, area.height);
+    let y = area.y + area.height.saturating_sub(body_height);
+    Rect::new(area.x, y, area.width, body_height)
+}
+
+fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usize {
+    if width == 0 {
+        return 0;
+    }
+
+    lines
+        .iter()
+        .map(|line| {
+            let line_width = line.width();
+            if line_width == 0 {
+                1
+            } else {
+                line_width.div_ceil(width as usize)
+            }
+        })
+        .sum()
 }
 
 fn split_inline_section(area: Rect) -> Rc<[Rect]> {

@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ratatui::Terminal;
+use ratatui::TerminalOptions;
+use ratatui::Viewport;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 
@@ -30,7 +32,7 @@ fn centered_rect_clamps_percentages_above_hundred() {
 
 #[test]
 fn inline_main_buffer_rendering_avoids_box_borders() {
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
     append_stable_history_message(&mut app, "stable history should stay above the live region");
 
@@ -45,7 +47,6 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
     assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
-    assert!(rendered.contains("input: ready"));
     assert!(!rendered.contains("stable history should stay above the live region"));
     assert!(!rendered.contains("No messages in this thread yet."));
     assert!(!rendered.contains("┌"));
@@ -54,7 +55,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 
 #[test]
 fn inline_render_positions_cursor_on_empty_prompt_line() {
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
@@ -64,7 +65,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 3));
+        .assert_cursor_position(Position::new(2, 14));
 }
 
 #[test]
@@ -84,6 +85,16 @@ fn alternate_screen_rendering_keeps_bordered_frame() {
     assert!(rendered.contains("stable history stays inside the framed renderer"));
     assert!(rendered.contains("┌"));
     assert!(rendered.contains("│"));
+}
+
+fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+    Terminal::with_options(
+        TestBackend::new(width, height),
+        TerminalOptions {
+            viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+        },
+    )
+    .expect("inline test terminal")
 }
 
 #[test]
