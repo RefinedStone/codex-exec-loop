@@ -4,5 +4,6 @@ pub mod github_review_poller_service;
 pub mod planning_bootstrap_service;
 pub mod planning_init_service;
 pub mod planning_validation_service;
+pub mod priority_queue_service;
 pub mod session_service;
 pub mod startup_service;

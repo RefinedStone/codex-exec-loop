@@ -183,9 +183,79 @@ pub enum TaskActor {
     System,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorityQueueSnapshot {
+    pub next_task: Option<PriorityQueueTask>,
+    pub active_tasks: Vec<PriorityQueueTask>,
+    pub skipped_tasks: Vec<PriorityQueueSkippedTask>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorityQueueTask {
+    pub rank: usize,
+    pub task_id: String,
+    pub direction_id: String,
+    pub direction_title: String,
+    pub task_title: String,
+    pub status: TaskStatus,
+    pub combined_priority: i32,
+    pub updated_at: String,
+    pub rank_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorityQueueSkippedTask {
+    pub task_id: String,
+    pub direction_id: String,
+    pub status: TaskStatus,
+    pub reason: String,
+}
+
+impl DirectionState {
+    pub fn allows_queue_execution(self) -> bool {
+        self == Self::Active
+    }
+}
+
+impl TaskStatus {
+    pub fn queue_readiness_rank(self) -> Option<u8> {
+        match self {
+            Self::InProgress => Some(0),
+            Self::Ready => Some(1),
+            Self::Blocked | Self::Done | Self::Cancelled | Self::AwaitingUser | Self::Proposed => {
+                None
+            }
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Blocked => "blocked",
+            Self::InProgress => "in_progress",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+            Self::AwaitingUser => "awaiting_user",
+            Self::Proposed => "proposed",
+        }
+    }
+
+    pub fn is_dependency_complete(self) -> bool {
+        self == Self::Done
+    }
+
+    pub fn clears_blocker(self) -> bool {
+        matches!(self, Self::Done | Self::Cancelled)
+    }
+}
+
 impl TaskDefinition {
     pub fn requires_relation_note(&self) -> bool {
         self.created_by == TaskActor::Llm || self.last_updated_by == TaskActor::Llm
+    }
+
+    pub fn combined_priority(&self) -> i32 {
+        self.base_priority + self.dynamic_priority_delta
     }
 }
 
@@ -207,5 +277,11 @@ pub struct PlanningValidationResult {
 impl PlanningValidationResult {
     pub fn is_valid(&self) -> bool {
         self.report.is_valid()
+    }
+}
+
+impl PriorityQueueSnapshot {
+    pub fn visible_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
+        self.active_tasks.iter().take(limit).cloned().collect()
     }
 }
