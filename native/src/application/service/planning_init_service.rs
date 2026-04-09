@@ -69,7 +69,7 @@ impl PlanningInitService {
             },
         );
 
-        let draft_name = format!("bootstrap-{}", Utc::now().format("%Y%m%dT%H%M%SZ"));
+        let draft_name = build_bootstrap_draft_name(Utc::now());
         let stage_record = self.planning_workspace_port.stage_planning_draft_files(
             workspace_dir,
             &draft_name,
@@ -102,13 +102,22 @@ impl PlanningInitService {
     }
 }
 
+fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
+    format!(
+        "bootstrap-{}Z-{:09}",
+        now.format("%Y%m%dT%H%M%S"),
+        now.timestamp_subsec_nanos()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
+    use chrono::{TimeZone, Timelike, Utc};
 
-    use super::PlanningInitService;
+    use super::{PlanningInitService, build_bootstrap_draft_name};
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftStageRecord, PlanningStagedFileRecord,
         PlanningWorkspacePort,
@@ -167,5 +176,28 @@ mod tests {
             .lock()
             .expect("staged_files mutex should not be poisoned");
         assert_eq!(staged_files.len(), 4);
+    }
+
+    #[test]
+    fn bootstrap_draft_name_keeps_same_second_runs_distinct() {
+        let first_timestamp = Utc
+            .with_ymd_and_hms(2026, 4, 9, 12, 0, 0)
+            .single()
+            .expect("timestamp should be valid")
+            .with_nanosecond(123_456_789)
+            .expect("nanoseconds should be valid");
+        let second_timestamp = Utc
+            .with_ymd_and_hms(2026, 4, 9, 12, 0, 0)
+            .single()
+            .expect("timestamp should be valid")
+            .with_nanosecond(987_654_321)
+            .expect("nanoseconds should be valid");
+
+        let first_name = build_bootstrap_draft_name(first_timestamp);
+        let second_name = build_bootstrap_draft_name(second_timestamp);
+
+        assert_ne!(first_name, second_name);
+        assert!(first_name.starts_with("bootstrap-20260409T120000Z-"));
+        assert!(second_name.starts_with("bootstrap-20260409T120000Z-"));
     }
 }

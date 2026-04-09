@@ -31,19 +31,20 @@ impl PriorityQueueService {
         let direction_map = directions
             .directions
             .iter()
-            .map(|direction| (direction.id.as_str(), direction))
+            .map(|direction| (direction.id.trim(), direction))
             .collect::<HashMap<_, _>>();
         let task_map = task_ledger
             .tasks
             .iter()
-            .map(|task| (task.id.as_str(), task))
+            .map(|task| (task.id.trim(), task))
             .collect::<HashMap<_, _>>();
 
         let mut candidates = Vec::new();
         let mut skipped_tasks = Vec::new();
 
         for task in &task_ledger.tasks {
-            let Some(direction) = direction_map.get(task.direction_id.as_str()) else {
+            let normalized_direction_id = task.direction_id.trim();
+            let Some(direction) = direction_map.get(normalized_direction_id) else {
                 skipped_tasks.push(
                     self.skipped_task(task, format!("unknown direction_id {}", task.direction_id)),
                 );
@@ -239,6 +240,8 @@ impl DirectionQueueLabel for DirectionDefinition {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::PriorityQueueService;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, TaskActor, TaskDefinition,
@@ -428,23 +431,77 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["review-open", "dependency-open"]
         );
+        let skipped = snapshot
+            .skipped_tasks
+            .iter()
+            .map(|task| (task.task_id.as_str(), task.reason.as_str()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(skipped.len(), 4);
+        assert!(skipped["paused-task"].contains("paused"));
+        assert!(skipped["waiting-on-dependency"].contains("dependency-open(ready)"));
+        assert!(skipped["blocked-by-review"].contains("review-open(in_progress)"));
+        assert!(skipped["proposed-followup"].contains("status proposed is not executable"));
+    }
+
+    #[test]
+    fn trims_direction_and_task_ids_for_queue_resolution() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[("direction-a", DirectionState::Active)]);
+        let mut runnable_task = task(
+            "  runnable-task  ",
+            " direction-a ",
+            TaskStatus::Ready,
+            50,
+            0,
+            "2026-04-09T11:00:00Z",
+        );
+        runnable_task.depends_on = vec!["dependency-task".to_string()];
+        runnable_task.blocked_by = vec![" blocker-task ".to_string()];
+
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![
+                task(
+                    " dependency-task ",
+                    "direction-a",
+                    TaskStatus::Done,
+                    10,
+                    0,
+                    "2026-04-09T09:00:00Z",
+                ),
+                task(
+                    "blocker-task",
+                    "direction-a",
+                    TaskStatus::Done,
+                    20,
+                    0,
+                    "2026-04-09T10:00:00Z",
+                ),
+                runnable_task,
+            ],
+        };
+
+        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+
+        assert_eq!(
+            snapshot
+                .next_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("  runnable-task  ")
+        );
+        assert!(
+            snapshot
+                .active_tasks
+                .iter()
+                .any(|task| task.task_id == "  runnable-task  ")
+        );
         assert!(
             snapshot
                 .skipped_tasks
                 .iter()
-                .any(|task| task.task_id == "paused-task" && task.reason.contains("paused"))
+                .all(|task| task.task_id != "  runnable-task  ")
         );
-        assert!(snapshot.skipped_tasks.iter().any(|task| {
-            task.task_id == "waiting-on-dependency"
-                && task.reason.contains("dependency-open(ready)")
-        }));
-        assert!(snapshot.skipped_tasks.iter().any(|task| {
-            task.task_id == "blocked-by-review" && task.reason.contains("review-open(in_progress)")
-        }));
-        assert!(snapshot.skipped_tasks.iter().any(|task| {
-            task.task_id == "proposed-followup"
-                && task.reason.contains("status proposed is not executable")
-        }));
     }
 
     #[test]

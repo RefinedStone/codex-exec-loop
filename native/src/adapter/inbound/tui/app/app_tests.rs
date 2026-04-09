@@ -399,6 +399,8 @@ fn empty_draft_prompts_for_first_message() {
 
 #[test]
 fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
+    use std::collections::HashSet;
+
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-init-app");
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
@@ -424,11 +426,16 @@ fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
         .expect("staged draft directory should be readable")
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect::<Vec<_>>();
-    assert!(staged_files.contains(&"directions.toml".to_string()));
-    assert!(staged_files.contains(&"task-ledger.json".to_string()));
-    assert!(staged_files.contains(&"task-ledger.schema.json".to_string()));
-    assert!(staged_files.contains(&"result-output.md".to_string()));
+        .collect::<HashSet<_>>();
+    let expected_files = [
+        "directions.toml".to_string(),
+        "task-ledger.json".to_string(),
+        "task-ledger.schema.json".to_string(),
+        "result-output.md".to_string(),
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>();
+    assert_eq!(staged_files, expected_files);
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

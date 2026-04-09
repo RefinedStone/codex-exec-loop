@@ -67,6 +67,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::FilesystemPlanningWorkspaceAdapter;
@@ -118,6 +119,4 @@ mod tests {
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
-
-    use std::path::Path;
 }
