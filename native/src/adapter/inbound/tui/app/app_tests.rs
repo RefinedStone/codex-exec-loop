@@ -11,11 +11,11 @@ use super::shell_presentation::{
     build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
 };
 use super::{
-    AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage, ConversationInputState,
-    ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-    ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-    ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, GithubReviewPollingState,
-    InlineShellCommand, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
+    ActiveTurnPlanningSnapshot, AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage,
+    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
+    ConversationState, ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
+    DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP,
+    GithubReviewPollingState, InlineShellCommand, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
     RecordedAutoFollowupActivity, SessionOverlayUiState, SessionState, ShellActionAvailability,
     ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
     build_conversation_shell_frame_view, build_conversation_shell_view,
@@ -486,10 +486,12 @@ fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
         Some("agent-1".to_string()),
     ));
     app.conversation_state = ConversationState::Ready(conversation);
-    app.active_turn_planning_snapshot = Some(PlanningExecutionSnapshot {
-        directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
-        task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
-    });
+    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+        PlanningExecutionSnapshot {
+            directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
+            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+        },
+    ));
 
     std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
         .expect("invalid task ledger should write");
@@ -523,6 +525,63 @@ fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
             .runtime_notices
             .iter()
             .any(|notice| notice.contains("archived rejected task-ledger"))
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn snapshot_capture_failure_blocks_followup_without_claiming_reconciliation() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-reconcile-snapshot-failure");
+    let mut conversation = ready_conversation();
+    conversation.cwd = workspace_dir.clone();
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::CaptureFailed(
+        "planning reconciliation could not capture the accepted planning snapshot before the turn started: failed to read task-ledger.json"
+            .to_string(),
+    ));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-snapshot-failure".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert_eq!(
+        conversation.planning_prompt_context.preview_status_label(),
+        "blocked"
+    );
+    assert!(
+        conversation
+            .planning_prompt_context
+            .preview_detail()
+            .is_some_and(
+                |detail| detail.contains("could not capture the accepted planning snapshot")
+            )
+    );
+    assert!(
+        conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| notice.contains("could not capture the accepted planning snapshot"))
+    );
+    assert!(
+        !conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| notice.contains("restored the last accepted ledger"))
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");

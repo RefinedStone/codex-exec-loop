@@ -31,6 +31,7 @@ pub struct PlanningReconciliationResult {
     pub rejected_task_ledger: bool,
     pub rejected_archive_path: Option<String>,
     pub queue_snapshot_rebuilt: bool,
+    pub auto_followup_block_reason: Option<String>,
 }
 
 impl PlanningReconciliationService {
@@ -95,10 +96,13 @@ impl PlanningReconciliationService {
                 .push("planning reconciliation restored protected directions.toml".to_string());
             execution_snapshot
                 .directions_toml
-                .clone()
+                .as_deref()
                 .unwrap_or_default()
         } else {
-            workspace_record.directions_toml.clone().unwrap_or_default()
+            workspace_record
+                .directions_toml
+                .as_deref()
+                .unwrap_or_default()
         };
 
         if task_ledger_changed {
@@ -107,7 +111,7 @@ impl PlanningReconciliationService {
                 turn_id,
                 &workspace_record,
                 execution_snapshot,
-                directions_toml.as_str(),
+                directions_toml,
                 &mut result,
             )?;
         }
@@ -126,13 +130,13 @@ impl PlanningReconciliationService {
     ) -> Result<()> {
         let task_ledger_candidate = workspace_record
             .task_ledger_json
-            .clone()
+            .as_deref()
             .unwrap_or_default();
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
                     directions_toml,
-                    task_ledger_json: task_ledger_candidate.as_str(),
+                    task_ledger_json: task_ledger_candidate,
                     task_ledger_schema_json: workspace_record
                         .task_ledger_schema_json
                         .as_deref()
@@ -189,6 +193,10 @@ impl PlanningReconciliationService {
                 execution_snapshot.task_ledger_json.as_deref(),
             )?;
         result.rejected_task_ledger = true;
+        result.auto_followup_block_reason = Some(
+            "planning reconciliation rejected task-ledger.json; auto follow-up stays paused until repair flow is wired"
+                .to_string(),
+        );
         result.notices.push(format!(
             "planning reconciliation rejected task-ledger.json and restored the last accepted ledger ({})",
             first_validation_error_summary(&validation_result)

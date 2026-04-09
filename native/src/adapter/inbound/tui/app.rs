@@ -150,6 +150,12 @@ enum PromptOrigin {
     AutoFollow(AutoFollowupSubmitContext),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActiveTurnPlanningSnapshot {
+    Ready(PlanningExecutionSnapshot),
+    CaptureFailed(String),
+}
+
 struct NativeTuiApp {
     shell_overlay: ShellOverlay,
     exit_confirmation_state: ExitConfirmationState,
@@ -168,7 +174,7 @@ struct NativeTuiApp {
     planning_init_service: PlanningInitService,
     planning_prompt_service: PlanningPromptService,
     planning_reconciliation_service: PlanningReconciliationService,
-    active_turn_planning_snapshot: Option<PlanningExecutionSnapshot>,
+    active_turn_planning_snapshot: Option<ActiveTurnPlanningSnapshot>,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     show_startup_ascii_art: bool,

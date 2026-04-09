@@ -9,7 +9,7 @@ use crate::application::service::planning_bootstrap_service::PlanningBootstrapSe
 use crate::application::service::planning_init_service::PlanningInitService;
 use crate::application::service::planning_prompt_service::PlanningPromptService;
 use crate::application::service::planning_reconciliation_service::{
-    PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
+    PlanningReconciliationResult, PlanningReconciliationService,
 };
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
@@ -21,17 +21,17 @@ use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::{
-    AutoFollowupSubmitContext, ConversationInputEvent, ConversationIntentEffect,
-    ConversationIntentEvent, ConversationIntentMode, ConversationIntentState,
-    ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-    ExitConfirmationState, FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent,
-    FollowupOverlayUiState, InlineShellCommand, NativeTuiApp, PromptOrigin, SESSION_PAGE_SIZE,
-    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
-    ShellOverlay, StartupState, TranscriptViewportState, reduce_conversation_input,
-    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
-    reduce_followup_controls, reduce_followup_overlay_ui, reduce_shell_chrome,
-    startup_ascii_art_enabled_from_environment,
+    ActiveTurnPlanningSnapshot, AutoFollowupSubmitContext, ConversationInputEvent,
+    ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
+    ConversationIntentState, ConversationLifecycleEffect, ConversationLifecycleEvent,
+    ConversationLifecycleState, ConversationRuntimeEffect, ConversationRuntimeEvent,
+    ConversationState, ConversationViewModel, ExitConfirmationState, FollowupControlEffect,
+    FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState, InlineShellCommand,
+    NativeTuiApp, PromptOrigin, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
+    ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay, StartupState,
+    TranscriptViewportState, reduce_conversation_input, reduce_conversation_intents,
+    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
+    reduce_followup_overlay_ui, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 
@@ -328,7 +328,8 @@ impl NativeTuiApp {
                 thread_id,
                 prompt,
             } => {
-                self.active_turn_planning_snapshot = self.load_planning_execution_snapshot(&cwd);
+                self.active_turn_planning_snapshot =
+                    Some(self.load_planning_execution_snapshot(&cwd));
                 let outer_tx = self.tx.clone();
                 let service = self.conversation_service.clone();
                 thread::spawn(move || {
@@ -396,9 +397,11 @@ impl NativeTuiApp {
             &queued_from_turn_id,
             &changed_planning_file_paths,
         );
-        let planning_prompt_context = if reconciliation_result.rejected_task_ledger {
+        let planning_prompt_context = if let Some(block_reason) =
+            reconciliation_result.auto_followup_block_reason.clone()
+        {
             crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult::blocked(
-                "planning reconciliation rejected task-ledger.json; auto follow-up stays paused until repair flow is wired",
+                block_reason,
             )
         } else if changed_planning_file_paths.is_empty() {
             conversation.planning_prompt_context.clone()
@@ -406,11 +409,7 @@ impl NativeTuiApp {
             self.load_planning_prompt_context(&conversation.cwd)
         };
         for notice in reconciliation_result.notices {
-            if !conversation
-                .runtime_notices
-                .iter()
-                .any(|existing| existing == &notice)
-            {
+            if !conversation.runtime_notices.contains(&notice) {
                 conversation.runtime_notices.push(notice);
             }
         }
@@ -455,10 +454,16 @@ impl NativeTuiApp {
     fn load_planning_execution_snapshot(
         &self,
         workspace_directory: &str,
-    ) -> Option<PlanningExecutionSnapshot> {
-        self.planning_reconciliation_service
+    ) -> ActiveTurnPlanningSnapshot {
+        match self
+            .planning_reconciliation_service
             .load_execution_snapshot(workspace_directory)
-            .ok()
+        {
+            Ok(snapshot) => ActiveTurnPlanningSnapshot::Ready(snapshot),
+            Err(error) => ActiveTurnPlanningSnapshot::CaptureFailed(format!(
+                "planning reconciliation could not capture the accepted planning snapshot before the turn started: {error}"
+            )),
+        }
     }
 
     fn reconcile_planning_after_turn(
@@ -476,16 +481,29 @@ impl NativeTuiApp {
             return PlanningReconciliationResult::default();
         }
 
-        let Some(execution_snapshot) = self.active_turn_planning_snapshot.take() else {
+        let Some(snapshot_state) = self.active_turn_planning_snapshot.take() else {
             return PlanningReconciliationResult {
                 notices: vec![
-                    "planning reconciliation skipped because no accepted planning snapshot was captured for the turn"
+                    "planning reconciliation could not restore protected planning files because the turn snapshot was unavailable"
                         .to_string(),
                 ],
-                rejected_task_ledger: true,
-                rejected_archive_path: None,
-                queue_snapshot_rebuilt: false,
+                auto_followup_block_reason: Some(
+                    "planning reconciliation could not restore protected planning files because the turn snapshot was unavailable"
+                        .to_string(),
+                ),
+                ..PlanningReconciliationResult::default()
             };
+        };
+
+        let execution_snapshot = match snapshot_state {
+            ActiveTurnPlanningSnapshot::Ready(snapshot) => snapshot,
+            ActiveTurnPlanningSnapshot::CaptureFailed(error_message) => {
+                return PlanningReconciliationResult {
+                    notices: vec![error_message.clone()],
+                    auto_followup_block_reason: Some(error_message),
+                    ..PlanningReconciliationResult::default()
+                };
+            }
         };
 
         match self.planning_reconciliation_service.reconcile_after_turn(
@@ -497,9 +515,11 @@ impl NativeTuiApp {
             Ok(result) => result,
             Err(error) => PlanningReconciliationResult {
                 notices: vec![format!("planning reconciliation failed: {error}")],
-                rejected_task_ledger: true,
-                rejected_archive_path: None,
-                queue_snapshot_rebuilt: false,
+                auto_followup_block_reason: Some(
+                    "planning reconciliation failed; auto follow-up stays paused until the planning workspace is repaired"
+                        .to_string(),
+                ),
+                ..PlanningReconciliationResult::default()
             },
         }
     }
