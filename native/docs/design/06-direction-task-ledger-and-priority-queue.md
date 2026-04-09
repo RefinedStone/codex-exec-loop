@@ -35,20 +35,27 @@ This means the new planning system should sit beside the existing follow-up flow
 - `priority queue`: the in-memory runtime structure derived from the accepted task ledger
 - `queue snapshot`: a generated file that mirrors the in-memory queue for inspection; never authoritative
 - `repair loop`: the bounded retry flow that asks the LLM to rewrite an invalid task-ledger update
+- `simple mode`: the planning entry path that emits one generic catch-all direction and an empty task ledger
+- `detail mode`: the planning entry path for explicit direction authoring, manual editing, and future LLM-assisted drafting
+- `manual planning editor`: an embedded terminal editing surface for staged planning drafts
 
 ## Target Operating Model
 
 The system should behave as follows:
 
-1. The operator creates or updates the planning files either by direct file edit or by a planning-init helper flow.
-2. The runtime validates the direction catalog and task ledger before each planning-aware turn.
-3. The runtime rebuilds an in-memory priority queue from the accepted task ledger.
-4. The selected follow-up template injects direction context, queue context, mutation rules, and result-output rules into the next prompt.
-5. The LLM performs the selected work and may update the task ledger only with tasks that can be linked to an existing direction.
-6. After the turn, the runtime validates the changed task ledger.
-7. If the ledger is valid, the runtime accepts it and rebuilds the queue.
-8. If the ledger is invalid, the runtime restores the last accepted ledger, stores the rejected attempt for inspection, and runs a bounded repair loop.
-9. If the LLM touched an execution-locked planning file, the runtime restores the operator-owned snapshot and records the violation.
+1. The operator enters planning mode through `:planning` or edits planning files directly on disk.
+2. `:planning` first asks whether the operator wants `simple mode` or `detail mode`.
+3. `simple mode` stages a minimal scaffold that keeps one generic active direction and an empty task ledger.
+4. `detail mode` asks whether the operator wants `manual` authoring or future `llm-assisted` authoring; until implemented, the LLM-assisted branch stays visible but disabled.
+5. The operator reviews and promotes staged planning files into the active planning paths.
+6. The runtime validates the direction catalog and task ledger before each planning-aware turn.
+7. The runtime rebuilds an in-memory priority queue from the accepted task ledger.
+8. The selected follow-up template injects direction context, queue context, mutation rules, and result-output rules into the next prompt.
+9. The LLM performs the selected work and may update the task ledger only with tasks that can be linked to an existing direction.
+10. After the turn, the runtime validates the changed task ledger.
+11. If the ledger is valid, the runtime accepts it and rebuilds the queue.
+12. If the ledger is invalid, the runtime restores the last accepted ledger, stores the rejected attempt for inspection, and runs a bounded repair loop.
+13. If the LLM touched an execution-locked planning file, the runtime restores the operator-owned snapshot and records the violation.
 
 ## Canonical Sources Of Truth
 
@@ -69,6 +76,7 @@ Properties:
 - editable by the operator while the runtime is idle or paused
 - not writable by the LLM during active automated execution
 - no queue priority fields
+- still required in `simple mode`; the file uses one generic catch-all direction instead of a detailed taxonomy
 
 Why TOML:
 
@@ -151,6 +159,7 @@ These rules close the main logical holes in the proposed workflow.
 8. A new LLM-authored task may enter the ledger only if it can be attached to an existing direction with an explicit relation note.
 9. Completely unrelated tasks must not be added to the task ledger.
 10. Runtime restart must be able to rebuild the same queue from accepted on-disk planning files without replaying prior turns.
+11. `simple mode` does not remove the direction catalog; it replaces detailed direction authoring with one generic active direction so task-ledger invariants stay uniform.
 
 ## Minimal Data Model
 
@@ -168,6 +177,8 @@ Each direction item should contain:
 - `state` with values such as `active`, `paused`, `done`
 
 Directions are intentionally simple. They are the operator's declared frame, not a scheduler.
+
+In `simple mode`, the catalog should contain exactly one generic active direction such as `general-workstream` so every task can still satisfy the `direction_id` contract without forcing the operator to define a richer hierarchy up front.
 
 ### Task Ledger
 
@@ -204,6 +215,8 @@ Recommended task statuses:
 `direction_relation_note` is required for LLM-added tasks. The note explains why the task belongs under the chosen direction. The relation can be loose, but it cannot be empty.
 
 `proposed` does not mean "unattached idea". It means a direction-linked task candidate that is not yet ready for normal execution.
+
+In `simple mode`, every task points at the one generic direction until the operator later replaces the scaffold with a more detailed direction catalog.
 
 ## Task Admission Rule
 
@@ -329,31 +342,77 @@ The product should help the operator produce valid planning files before automat
 
 ### Primary V1 Authoring Path
 
-- the runtime scaffolds readable initial files
-- the operator edits them directly in the filesystem
-- the runtime re-validates when they change
+- `:planning` is the primary guided entrypoint inside the shell
+- direct filesystem editing remains supported for advanced users and scripts
+- every guided path stages files first and requires an explicit promote step before active planning changes
 
-This should ship before any embedded terminal editor.
+### `:planning` Entry Flow
+
+The `:planning` command should open a lightweight selector instead of immediately writing one fixed scaffold.
+
+Recommended selector behavior:
+
+1. Show `simple mode` and `detail mode` as the first two options.
+2. Let the operator move between them with `A` / `B`, arrow keys, or equivalent focus movement, and confirm with `Enter`.
+3. Allow `Esc` to cancel without writing files.
+4. Keep the UI lightweight and shell-native rather than opening a heavyweight planning dashboard.
+
+### Simple Mode
+
+`simple mode` is for operators who want planning-aware execution without investing in explicit direction taxonomy first.
+
+Recommended behavior:
+
+1. Stage a minimal valid planning scaffold under `.codex-exec-loop/planning/drafts/`.
+2. Write `directions.toml` with one generic active direction such as `general-workstream`.
+3. Write `task-ledger.json` with an empty `tasks` list.
+4. Keep `task-ledger.schema.json` and `result-output.md` on standard defaults.
+5. Phrase the generic direction so the LLM can interpret it as "put all actionable goals or accepted proposals into the task ledger and work from there."
+6. Allow the operator to later replace the generic direction catalog with a richer detail-mode catalog without changing the task-ledger storage shape.
 
 ### Assisted Initialization Flow
 
-The first guided helper should be a dedicated planning-init flow, not a general subagent framework.
+`detail mode` should branch again after the first selector:
 
 Suggested operator entrypoints:
 
-- `:planning-init` in the TUI
+- `:planning` in the TUI
+- `:planning-init` as a compatibility alias
 - a future `/init` alias if a slash-command surface is introduced
 
-Suggested helper behavior:
+Detail-mode selector behavior:
 
-1. Open a dedicated new thread with a fixed planning-init prompt.
-2. Ask the LLM to draft `directions.toml` and `task-ledger.json` only.
-3. Write the draft files into a staging area such as `.codex-exec-loop/planning/drafts/`.
-4. Validate the drafts.
-5. If valid, present a summary and let the operator promote them into the active planning paths.
-6. If invalid, keep the drafts in staging and show the validation report.
+1. Show `manual` and `llm-assisted` as the second-level options.
+2. Keep `llm-assisted` visible but disabled until supported.
+3. Make `manual` the only selectable implementation for the first delivery.
 
-This gives the operator help with creation and validation without letting the helper silently overwrite active planning state. Automated follow-up should remain off until staged files are promoted and accepted.
+### Manual Detail Mode
+
+`manual` detail mode should not stop at scaffold creation. It should let the operator keep editing the staged files in the terminal.
+
+Recommended behavior:
+
+1. Stage a detail scaffold under `.codex-exec-loop/planning/drafts/`.
+2. Open an embedded terminal editor over the staged files.
+3. Focus editing on `directions.toml`, `task-ledger.json`, and `result-output.md`.
+4. Keep `task-ledger.schema.json` read-only by default, or hide it behind an advanced inspection toggle.
+5. Provide explicit `save`, `validate`, `cancel`, and `promote` actions.
+6. Show validation errors inline and keep `promote` disabled until the staged files validate.
+7. Leave the staged files on disk if the operator exits without promoting, so the draft can be resumed later.
+
+### Future LLM-Assisted Detail Mode
+
+The LLM-assisted branch is still part of the target design, but it should come after the manual path is stable.
+
+Recommended future behavior:
+
+1. Collect operator input such as goal summary, direction ideas, constraints, and non-goals.
+2. Open a dedicated planning-init thread with a fixed prompt contract.
+3. Ask the LLM to draft `directions.toml` and `task-ledger.json` only.
+4. Write the generated files into the same staging area as manual mode.
+5. Run the same validation and promote flow as manual mode.
+
+This preserves one safe authoring lifecycle across both detail-mode branches and keeps active planning state operator-approved.
 
 ## Runtime Lifecycle
 
@@ -488,12 +547,15 @@ That means the outbound `codex app-server` mapping and conversation domain event
 
 Add operator-visible planning signals without breaking the current shell shape:
 
+- a lightweight `:planning` selector for `simple mode` and `detail mode`
+- a second-level selector for `manual` and future `llm-assisted` detail authoring
+- an embedded manual planning editor for staged drafts, validation results, and explicit promote actions
 - planning status: valid, stale, invalid, repairing
 - selected queue-head task
 - last validation failure summary
 - protected-file rollback notice
 
-This belongs in the current shell notices and inspection surfaces, not in a separate heavyweight planning UI.
+This should still feel like an extension of the current shell surfaces, not a separate heavyweight planning product inside the TUI.
 
 ## Backward Compatibility
 
@@ -501,6 +563,8 @@ The current simple follow-up mode should remain usable.
 
 - if a workspace has no planning files, current builtin follow-up templates still work
 - the operator may enter authoring mode, edit files, validate them, and then return to automated execution
+- `simple mode` should cover the low-ceremony case where the operator does not want to define named directions yet
+- direct filesystem editing remains valid even after the guided `:planning` flow exists
 - planning-aware templates should activate only when the workspace is initialized
 - stop-keyword and no-file-change rules remain valid and should continue to gate auto follow-up
 
@@ -508,15 +572,18 @@ This keeps rollout incremental and avoids blocking today's users.
 
 ## Recommended Initialization Template
 
-Workspace initialization should generate:
+Planning initialization should stage:
 
 - `.codex-exec-loop/planning/directions.toml`
 - `.codex-exec-loop/planning/task-ledger.json`
 - `.codex-exec-loop/planning/task-ledger.schema.json`
-- `.codex-exec-loop/planning/queue.snapshot.json`
 - `.codex-exec-loop/planning/result-output.md`
 
-The generated files should be minimal but valid, so the runtime can enter a known planning state immediately after initialization.
+Mode-specific expectations:
+
+- `simple mode`: `directions.toml` contains one generic active direction and `task-ledger.json` starts empty
+- `detail mode`: `directions.toml` is intended for explicit direction authoring and `task-ledger.json` starts from a richer operator-edited draft
+- `queue.snapshot.json`: generated only after the staged planning files are promoted and accepted by runtime validation
 
 ## Explicitly Rejected Alternatives
 
@@ -549,12 +616,14 @@ Rejected because:
 Recommended implementation order:
 
 1. Add planning domain models plus file contracts.
-2. Add planning-init scaffolding and validation-only authoring flow.
-3. Add validation and queue rebuild services.
-4. Extend prompt assembly with planning context injection and task-admission rules.
-5. Extend runtime events so changed planning-file paths are available after each turn.
-6. Add protected-file rollback and task-ledger repair flow.
-7. Surface planning status inside the shell.
+2. Add `:planning` mode selection plus simple-mode generic scaffold creation.
+3. Add detail-mode manual editor, staged validation, and explicit promote flow.
+4. Add validation and queue rebuild services.
+5. Extend prompt assembly with planning context injection and task-admission rules.
+6. Extend runtime events so changed planning-file paths are available after each turn.
+7. Add protected-file rollback and task-ledger repair flow.
+8. Surface planning status inside the shell.
+9. Add the future detail-mode LLM-assisted drafting branch after the manual path is stable.
 
 This order minimizes risk because validation and source-of-truth rules land before auto-repair and UI polish.
 
