@@ -3,10 +3,12 @@ use std::rc::Rc;
 use ratatui::layout::Position;
 
 use super::shell_presentation::{
-    ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
-    StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
+    ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView,
+    PlanningInitOverlayView, SessionOverlayView, StartupOverlayView,
+    build_conversation_shell_frame_view, build_followup_template_overlay_view,
     build_inline_prompt_cursor_offset, build_inline_tail_lines, build_input_prompt_cursor_offset,
-    build_session_overlay_view, build_startup_overlay_view, startup_screen_is_active,
+    build_planning_init_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    startup_screen_is_active,
 };
 use super::*;
 
@@ -19,6 +21,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
         (_, ShellOverlay::Startup) => draw_startup_overlay(frame, app),
         (_, ShellOverlay::Sessions) => draw_session_overlay(frame, app),
         (_, ShellOverlay::FollowupTemplates) => draw_followup_template_overlay(frame, app),
+        (_, ShellOverlay::PlanningInit) => draw_planning_init_overlay(frame, app),
     }
 
     if app.is_exit_confirmation_visible() {
@@ -299,6 +302,9 @@ fn draw_inline_shell_inspection(
         ShellOverlay::FollowupTemplates => {
             draw_inline_followup_template_inspection(frame, inspection_area, app)
         }
+        ShellOverlay::PlanningInit => {
+            draw_inline_planning_init_inspection(frame, inspection_area, app)
+        }
     }
 }
 
@@ -456,6 +462,40 @@ fn draw_inline_followup_template_inspection(
         false,
     );
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_planning_init_overlay_view(app);
+    let PlanningInitOverlayView {
+        header_lines,
+        summary_lines,
+        option_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 5)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&status_lines, 5)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Planning / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
@@ -626,6 +666,59 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     frame.render_widget(
         Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
         layout[3],
+    );
+}
+
+fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let overlay_view = build_planning_init_overlay_view(app);
+    let PlanningInitOverlayView {
+        header_lines,
+        summary_lines,
+        option_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let popup_area = centered_rect(86, 70, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(block_height_for_lines(&header_lines, 3, 4)),
+            Constraint::Length(block_height_for_lines(&summary_lines, 4, 6)),
+            Constraint::Min(8),
+            Constraint::Length(block_height_for_lines(&status_lines, 4, 6)),
+            Constraint::Length(block_height_for_lines(&key_lines, 3, 5)),
+        ])
+        .split(popup_area);
+
+    frame.render_widget(
+        Paragraph::new(header_lines)
+            .block(Block::default().borders(Borders::ALL).title("Planning")),
+        layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(summary_lines)
+            .block(Block::default().borders(Borders::ALL).title("Summary"))
+            .wrap(Wrap { trim: true }),
+        layout[1],
+    );
+    frame.render_widget(
+        Paragraph::new(option_lines)
+            .block(Block::default().borders(Borders::ALL).title("Options"))
+            .wrap(Wrap { trim: false }),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(status_lines)
+            .block(Block::default().borders(Borders::ALL).title("Status"))
+            .wrap(Wrap { trim: true }),
+        layout[3],
+    );
+    frame.render_widget(
+        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        layout[4],
     );
 }
 

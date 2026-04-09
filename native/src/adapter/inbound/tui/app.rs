@@ -69,6 +69,8 @@ mod followup_overlay_ui;
 mod github_polling;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/planning_init_overlay_ui.rs"]
+mod planning_init_overlay_ui;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/session_browser.rs"]
@@ -118,6 +120,10 @@ use followup_overlay_ui::{
 };
 use github_polling::GithubReviewPollingState;
 use inline_shell_commands::InlineShellCommand;
+use planning_init_overlay_ui::{
+    PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
+    PlanningInitOverlayUiState,
+};
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
@@ -132,9 +138,9 @@ use shell_presentation::{
     build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
     build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
-    build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
-    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
-    build_transcript_title,
+    build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
+    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
+    build_transcript_panel_view, build_transcript_title,
 };
 use transcript_viewport::TranscriptViewportState;
 
@@ -173,6 +179,7 @@ struct NativeTuiApp {
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
     followup_overlay_ui_state: FollowupOverlayUiState,
+    planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     transcript_viewport_state: TranscriptViewportState,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,

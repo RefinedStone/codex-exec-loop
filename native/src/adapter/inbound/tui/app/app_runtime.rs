@@ -29,12 +29,12 @@ use super::{
     ConversationLifecycleState, ConversationRuntimeEffect, ConversationRuntimeEvent,
     ConversationState, ConversationViewModel, ExitConfirmationState, FollowupControlEffect,
     FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState, InlineShellCommand,
-    NativeTuiApp, PlanningRepairSubmitContext, PromptOrigin, SESSION_PAGE_SIZE,
-    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
-    ShellOverlay, StartupState, TranscriptViewportState, reduce_conversation_input,
-    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
-    reduce_followup_controls, reduce_followup_overlay_ui, reduce_shell_chrome,
-    startup_ascii_art_enabled_from_environment,
+    NativeTuiApp, PlanningInitOverlayUiState, PlanningRepairSubmitContext, PromptOrigin,
+    SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent,
+    ShellChromeState, ShellOverlay, StartupState, TranscriptViewportState,
+    reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
+    reduce_conversation_runtime, reduce_followup_controls, reduce_followup_overlay_ui,
+    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 
@@ -106,6 +106,7 @@ impl NativeTuiApp {
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
+            planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
             transcript_viewport_state: TranscriptViewportState::default(),
             active_session: None,
             startup_service,

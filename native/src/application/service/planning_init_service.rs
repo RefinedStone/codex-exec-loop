@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::domain::planning::PlanningValidationReport;
 
-use super::planning_bootstrap_service::PlanningBootstrapService;
+use super::planning_bootstrap_service::{PlanningBootstrapMode, PlanningBootstrapService};
 use super::planning_validation_service::PlanningValidationService;
 
 #[derive(Clone)]
@@ -20,6 +20,7 @@ pub struct PlanningInitService {
 
 #[derive(Debug, Clone)]
 pub struct PlanningInitStageResult {
+    pub mode: PlanningBootstrapMode,
     pub draft_name: String,
     pub draft_directory: String,
     pub staged_file_count: usize,
@@ -33,7 +34,11 @@ impl PlanningInitStageResult {
 
     pub fn status_text(&self) -> String {
         format!(
-            "planning init staged / draft: {} / files: {} / validation: {}",
+            "planning init staged / mode: {} / draft: {} / files: {} / validation: {}",
+            match self.mode {
+                PlanningBootstrapMode::Detail => "detail",
+                PlanningBootstrapMode::Simple => "simple",
+            },
             self.draft_name,
             self.staged_file_count,
             if self.is_valid() {
@@ -59,7 +64,21 @@ impl PlanningInitService {
     }
 
     pub fn stage_bootstrap_draft(&self, workspace_dir: &str) -> Result<PlanningInitStageResult> {
-        let artifacts = self.planning_bootstrap_service.build_artifacts();
+        self.stage_draft(workspace_dir, PlanningBootstrapMode::Detail)
+    }
+
+    pub fn stage_simple_mode_draft(&self, workspace_dir: &str) -> Result<PlanningInitStageResult> {
+        self.stage_draft(workspace_dir, PlanningBootstrapMode::Simple)
+    }
+
+    fn stage_draft(
+        &self,
+        workspace_dir: &str,
+        mode: PlanningBootstrapMode,
+    ) -> Result<PlanningInitStageResult> {
+        let artifacts = self
+            .planning_bootstrap_service
+            .build_artifacts_for_mode(mode);
         let validation_result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions_toml: &artifacts.directions_toml,
@@ -94,6 +113,7 @@ impl PlanningInitService {
         )?;
 
         Ok(PlanningInitStageResult {
+            mode,
             draft_name: stage_record.draft_name,
             draft_directory: stage_record.draft_directory,
             staged_file_count: stage_record.staged_files.len(),
@@ -122,7 +142,9 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftStageRecord, PlanningStagedFileRecord,
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_bootstrap_service::{
+        PlanningBootstrapMode, PlanningBootstrapService,
+    };
     use crate::application::service::planning_validation_service::PlanningValidationService;
 
     #[derive(Default)]
@@ -194,6 +216,7 @@ mod tests {
             .stage_bootstrap_draft("/tmp/workspace")
             .expect("bootstrap draft should stage");
 
+        assert_eq!(result.mode, PlanningBootstrapMode::Detail);
         assert!(result.draft_name.starts_with("bootstrap-"));
         assert_eq!(result.staged_file_count, 4);
         assert!(result.is_valid(), "{:?}", result.validation_report.issues);
@@ -202,6 +225,33 @@ mod tests {
             .lock()
             .expect("staged_files mutex should not be poisoned");
         assert_eq!(staged_files.len(), 4);
+    }
+
+    #[test]
+    fn stage_simple_mode_draft_uses_simple_bootstrap_contract() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let result = service
+            .stage_simple_mode_draft("/tmp/workspace")
+            .expect("simple mode draft should stage");
+
+        assert_eq!(result.mode, PlanningBootstrapMode::Simple);
+        assert!(result.is_valid(), "{:?}", result.validation_report.issues);
+        let staged_files = workspace_port
+            .staged_files
+            .lock()
+            .expect("staged_files mutex should not be poisoned");
+        let directions_body = staged_files
+            .iter()
+            .find(|file| file.active_path.ends_with("directions.toml"))
+            .map(|file| file.body.as_str())
+            .expect("directions.toml should be staged");
+        assert!(directions_body.contains("general-workstream"));
     }
 
     #[test]

@@ -124,6 +124,14 @@ pub(super) struct FollowupTemplateOverlayView {
     pub(super) key_lines: Vec<Line<'static>>,
 }
 
+pub(super) struct PlanningInitOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) summary_lines: Vec<Line<'static>>,
+    pub(super) option_lines: Vec<Line<'static>>,
+    pub(super) status_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
 pub(super) fn build_startup_banner_lines(
     app: &NativeTuiApp,
     max_height: Option<u16>,
@@ -363,6 +371,142 @@ pub(super) fn build_followup_template_overlay_view(
         status_lines: build_followup_template_status_lines(app),
         key_lines: build_followup_template_key_lines(app),
     }
+}
+
+pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
+    match app.planning_init_overlay_ui_state.step() {
+        PlanningInitOverlayStep::ModeSelection => PlanningInitOverlayView {
+            header_lines: vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Planning Initialization",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" / shell guidance"),
+                ]),
+                Line::from("Pick the planning entry path before any files are staged."),
+            ],
+            summary_lines: vec![
+                Line::from(
+                    "Every guided path stages draft files under .codex-exec-loop/planning/drafts/.",
+                ),
+                Line::from(
+                    "Simple mode keeps one generic active direction; detail mode prepares richer direction authoring.",
+                ),
+            ],
+            option_lines: vec![
+                planning_init_option_line(
+                    "A",
+                    "simple mode",
+                    "stage one generic direction and an empty task ledger",
+                    app.planning_init_overlay_ui_state.selected_mode()
+                        == PlanningInitModeSelection::Simple,
+                    false,
+                ),
+                planning_init_option_line(
+                    "B",
+                    "detail mode",
+                    "branch into manual or future llm-assisted authoring",
+                    app.planning_init_overlay_ui_state.selected_mode()
+                        == PlanningInitModeSelection::Detail,
+                    false,
+                ),
+            ],
+            status_lines: vec![
+                Line::from(format!(
+                    "selected: {}",
+                    match app.planning_init_overlay_ui_state.selected_mode() {
+                        PlanningInitModeSelection::Simple => "simple mode",
+                        PlanningInitModeSelection::Detail => "detail mode",
+                    }
+                )),
+                Line::from("simple mode is the low-ceremony path for planning-aware execution."),
+            ],
+            key_lines: vec![
+                Line::from("A/B or arrows: move selection"),
+                Line::from("Enter: continue    Esc/Ctrl+C: cancel"),
+            ],
+        },
+        PlanningInitOverlayStep::DetailSelection => PlanningInitOverlayView {
+            header_lines: vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Planning Initialization",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" / detail mode"),
+                ]),
+                Line::from("Choose how detail-mode drafts should be prepared."),
+            ],
+            summary_lines: vec![
+                Line::from(
+                    "Manual stages the richer scaffold now; embedded terminal editing lands in a later slice.",
+                ),
+                Line::from("LLM-assisted remains visible for the target UX but is still disabled."),
+            ],
+            option_lines: vec![
+                planning_init_option_line(
+                    "A",
+                    "manual",
+                    "stage the detail scaffold for direct follow-up editing",
+                    app.planning_init_overlay_ui_state.selected_detail()
+                        == PlanningInitDetailSelection::Manual,
+                    false,
+                ),
+                planning_init_option_line(
+                    "B",
+                    "llm-assisted",
+                    "future guided drafting flow (not supported yet)",
+                    app.planning_init_overlay_ui_state.selected_detail()
+                        == PlanningInitDetailSelection::LlmAssisted,
+                    true,
+                ),
+            ],
+            status_lines: vec![
+                Line::from(format!(
+                    "selected: {}",
+                    match app.planning_init_overlay_ui_state.selected_detail() {
+                        PlanningInitDetailSelection::Manual => "manual",
+                        PlanningInitDetailSelection::LlmAssisted => "llm-assisted (disabled)",
+                    }
+                )),
+                Line::from(
+                    "Enter on manual stages the richer scaffold; llm-assisted stays unavailable for now.",
+                ),
+            ],
+            key_lines: vec![
+                Line::from("A/B or arrows: move selection"),
+                Line::from("Backspace/Left: back    Enter: act    Esc/Ctrl+C: cancel"),
+            ],
+        },
+    }
+}
+
+fn planning_init_option_line(
+    shortcut: &str,
+    label: &str,
+    detail: &str,
+    selected: bool,
+    disabled: bool,
+) -> Line<'static> {
+    let style = if disabled {
+        Style::default().fg(Color::DarkGray)
+    } else if selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let marker = if selected { ">>" } else { "  " };
+
+    Line::from(vec![
+        Span::styled(format!("{marker} {shortcut}. "), style),
+        Span::styled(label.to_string(), style.add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {detail}"), style),
+    ])
 }
 
 fn current_live_agent_lines(app: &NativeTuiApp) -> Option<Vec<Line<'static>>> {

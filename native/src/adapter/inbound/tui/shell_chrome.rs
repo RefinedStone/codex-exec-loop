@@ -7,6 +7,7 @@ pub enum ShellOverlay {
     Startup,
     Sessions,
     FollowupTemplates,
+    PlanningInit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,7 @@ pub enum ShellChromeEvent {
         limit: usize,
     },
     FollowupTemplatesOverlayShown,
+    PlanningInitOverlayShown,
     StartupOverlayToggled,
     SessionsOverlayToggled {
         limit: usize,
@@ -156,6 +158,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::FollowupTemplatesOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::FollowupTemplates;
+        }
+        ShellChromeEvent::PlanningInitOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::PlanningInit;
         }
         ShellChromeEvent::StartupOverlayToggled => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -391,6 +397,21 @@ mod tests {
             ExitConfirmationState::Hidden
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::FollowupTemplates);
+    }
+
+    #[test]
+    fn showing_planning_init_overlay_hides_exit_confirmation() {
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::PlanningInitOverlayShown);
+
+        assert_eq!(
+            reduced.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::PlanningInit);
+        assert!(reduced.effects.is_empty());
     }
 
     fn sample_startup_diagnostics() -> StartupDiagnostics {

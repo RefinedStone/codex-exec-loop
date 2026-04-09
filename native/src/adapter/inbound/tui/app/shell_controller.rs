@@ -120,6 +120,11 @@ impl NativeTuiApp {
         self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayShown);
     }
 
+    pub(super) fn show_planning_init_overlay(&mut self) {
+        self.planning_init_overlay_ui_state.reset();
+        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+    }
+
     pub(super) fn toggle_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayToggled);
     }
@@ -151,7 +156,7 @@ impl NativeTuiApp {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
-            InlineShellCommand::PlanningInit => self.stage_planning_init_draft(),
+            InlineShellCommand::PlanningInit => self.show_planning_init_overlay(),
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
             InlineShellCommand::TranscriptTopLegacy => {}
             InlineShellCommand::TranscriptTailLegacy => {}
@@ -172,7 +177,27 @@ impl NativeTuiApp {
             .planning_init_service
             .stage_bootstrap_draft(&workspace_directory)
         {
-            Ok(result) => result.status_text(),
+            Ok(result) => {
+                self.close_shell_overlay();
+                result.status_text()
+            }
+            Err(error) => format!("planning init failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
+        let workspace_directory = self.current_workspace_directory();
+        let status_text = match self
+            .planning_init_service
+            .stage_simple_mode_draft(&workspace_directory)
+        {
+            Ok(result) => {
+                self.close_shell_overlay();
+                result.status_text()
+            }
             Err(error) => format!("planning init failed: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -779,6 +804,87 @@ impl NativeTuiApp {
                     .scroll_followup_template_preview(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32),
                 KeyCode::Enter if key.modifiers.is_empty() => self.close_shell_overlay(),
                 _ => {}
+            }
+            return true;
+        }
+
+        if self.shell_overlay == ShellOverlay::PlanningInit {
+            match self.planning_init_overlay_ui_state.step() {
+                PlanningInitOverlayStep::ModeSelection => match key.code {
+                    KeyCode::Up | KeyCode::Left | KeyCode::Char('h')
+                        if key.modifiers.is_empty() =>
+                    {
+                        self.planning_init_overlay_ui_state.move_mode_selection(-1)
+                    }
+                    KeyCode::Down | KeyCode::Right | KeyCode::Char('l')
+                        if key.modifiers.is_empty() =>
+                    {
+                        self.planning_init_overlay_ui_state.move_mode_selection(1)
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('A')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.planning_init_overlay_ui_state
+                            .select_mode(PlanningInitModeSelection::Simple)
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.planning_init_overlay_ui_state
+                            .select_mode(PlanningInitModeSelection::Detail)
+                    }
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        match self.planning_init_overlay_ui_state.selected_mode() {
+                            PlanningInitModeSelection::Simple => {
+                                self.stage_simple_mode_planning_init_draft()
+                            }
+                            PlanningInitModeSelection::Detail => {
+                                self.planning_init_overlay_ui_state.open_detail_selection()
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                PlanningInitOverlayStep::DetailSelection => match key.code {
+                    KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
+                        .planning_init_overlay_ui_state
+                        .return_to_mode_selection(),
+                    KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                        .planning_init_overlay_ui_state
+                        .move_detail_selection(-1),
+                    KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                        self.planning_init_overlay_ui_state.move_detail_selection(1)
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('A')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.planning_init_overlay_ui_state
+                            .select_detail(PlanningInitDetailSelection::Manual)
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.planning_init_overlay_ui_state
+                            .select_detail(PlanningInitDetailSelection::LlmAssisted)
+                    }
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        match self.planning_init_overlay_ui_state.selected_detail() {
+                            PlanningInitDetailSelection::Manual => {
+                                self.stage_planning_init_draft();
+                            }
+                            PlanningInitDetailSelection::LlmAssisted => {
+                                self.dispatch_conversation_input(
+                                    ConversationInputEvent::StatusMessageShown {
+                                        status_text:
+                                            "planning llm-assisted detail mode is not supported yet"
+                                                .to_string(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                },
             }
             return true;
         }

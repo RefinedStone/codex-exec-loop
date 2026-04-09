@@ -20,6 +20,23 @@ scope_hints = [
 state = "active"
 "#;
 
+const SIMPLE_MODE_DIRECTIONS_TOML: &str = r#"version = 1
+
+[[directions]]
+id = "general-workstream"
+title = "General workstream"
+summary = "No detailed direction taxonomy is defined yet. Put every actionable goal or accepted proposal into task-ledger.json and work from that queue."
+success_criteria = [
+    "Actionable goals are represented in task-ledger.json before execution.",
+    "Work advances by updating the task ledger instead of inventing unmanaged side tasks.",
+]
+scope_hints = [
+    "Use this generic direction until the operator replaces it with a richer direction catalog.",
+    "Treat task-ledger.json as the source of truth for concrete next actions and proposals.",
+]
+state = "active"
+"#;
+
 const DEFAULT_RESULT_OUTPUT_MARKDOWN: &str = r#"# Result Output Prompt
 
 - Summarize the work you actually completed in this turn.
@@ -29,6 +46,12 @@ const DEFAULT_RESULT_OUTPUT_MARKDOWN: &str = r#"# Result Output Prompt
 
 #[derive(Default, Clone)]
 pub struct PlanningBootstrapService;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningBootstrapMode {
+    Detail,
+    Simple,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningBootstrapArtifacts {
@@ -48,9 +71,21 @@ impl PlanningBootstrapService {
     }
 
     pub fn build_artifacts(&self) -> PlanningBootstrapArtifacts {
+        self.build_artifacts_for_mode(PlanningBootstrapMode::Detail)
+    }
+
+    pub fn build_artifacts_for_mode(
+        &self,
+        mode: PlanningBootstrapMode,
+    ) -> PlanningBootstrapArtifacts {
+        let directions_toml = match mode {
+            PlanningBootstrapMode::Detail => DEFAULT_DIRECTIONS_TOML,
+            PlanningBootstrapMode::Simple => SIMPLE_MODE_DIRECTIONS_TOML,
+        };
+
         PlanningBootstrapArtifacts {
             directions_path: DIRECTIONS_FILE_PATH.to_string(),
-            directions_toml: DEFAULT_DIRECTIONS_TOML.to_string(),
+            directions_toml: directions_toml.to_string(),
             task_ledger_path: TASK_LEDGER_FILE_PATH.to_string(),
             task_ledger_json: serde_json::to_string_pretty(&TaskLedgerDocument {
                 version: PLANNING_FORMAT_VERSION,
@@ -136,7 +171,7 @@ impl PlanningBootstrapService {
 
 #[cfg(test)]
 mod tests {
-    use super::PlanningBootstrapService;
+    use super::{PlanningBootstrapMode, PlanningBootstrapService};
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionState, PLANNING_FORMAT_VERSION,
     };
@@ -171,5 +206,27 @@ mod tests {
         assert_eq!(directions.version, PLANNING_FORMAT_VERSION);
         assert_eq!(directions.directions.len(), 1);
         assert_eq!(directions.directions[0].state, DirectionState::Active);
+    }
+
+    #[test]
+    fn simple_mode_artifacts_use_generic_catch_all_direction() {
+        let service = PlanningBootstrapService::new();
+        let directions: DirectionCatalogDocument = toml::from_str(
+            service
+                .build_artifacts_for_mode(PlanningBootstrapMode::Simple)
+                .directions_toml
+                .as_str(),
+        )
+        .expect("simple mode directions should parse");
+
+        assert_eq!(directions.version, PLANNING_FORMAT_VERSION);
+        assert_eq!(directions.directions.len(), 1);
+        assert_eq!(directions.directions[0].id, "general-workstream");
+        assert_eq!(directions.directions[0].state, DirectionState::Active);
+        assert!(
+            directions.directions[0]
+                .summary
+                .contains("task-ledger.json")
+        );
     }
 }

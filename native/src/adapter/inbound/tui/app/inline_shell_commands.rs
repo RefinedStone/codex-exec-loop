@@ -12,7 +12,7 @@ pub(super) enum InlineShellCommand {
 
 impl InlineShellCommand {
     const COMMAND_LIST_LINE: &str =
-        "Shell commands: :diag  :sessions  :templates  :planning-init  :new  :help";
+        "Shell commands: :diag  :sessions  :templates  :planning  :new  :help";
 
     pub(super) fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
@@ -52,7 +52,7 @@ impl InlineShellCommand {
             Self::Diagnostics => "Press Enter to open the diagnostics inspection.",
             Self::Sessions => "Press Enter to open the recent-sessions inspection.",
             Self::Templates => "Press Enter to open the template inspection.",
-            Self::PlanningInit => "Press Enter to stage planning draft files for review.",
+            Self::PlanningInit => "Press Enter to open the planning mode selector.",
             Self::NewDraft => "Press Enter to open a new draft in the shell.",
             Self::TranscriptTopLegacy | Self::TranscriptTailLegacy => {
                 "Press Enter to see where transcript jump controls moved."
@@ -66,7 +66,7 @@ impl InlineShellCommand {
             Self::Diagnostics => Some("opened diagnostics inspection"),
             Self::Sessions => Some("opened recent sessions inspection"),
             Self::Templates => Some("opened template inspection"),
-            Self::PlanningInit => None,
+            Self::PlanningInit => Some("opened planning initialization selector"),
             Self::NewDraft => None,
             Self::TranscriptTopLegacy | Self::TranscriptTailLegacy => Some(
                 "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
@@ -130,7 +130,10 @@ mod tests {
                 InlineShellCommand::Templates,
                 Some("opened template inspection"),
             ),
-            (InlineShellCommand::PlanningInit, None),
+            (
+                InlineShellCommand::PlanningInit,
+                Some("opened planning initialization selector"),
+            ),
             (
                 InlineShellCommand::TranscriptTopLegacy,
                 Some(

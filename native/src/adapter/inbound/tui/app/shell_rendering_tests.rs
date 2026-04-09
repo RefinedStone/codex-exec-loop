@@ -209,6 +209,25 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
     assert!(!rendered.contains("┌"));
 }
 
+#[test]
+fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.show_planning_init_overlay();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline planning inspection render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(rendered.contains("Planning / inline inspection"));
+    assert!(rendered.contains("simple mode"));
+    assert!(rendered.contains("detail mode"));
+    assert!(!rendered.contains("Transcript /"));
+    assert!(!rendered.contains("┌"));
+}
+
 struct FakeCodexAppServerPort;
 
 impl CodexAppServerPort for FakeCodexAppServerPort {

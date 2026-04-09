@@ -16,15 +16,15 @@ use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
     ConversationState, ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
     DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP,
-    GithubReviewPollingState, InlineShellCommand, MAX_COMPOSER_HEIGHT, NativeTuiApp, PromptOrigin,
-    RecordedAutoFollowupActivity, SessionOverlayUiState, SessionState, ShellActionAvailability,
-    ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
-    build_conversation_shell_frame_view, build_conversation_shell_view,
+    GithubReviewPollingState, InlineShellCommand, MAX_COMPOSER_HEIGHT, NativeTuiApp,
+    PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
+    SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
+    TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
     build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
-    build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
-    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
-    build_transcript_title, format_conversation_lines, shell_layout,
+    build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
+    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
+    build_transcript_panel_view, build_transcript_title, format_conversation_lines, shell_layout,
     startup_ascii_art_enabled_from_value,
 };
 use crate::application::port::outbound::codex_app_server_port::{
@@ -408,7 +408,28 @@ fn empty_draft_prompts_for_first_message() {
 }
 
 #[test]
-fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
+fn planning_init_command_opens_selector_overlay() {
+    let (mut app, _) = make_test_app();
+
+    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ModeSelection
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("opened planning initialization selector")
+    );
+}
+
+#[test]
+fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() {
     use std::collections::HashSet;
 
     let (mut app, _) = make_test_app();
@@ -420,11 +441,15 @@ fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
         .join("drafts");
 
     app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
     assert!(conversation.status_text.contains("planning init staged"));
+    assert!(conversation.status_text.contains("mode: simple"));
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
     assert!(staged_drafts_dir.exists());
     let draft_directories = std::fs::read_dir(&staged_drafts_dir)
         .expect("drafts directory should be readable")
@@ -446,8 +471,60 @@ fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
     .into_iter()
     .collect::<HashSet<_>>();
     assert_eq!(staged_files, expected_files);
+    let directions = std::fs::read_to_string(draft_directories[0].join("directions.toml"))
+        .expect("staged directions should be readable");
+    assert!(directions.contains("general-workstream"));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_detail_manual_selection_stages_detail_scaffold() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-init-detail-app");
+    let staged_drafts_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning")
+        .join("drafts");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+
+    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::DetailSelection
+    );
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("planning init staged"));
+    assert!(conversation.status_text.contains("mode: detail"));
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    assert!(staged_drafts_dir.exists());
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_detail_overlay_surfaces_llm_assisted_as_disabled() {
+    let (mut app, _) = make_test_app();
+    app.show_planning_init_overlay();
+    app.planning_init_overlay_ui_state.open_detail_selection();
+    app.planning_init_overlay_ui_state
+        .select_detail(super::PlanningInitDetailSelection::LlmAssisted);
+
+    let view = build_planning_init_overlay_view(&app);
+    let rendered = view
+        .option_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("llm-assisted"));
+    assert!(rendered.contains("not supported yet"));
 }
 
 #[test]
