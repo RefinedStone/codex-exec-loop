@@ -528,6 +528,24 @@ fn planning_detail_overlay_surfaces_llm_assisted_as_disabled() {
 }
 
 #[test]
+fn planning_mode_selection_uses_vertical_navigation_keys() {
+    let (mut app, _) = make_test_app();
+    app.show_planning_init_overlay();
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.selected_mode(),
+        super::PlanningInitModeSelection::Detail
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.selected_mode(),
+        super::PlanningInitModeSelection::Simple
+    );
+}
+
+#[test]
 fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));

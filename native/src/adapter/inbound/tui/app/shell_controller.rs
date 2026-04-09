@@ -811,14 +811,10 @@ impl NativeTuiApp {
         if self.shell_overlay == ShellOverlay::PlanningInit {
             match self.planning_init_overlay_ui_state.step() {
                 PlanningInitOverlayStep::ModeSelection => match key.code {
-                    KeyCode::Up | KeyCode::Left | KeyCode::Char('h')
-                        if key.modifiers.is_empty() =>
-                    {
+                    KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                         self.planning_init_overlay_ui_state.move_mode_selection(-1)
                     }
-                    KeyCode::Down | KeyCode::Right | KeyCode::Char('l')
-                        if key.modifiers.is_empty() =>
-                    {
+                    KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                         self.planning_init_overlay_ui_state.move_mode_selection(1)
                     }
                     KeyCode::Char('a') | KeyCode::Char('A')
