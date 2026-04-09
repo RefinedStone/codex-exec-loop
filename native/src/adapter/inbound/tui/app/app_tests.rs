@@ -330,12 +330,15 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("workspace: /tmp/root"));
+    assert!(rendered.contains("schema snapshot: schema"));
     assert!(rendered.contains("> "));
     assert!(rendered.contains("prompt: new thread ready"));
     assert!(rendered.contains("Ctrl+j nl"));
     assert!(rendered.contains(":help"));
     assert!(!rendered.contains(":help commands"));
-    assert!(!rendered.contains("Ready to start a new thread."));
+    assert!(!rendered.contains("thread: new draft  |  turn: idle"));
 }
 
 #[test]
@@ -1271,6 +1274,27 @@ fn typing_in_blank_draft_keeps_startup_ascii_art_visible() {
     assert!(rendered.contains(".::::::.::::::.::::::.::::::"));
     assert!(rendered.contains(".::       .::.::  .::   .::"));
     assert!(!rendered.contains("No messages in this thread yet."));
+}
+
+#[test]
+fn inline_tail_keeps_startup_context_above_buffered_prompt_in_new_draft() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+        conversation.input_buffer = "hello".to_string();
+    }
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("workspace: /tmp/root"));
+    assert!(rendered.contains("schema snapshot: schema"));
+    assert!(rendered.contains("> hello"));
+    assert!(rendered.contains("buffered prompt"));
 }
 
 #[test]

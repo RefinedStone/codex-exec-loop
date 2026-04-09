@@ -136,16 +136,19 @@ pub(super) fn build_startup_banner_lines(
     Some(startup_ascii_art_lines(max_height))
 }
 
-pub(super) fn startup_banner_is_active(app: &NativeTuiApp) -> bool {
+pub(super) fn startup_screen_is_active(app: &NativeTuiApp) -> bool {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         return false;
     };
 
-    app.show_startup_ascii_art
-        && !conversation.has_active_thread()
+    !conversation.has_active_thread()
         && conversation.messages.is_empty()
         && conversation.active_turn_id.is_none()
         && conversation.live_agent_message.is_none()
+}
+
+pub(super) fn startup_banner_is_active(app: &NativeTuiApp) -> bool {
+    app.show_startup_ascii_art && startup_screen_is_active(app)
 }
 
 pub(super) fn build_conversation_shell_view(
@@ -521,6 +524,12 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
 }
 
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if startup_screen_is_active(app) {
+        let mut lines = build_inline_startup_screen_lines(app);
+        lines.extend(build_inline_tail_prompt_lines(app));
+        return lines;
+    }
+
     let mut lines = Vec::new();
 
     match &app.conversation_state {
@@ -592,6 +601,55 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
     }
 
     lines.extend(build_inline_tail_prompt_lines(app));
+    lines
+}
+
+fn build_inline_startup_screen_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!(
+        "startup: {}  |  sessions: {}  |  gh: {}",
+        shell_action_availability_label(app),
+        recent_session_status_label(app),
+        github_review_polling_status_label(app),
+    ))];
+
+    match &app.startup_state {
+        StartupState::Idle => {
+            lines.push(Line::from("status: preparing startup checks"));
+            if let ConversationState::Ready(conversation) = &app.conversation_state {
+                lines.push(Line::from(format!("workspace: {}", conversation.cwd)));
+            }
+        }
+        StartupState::Loading => {
+            lines.push(Line::from("status: initializing codex shell"));
+            lines.extend(build_startup_check_lines(app));
+        }
+        StartupState::Ready(diagnostics) => {
+            lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
+            lines.extend(build_startup_check_lines(app));
+            if let Some(first_warning) = diagnostics.warnings.first() {
+                lines.push(Line::from(format!(
+                    "warning: {}",
+                    compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+                )));
+            }
+        }
+        StartupState::Failed(message) => {
+            lines.push(Line::from(format!("status: {message}")));
+            for warning_line in build_startup_warning_lines(app)
+                .into_iter()
+                .filter(|line| !line.to_string().eq_ignore_ascii_case("no warnings"))
+            {
+                lines.push(Line::from(format!(
+                    "warning: {}",
+                    compact_inline_detail(
+                        &warning_line.to_string(),
+                        INLINE_TAIL_NOTICE_DETAIL_LIMIT
+                    )
+                )));
+            }
+        }
+    }
+
     lines
 }
 

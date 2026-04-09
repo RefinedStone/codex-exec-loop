@@ -6,7 +6,7 @@ use super::shell_presentation::{
     ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView, SessionOverlayView,
     StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
     build_inline_prompt_cursor_offset, build_inline_tail_lines, build_input_prompt_cursor_offset,
-    build_session_overlay_view, build_startup_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, startup_screen_is_active,
 };
 use super::*;
 
@@ -88,7 +88,11 @@ fn draw_inline_conversation_shell(
     let tail_lines = build_inline_tail_lines(app);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
         let frame_area = frame.area();
-        let tail_area = inline_body_render_area(frame_area, &tail_lines);
+        let tail_area = if startup_screen_is_active(app) {
+            frame_area
+        } else {
+            inline_body_render_area(frame_area, &tail_lines)
+        };
         render_inline_body(frame, tail_area, tail_lines, false);
         set_cursor_if_visible(
             frame,

@@ -58,6 +58,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = true;
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -67,7 +68,10 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
-    assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
+    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("workspace: /tmp/root"));
+    assert!(rendered.contains("schema snapshot: snapshot.json"));
+    assert!(rendered.contains("prompt: new thread ready"));
 }
 
 #[test]
@@ -82,7 +86,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 14));
+        .assert_cursor_position(Position::new(2, 7));
 }
 
 #[test]
