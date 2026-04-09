@@ -543,9 +543,36 @@ fn inline_shell_view_surfaces_live_agent_output_in_footer() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(
-        rendered.contains("live output: Codex: working through the next streaming answer chunk")
-    );
+    assert!(rendered.contains("live: Codex"));
+    assert!(rendered.contains("  working through the next streaming answer chunk"));
+}
+
+#[test]
+fn inline_tail_shows_latest_live_agent_lines_instead_of_activity_summary() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    conversation.live_agent_message = Some(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "line one\nline two\nline three",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("live: Codex"));
+    assert!(!rendered.contains("tool: idle"));
+    assert!(!rendered.contains("line one"));
+    assert!(rendered.contains("  line two"));
+    assert!(rendered.contains("  line three"));
 }
 
 #[test]

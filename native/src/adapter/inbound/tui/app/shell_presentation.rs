@@ -10,6 +10,7 @@ const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOOTER_GITHUB_REVIEW_DETAIL_LIMIT: usize = 44;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
+const INLINE_LIVE_AGENT_MAX_CONTENT_LINES: usize = 2;
 const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
 const INLINE_TAIL_TEMPLATE_LABEL_LIMIT: usize = 16;
 const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
@@ -96,8 +97,8 @@ pub(super) fn build_conversation_shell_view(
     header_lines.push(build_frontend_summary_line(mode));
     let mut footer_lines = build_shell_footer_lines(app);
     if mode == ShellFrontendMode::InlineMainBuffer {
-        if let Some(live_agent_summary) = current_live_agent_footer_line(app) {
-            footer_lines.push(live_agent_summary);
+        if let Some(live_agent_lines) = current_live_agent_lines(app) {
+            footer_lines.extend(live_agent_lines);
         }
     }
 
@@ -298,14 +299,27 @@ pub(super) fn build_followup_template_overlay_view(
     }
 }
 
-fn current_live_agent_footer_line(app: &NativeTuiApp) -> Option<Line<'static>> {
+fn current_live_agent_lines(app: &NativeTuiApp) -> Option<Vec<Line<'static>>> {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         return None;
     };
 
-    conversation
-        .live_agent_summary(INLINE_LIVE_AGENT_DETAIL_LIMIT)
-        .map(|summary| Line::from(format!("live output: {summary}")))
+    let message = conversation.live_agent_message.as_ref()?;
+    let label = message.kind.label(message.phase.as_deref());
+    let content_lines = message.text.split('\n').collect::<Vec<_>>();
+    let start_index = content_lines
+        .len()
+        .saturating_sub(INLINE_LIVE_AGENT_MAX_CONTENT_LINES);
+    let mut lines = vec![Line::from(format!("live: {label}"))];
+
+    for line in content_lines.into_iter().skip(start_index) {
+        lines.push(Line::from(format!(
+            "  {}",
+            compact_live_agent_line(line, INLINE_LIVE_AGENT_DETAIL_LIMIT)
+        )));
+    }
+
+    Some(lines)
 }
 
 fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -534,8 +548,8 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
                 ),
             }));
 
-            if let Some(live_agent_summary) = current_live_agent_footer_line(app) {
-                lines.push(live_agent_summary);
+            if let Some(live_agent_lines) = current_live_agent_lines(app) {
+                lines.extend(live_agent_lines);
             } else {
                 let mut activity_line = format!(
                     "tool: {}  |  cmd: {}  |  files: {}",
@@ -675,6 +689,17 @@ fn compact_inline_detail(text: &str, max_len: usize) -> String {
 
     let keep = max_len.saturating_sub(3);
     let truncated = compact.chars().take(keep).collect::<String>();
+    format!("{truncated}...")
+}
+
+fn compact_live_agent_line(text: &str, max_len: usize) -> String {
+    let rendered = text.replace('\t', "    ");
+    if rendered.chars().count() <= max_len {
+        return rendered;
+    }
+
+    let keep = max_len.saturating_sub(3);
+    let truncated = rendered.chars().take(keep).collect::<String>();
     format!("{truncated}...")
 }
 

@@ -891,15 +891,6 @@ impl ConversationViewModel {
         true
     }
 
-    pub(crate) fn live_agent_summary(&self, max_detail_len: usize) -> Option<String> {
-        let message = self.live_agent_message.as_ref()?;
-        Some(format!(
-            "{}: {}",
-            message.kind.label(message.phase.as_deref()),
-            Self::truncate_warning_text(&message.text, max_detail_len)
-        ))
-    }
-
     pub(crate) fn has_active_thread(&self) -> bool {
         !self.thread_id.trim().is_empty()
     }
