@@ -1253,6 +1253,27 @@ fn blank_draft_uses_startup_ascii_art_when_enabled() {
 }
 
 #[test]
+fn typing_in_blank_draft_keeps_startup_ascii_art_visible() {
+    let (mut app, _) = make_test_app();
+    app.show_startup_ascii_art = true;
+    if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+        conversation.input_buffer = "hello".to_string();
+    }
+
+    let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+    let rendered = view
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(".::::::.::::::.::::::.::::::"));
+    assert!(rendered.contains(".::       .::.::  .::   .::"));
+    assert!(!rendered.contains("No messages in this thread yet."));
+}
+
+#[test]
 fn inline_transcript_panel_stays_pinned_to_tail_even_after_manual_viewport_state() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));

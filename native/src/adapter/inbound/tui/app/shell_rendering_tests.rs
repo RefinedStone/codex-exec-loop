@@ -54,7 +54,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 }
 
 #[test]
-fn inline_main_buffer_renders_startup_ascii_art_for_blank_draft_when_enabled() {
+fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently() {
     let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = true;
@@ -65,8 +65,8 @@ fn inline_main_buffer_renders_startup_ascii_art_for_blank_draft_when_enabled() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains(".:  .::    .::  .::.: .:::   .::"));
-    assert!(rendered.contains(".::.::  .::   .::    .::  .::   .::"));
+    assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
+    assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
     assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
 }
 

@@ -124,10 +124,7 @@ pub(super) fn build_startup_banner_lines(
     app: &NativeTuiApp,
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
-        return None;
-    };
-    if !app.show_startup_ascii_art || !conversation.is_blank_draft() {
+    if !startup_banner_is_active(app) {
         return None;
     }
 
@@ -137,6 +134,18 @@ pub(super) fn build_startup_banner_lines(
     };
 
     Some(startup_ascii_art_lines(max_height))
+}
+
+pub(super) fn startup_banner_is_active(app: &NativeTuiApp) -> bool {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return false;
+    };
+
+    app.show_startup_ascii_art
+        && !conversation.has_active_thread()
+        && conversation.messages.is_empty()
+        && conversation.active_turn_id.is_none()
+        && conversation.live_agent_message.is_none()
 }
 
 pub(super) fn build_conversation_shell_view(

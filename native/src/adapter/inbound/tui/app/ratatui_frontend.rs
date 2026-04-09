@@ -18,7 +18,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::shell_frontend::ShellFrontend;
-use super::shell_presentation::build_inline_tail_lines;
+use super::shell_presentation::{build_inline_tail_lines, build_startup_banner_lines};
 use super::shell_rendering::draw;
 use super::shell_runtime::ShellRuntime;
 use super::{
@@ -97,6 +97,10 @@ fn sync_inline_viewport(
 }
 
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
+        return startup_banner_lines;
+    }
+
     match &app.conversation_state {
         ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
         ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),
@@ -287,7 +291,7 @@ mod tests {
     use anyhow::Result;
     use ratatui::text::Line;
 
-    use super::{InlineHistoryState, InlineViewportState};
+    use super::{InlineHistoryState, InlineViewportState, current_inline_history_lines};
     use crate::adapter::inbound::tui::app::{MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp};
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::application::port::outbound::codex_app_server_port::{
@@ -462,6 +466,27 @@ mod tests {
 
         app.shell_overlay = ShellOverlay::Hidden;
         assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    }
+
+    #[test]
+    fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
+        let mut app = make_test_app();
+        app.show_startup_ascii_art = true;
+        if let crate::adapter::inbound::tui::app::ConversationState::Ready(conversation) =
+            &mut app.conversation_state
+        {
+            conversation.input_buffer = "hello banner".to_string();
+        }
+
+        let lines = current_inline_history_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        let rendered = lines.join("\n");
+
+        assert!(rendered.contains(".::::::.::::::.::::::.::::::"));
+        assert!(rendered.contains(".::       .::.::  .::   .::"));
+        assert!(!rendered.contains("No messages in this thread yet."));
     }
 
     struct FakeCodexAppServerPort;
