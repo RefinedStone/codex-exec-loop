@@ -226,6 +226,16 @@ fn sample_session_with_workspace_at(
     }
 }
 
+fn create_temp_workspace(prefix: &str) -> String {
+    let unique_suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be valid")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+    std::fs::create_dir_all(&path).expect("temp workspace should be created");
+    path.display().to_string()
+}
+
 fn ready_conversation() -> ConversationViewModel {
     ConversationViewModel {
         thread_id: "thread-1".to_string(),
@@ -385,6 +395,42 @@ fn empty_draft_prompts_for_first_message() {
             .iter()
             .any(|line| line.contains("Ctrl+j for newline"))
     );
+}
+
+#[test]
+fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-init-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    let staged_drafts_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning")
+        .join("drafts");
+
+    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("planning init staged"));
+    assert!(staged_drafts_dir.exists());
+    let draft_directories = std::fs::read_dir(&staged_drafts_dir)
+        .expect("drafts directory should be readable")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    assert_eq!(draft_directories.len(), 1);
+    let staged_files = std::fs::read_dir(&draft_directories[0])
+        .expect("staged draft directory should be readable")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    assert!(staged_files.contains(&"directions.toml".to_string()));
+    assert!(staged_files.contains(&"task-ledger.json".to_string()));
+    assert!(staged_files.contains(&"task-ledger.schema.json".to_string()));
+    assert!(staged_files.contains(&"result-output.md".to_string()));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]

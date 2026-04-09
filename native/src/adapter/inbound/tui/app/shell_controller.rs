@@ -143,6 +143,7 @@ impl NativeTuiApp {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
+            InlineShellCommand::PlanningInit => self.stage_planning_init_draft(),
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
             InlineShellCommand::TranscriptTopLegacy => {}
             InlineShellCommand::TranscriptTailLegacy => {}
@@ -155,6 +156,20 @@ impl NativeTuiApp {
             });
         }
         self.clear_input_buffer();
+    }
+
+    pub(super) fn stage_planning_init_draft(&mut self) {
+        let workspace_directory = self.current_workspace_directory();
+        let status_text = match self
+            .planning_init_service
+            .stage_bootstrap_draft(&workspace_directory)
+        {
+            Ok(result) => result.status_text(),
+            Err(error) => format!("planning init failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
     }
 
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {

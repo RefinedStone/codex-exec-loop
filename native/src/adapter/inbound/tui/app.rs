@@ -16,6 +16,7 @@ use crate::application::service::followup_template_service::{
     FollowupTemplateReloadResult, FollowupTemplateService,
 };
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::planning_init_service::PlanningInitService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -160,6 +161,7 @@ struct NativeTuiApp {
     session_service: SessionService,
     conversation_service: ConversationService,
     followup_template_service: FollowupTemplateService,
+    planning_init_service: PlanningInitService,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     show_startup_ascii_art: bool,

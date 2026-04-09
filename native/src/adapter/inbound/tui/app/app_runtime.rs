@@ -1,8 +1,12 @@
 use std::sync::mpsc;
 use std::thread;
 
+use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
+use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+use crate::application::service::planning_init_service::PlanningInitService;
+use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestPollResult;
@@ -63,6 +67,11 @@ impl NativeTuiApp {
             session_service,
             conversation_service,
             followup_template_service,
+            planning_init_service: PlanningInitService::new(
+                std::sync::Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                PlanningBootstrapService::new(),
+                PlanningValidationService::new(),
+            ),
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
