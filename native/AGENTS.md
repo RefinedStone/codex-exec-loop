@@ -33,14 +33,14 @@ Write Rust so a Spring Boot Kotlin developer can read it quickly. Use 4-space in
 ## Testing Guidelines
 Place unit tests next to the module with `#[cfg(test)] mod tests`. Add integration tests under `native/tests/` when a flow spans multiple layers. Prioritize startup checks, app-server response parsing, stream reduction, and session list mapping. New adapter or service logic should usually ship with tests.
 
-## GitHub PR Auth
-Use the repo-local RefinedStone identity for PR operations.
+## GitHub Identity
+All GitHub writes for this repo must authenticate as `RefinedStone`.
 
-- use `bash ../scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies
-- do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
-- prefer the repo-local `.git/refinedstone-credentials` token first
-- if the repo-local token is unavailable, let `bash ../scripts/gh-refinedstone.sh` fall back to a Windows `/mnt/c/Users/*/.git-credentials` entry for `RefinedStone` when one exists
-- if neither the repo-local token nor the Windows RefinedStone credential is available, push code only and do not leave GitHub comments from the wrong account
+- keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`
+- prefer the repo-local `.git/refinedstone-credentials`; if another `credential.helper` is inherited, override it in this repo's local `.git/config` only and do not touch global GitHub credentials for other repositories
+- before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`
+- use `bash ../scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies; do not use GitHub MCP tools for them in this repo because they authenticate as `seungjoo-1ee`
+- if the RefinedStone identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment
 - once a change reaches a reviewable milestone, the default is `commit -> push -> PR`; do not stop at a local commit unless the user explicitly says to hold
 - after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
 - for final integration, do not use GitHub merge-commit flow; rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits

@@ -43,12 +43,12 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 - Use official Codex interfaces first.
   - `codex app-server`
   - keep `codex exec` / `codex exec resume` only for legacy compatibility work
-- Use the repo-local RefinedStone GitHub path for PR operations.
-  - PR creation, PR edits, and review replies must run through `bash scripts/gh-refinedstone.sh`
-  - do not use GitHub MCP tools for PR creation, PR comments, or review replies in this repo because they authenticate as `seungjoo-1ee`
-  - prefer the repo-local `.git/refinedstone-credentials` token first
-  - if the repo-local token is unavailable, let `bash scripts/gh-refinedstone.sh` fall back to a Windows `/mnt/c/Users/*/.git-credentials` entry for `RefinedStone` when one exists
-  - if neither the repo-local token nor the Windows RefinedStone credential is available, push code only and do not leave GitHub comments from the wrong account
+- GitHub writes in this repo must authenticate as `RefinedStone`.
+  - keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`
+  - prefer the repo-local `.git/refinedstone-credentials`; if another `credential.helper` is inherited, override it in this repo's local `.git/config` only and do not touch global GitHub credentials for other repositories
+  - before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`
+  - PR creation, PR edits, and review replies must run through `bash scripts/gh-refinedstone.sh`; do not use GitHub MCP tools for them in this repo because they authenticate as `seungjoo-1ee`
+  - if the RefinedStone identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment
 - Keep commits small and milestone-based.
 - Default delivery rule:
   - once a task reaches a reviewable milestone, do not stop at a local commit

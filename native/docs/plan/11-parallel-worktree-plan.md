@@ -113,8 +113,6 @@ Keep these guardrails for the remaining slices:
 
 When one remaining slice finishes:
 
-1. rebase it onto the latest `origin/prerelease`
-2. fast-forward `prerelease` to that reviewed head
-3. close the PR after `prerelease` contains the commits
-4. remove the finished worktree
-5. update this file to move the slice into the completion snapshot before opening the next worktree
+1. follow the review, push, and linear-integration rules in `04-worktree-branch-rules.md`
+2. remove the finished worktree
+3. update this file to move the slice into the completion snapshot before opening the next worktree

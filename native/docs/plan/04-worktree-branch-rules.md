@@ -62,7 +62,9 @@ Minimum preflight:
 
 - `git worktree list`
 - `git branch -vv`
+- before the first push in an environment, verify RefinedStone for this repo only: keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`, confirm `git credential fill` resolves `username=RefinedStone`, and scope any helper override to local `.git/config`
 - inspect open PRs when GitHub access is available
+- if GitHub access is unavailable, rely on local worktrees, tracked branches, and the active plan doc before opening a new branch
 - identify which `lane` and `zone` are already occupied by another unmerged branch
 - choose a disjoint `lane` or `zone` when two workers are active
 
@@ -132,13 +134,13 @@ If two lanes need one of these files, prefer a short precursor branch that extra
 
 ## 9. Review And Merge Rule
 
-- commit, push, and open one PR per worktree branch once the slice is reviewable
+- once the slice is reviewable, push the branch and keep exactly one PR tied to it
+- if a rebased branch already has a PR, push the new head with `--force-with-lease` so the PR matches the reviewed commit
 - keep review-response commits separate from the original milestone commit when practical
-- rebase the worktree branch onto the latest `origin/prerelease` before final integration
+- before final integration, rebase the worktree branch onto the latest `origin/prerelease`
 - perform the final fast-forward of `prerelease` only from the integration checkout that already owns local `prerelease`
-- do not use GitHub merge-commit flow
-- fast-forward `prerelease` locally to the reviewed branch head, push `prerelease`, then close the PR after the base branch already contains the commits
-- after merge or closure, remove the worktree and delete the branch if it no longer has a job
+- do not use GitHub merge-commit flow; fast-forward local `prerelease` to the reviewed branch head, push `prerelease`, then close the PR only after `origin/prerelease` contains that head commit
+- if PR creation is unavailable but the push identity is already verified as `RefinedStone`, push the branch and stop there; otherwise stop without pushing or commenting, then after merge or closure remove the worktree and delete the branch if it no longer has a job
 
 Cleanup example:
 
@@ -158,5 +160,6 @@ git push origin --delete feature/native-session-query-model
 6. Keep the branch scoped to that slice only.
 7. Rebase onto `origin/prerelease` from the feature worktree without checking out local `prerelease`.
 8. Run the slice-specific verification commands before review.
-9. Fast-forward merge from the integration checkout, then close the PR with linear history.
-10. Remove the finished worktree before starting another slice in the same lane.
+9. Push the reviewable branch, open or update one PR, and keep the PR head aligned with any rebase.
+10. Fast-forward merge from the integration checkout, push `prerelease`, then close the PR with linear history.
+11. Remove the finished worktree before starting another slice in the same lane.
