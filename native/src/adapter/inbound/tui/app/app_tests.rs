@@ -35,7 +35,9 @@ use crate::application::port::outbound::followup_template_port::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
-use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+use crate::application::service::planning_prompt_service::{
+    PlanningPromptContext, PlanningPromptContextLoadResult,
+};
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningRepairRequest,
 };
@@ -2988,6 +2990,47 @@ fn followup_template_status_lines_include_runtime_notice_summary() {
 }
 
 #[test]
+fn followup_template_status_lines_surface_planning_queue_failure_and_notice() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context".to_string(),
+            summary: "next task: rank 1 / task-1 / Implement shell planning status".to_string(),
+        },
+    ));
+    conversation.planning_repair_state = Some(PlanningRepairState {
+        root_turn_id: "turn-root".to_string(),
+        attempts_used: 1,
+        max_attempts: 2,
+        latest_request: PlanningRepairRequest {
+            failure_summary: "task-ledger.json is missing direction_id".to_string(),
+            validation_errors: vec!["task-ledger.json is missing direction_id".to_string()],
+            directions_toml: "version = 1".to_string(),
+            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+            rejected_task_ledger_json: None,
+            rejected_archive_path: None,
+        },
+    });
+    conversation.runtime_notices =
+        vec!["planning reconciliation restored protected directions.toml".to_string()];
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_followup_template_status_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning status: repairing"));
+    assert!(rendered.contains("planning repair attempt: 1/2"));
+    assert!(rendered.contains("planning queue head: next task: rank 1 / task-1"));
+    assert!(rendered.contains("last planning failure: task-ledger.json is missing direction_id"));
+    assert!(rendered.contains("planning: planning reconciliation restored protected"));
+}
+
+#[test]
 fn followup_template_status_lines_include_max_auto_turns_value() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
@@ -3075,7 +3118,7 @@ fn followup_template_status_lines_fit_default_overlay_budget() {
 
     let lines = build_followup_template_status_lines(&app);
 
-    assert_eq!(lines.len(), 9);
+    assert_eq!(lines.len(), 10);
 }
 
 #[test]
@@ -3086,7 +3129,7 @@ fn followup_template_status_lines_fit_edit_overlay_budget() {
 
     let lines = build_followup_template_status_lines(&app);
 
-    assert_eq!(lines.len(), 9);
+    assert_eq!(lines.len(), 10);
 }
 
 #[test]
@@ -3225,6 +3268,29 @@ fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
 }
 
 #[test]
+fn inline_tail_surfaces_stale_planning_status_while_turn_is_running() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context".to_string(),
+            summary: "next task: rank 1 / task-1 / Implement shell planning status".to_string(),
+        },
+    ));
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning: stale  |  queue: next task: rank 1 / task-1"));
+}
+
+#[test]
 fn shell_footer_surfaces_recent_tool_activity_summary() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
@@ -3306,6 +3372,32 @@ fn shell_footer_surfaces_runtime_notice_summary() {
 
     assert!(rendered.contains("template warning: workspace template missing"));
     assert!(rendered.contains("runtime: shared runtime reconnected"));
+}
+
+#[test]
+fn shell_footer_surfaces_planning_summary_and_notice() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context".to_string(),
+            summary: "next task: rank 1 / task-1 / Implement shell planning status".to_string(),
+        },
+    ));
+    conversation.runtime_notices =
+        vec!["planning reconciliation restored protected directions.toml".to_string()];
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_shell_footer_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning: valid  |  queue: next task: rank 1 / task-1"));
+    assert!(
+        rendered.contains("planning notice: planning: planning reconciliation restored protected")
+    );
 }
 
 #[test]

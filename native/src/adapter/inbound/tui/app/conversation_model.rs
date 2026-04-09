@@ -1,6 +1,8 @@
 use ratatui::text::Line;
 
-use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+use crate::application::service::planning_prompt_service::{
+    PlanningPromptContextAvailability, PlanningPromptContextLoadResult,
+};
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
@@ -9,6 +11,7 @@ use crate::domain::conversation::{
 use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
 };
+use crate::domain::planning::PlanningWorkspaceState;
 
 use super::{
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
@@ -780,6 +783,73 @@ impl ConversationViewModel {
                 "runtime notices ({}): {summary}",
                 self.runtime_notices.len()
             )
+        })
+    }
+
+    pub(crate) fn planning_workspace_state(&self) -> PlanningWorkspaceState {
+        if self.planning_repair_state.is_some() {
+            return PlanningWorkspaceState::Repairing;
+        }
+
+        match &self.planning_prompt_context.availability {
+            PlanningPromptContextAvailability::Uninitialized => {
+                PlanningWorkspaceState::Uninitialized
+            }
+            PlanningPromptContextAvailability::Ready(_) if self.has_running_turn() => {
+                PlanningWorkspaceState::Executing
+            }
+            PlanningPromptContextAvailability::Ready(_) => PlanningWorkspaceState::Ready,
+            PlanningPromptContextAvailability::Blocked { .. } => {
+                PlanningWorkspaceState::BlockedInvalid
+            }
+        }
+    }
+
+    pub(crate) fn planning_status_label(&self) -> &'static str {
+        match self.planning_workspace_state() {
+            PlanningWorkspaceState::Uninitialized => "inactive",
+            PlanningWorkspaceState::Authoring => "authoring",
+            PlanningWorkspaceState::Ready => "valid",
+            PlanningWorkspaceState::Executing => "stale",
+            PlanningWorkspaceState::Repairing => "repairing",
+            PlanningWorkspaceState::BlockedInvalid => "invalid",
+        }
+    }
+
+    pub(crate) fn planning_queue_summary(&self) -> Option<&str> {
+        match &self.planning_prompt_context.availability {
+            PlanningPromptContextAvailability::Ready(prompt_context) => {
+                Some(prompt_context.summary.as_str())
+            }
+            PlanningPromptContextAvailability::Uninitialized
+            | PlanningPromptContextAvailability::Blocked { .. } => None,
+        }
+    }
+
+    pub(crate) fn planning_failure_summary(&self) -> Option<&str> {
+        self.planning_repair_state
+            .as_ref()
+            .map(|state| state.latest_request.failure_summary.as_str())
+            .or_else(|| match &self.planning_prompt_context.availability {
+                PlanningPromptContextAvailability::Blocked { reason } => Some(reason.as_str()),
+                PlanningPromptContextAvailability::Uninitialized
+                | PlanningPromptContextAvailability::Ready(_) => None,
+            })
+    }
+
+    pub(crate) fn planning_notice_summary(&self, max_detail_len: usize) -> Option<String> {
+        let planning_notices = self
+            .runtime_notices
+            .iter()
+            .filter(|notice| notice.starts_with("planning "))
+            .collect::<Vec<_>>();
+        let selected_notice = planning_notices.last()?;
+        let summary = Self::truncate_warning_text(selected_notice, max_detail_len);
+
+        Some(if planning_notices.len() == 1 {
+            format!("planning: {summary}")
+        } else {
+            format!("planning notices ({}): {summary}", planning_notices.len())
         })
     }
 

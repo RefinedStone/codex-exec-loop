@@ -6,6 +6,7 @@ use super::{
 use crate::application::service::planning_prompt_service::{
     PlanningPromptContext, PlanningPromptContextLoadResult,
 };
+use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
 };
@@ -13,6 +14,7 @@ use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
     FollowupTemplateSource,
 };
+use crate::domain::planning::PlanningWorkspaceState;
 
 fn sample_template_catalog() -> FollowupTemplateCatalog {
     FollowupTemplateCatalog {
@@ -514,5 +516,81 @@ fn auto_followup_skips_when_planning_prompt_context_is_blocked() {
     assert_eq!(
         conversation.decide_auto_followup(),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
+    );
+}
+
+#[test]
+fn planning_workspace_state_marks_ready_context_as_stale_during_running_turn() {
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context".to_string(),
+            summary: "next task: task-1".to_string(),
+        },
+    ));
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+
+    assert_eq!(
+        conversation.planning_workspace_state(),
+        PlanningWorkspaceState::Executing
+    );
+    assert_eq!(conversation.planning_status_label(), "stale");
+    assert_eq!(
+        conversation.planning_queue_summary(),
+        Some("next task: task-1")
+    );
+}
+
+#[test]
+fn planning_workspace_state_prefers_repairing_failure_over_ready_queue_context() {
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context".to_string(),
+            summary: "next task: task-1".to_string(),
+        },
+    ));
+    conversation.planning_repair_state = Some(super::PlanningRepairState {
+        root_turn_id: "turn-root".to_string(),
+        attempts_used: 1,
+        max_attempts: 2,
+        latest_request: PlanningRepairRequest {
+            failure_summary: "task-ledger.json is missing direction_id".to_string(),
+            validation_errors: vec!["task-ledger.json is missing direction_id".to_string()],
+            directions_toml: "version = 1".to_string(),
+            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+            rejected_task_ledger_json: None,
+            rejected_archive_path: None,
+        },
+    });
+
+    assert_eq!(
+        conversation.planning_workspace_state(),
+        PlanningWorkspaceState::Repairing
+    );
+    assert_eq!(conversation.planning_status_label(), "repairing");
+    assert_eq!(
+        conversation.planning_failure_summary(),
+        Some("task-ledger.json is missing direction_id")
+    );
+}
+
+#[test]
+fn planning_notice_summary_filters_non_planning_runtime_notices() {
+    let mut conversation = ready_conversation();
+    conversation.runtime_notices = vec![
+        "shared runtime reconnected after app-server exit".to_string(),
+        "planning reconciliation restored protected directions.toml".to_string(),
+        "planning repair queued retry 1/2 for task-ledger.json".to_string(),
+    ];
+
+    assert_eq!(
+        conversation.planning_notice_summary(64),
+        Some(
+            "planning notices (2): planning repair queued retry 1/2 for task-ledger.json"
+                .to_string()
+        )
     );
 }

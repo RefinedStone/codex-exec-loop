@@ -2,6 +2,7 @@ use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
 use crate::application::service::session_service::SessionProjectFilter;
 use crate::domain::followup_template::FollowupTemplateDefinition;
+use crate::domain::planning::PlanningWorkspaceState;
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
@@ -10,6 +11,7 @@ const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 const FOOTER_STATUS_DETAIL_LIMIT: usize = 72;
 const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
+const FOOTER_PLANNING_DETAIL_LIMIT: usize = 56;
 const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
 const INLINE_LIVE_AGENT_MAX_CONTENT_LINES: usize = 2;
 const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
@@ -18,6 +20,8 @@ const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
 const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
 const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
+const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
+const FOLLOWUP_PLANNING_DETAIL_LIMIT: usize = 48;
 const PROMPT_PRIMARY_PREFIX: &str = "> ";
 const PROMPT_CONTINUATION_PREFIX: &str = "  ";
 const STARTUP_ASCII_ART_DEFAULT: &str = r#"
@@ -512,6 +516,17 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
             }
             lines.push(Line::from(status_segments.join("  |  ")));
 
+            if let Some(planning_line) =
+                build_planning_summary_line(conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
+            {
+                lines.push(Line::from(planning_line));
+            }
+            if let Some(planning_notice_line) =
+                build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
+            {
+                lines.push(Line::from(planning_notice_line));
+            }
+
             if let Some(notice_line) =
                 build_operator_notice_line(app, conversation, FOOTER_NOTICE_DETAIL_LIMIT)
             {
@@ -589,6 +604,16 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
                 status_segments.push(format!("gh: {}", github_review_polling_status_label(app)));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
+            if let Some(planning_line) =
+                build_planning_summary_line(conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
+            {
+                lines.push(Line::from(planning_line));
+            }
+            if let Some(planning_notice_line) =
+                build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+            {
+                lines.push(Line::from(planning_notice_line));
+            }
 
             if let Some(live_agent_lines) = current_live_agent_lines(app) {
                 lines.extend(live_agent_lines);
@@ -807,6 +832,78 @@ fn compact_live_agent_line(text: &str, max_len: usize) -> String {
     let keep = max_len.saturating_sub(3);
     let truncated = rendered.chars().take(keep).collect::<String>();
     format!("{truncated}...")
+}
+
+fn build_planning_summary_line(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+    always_show: bool,
+) -> Option<String> {
+    let planning_state = conversation.planning_workspace_state();
+    if !always_show
+        && planning_state == PlanningWorkspaceState::Uninitialized
+        && conversation
+            .planning_notice_summary(max_detail_len)
+            .is_none()
+    {
+        return None;
+    }
+
+    let mut segments = vec![format!(
+        "planning: {}",
+        conversation.planning_status_label()
+    )];
+    if let Some(repair_state) = conversation.planning_repair_state.as_ref() {
+        segments.push(format!(
+            "repair: {}/{}",
+            repair_state.attempts_used, repair_state.max_attempts
+        ));
+    }
+
+    match planning_state {
+        PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
+            if let Some(queue_summary) = conversation.planning_queue_summary() {
+                segments.push(format!(
+                    "queue: {}",
+                    compact_inline_detail(queue_summary, max_detail_len)
+                ));
+            }
+        }
+        PlanningWorkspaceState::Repairing => {
+            if let Some(failure_summary) = conversation.planning_failure_summary() {
+                segments.push(format!(
+                    "failure: {}",
+                    compact_inline_detail(failure_summary, max_detail_len)
+                ));
+            }
+            if let Some(queue_summary) = conversation.planning_queue_summary() {
+                segments.push(format!(
+                    "queue: {}",
+                    compact_inline_detail(queue_summary, max_detail_len)
+                ));
+            }
+        }
+        PlanningWorkspaceState::BlockedInvalid => {
+            if let Some(failure_summary) = conversation.planning_failure_summary() {
+                segments.push(format!(
+                    "failure: {}",
+                    compact_inline_detail(failure_summary, max_detail_len)
+                ));
+            }
+        }
+        PlanningWorkspaceState::Uninitialized | PlanningWorkspaceState::Authoring => {}
+    }
+
+    Some(segments.join("  |  "))
+}
+
+fn build_planning_notice_line(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> Option<String> {
+    conversation
+        .planning_notice_summary(max_detail_len)
+        .map(|summary| format!("planning notice: {summary}"))
 }
 
 fn build_operator_notice_line(
@@ -1171,6 +1268,10 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     conversation.auto_follow_state.no_file_change_stop_label()
                 )),
                 Line::from(format!(
+                    "planning status: {}",
+                    conversation.planning_status_label()
+                )),
+                Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
                     conversation
                         .turn_activity
@@ -1193,6 +1294,29 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     activity_line
                 }),
             ];
+            if let Some(repair_state) = conversation.planning_repair_state.as_ref() {
+                lines.push(Line::from(format!(
+                    "planning repair attempt: {}/{}",
+                    repair_state.attempts_used, repair_state.max_attempts
+                )));
+            }
+            if let Some(queue_summary) = conversation.planning_queue_summary() {
+                lines.push(Line::from(format!(
+                    "planning queue head: {}",
+                    compact_inline_detail(queue_summary, FOLLOWUP_PLANNING_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(failure_summary) = conversation.planning_failure_summary() {
+                lines.push(Line::from(format!(
+                    "last planning failure: {}",
+                    compact_inline_detail(failure_summary, FOLLOWUP_PLANNING_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(planning_notice_summary) =
+                conversation.planning_notice_summary(FOLLOWUP_PLANNING_DETAIL_LIMIT)
+            {
+                lines.push(Line::from(planning_notice_summary));
+            }
 
             if app.is_max_auto_turns_editing() {
                 lines.push(Line::from(format!(
