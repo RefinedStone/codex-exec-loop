@@ -653,7 +653,8 @@ pub(super) fn build_planning_draft_editor_overlay_view(
         key_lines: vec![
             Line::from("Tab/BackTab: switch file    arrows: move cursor"),
             Line::from("Enter: newline    Backspace: delete    Ctrl+W: delete previous word"),
-            Line::from("Ctrl+S: save + validate    Esc/Ctrl+C: close"),
+            Line::from("Ctrl+S: save + validate    Ctrl+P: promote"),
+            Line::from("Esc/Ctrl+C: close"),
         ],
     })
 }

@@ -250,6 +250,7 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
     assert!(rendered.contains("Files"));
     assert!(rendered.contains("directions.toml"));
     assert!(rendered.contains("Ctrl+S: save + validate"));
+    assert!(rendered.contains("Ctrl+P: promote"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }

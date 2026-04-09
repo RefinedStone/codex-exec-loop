@@ -235,6 +235,47 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn promote_planning_manual_editor(&mut self) {
+        let Some(draft_name) = self.planning_draft_editor_ui_state.draft_name() else {
+            return;
+        };
+        let workspace_directory = self.current_workspace_directory();
+        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
+        let status_text = match self.planning_init_service.promote_draft_editor_files(
+            &workspace_directory,
+            draft_name,
+            &editable_files,
+        ) {
+            Ok(result) => {
+                let validation_ok = result.validation_report.is_valid();
+                self.planning_draft_editor_ui_state
+                    .apply_save_result(result.validation_report.clone());
+                if result.promoted_file_count == 0 {
+                    format!(
+                        "planning draft promote blocked / draft: {} / validation: {}",
+                        result.draft_name,
+                        if validation_ok {
+                            "ok"
+                        } else {
+                            "needs attention"
+                        }
+                    )
+                } else {
+                    self.close_shell_overlay();
+                    self.refresh_ready_conversation_planning_prompt_context();
+                    format!(
+                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                        result.draft_name, result.promoted_file_count
+                    )
+                }
+            }
+            Err(error) => format!("planning draft promote failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
         let workspace_directory = self.current_workspace_directory();
         let status_text = match self
@@ -968,6 +1009,9 @@ impl NativeTuiApp {
                     }
                     KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                         self.save_planning_manual_editor()
+                    }
+                    KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.promote_planning_manual_editor()
                     }
                     KeyCode::Char(character)
                         if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>

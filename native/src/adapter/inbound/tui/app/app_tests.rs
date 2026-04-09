@@ -562,6 +562,99 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
 }
 
 #[test]
+fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_context() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-promote-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    conversation.cwd = workspace_dir.clone();
+
+    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ManualEditor
+    );
+
+    assert!(
+        app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL,))
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    assert!(conversation.status_text.contains("planning draft promoted"));
+    assert_eq!(
+        conversation.planning_prompt_context.preview_status_label(),
+        "ready"
+    );
+
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    assert!(planning_dir.join("directions.toml").exists());
+    assert!(planning_dir.join("task-ledger.json").exists());
+    assert!(planning_dir.join("task-ledger.schema.json").exists());
+    assert!(planning_dir.join("result-output.md").exists());
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_manual_editor_promote_stays_open_when_validation_fails() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-editor-promote-invalid-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    conversation.cwd = workspace_dir.clone();
+
+    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
+    assert!(
+        app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL,))
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ManualEditor
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("planning draft promote blocked")
+    );
+    assert_eq!(
+        conversation.planning_prompt_context.preview_status_label(),
+        "inactive"
+    );
+    assert!(
+        !std::path::Path::new(&workspace_dir)
+            .join(".codex-exec-loop")
+            .join("planning")
+            .join("directions.toml")
+            .exists()
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn planning_detail_overlay_surfaces_llm_assisted_as_disabled() {
     let (mut app, _) = make_test_app();
     app.show_planning_init_overlay();

@@ -11,18 +11,19 @@ Unless noted otherwise, file paths below are relative to `native/`.
 1. merged: `feature/native-planning-overlay-manual-draft-editor-entry`
    - delivered by PR `#128`
    - scope: `:planning` selector plus `simple mode` scaffold creation
-2. current: `feature/native-planning-overlay-manual-draft-editor`
+2. merged: `feature/native-planning-overlay-manual-draft-editor`
+   - delivered by PR `#129`
    - scope: detail-mode `manual` stages a draft editor session, loads staged files, and lets the operator edit/save/validate draft content in the shell
-3. next: `feature/native-planning-service-draft-promote-flow`
+3. current: `feature/native-planning-service-draft-promote-flow`
    - scope: explicit `promote` action, active-path copy, and accepted planning refresh after manual editing
 4. later: `feature/native-planning-overlay-llm-assisted-detail`
    - scope: future `llm-assisted` branch after the manual path is stable
 
 ## Current Slice
 
-- branch: `feature/native-planning-overlay-manual-draft-editor`
-- goal: move detail-mode `manual` from “stage and exit” to “stage and keep editing inside the shell”
-- dependency: `origin/prerelease` already contains PR `#128`
+- branch: `feature/native-planning-service-draft-promote-flow`
+- goal: add explicit promote from the embedded draft editor into the active planning path and refresh the accepted planning context in the shell
+- dependency: `origin/prerelease` already contains PR `#129`
 - verification:
   - `cargo fmt`
   - `cargo test`
@@ -49,15 +50,13 @@ Unless noted otherwise, file paths below are relative to `native/`.
 
 This slice should include:
 
-- stage detail-mode draft and open a shell-native draft editor session
-- load staged draft file bodies through the planning workspace port
-- edit the staged draft buffers for operator-owned files
-- save draft content back under `.codex-exec-loop/planning/drafts/<draft>/`
-- validate the staged draft without mutating active planning files
+- explicit promote action from the embedded draft editor
+- re-use staged draft validation before mutating active planning files
+- copy accepted draft content into `.codex-exec-loop/planning/`
+- refresh the ready conversation's planning prompt context after promote
 
 This slice should not include:
 
-- full active-path promote and runtime refresh if that forces additional reconciliation churn
 - the future `llm-assisted` draft generation branch
 - unrelated shell refactors outside the planning-init/manual path
 
@@ -65,6 +64,5 @@ This slice should not include:
 
 The next slice should pick up once the editor session is stable:
 
-- explicit `promote` action from staged draft to active planning path
-- post-promote planning prompt refresh and accepted planning summary
 - stronger exit/cancel messaging around unsaved or invalid draft state
+- richer post-promote operator summary if accepted planning needs additional runtime reconciliation
