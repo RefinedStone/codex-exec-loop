@@ -69,8 +69,8 @@ pub(super) fn reduce_conversation_runtime(
             state.status_text = match origin {
                 PromptOrigin::Manual => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
-                    "auto follow-up submitted / turn {auto_follow_progress} / queued from {} / template: {}",
-                    context.queued_from_turn_id, context.template_label
+                    "auto follow-up submitted / turn {auto_follow_progress} / template: {}",
+                    context.template_label
                 ),
             };
             effects.push(ConversationRuntimeEffect::StartStream {
@@ -88,7 +88,7 @@ pub(super) fn reduce_conversation_runtime(
                     title,
                     cwd,
                 } => {
-                    let thread_ready_message = format!("thread opened: {thread_id} / {title}");
+                    let thread_ready_message = format!("thread opened / {title}");
                     state.thread_id = thread_id;
                     state.title = title;
                     state.cwd = cwd;
@@ -96,7 +96,7 @@ pub(super) fn reduce_conversation_runtime(
                     should_refresh_lines = state.append_status_message(thread_ready_message);
                 }
                 ConversationStreamEvent::TurnStarted { turn_id } => {
-                    let turn_started_message = format!("turn started: {turn_id}");
+                    let turn_started_message = "turn started".to_string();
                     state.mark_turn_started(turn_id);
                     state.live_agent_message = None;
                     state.status_text = "turn started".to_string();
@@ -139,7 +139,7 @@ pub(super) fn reduce_conversation_runtime(
                                 state.auto_follow_state.template_label().to_string();
                             state.record_auto_followup_queue(&turn_id, &template_label);
                             state.status_text = format!(
-                                "turn completed: {turn_id} / queued auto follow-up with template {template_label}"
+                                "turn completed / queued auto follow-up with template {template_label}"
                             );
                             effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
                                 prompt,
@@ -150,7 +150,7 @@ pub(super) fn reduce_conversation_runtime(
                         AutoFollowupDecision::Skip(skip_reason) => {
                             state.record_auto_followup_skip(skip_reason);
                             state.status_text =
-                                skip_reason.runtime_status(&turn_id, &state.auto_follow_state);
+                                skip_reason.runtime_status(&state.auto_follow_state);
                         }
                     }
                     should_refresh_lines = state.append_status_message(state.status_text.clone())
@@ -234,7 +234,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.status_text,
-            "auto follow-up submitted / turn 1/3 / queued from turn-1 / template: builtin next-task"
+            "auto follow-up submitted / turn 1/3 / template: builtin next-task"
         );
         assert_eq!(
             reduced
@@ -250,7 +250,9 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.detail.as_str()),
-            Some("queued after turn turn-1 completed; submitted with template builtin next-task")
+            Some(
+                "queued after the previous turn completed; submitted with template builtin next-task"
+            )
         );
     }
 
@@ -280,7 +282,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed: turn-1 / queued auto follow-up with template builtin next-task"
+            "turn completed / queued auto follow-up with template builtin next-task"
         );
         assert_eq!(
             reduced
@@ -304,7 +306,7 @@ mod tests {
                 .messages
                 .last()
                 .map(|message| message.text.as_str()),
-            Some("turn completed: turn-1 / queued auto follow-up with template builtin next-task")
+            Some("turn completed / queued auto follow-up with template builtin next-task")
         );
     }
 
@@ -368,7 +370,7 @@ mod tests {
                 .messages
                 .last()
                 .map(|message| message.text.as_str()),
-            Some("turn started: turn-2")
+            Some("turn started")
         );
     }
 
@@ -399,7 +401,7 @@ mod tests {
                 .messages
                 .last()
                 .map(|message| message.text.as_str()),
-            Some("thread opened: thread-2 / Loaded thread")
+            Some("thread opened / Loaded thread")
         );
         assert_eq!(
             reduced.state.cached_conversation_lines,
@@ -468,7 +470,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed: turn-1 / auto follow-up skipped: no agent reply"
+            "turn completed / auto follow-up skipped: no agent reply"
         );
         assert_eq!(
             reduced
@@ -489,7 +491,7 @@ mod tests {
                 .messages
                 .last()
                 .map(|message| message.text.as_str()),
-            Some("turn completed: turn-1 / auto follow-up skipped: no agent reply")
+            Some("turn completed / auto follow-up skipped: no agent reply")
         );
     }
 
@@ -517,7 +519,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed: turn-1 / auto follow-up stopped: no file changes"
+            "turn completed / auto follow-up stopped: no file changes"
         );
         assert_eq!(
             reduced

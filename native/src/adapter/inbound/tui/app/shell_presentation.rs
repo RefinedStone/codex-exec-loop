@@ -7,13 +7,15 @@ const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
 const FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
-const FOOTER_GITHUB_REVIEW_DETAIL_LIMIT: usize = 44;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
+const FOOTER_STATUS_DETAIL_LIMIT: usize = 72;
+const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
 const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
 const INLINE_LIVE_AGENT_MAX_CONTENT_LINES: usize = 2;
 const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
 const INLINE_TAIL_TEMPLATE_LABEL_LIMIT: usize = 16;
 const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
+const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
 const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const PROMPT_PRIMARY_PREFIX: &str = "> ";
@@ -379,100 +381,53 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
             Line::from(format!("status: {message}")),
         ],
         ConversationState::Ready(conversation) => {
-            let turn_running = conversation.has_running_turn();
-            let activity_scope = conversation
-                .turn_activity
-                .activity_scope_label(turn_running);
-            let activity_summary = conversation
-                .last_auto_followup_activity
-                .as_ref()
-                .map(|activity| activity.summary.as_str())
-                .unwrap_or("none");
-            let activity_detail = conversation
-                .last_auto_followup_activity
-                .as_ref()
-                .map(|activity| activity.detail.as_str())
-                .unwrap_or("none");
             let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
             let runtime_notice_summary =
                 conversation.runtime_notice_summary(FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT);
-            let approval_summary = conversation.approval_summary();
-            let github_review_summary =
-                app.github_review_recent_changes_summary(FOOTER_GITHUB_REVIEW_DETAIL_LIMIT);
-            let tool_activity_line = if let Some(approval_summary) = approval_summary.as_deref() {
-                format!(
-                    "tool activity: {}  |  cmd: {}  |  files: {}  |  approval: {approval_summary}",
-                    conversation.turn_activity.activity_summary(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_command_count(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_file_change_count(turn_running),
-                )
-            } else {
-                format!(
-                    "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
-                    conversation.turn_activity.activity_summary(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_command_count(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_file_change_count(turn_running),
-                )
-            };
-
-            vec![
+            let mut lines = vec![
                 Line::from(format!(
-                    "startup: {}  |  sessions: {}  |  github: {}  |  turn: {}  |  input: {}",
-                    shell_action_availability_label(app),
-                    recent_session_status_label(app),
-                    github_review_polling_status_label(app),
+                    "thread: {}  |  turn: {}  |  input: {}",
+                    inline_thread_label(conversation),
                     turn_status_label(conversation),
                     conversation.input_state.label(),
                 )),
                 Line::from(format!(
-                    "thread: {}  |  auto: {} ({})  |  template: {}",
-                    if conversation.has_active_thread() {
-                        conversation.thread_id.as_str()
-                    } else {
-                        "new draft"
-                    },
+                    "startup: {}  |  gh: {}  |  auto: {} ({})  |  tmpl: {}",
+                    shell_action_availability_label(app),
+                    github_review_polling_status_label(app),
                     conversation.auto_follow_state.status_label(),
                     conversation.auto_follow_state.progress_label(),
-                    conversation.auto_follow_state.template_label()
+                    inline_template_label(conversation),
                 )),
-                Line::from(match runtime_notice_summary.as_deref() {
-                    Some(runtime_notice_summary) => format!(
-                        "status: {}  |  {}  |  {}",
-                        conversation.status_text, warning_summary, runtime_notice_summary,
-                    ),
-                    None => format!(
-                        "status: {}  |  {}",
-                        conversation.status_text, warning_summary,
-                    ),
-                }),
-                Line::from(tool_activity_line),
-                Line::from(format!(
-                    "input detail: {}  |  template slot: {}/{}",
-                    conversation.input_state.detail(),
-                    conversation.auto_follow_state.selected_template_index() + 1,
-                    conversation.auto_follow_state.template_count(),
-                )),
-                Line::from(format!(
-                    "{}",
-                    if let Some(github_review_summary) = github_review_summary.as_deref() {
-                        format!("gh update: {github_review_summary}  |  auto: {activity_summary}")
-                    } else {
-                        format!(
-                            "template source: {}  |  auto activity: {}  |  detail: {activity_detail}",
-                            conversation.auto_follow_state.template_source_label(),
-                            activity_summary,
-                        )
-                    },
-                )),
-            ]
+            ];
+
+            let mut status_segments = vec![format!(
+                "status: {}",
+                compact_inline_detail(&conversation.status_text, FOOTER_STATUS_DETAIL_LIMIT)
+            )];
+            if warning_summary != "clear" {
+                status_segments.push(compact_inline_detail(
+                    &warning_summary,
+                    FOOTER_WARNING_DETAIL_LIMIT,
+                ));
+            }
+            if let Some(runtime_notice_summary) = runtime_notice_summary.as_deref() {
+                status_segments.push(compact_inline_detail(
+                    runtime_notice_summary,
+                    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT,
+                ));
+            } else if warning_summary == "clear" {
+                status_segments.push(format!("sessions: {}", recent_session_status_label(app)));
+            }
+            lines.push(Line::from(status_segments.join("  |  ")));
+
+            if let Some(notice_line) =
+                build_operator_notice_line(app, conversation, FOOTER_NOTICE_DETAIL_LIMIT)
+            {
+                lines.push(Line::from(format!("notice: {notice_line}")));
+            }
+
+            lines
         }
     }
 }
@@ -508,68 +463,42 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
             lines.push(Line::from(format!("status: {message}")));
         }
         ConversationState::Ready(conversation) => {
-            let turn_running = conversation.has_running_turn();
             let warning_summary = compact_inline_summary_label(
                 &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
             );
             let runtime_notice_summary = conversation
                 .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
                 .map(|summary| compact_inline_summary_label(&summary));
-            let approval_summary = conversation.approval_summary();
-            let github_review_summary =
-                app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
 
             lines.push(Line::from(format!(
-                "thread: {}  |  turn: {}  |  auto: {} ({})  |  tmpl: {}",
+                "thread: {}  |  turn: {}  |  auto: {} ({})  |  input: {}",
                 inline_thread_label(conversation),
                 turn_status_label(conversation),
                 conversation.auto_follow_state.status_label(),
                 conversation.auto_follow_state.progress_label(),
-                inline_template_label(conversation),
+                conversation.input_state.label(),
             )));
-            lines.push(Line::from(match runtime_notice_summary.as_deref() {
-                Some(runtime_notice_summary) => format!(
-                    "status: {}  |  {}  |  {}",
-                    compact_inline_detail(
-                        &conversation.status_text,
-                        INLINE_TAIL_STATUS_DETAIL_LIMIT,
-                    ),
-                    warning_summary,
-                    runtime_notice_summary,
-                ),
-                None => format!(
-                    "status: {}  |  startup: {}  |  gh: {}",
-                    compact_inline_detail(
-                        &conversation.status_text,
-                        INLINE_TAIL_STATUS_DETAIL_LIMIT,
-                    ),
-                    shell_action_availability_label(app),
-                    github_review_polling_status_label(app),
-                ),
-            }));
+            let mut status_segments = vec![format!(
+                "status: {}",
+                compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT)
+            )];
+            if warning_summary != "clear" {
+                status_segments.push(warning_summary);
+            }
+            if let Some(runtime_notice_summary) = runtime_notice_summary.as_deref() {
+                status_segments.push(runtime_notice_summary.to_string());
+            } else {
+                status_segments.push(format!("startup: {}", shell_action_availability_label(app)));
+                status_segments.push(format!("gh: {}", github_review_polling_status_label(app)));
+            }
+            lines.push(Line::from(status_segments.join("  |  ")));
 
             if let Some(live_agent_lines) = current_live_agent_lines(app) {
                 lines.extend(live_agent_lines);
-            } else {
-                let mut activity_line = format!(
-                    "tool: {}  |  cmd: {}  |  files: {}",
-                    conversation.turn_activity.activity_summary(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_command_count(turn_running),
-                    conversation
-                        .turn_activity
-                        .activity_file_change_count(turn_running),
-                );
-                if let Some(approval_summary) = approval_summary.as_deref() {
-                    activity_line.push_str(&format!("  |  approval: {approval_summary}"));
-                }
-                if let Some(github_review_summary) = github_review_summary.as_deref() {
-                    activity_line.push_str(&format!("  |  gh: {github_review_summary}"));
-                } else if runtime_notice_summary.is_some() {
-                    activity_line.push_str(&format!("  |  {}", warning_summary));
-                }
-                lines.push(Line::from(activity_line));
+            } else if let Some(notice_line) =
+                build_operator_notice_line(app, conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+            {
+                lines.push(Line::from(format!("notice: {notice_line}")));
             }
         }
     }
@@ -701,6 +630,80 @@ fn compact_live_agent_line(text: &str, max_len: usize) -> String {
     let keep = max_len.saturating_sub(3);
     let truncated = rendered.chars().take(keep).collect::<String>();
     format!("{truncated}...")
+}
+
+fn build_operator_notice_line(
+    app: &NativeTuiApp,
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> Option<String> {
+    if let Some(github_review_summary) = app.github_review_recent_changes_summary(max_detail_len) {
+        return Some(format!(
+            "gh update: {}",
+            compact_inline_detail(&github_review_summary, max_detail_len)
+        ));
+    }
+
+    let turn_running = conversation.has_running_turn();
+    let activity_scope = conversation
+        .turn_activity
+        .activity_scope_label(turn_running);
+    let activity_summary = conversation.turn_activity.activity_summary(turn_running);
+    let activity_command_count = conversation
+        .turn_activity
+        .activity_command_count(turn_running);
+    let activity_file_change_count = conversation
+        .turn_activity
+        .activity_file_change_count(turn_running);
+    let has_tool_activity = (activity_summary != "idle" && activity_summary != "none")
+        || activity_command_count > 0
+        || activity_file_change_count > 0;
+    if turn_running && has_tool_activity {
+        let mut notice_line = format!(
+            "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
+            compact_inline_detail(&activity_summary, max_detail_len),
+            activity_command_count,
+            activity_file_change_count,
+        );
+        if let Some(approval_summary) = conversation.approval_summary().as_deref() {
+            notice_line.push_str(&format!(
+                "  |  approval: {}",
+                compact_inline_detail(approval_summary, max_detail_len)
+            ));
+        }
+        return Some(notice_line);
+    }
+
+    if let Some(activity) = conversation.last_auto_followup_activity.as_ref() {
+        return Some(format!(
+            "auto: {}  |  detail: {}",
+            activity.summary,
+            compact_inline_detail(&activity.detail, max_detail_len)
+        ));
+    }
+
+    if has_tool_activity {
+        let mut notice_line = format!(
+            "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
+            compact_inline_detail(&activity_summary, max_detail_len),
+            activity_command_count,
+            activity_file_change_count,
+        );
+        if let Some(approval_summary) = conversation.approval_summary().as_deref() {
+            notice_line.push_str(&format!(
+                "  |  approval: {}",
+                compact_inline_detail(approval_summary, max_detail_len)
+            ));
+        }
+        return Some(notice_line);
+    }
+
+    conversation.approval_summary().map(|approval_summary| {
+        format!(
+            "approval: {}",
+            compact_inline_detail(&approval_summary, max_detail_len)
+        )
+    })
 }
 
 pub(super) fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

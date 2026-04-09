@@ -451,7 +451,7 @@ fn inline_prompt_cursor_offset_accounts_for_status_lines() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     app.conversation_state = ConversationState::Ready(ready_conversation());
 
-    assert_eq!(build_inline_prompt_cursor_offset(&app, 80), Some((2, 3)));
+    assert_eq!(build_inline_prompt_cursor_offset(&app, 80), Some((2, 2)));
 }
 
 #[test]
@@ -474,7 +474,7 @@ fn status_footer_height_expands_for_ready_shell_summary() {
 
     let rendered = build_shell_footer_lines(&app);
 
-    assert_eq!(shell_layout::build_shell_footer_height(&rendered), 8);
+    assert_eq!(shell_layout::build_shell_footer_height(&rendered), 5);
 }
 
 #[test]
@@ -492,7 +492,7 @@ fn shell_footer_shows_github_polling_state_summary() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("github: setup failed acme/widgets#42"));
+    assert!(rendered.contains("gh: setup failed acme/widgets#42"));
 }
 
 #[test]
@@ -517,7 +517,7 @@ fn shell_footer_surfaces_recent_github_review_change_summary() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("gh update: review commented by reviewer: Looks good"));
+    assert!(rendered.contains("notice: gh update: review commented by reviewer: Looks good"));
 }
 
 #[test]
@@ -609,7 +609,7 @@ fn tool_activity_stays_out_of_inline_transcript_until_turn_completion() {
         .join("\n");
 
     assert!(!transcript_rendered.contains("command: cargo test [running]"));
-    assert!(footer_rendered.contains("tool activity: command: cargo test [running]"));
+    assert!(footer_rendered.contains("notice: tool activity: command: cargo test [running]"));
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2483,8 +2483,9 @@ fn auto_followup_skip_reason_is_visible_in_status_footer() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("auto activity: stopped: no file changes"));
+    assert!(rendered.contains("notice: auto: stopped: no file changes"));
     assert!(rendered.contains("detail: the last completed turn changed 0 files"));
+    assert!(!rendered.contains("turn-1"));
 }
 
 #[test]
@@ -2518,10 +2519,40 @@ fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("auto activity: queued auto turn 1/3"));
-    assert!(rendered.contains(
-        "detail: queued after turn turn-2 completed; waiting to submit with template builtin next-task"
+    assert!(rendered.contains("notice: auto: queued auto turn 1/3"));
+    assert!(rendered.contains("detail: queued after the previous turn completed"));
+    assert!(!rendered.contains("turn-2"));
+}
+
+#[test]
+fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation
+        .turn_activity
+        .last_completed_turn_file_change_count = 1;
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
     ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "019d7032-fa43-7a62-a7b4-5328f373bb90".to_string(),
+        },
+    ));
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("notice: auto: queued auto turn 1/3"));
+    assert!(!rendered.contains("019d7032-fa43-7a62-a7b4-5328f373bb90"));
 }
 
 #[test]
@@ -2542,7 +2573,7 @@ fn shell_footer_surfaces_recent_tool_activity_summary() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("tool activity: file change: update src/app.rs"));
+    assert!(rendered.contains("notice: tool activity: file change: update src/app.rs"));
     assert!(rendered.contains("last turn commands: 1"));
     assert!(rendered.contains("last turn file changes: 3"));
 }
@@ -2585,9 +2616,7 @@ fn shell_footer_prioritizes_runtime_warning_summary_when_runtime_and_template_mi
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(
-        "warnings: runtime 1, template 1 / shared runtime reconnected after the previous"
-    ));
+    assert!(rendered.contains("warnings: runtime 1, template 1"));
 }
 
 #[test]
@@ -2632,9 +2661,10 @@ fn shell_footer_surfaces_approval_review_summary() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    assert!(rendered.contains("notice: tool activity: none"));
     assert!(rendered.contains("approval: approved medium"));
-    assert!(rendered.contains("cmd: 1"));
-    assert!(rendered.contains("files: 2"));
+    assert!(rendered.contains("last turn commands: 1"));
+    assert!(rendered.contains("last turn file changes: 2"));
 }
 
 #[test]
@@ -2655,7 +2685,7 @@ fn shell_footer_shows_current_turn_activity_while_streaming() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("tool activity: command: cargo test [running]"));
+    assert!(rendered.contains("notice: tool activity: command: cargo test [running]"));
     assert!(rendered.contains("current turn commands: 1"));
     assert!(rendered.contains("current turn file changes: 2"));
 }

@@ -38,15 +38,6 @@ impl ConversationInputState {
         }
     }
 
-    pub(crate) fn detail(self) -> &'static str {
-        match self {
-            Self::DraftReady => "first prompt will create a new thread",
-            Self::ReadyToContinue => "session is ready for the next prompt",
-            Self::SubmittingTurn => "sending prompt to codex app-server",
-            Self::StreamingTurn => "current turn is still running",
-        }
-    }
-
     pub(crate) fn can_submit_now(self) -> bool {
         matches!(self, Self::DraftReady | Self::ReadyToContinue)
     }
@@ -115,29 +106,25 @@ impl AutoFollowupSkipReason {
         }
     }
 
-    pub(crate) fn runtime_status(
-        self,
-        turn_id: &str,
-        auto_follow_state: &AutoFollowState,
-    ) -> String {
+    pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
         match self {
-            Self::Disabled => format!("turn completed: {turn_id} / auto follow-up stopped: off"),
+            Self::Disabled => "turn completed / auto follow-up stopped: off".to_string(),
             Self::ManualInputBuffered => {
-                format!("turn completed: {turn_id} / auto follow-up skipped: manual input buffered")
+                "turn completed / auto follow-up skipped: manual input buffered".to_string()
             }
             Self::LimitReached => format!(
-                "turn completed: {turn_id} / auto follow-up stopped: turn limit reached ({})",
+                "turn completed / auto follow-up stopped: turn limit reached ({})",
                 auto_follow_state.progress_label()
             ),
             Self::NoAgentReply => {
-                format!("turn completed: {turn_id} / auto follow-up skipped: no agent reply")
+                "turn completed / auto follow-up skipped: no agent reply".to_string()
             }
             Self::StopKeywordMatched => format!(
-                "turn completed: {turn_id} / auto follow-up stopped: stop keyword matched ({})",
+                "turn completed / auto follow-up stopped: stop keyword matched ({})",
                 auto_follow_state.stop_rules.stop_keyword.value()
             ),
             Self::NoFileChanges => {
-                format!("turn completed: {turn_id} / auto follow-up stopped: no file changes")
+                "turn completed / auto follow-up stopped: no file changes".to_string()
             }
         }
     }
@@ -235,10 +222,12 @@ impl AutoFollowState {
         self.template_state.selected_index
     }
 
+    #[cfg(test)]
     pub(crate) fn template_source_label(&self) -> String {
         self.template_state.current().source_label()
     }
 
+    #[cfg(test)]
     pub(crate) fn template_count(&self) -> usize {
         self.template_state.items.len()
     }
@@ -958,21 +947,21 @@ impl ConversationViewModel {
 
     pub(crate) fn record_auto_followup_submission(
         &mut self,
-        queued_from_turn_id: &str,
+        _queued_from_turn_id: &str,
         template_label: &str,
     ) {
         let progress = self.auto_follow_state.progress_label();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("submitted auto turn {progress}"),
             detail: format!(
-                "queued after turn {queued_from_turn_id} completed; submitted with template {template_label}"
+                "queued after the previous turn completed; submitted with template {template_label}"
             ),
         });
     }
 
     pub(crate) fn record_auto_followup_queue(
         &mut self,
-        queued_from_turn_id: &str,
+        _queued_from_turn_id: &str,
         template_label: &str,
     ) {
         let next_progress = format!(
@@ -983,7 +972,7 @@ impl ConversationViewModel {
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("queued auto turn {next_progress}"),
             detail: format!(
-                "queued after turn {queued_from_turn_id} completed; waiting to submit with template {template_label}"
+                "queued after the previous turn completed; waiting to submit with template {template_label}"
             ),
         });
     }
