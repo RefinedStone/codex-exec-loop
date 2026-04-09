@@ -8,11 +8,15 @@ use crate::application::service::followup_template_service::FollowupTemplateServ
 use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
 use crate::application::service::planning_init_service::PlanningInitService;
 use crate::application::service::planning_prompt_service::PlanningPromptService;
+use crate::application::service::planning_reconciliation_service::{
+    PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
+};
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestPollResult;
+use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -57,6 +61,11 @@ impl NativeTuiApp {
             PlanningValidationService::new(),
             PriorityQueueService::new(),
         );
+        let planning_reconciliation_service = PlanningReconciliationService::new(
+            planning_workspace_port.clone(),
+            PlanningValidationService::new(),
+            PriorityQueueService::new(),
+        );
         let mut initial_conversation = ConversationViewModel::new_draft(
             workspace_directory.clone(),
             followup_template_service.load_catalog(&workspace_directory),
@@ -89,6 +98,8 @@ impl NativeTuiApp {
                 PlanningValidationService::new(),
             ),
             planning_prompt_service,
+            planning_reconciliation_service,
+            active_turn_planning_snapshot: None,
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
@@ -222,12 +233,19 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_conversation_runtime(&mut self, event: ConversationRuntimeEvent) {
+        let clear_turn_snapshot = matches!(
+            &event,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
+        );
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
 
         let reduction = reduce_conversation_runtime(conversation, event);
         self.conversation_state = ConversationState::Ready(reduction.state);
+        if clear_turn_snapshot {
+            self.active_turn_planning_snapshot = None;
+        }
         for effect in reduction.effects {
             self.execute_conversation_runtime_effect(effect);
         }
@@ -310,6 +328,7 @@ impl NativeTuiApp {
                 thread_id,
                 prompt,
             } => {
+                self.active_turn_planning_snapshot = self.load_planning_execution_snapshot(&cwd);
                 let outer_tx = self.tx.clone();
                 let service = self.conversation_service.clone();
                 thread::spawn(move || {
@@ -372,11 +391,29 @@ impl NativeTuiApp {
             return;
         };
 
-        let planning_prompt_context = if changed_planning_file_paths.is_empty() {
+        let reconciliation_result = self.reconcile_planning_after_turn(
+            &conversation.cwd,
+            &queued_from_turn_id,
+            &changed_planning_file_paths,
+        );
+        let planning_prompt_context = if reconciliation_result.rejected_task_ledger {
+            crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult::blocked(
+                "planning reconciliation rejected task-ledger.json; auto follow-up stays paused until repair flow is wired",
+            )
+        } else if changed_planning_file_paths.is_empty() {
             conversation.planning_prompt_context.clone()
         } else {
             self.load_planning_prompt_context(&conversation.cwd)
         };
+        for notice in reconciliation_result.notices {
+            if !conversation
+                .runtime_notices
+                .iter()
+                .any(|existing| existing == &notice)
+            {
+                conversation.runtime_notices.push(notice);
+            }
+        }
         conversation.replace_planning_prompt_context(planning_prompt_context);
 
         match conversation.decide_auto_followup() {
@@ -412,6 +449,58 @@ impl NativeTuiApp {
                 }
                 self.conversation_state = ConversationState::Ready(conversation);
             }
+        }
+    }
+
+    fn load_planning_execution_snapshot(
+        &self,
+        workspace_directory: &str,
+    ) -> Option<PlanningExecutionSnapshot> {
+        self.planning_reconciliation_service
+            .load_execution_snapshot(workspace_directory)
+            .ok()
+    }
+
+    fn reconcile_planning_after_turn(
+        &mut self,
+        workspace_directory: &str,
+        turn_id: &str,
+        changed_planning_file_paths: &[String],
+    ) -> PlanningReconciliationResult {
+        let requires_execution_snapshot = changed_planning_file_paths
+            .iter()
+            .any(|path| path == DIRECTIONS_FILE_PATH || path == TASK_LEDGER_FILE_PATH);
+
+        if !requires_execution_snapshot {
+            self.active_turn_planning_snapshot = None;
+            return PlanningReconciliationResult::default();
+        }
+
+        let Some(execution_snapshot) = self.active_turn_planning_snapshot.take() else {
+            return PlanningReconciliationResult {
+                notices: vec![
+                    "planning reconciliation skipped because no accepted planning snapshot was captured for the turn"
+                        .to_string(),
+                ],
+                rejected_task_ledger: true,
+                rejected_archive_path: None,
+                queue_snapshot_rebuilt: false,
+            };
+        };
+
+        match self.planning_reconciliation_service.reconcile_after_turn(
+            workspace_directory,
+            turn_id,
+            changed_planning_file_paths,
+            &execution_snapshot,
+        ) {
+            Ok(result) => result,
+            Err(error) => PlanningReconciliationResult {
+                notices: vec![format!("planning reconciliation failed: {error}")],
+                rejected_task_ledger: true,
+                rejected_archive_path: None,
+                queue_snapshot_rebuilt: false,
+            },
         }
     }
 

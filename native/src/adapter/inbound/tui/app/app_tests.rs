@@ -35,6 +35,7 @@ use crate::application::port::outbound::followup_template_port::{
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+use crate::application::service::planning_reconciliation_service::PlanningExecutionSnapshot;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -48,6 +49,7 @@ use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
 };
+use crate::domain::planning::TASK_LEDGER_FILE_PATH;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -438,6 +440,90 @@ fn planning_init_command_stages_bootstrap_files_in_current_workspace() {
     .into_iter()
     .collect::<HashSet<_>>();
     assert_eq!(staged_files, expected_files);
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn invalid_task_ledger_change_restores_snapshot_and_pauses_auto_followup() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-reconcile-app");
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+
+    let bootstrap_artifacts =
+        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
+            .build_artifacts();
+    std::fs::write(
+        planning_dir.join("directions.toml"),
+        &bootstrap_artifacts.directions_toml,
+    )
+    .expect("directions should write");
+    std::fs::write(
+        planning_dir.join("task-ledger.json"),
+        &bootstrap_artifacts.task_ledger_json,
+    )
+    .expect("task ledger should write");
+    std::fs::write(
+        planning_dir.join("task-ledger.schema.json"),
+        &bootstrap_artifacts.task_ledger_schema_json,
+    )
+    .expect("schema should write");
+    std::fs::write(
+        planning_dir.join("result-output.md"),
+        &bootstrap_artifacts.result_output_markdown,
+    )
+    .expect("result output should write");
+
+    let mut conversation = ready_conversation();
+    conversation.cwd = workspace_dir.clone();
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_snapshot = Some(PlanningExecutionSnapshot {
+        directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
+        task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+    });
+
+    std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
+        .expect("invalid task ledger should write");
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-invalid".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    let restored_task_ledger = std::fs::read_to_string(planning_dir.join("task-ledger.json"))
+        .expect("restored task ledger should read");
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert_eq!(restored_task_ledger, bootstrap_artifacts.task_ledger_json);
+    assert_eq!(
+        conversation.planning_prompt_context.preview_status_label(),
+        "blocked"
+    );
+    assert!(
+        conversation
+            .planning_prompt_context
+            .preview_detail()
+            .is_some_and(|detail| detail.contains("rejected task-ledger.json"))
+    );
+    assert!(
+        conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| notice.contains("archived rejected task-ledger"))
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

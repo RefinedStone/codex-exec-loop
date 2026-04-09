@@ -48,4 +48,19 @@ pub trait PlanningWorkspacePort: Send + Sync {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord>;
+
+    fn replace_planning_workspace_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+        body: Option<&str>,
+    ) -> Result<()>;
+
+    fn archive_rejected_planning_file(
+        &self,
+        workspace_dir: &str,
+        archive_name: &str,
+        active_path: &str,
+        body: &str,
+    ) -> Result<String>;
 }

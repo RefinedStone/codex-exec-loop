@@ -160,6 +160,25 @@ mod tests {
         ) -> Result<PlanningWorkspaceLoadRecord> {
             Ok(PlanningWorkspaceLoadRecord::default())
         }
+
+        fn replace_planning_workspace_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+            _body: Option<&str>,
+        ) -> Result<()> {
+            unreachable!("file replacement is not used in planning init service tests")
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            _workspace_dir: &str,
+            _archive_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            unreachable!("archive writes are not used in planning init service tests")
+        }
     }
 
     #[test]

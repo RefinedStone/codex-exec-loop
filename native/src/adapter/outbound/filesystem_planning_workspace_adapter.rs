@@ -8,8 +8,8 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
+    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 #[derive(Default)]
@@ -26,11 +26,21 @@ impl FilesystemPlanningWorkspaceAdapter {
             .join(draft_name)
     }
 
+    fn rejected_directory(workspace_dir: &str, archive_name: &str) -> PathBuf {
+        Path::new(workspace_dir)
+            .join(PLANNING_REJECTED_DIRECTORY)
+            .join(archive_name)
+    }
+
+    fn workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
+        Path::new(workspace_dir).join(relative_path)
+    }
+
     fn read_optional_workspace_file(
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        let path = Path::new(workspace_dir).join(relative_path);
+        let path = Self::workspace_path(workspace_dir, relative_path);
         if !path.is_file() {
             return Ok(None);
         }
@@ -38,6 +48,13 @@ impl FilesystemPlanningWorkspaceAdapter {
         fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))
             .map(Some)
+    }
+
+    fn ensure_parent_directory(path: &Path) -> Result<()> {
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
+        fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))
     }
 }
 
@@ -103,6 +120,51 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             )?,
         })
     }
+
+    fn replace_planning_workspace_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+        body: Option<&str>,
+    ) -> Result<()> {
+        let path = Self::workspace_path(workspace_dir, relative_path);
+        match body {
+            Some(body) => {
+                Self::ensure_parent_directory(&path)?;
+                fs::write(&path, body)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+            }
+            None => {
+                if path.exists() {
+                    fs::remove_file(&path)
+                        .with_context(|| format!("failed to remove {}", path.display()))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn archive_rejected_planning_file(
+        &self,
+        workspace_dir: &str,
+        archive_name: &str,
+        active_path: &str,
+        body: &str,
+    ) -> Result<String> {
+        let archive_directory = Self::rejected_directory(workspace_dir, archive_name);
+        fs::create_dir_all(&archive_directory)
+            .with_context(|| format!("failed to create {}", archive_directory.display()))?;
+
+        let file_name = Path::new(active_path)
+            .file_name()
+            .with_context(|| format!("planning file has no file name: {active_path}"))?;
+        let archived_path = archive_directory.join(file_name);
+        fs::write(&archived_path, body)
+            .with_context(|| format!("failed to write {}", archived_path.display()))?;
+
+        Ok(archived_path.display().to_string())
+    }
 }
 
 #[cfg(test)]
@@ -115,6 +177,7 @@ mod tests {
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningWorkspacePort,
     };
+    use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()
@@ -230,6 +293,56 @@ mod tests {
             .expect("directory entries should not fail planning workspace load");
 
         assert!(result.directions_toml.is_none());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn replace_planning_workspace_file_writes_and_removes_files() {
+        let workspace_dir = create_temp_workspace("planning-workspace-replace");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let directions_path =
+            Path::new(&workspace_dir).join(".codex-exec-loop/planning/directions.toml");
+
+        adapter
+            .replace_planning_workspace_file(
+                &workspace_dir,
+                DIRECTIONS_FILE_PATH,
+                Some("version = 1"),
+            )
+            .expect("directions should write");
+        assert_eq!(
+            fs::read_to_string(&directions_path).expect("written directions should read"),
+            "version = 1"
+        );
+
+        adapter
+            .replace_planning_workspace_file(&workspace_dir, DIRECTIONS_FILE_PATH, None)
+            .expect("directions should remove");
+        assert!(!directions_path.exists());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn archive_rejected_planning_file_writes_copy_under_rejected_directory() {
+        let workspace_dir = create_temp_workspace("planning-workspace-rejected");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let archived_path = adapter
+            .archive_rejected_planning_file(
+                &workspace_dir,
+                "turn-1",
+                TASK_LEDGER_FILE_PATH,
+                "{\"version\":1}",
+            )
+            .expect("rejected planning file should archive");
+
+        assert!(archived_path.contains(".codex-exec-loop/planning/rejected/turn-1"));
+        assert_eq!(
+            fs::read_to_string(&archived_path).expect("archived file should read"),
+            "{\"version\":1}"
+        );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

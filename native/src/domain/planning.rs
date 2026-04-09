@@ -7,6 +7,7 @@ pub const TASK_LEDGER_SCHEMA_FILE_PATH: &str = ".codex-exec-loop/planning/task-l
 pub const QUEUE_SNAPSHOT_FILE_PATH: &str = ".codex-exec-loop/planning/queue.snapshot.json";
 pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
 pub const PLANNING_DRAFTS_DIRECTORY: &str = ".codex-exec-loop/planning/drafts";
+pub const PLANNING_REJECTED_DIRECTORY: &str = ".codex-exec-loop/planning/rejected";
 pub const ACTIVE_PLANNING_FILE_PATHS: [&str; 5] = [
     DIRECTIONS_FILE_PATH,
     TASK_LEDGER_FILE_PATH,
@@ -191,14 +192,14 @@ pub enum TaskActor {
     System,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PriorityQueueSnapshot {
     pub next_task: Option<PriorityQueueTask>,
     pub active_tasks: Vec<PriorityQueueTask>,
     pub skipped_tasks: Vec<PriorityQueueSkippedTask>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PriorityQueueTask {
     pub rank: usize,
     pub task_id: String,
@@ -211,7 +212,7 @@ pub struct PriorityQueueTask {
     pub rank_reasons: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PriorityQueueSkippedTask {
     pub task_id: String,
     pub direction_id: String,
