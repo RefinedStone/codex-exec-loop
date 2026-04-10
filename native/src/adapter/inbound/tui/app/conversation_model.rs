@@ -6,12 +6,11 @@ use super::{
 };
 use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
-use crate::application::service::planning_runtime_policy_service::{
-    PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
+use crate::application::service::planning_runtime_facade_service::{
+    PlanningRuntimeAutoFollowDecision, PlanningRuntimeAutoFollowRequest,
+    PlanningRuntimeFacadeService,
 };
-use crate::application::service::turn_prompt_assembly_service::{
-    AutoFollowPromptAssemblyRequest, TurnPromptAssemblyService,
-};
+use crate::application::service::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
     ConversationToolActivity, ConversationToolActivityKind,
@@ -1068,8 +1067,7 @@ impl ConversationViewModel {
 
     pub(crate) fn decide_auto_followup(
         &self,
-        turn_prompt_assembly_service: &TurnPromptAssemblyService,
-        planning_runtime_policy_service: &PlanningRuntimePolicyService,
+        planning_runtime_facade_service: &PlanningRuntimeFacadeService,
     ) -> AutoFollowupDecision {
         if !self.auto_follow_state.enabled {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
@@ -1104,31 +1102,31 @@ impl ConversationViewModel {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
         }
 
-        if let Some(block_reason) = planning_runtime_policy_service.auto_follow_block_reason(
-            self.auto_follow_state.selected_template(),
-            &self.planning_runtime_snapshot,
-        ) {
-            return AutoFollowupDecision::Skip(match block_reason {
-                PlanningAutoFollowBlockReason::InvalidWorkspace => {
-                    AutoFollowupSkipReason::PlanningBlocked
-                }
-                PlanningAutoFollowBlockReason::ActionableQueueRequired => {
-                    AutoFollowupSkipReason::PlanningQueueHeadRequired
-                }
-            });
-        }
-
-        AutoFollowupDecision::QueuePrompt(turn_prompt_assembly_service.build_auto_follow_prompt(
-            AutoFollowPromptAssemblyRequest {
+        match planning_runtime_facade_service.decide_auto_followup(
+            PlanningRuntimeAutoFollowRequest {
                 template: self.auto_follow_state.selected_template(),
                 auto_turn: self.auto_follow_state.next_auto_turn_index(),
                 max_auto_turns: self.auto_follow_state.max_auto_turns_value(),
                 session_id: &self.thread_id,
                 stop_keyword: self.auto_follow_state.stop_keyword_value(),
                 last_message: last_message.trim(),
-                planning_prompt_fragment: self.planning_runtime_snapshot.prompt_fragment(),
+                snapshot: &self.planning_runtime_snapshot,
             },
-        ))
+        ) {
+            PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
+                AutoFollowupDecision::QueuePrompt(prompt)
+            }
+            PlanningRuntimeAutoFollowDecision::Blocked(block_reason) => {
+                AutoFollowupDecision::Skip(match block_reason {
+                    PlanningAutoFollowBlockReason::InvalidWorkspace => {
+                        AutoFollowupSkipReason::PlanningBlocked
+                    }
+                    PlanningAutoFollowBlockReason::ActionableQueueRequired => {
+                        AutoFollowupSkipReason::PlanningQueueHeadRequired
+                    }
+                })
+            }
+        }
     }
 }
 

@@ -2,7 +2,6 @@ use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
 use crate::application::service::planning_runtime_policy_service::PlanningRuntimeSummaryRequest;
 use crate::application::service::session_service::SessionProjectFilter;
-use crate::application::service::turn_prompt_assembly_service::AutoFollowPromptPreviewRequest;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::{PlanningValidationSeverity, PlanningWorkspaceState};
 
@@ -1391,7 +1390,7 @@ fn planning_summary_view(
     conversation: &ConversationViewModel,
 ) -> crate::application::service::planning_runtime_policy_service::PlanningRuntimeSummaryView {
     app.planning_services
-        .policy_service
+        .runtime_facade
         .build_summary_view(PlanningRuntimeSummaryRequest {
             snapshot: &conversation.planning_runtime_snapshot,
             has_running_turn: conversation.has_running_turn(),
@@ -1679,30 +1678,25 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => {
             let template = conversation.auto_follow_state.selected_template();
-            let planning_preview = app
+            let preview = app
                 .planning_services
-                .policy_service
-                .build_preview_view(template, &conversation.planning_runtime_snapshot);
+                .runtime_facade
+                .build_auto_follow_preview(
+                    crate::application::service::planning_runtime_facade_service::PlanningRuntimePreviewRequest {
+                        template,
+                        auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
+                        max_auto_turns: conversation.auto_follow_state.max_auto_turns_value(),
+                        session_id: &conversation.thread_id,
+                        stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
+                        last_message: conversation.latest_agent_message_text(),
+                        snapshot: &conversation.planning_runtime_snapshot,
+                    },
+                );
             let preview_thread_id = if conversation.thread_id.trim().is_empty() {
                 "draft-thread"
             } else {
                 conversation.thread_id.as_str()
             };
-            let latest_agent_message = conversation.latest_agent_message_text();
-            let rendered_preview = app
-                .planning_services
-                .turn_prompt_assembly_service
-                .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
-                    template,
-                    auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
-                    max_auto_turns: conversation.auto_follow_state.max_auto_turns_value(),
-                    session_id: &conversation.thread_id,
-                    stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
-                    last_message: latest_agent_message,
-                    planning_prompt_fragment: conversation
-                        .planning_runtime_snapshot
-                        .prompt_fragment(),
-                });
 
             let mut lines = vec![
                 Line::from(format!("selected: {}", template.label)),
@@ -1710,7 +1704,7 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                 Line::from(format!("preview thread id: {preview_thread_id}")),
             ];
 
-            if latest_agent_message.is_some() {
+            if conversation.latest_agent_message_text().is_some() {
                 lines.push(Line::from(
                     "preview last_message: using the latest non-empty agent reply",
                 ));
@@ -1721,9 +1715,9 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             }
             lines.push(Line::from(format!(
                 "planning: {}",
-                planning_preview.status_label
+                preview.planning_view.status_label
             )));
-            if let Some(detail) = planning_preview.detail.as_deref() {
+            if let Some(detail) = preview.planning_view.detail.as_deref() {
                 lines.push(Line::from(format!("planning detail: {detail}")));
             }
 
@@ -1735,7 +1729,7 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
 
             lines.push(Line::from(""));
             lines.push(Line::from("Rendered Preview"));
-            for preview_line in rendered_preview.lines() {
+            for preview_line in preview.rendered_prompt.lines() {
                 lines.push(Line::from(preview_line.to_string()));
             }
 

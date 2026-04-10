@@ -727,7 +727,8 @@ impl NativeTuiApp {
         workspace_directory: &str,
     ) -> PlanningRuntimeSnapshot {
         self.planning_services
-            .load_runtime_snapshot(workspace_directory)
+            .runtime_facade
+            .load_runtime_snapshot_or_invalid(workspace_directory)
     }
 
     pub(super) fn refresh_ready_conversation_planning_runtime_snapshot(&mut self) {

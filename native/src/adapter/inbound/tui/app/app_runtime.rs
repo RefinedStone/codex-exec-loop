@@ -74,7 +74,9 @@ impl NativeTuiApp {
             followup_template_service.load_catalog(&workspace_directory),
         );
         initial_conversation.replace_planning_runtime_snapshot(
-            planning_services.load_runtime_snapshot(&workspace_directory),
+            planning_services
+                .runtime_facade
+                .load_runtime_snapshot_or_invalid(&workspace_directory),
         );
         Self {
             shell_overlay: ShellOverlay::Hidden,
@@ -482,10 +484,7 @@ impl NativeTuiApp {
             return;
         }
 
-        match conversation.decide_auto_followup(
-            &self.planning_services.turn_prompt_assembly_service,
-            &self.planning_services.policy_service,
-        ) {
+        match conversation.decide_auto_followup(&self.planning_services.runtime_facade) {
             super::AutoFollowupDecision::QueuePrompt(prompt) => {
                 conversation.clear_auto_followup_skip();
                 let template_label = conversation.auto_follow_state.template_label().to_string();
@@ -527,7 +526,7 @@ impl NativeTuiApp {
     ) -> ActiveTurnPlanningSnapshot {
         match self
             .planning_services
-            .reconciliation_service
+            .runtime_facade
             .load_execution_snapshot(workspace_directory)
         {
             Ok(snapshot) => ActiveTurnPlanningSnapshot::Ready(snapshot),
@@ -577,7 +576,7 @@ impl NativeTuiApp {
             }
         };
 
-        match self.planning_services.reconciliation_service.reconcile_after_turn(
+        match self.planning_services.runtime_facade.reconcile_after_turn(
             workspace_directory,
             turn_id,
             changed_planning_file_paths,
@@ -810,15 +809,9 @@ impl NativeTuiApp {
     }
 
     fn assemble_manual_prompt(&self, conversation: &ConversationViewModel) -> Option<String> {
-        self.planning_services
-            .turn_prompt_assembly_service
-            .build_manual_prompt(
-                crate::application::service::turn_prompt_assembly_service::ManualPromptAssemblyRequest {
-                    operator_prompt: &conversation.input_buffer,
-                    planning_prompt_fragment: conversation
-                        .planning_runtime_snapshot
-                        .prompt_fragment(),
-                },
-            )
+        self.planning_services.runtime_facade.build_manual_prompt(
+            &conversation.input_buffer,
+            &conversation.planning_runtime_snapshot,
+        )
     }
 }
