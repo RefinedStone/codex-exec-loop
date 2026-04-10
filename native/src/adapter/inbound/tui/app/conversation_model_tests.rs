@@ -7,6 +7,7 @@ use super::{
     ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
     TurnActivityState, format_conversation_lines,
 };
+use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
     PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -26,7 +27,6 @@ use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
     FollowupTemplateSource,
 };
-use crate::domain::planning::{PriorityQueueTask, TaskStatus};
 
 fn sample_template_catalog() -> FollowupTemplateCatalog {
     FollowupTemplateCatalog {
@@ -162,31 +162,6 @@ fn planning_runtime_facade_service() -> PlanningRuntimeFacadeService {
         ),
         PlanningRuntimePolicyService::new(),
         TurnPromptAssemblyService::new(),
-    )
-}
-
-fn sample_queue_head() -> PriorityQueueTask {
-    PriorityQueueTask {
-        rank: 1,
-        task_id: "task-1".to_string(),
-        direction_id: "general-workstream".to_string(),
-        direction_title: "General workstream".to_string(),
-        task_title: "Implement shell planning status".to_string(),
-        status: TaskStatus::Ready,
-        combined_priority: 10,
-        updated_at: "2026-04-10T00:00:00Z".to_string(),
-        rank_reasons: vec!["status=ready".to_string()],
-    }
-}
-
-fn sample_planning_runtime_snapshot(
-    prompt_fragment: &str,
-    queue_summary: &str,
-) -> PlanningRuntimeSnapshot {
-    PlanningRuntimeSnapshot::ready(
-        prompt_fragment.to_string(),
-        queue_summary.to_string(),
-        Some(sample_queue_head()),
     )
 }
 

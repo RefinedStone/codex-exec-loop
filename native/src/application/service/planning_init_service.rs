@@ -152,18 +152,7 @@ impl PlanningInitService {
         draft_name: &str,
         files: &[PlanningDraftEditorFile],
     ) -> Result<PlanningDraftSaveResult> {
-        for file in files {
-            self.planning_workspace_port.replace_planning_draft_file(
-                workspace_dir,
-                draft_name,
-                &file.active_path,
-                &file.body,
-            )?;
-        }
-
-        let loaded = self
-            .planning_workspace_port
-            .load_planning_draft_files(workspace_dir, draft_name)?;
+        let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
         Ok(PlanningDraftSaveResult {
             draft_name: draft_name.to_string(),
             validation_report: self.validate_loaded_draft(&loaded),
@@ -176,8 +165,8 @@ impl PlanningInitService {
         draft_name: &str,
         files: &[PlanningDraftEditorFile],
     ) -> Result<PlanningDraftPromoteResult> {
-        self.save_draft_editor_files(workspace_dir, draft_name, files)?;
-        self.promote_staged_draft(workspace_dir, draft_name)
+        let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
+        self.promote_loaded_draft(workspace_dir, draft_name, loaded)
     }
 
     pub fn promote_staged_draft(
@@ -188,6 +177,34 @@ impl PlanningInitService {
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(workspace_dir, draft_name)?;
+        self.promote_loaded_draft(workspace_dir, draft_name, loaded)
+    }
+
+    fn replace_and_load_draft_editor_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftEditorFile],
+    ) -> Result<PlanningDraftLoadRecord> {
+        for file in files {
+            self.planning_workspace_port.replace_planning_draft_file(
+                workspace_dir,
+                draft_name,
+                &file.active_path,
+                &file.body,
+            )?;
+        }
+
+        self.planning_workspace_port
+            .load_planning_draft_files(workspace_dir, draft_name)
+    }
+
+    fn promote_loaded_draft(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        loaded: PlanningDraftLoadRecord,
+    ) -> Result<PlanningDraftPromoteResult> {
         let validation_report = self.validate_loaded_draft(&loaded);
         if !validation_report.is_valid() {
             return Ok(PlanningDraftPromoteResult {

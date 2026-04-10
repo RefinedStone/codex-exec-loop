@@ -1,7 +1,7 @@
 use crate::domain::followup_template::FollowupTemplateDefinition;
 
-const PREVIEW_THREAD_ID_PLACEHOLDER: &str = "draft-thread";
-const PREVIEW_LAST_MESSAGE_PLACEHOLDER: &str = "(waiting for next agent reply)";
+pub(crate) const PREVIEW_THREAD_ID_PLACEHOLDER: &str = "draft-thread";
+pub(crate) const PREVIEW_LAST_MESSAGE_PLACEHOLDER: &str = "(waiting for next agent reply)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualPromptAssemblyRequest<'a> {
@@ -104,15 +104,21 @@ fn append_planning_fragment(
     rendered_prompt: String,
     planning_prompt_fragment: Option<&str>,
 ) -> String {
-    match planning_prompt_fragment
+    let Some(planning_prompt_fragment) = planning_prompt_fragment
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        Some(planning_prompt_fragment) => {
-            format!("{rendered_prompt}\n\n{planning_prompt_fragment}")
-        }
-        None => rendered_prompt,
+    else {
+        return rendered_prompt;
+    };
+
+    let mut result = rendered_prompt;
+    let trimmed_len = result.trim_end().len();
+    result.truncate(trimmed_len);
+    if !result.is_empty() {
+        result.push_str("\n\n");
     }
+    result.push_str(planning_prompt_fragment);
+    result
 }
 
 fn normalized_preview_session_id(session_id: &str) -> &str {
@@ -212,5 +218,28 @@ mod tests {
         assert!(prompt.contains("session=draft-thread"));
         assert!(prompt.contains("auto=1/3"));
         assert!(prompt.contains("last=(waiting for next agent reply)"));
+    }
+
+    #[test]
+    fn auto_follow_prompt_uses_fragment_without_leading_blank_lines_when_template_is_empty() {
+        let service = TurnPromptAssemblyService::new();
+        let template = FollowupTemplateDefinition {
+            id: "empty".to_string(),
+            label: "empty".to_string(),
+            body: "   ".to_string(),
+            source: FollowupTemplateSource::Builtin,
+        };
+
+        let prompt = service.build_auto_follow_prompt(AutoFollowPromptAssemblyRequest {
+            template: &template,
+            auto_turn: 1,
+            max_auto_turns: 2,
+            session_id: "thread-1",
+            stop_keyword: "AUTO_STOP",
+            last_message: "latest answer",
+            planning_prompt_fragment: Some("Planning Context"),
+        });
+
+        assert_eq!(prompt, "Planning Context");
     }
 }

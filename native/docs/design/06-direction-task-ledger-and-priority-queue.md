@@ -370,7 +370,7 @@ Recommended behavior:
 5. Phrase the generic direction so the LLM can interpret it as "put all actionable goals or accepted proposals into the task ledger and work from there."
 6. Allow the operator to later replace the generic direction catalog with a richer detail-mode catalog without changing the task-ledger storage shape.
 
-### Assisted Initialization Flow
+### Detail Mode
 
 `detail mode` should branch again after the first selector:
 

@@ -7,6 +7,7 @@ use super::*;
 use crate::application::service::session_service::SessionProjectFilter;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::PlanningValidationSeverity;
+use crate::domain::text::compact_whitespace_detail;
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 48;
@@ -502,7 +503,7 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 .map(|review| review.staged_file_count())
                 .unwrap_or_default();
             let validation_report = simple_review.map(|review| review.validation_report());
-            let validation_ok = validation_report.map_or(true, |report| report.is_valid());
+            let validation_ok = validation_report.is_none_or(|report| report.is_valid());
             let first_error = validation_report
                 .and_then(|report| report.errors().into_iter().next())
                 .map(|issue| {
@@ -638,10 +639,12 @@ pub(super) fn build_planning_draft_editor_overlay_view(
         .map(|line| Line::from(line.clone()))
         .collect::<Vec<_>>();
     let editor_height = editor_height.max(1) as usize;
-    let editor_scroll = selected_buffer
-        .cursor_line_index()
-        .saturating_sub(editor_height.saturating_sub(1))
+    let max_editor_scroll = selected_buffer
+        .lines()
+        .len()
+        .saturating_sub(editor_height)
         .min(u16::MAX as usize) as u16;
+    let editor_scroll = selected_buffer.editor_scroll().min(max_editor_scroll);
     let editor_cursor_offset = Some((
         selected_buffer.cursor_column().min(u16::MAX as usize) as u16,
         selected_buffer
@@ -1292,14 +1295,7 @@ fn compact_inline_summary_label(summary: &str) -> String {
 }
 
 fn compact_inline_detail(text: &str, max_len: usize) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() <= max_len {
-        return compact;
-    }
-
-    let keep = max_len.saturating_sub(3);
-    let truncated = compact.chars().take(keep).collect::<String>();
-    format!("{truncated}...")
+    compact_whitespace_detail(text, max_len)
 }
 
 fn compact_live_agent_line(text: &str, max_len: usize) -> String {
@@ -1342,7 +1338,7 @@ fn build_operator_notice_line(
     if turn_running && has_tool_activity {
         let mut notice_line = format!(
             "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
-            compact_inline_detail(&activity_summary, max_detail_len),
+            compact_inline_detail(activity_summary, max_detail_len),
             activity_command_count,
             activity_file_change_count,
         );
@@ -1366,7 +1362,7 @@ fn build_operator_notice_line(
     if has_tool_activity {
         let mut notice_line = format!(
             "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
-            compact_inline_detail(&activity_summary, max_detail_len),
+            compact_inline_detail(activity_summary, max_detail_len),
             activity_command_count,
             activity_file_change_count,
         );

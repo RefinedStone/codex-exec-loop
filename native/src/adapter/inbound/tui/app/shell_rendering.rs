@@ -726,7 +726,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     );
 }
 
-fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     if app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor {
         draw_planning_draft_editor_overlay(frame, app);
         return;
@@ -784,12 +784,16 @@ fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
-fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let popup_area = centered_rect(92, 82, frame.area());
     frame.render_widget(Clear, popup_area);
 
     let editor_height = popup_area.height.saturating_sub(14).max(8);
-    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_height) else {
+    app.planning_draft_editor_ui_state
+        .sync_editor_scroll(editor_height.saturating_sub(2).max(1));
+    let Some(overlay_view) =
+        build_planning_draft_editor_overlay_view(app, editor_height.saturating_sub(2).max(1))
+    else {
         return;
     };
     let PlanningDraftEditorOverlayView {

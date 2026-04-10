@@ -165,16 +165,13 @@ impl NativeTuiApp {
         } else {
             self.load_planning_runtime_snapshot(&conversation.cwd)
         };
-        for notice in reconciliation_result.notices {
-            if !conversation.runtime_notices.contains(&notice) {
-                conversation.runtime_notices.push(notice);
-            }
-        }
-        for notice in planning_repair_resolution.notices {
-            if !conversation.runtime_notices.contains(&notice) {
-                conversation.runtime_notices.push(notice);
-            }
-        }
+        extend_unique_runtime_notices(
+            &mut conversation,
+            reconciliation_result
+                .notices
+                .into_iter()
+                .chain(planning_repair_resolution.notices),
+        );
         conversation.replace_planning_runtime_snapshot(planning_runtime_snapshot);
 
         if let Some(queued_prompt) = planning_repair_resolution.queued_prompt {
@@ -183,9 +180,7 @@ impl NativeTuiApp {
                     "planning repair retry {}/{} is waiting because manual input is buffered",
                     queued_prompt.attempt_number, queued_prompt.max_attempts
                 );
-                if !conversation.runtime_notices.contains(&pause_notice) {
-                    conversation.runtime_notices.push(pause_notice);
-                }
+                push_unique_runtime_notice(&mut conversation, pause_notice);
                 conversation.status_text =
                     "turn completed / planning repair paused: manual input buffered".to_string();
                 let should_refresh_lines =
@@ -501,5 +496,20 @@ impl NativeTuiApp {
             &conversation.input_buffer,
             &conversation.planning_runtime_snapshot,
         )
+    }
+}
+
+fn extend_unique_runtime_notices<I>(conversation: &mut ConversationViewModel, notices: I)
+where
+    I: IntoIterator<Item = String>,
+{
+    for notice in notices {
+        push_unique_runtime_notice(conversation, notice);
+    }
+}
+
+fn push_unique_runtime_notice(conversation: &mut ConversationViewModel, notice: String) {
+    if !conversation.runtime_notices.contains(&notice) {
+        conversation.runtime_notices.push(notice);
     }
 }

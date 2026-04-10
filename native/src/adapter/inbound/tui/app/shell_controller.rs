@@ -2,7 +2,10 @@ use super::planning_draft_editor_ui::{
     PlanningDraftEditorCloseRequest, PlanningDraftEditorCloseRisk,
 };
 use super::*;
+use crate::application::service::planning_init_service::PlanningDraftEditorSession;
 use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
+
+type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellActionAvailability {
@@ -1004,9 +1007,7 @@ impl NativeTuiApp {
 
     fn open_guided_planning_editor_session(
         &mut self,
-        session_result: anyhow::Result<
-            crate::application::service::planning_init_service::PlanningDraftEditorSession,
-        >,
+        session_result: PlanningEditorSessionResult,
         ready_status_prefix: &str,
         mode: PlanningInitModeSelection,
     ) {

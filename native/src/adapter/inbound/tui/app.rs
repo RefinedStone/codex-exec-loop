@@ -94,6 +94,9 @@ mod shell_presentation;
 mod shell_rendering;
 #[path = "app/shell_runtime.rs"]
 mod shell_runtime;
+#[cfg(test)]
+#[path = "app/test_helpers.rs"]
+pub(crate) mod test_helpers;
 #[path = "app/transcript_viewport.rs"]
 mod transcript_viewport;
 #[path = "app/turn_submission_runtime.rs"]

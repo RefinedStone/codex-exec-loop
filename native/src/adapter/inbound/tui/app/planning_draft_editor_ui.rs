@@ -28,6 +28,7 @@ pub(super) struct PlanningDraftEditorBufferState {
     cursor_line_index: usize,
     cursor_column: usize,
     preferred_column: usize,
+    editor_scroll: u16,
     dirty: bool,
 }
 
@@ -162,6 +163,12 @@ impl PlanningDraftEditorUiState {
         self.clear_close_confirmation();
         if let Some(buffer) = self.selected_buffer_mut() {
             buffer.move_cursor_down();
+        }
+    }
+
+    pub fn sync_editor_scroll(&mut self, visible_height: u16) {
+        if let Some(buffer) = self.selected_buffer_mut() {
+            buffer.sync_editor_scroll(visible_height);
         }
     }
 
@@ -316,6 +323,10 @@ impl PlanningDraftEditorBufferState {
         self.cursor_column
     }
 
+    pub fn editor_scroll(&self) -> u16 {
+        self.editor_scroll
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -374,49 +385,30 @@ impl PlanningDraftEditorBufferState {
     }
 
     fn delete_previous_word(&mut self) {
-        let original_line = self.cursor_line_index;
-        let original_column = self.cursor_column;
-
-        while self.cursor_line_index > 0 || self.cursor_column > 0 {
-            let current_line = &self.lines[self.cursor_line_index];
-            let current_char = current_line
-                .chars()
-                .nth(self.cursor_column.saturating_sub(1));
-            let should_stop = self.cursor_column > 0
-                && current_char.is_some_and(|character| !character.is_whitespace())
-                && has_non_whitespace_before_cursor(
-                    current_line,
-                    self.cursor_column.saturating_sub(1),
-                );
-            self.backspace();
-            if should_stop {
-                break;
-            }
-            let current_line = &self.lines[self.cursor_line_index];
-            let previous_char = current_line
-                .chars()
-                .nth(self.cursor_column.saturating_sub(1));
-            if self.cursor_column == 0 && self.cursor_line_index == 0 {
-                break;
-            }
-            if previous_char.is_some_and(|character| character.is_whitespace()) {
-                while self.cursor_line_index > 0 || self.cursor_column > 0 {
-                    let current_line = &self.lines[self.cursor_line_index];
-                    let previous_char = current_line
-                        .chars()
-                        .nth(self.cursor_column.saturating_sub(1));
-                    if !previous_char.is_some_and(|character| character.is_whitespace()) {
-                        break;
-                    }
-                    self.backspace();
-                }
-                break;
-            }
+        let cursor_byte_index = self.cursor_byte_index();
+        if cursor_byte_index == 0 {
+            return;
         }
 
-        if original_line != self.cursor_line_index || original_column != self.cursor_column {
-            self.dirty = true;
+        let body = self.body();
+        let before_cursor = &body[..cursor_byte_index];
+        let trimmed_before_cursor =
+            before_cursor.trim_end_matches(|character: char| character.is_whitespace());
+        let word_start = trimmed_before_cursor
+            .char_indices()
+            .rev()
+            .find(|(_, character)| character.is_whitespace())
+            .map(|(index, character)| index + character.len_utf8())
+            .unwrap_or(0);
+        if word_start == cursor_byte_index {
+            return;
         }
+
+        let mut next_body = String::with_capacity(body.len() - (cursor_byte_index - word_start));
+        next_body.push_str(&body[..word_start]);
+        next_body.push_str(&body[cursor_byte_index..]);
+        self.replace_body_and_cursor(next_body, word_start);
+        self.dirty = true;
     }
 
     fn move_cursor_left(&mut self) {
@@ -463,6 +455,40 @@ impl PlanningDraftEditorBufferState {
             .preferred_column
             .min(self.lines[self.cursor_line_index].chars().count());
     }
+
+    fn cursor_byte_index(&self) -> usize {
+        let preceding_lines_len = self
+            .lines
+            .iter()
+            .take(self.cursor_line_index)
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+        preceding_lines_len
+            + char_to_byte_index(&self.lines[self.cursor_line_index], self.cursor_column)
+    }
+
+    fn replace_body_and_cursor(&mut self, body: String, cursor_byte_index: usize) {
+        self.lines = lines_from_body(body.as_str());
+        let (cursor_line_index, cursor_column) =
+            line_and_column_from_byte_index(body.as_str(), cursor_byte_index);
+        self.cursor_line_index = cursor_line_index;
+        self.cursor_column = cursor_column;
+        self.preferred_column = cursor_column;
+    }
+
+    fn sync_editor_scroll(&mut self, visible_height: u16) {
+        let visible_height = visible_height.max(1) as usize;
+        let max_scroll = self.lines.len().saturating_sub(visible_height);
+        let current_scroll = self.editor_scroll as usize;
+        let next_scroll = if self.cursor_line_index < current_scroll {
+            self.cursor_line_index
+        } else if self.cursor_line_index >= current_scroll + visible_height {
+            self.cursor_line_index + 1 - visible_height
+        } else {
+            current_scroll
+        };
+        self.editor_scroll = next_scroll.min(max_scroll).min(u16::MAX as usize) as u16;
+    }
 }
 
 impl From<PlanningDraftEditorFile> for PlanningDraftEditorBufferState {
@@ -480,8 +506,17 @@ impl From<PlanningDraftEditorFile> for PlanningDraftEditorBufferState {
             cursor_line_index: 0,
             cursor_column: 0,
             preferred_column: 0,
+            editor_scroll: 0,
             dirty: false,
         }
+    }
+}
+
+fn lines_from_body(body: &str) -> Vec<String> {
+    if body.is_empty() {
+        vec![String::new()]
+    } else {
+        body.split('\n').map(|line| line.to_string()).collect()
     }
 }
 
@@ -492,10 +527,20 @@ fn char_to_byte_index(line: &str, column: usize) -> usize {
         .unwrap_or(line.len())
 }
 
-fn has_non_whitespace_before_cursor(line: &str, column: usize) -> bool {
-    line.chars()
-        .take(column)
-        .any(|character| !character.is_whitespace())
+fn line_and_column_from_byte_index(body: &str, byte_index: usize) -> (usize, usize) {
+    let mut line_index = 0;
+    let mut line_start = 0;
+    for (index, character) in body.char_indices() {
+        if index >= byte_index {
+            break;
+        }
+        if character == '\n' {
+            line_index += 1;
+            line_start = index + character.len_utf8();
+        }
+    }
+
+    (line_index, body[line_start..byte_index].chars().count())
 }
 
 #[cfg(test)]
@@ -524,6 +569,19 @@ mod tests {
                     body: "{\n  \"version\": 1,\n  \"tasks\": []\n}".to_string(),
                 },
             ],
+            validation_report: PlanningValidationReport::default(),
+        }
+    }
+
+    fn single_buffer_session(body: &str) -> PlanningDraftEditorSession {
+        PlanningDraftEditorSession {
+            draft_name: "bootstrap-test".to_string(),
+            draft_directory: "/tmp/bootstrap-test".to_string(),
+            editable_files: vec![PlanningDraftEditorFile {
+                active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
+                staged_path: "/tmp/bootstrap-test/directions.toml".to_string(),
+                body: body.to_string(),
+            }],
             validation_report: PlanningValidationReport::default(),
         }
     }
@@ -642,5 +700,61 @@ mod tests {
         state.move_cursor_right();
 
         assert!(!state.is_close_confirmation_pending());
+    }
+
+    #[test]
+    fn delete_previous_word_removes_the_full_word_before_cursor() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(single_buffer_session("alpha beta"));
+
+        for _ in 0..10 {
+            state.move_cursor_right();
+        }
+        state.delete_previous_word();
+
+        let buffer = state.selected_buffer().expect("buffer");
+        assert_eq!(buffer.body(), "alpha ");
+        assert_eq!(buffer.cursor_line_index(), 0);
+        assert_eq!(buffer.cursor_column(), 6);
+    }
+
+    #[test]
+    fn delete_previous_word_trims_whitespace_and_respects_newline_boundaries() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(single_buffer_session("alpha\nbeta gamma"));
+
+        for _ in 0..16 {
+            state.move_cursor_right();
+        }
+        state.delete_previous_word();
+
+        let buffer = state.selected_buffer().expect("buffer");
+        assert_eq!(buffer.body(), "alpha\nbeta ");
+        assert_eq!(buffer.cursor_line_index(), 1);
+        assert_eq!(buffer.cursor_column(), 5);
+    }
+
+    #[test]
+    fn sync_editor_scroll_keeps_cursor_visible_without_repinning_every_move() {
+        let mut state = PlanningDraftEditorUiState::default();
+        state.open_session(single_buffer_session("1\n2\n3\n4\n5\n6"));
+
+        for _ in 0..4 {
+            state.move_cursor_down();
+        }
+        state.sync_editor_scroll(3);
+        assert_eq!(state.selected_buffer().expect("buffer").editor_scroll(), 2);
+
+        state.move_cursor_up();
+        state.sync_editor_scroll(3);
+        assert_eq!(state.selected_buffer().expect("buffer").editor_scroll(), 2);
+
+        state.move_cursor_up();
+        state.sync_editor_scroll(3);
+        assert_eq!(state.selected_buffer().expect("buffer").editor_scroll(), 2);
+
+        state.move_cursor_up();
+        state.sync_editor_scroll(3);
+        assert_eq!(state.selected_buffer().expect("buffer").editor_scroll(), 1);
     }
 }

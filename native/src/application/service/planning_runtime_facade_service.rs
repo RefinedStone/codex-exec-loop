@@ -16,6 +16,7 @@ use crate::application::service::turn_prompt_assembly_service::{
 };
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::PlanningWorkspaceState;
+use crate::domain::text::compact_whitespace_detail;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeAutoFollowRequest<'a> {
@@ -155,7 +156,7 @@ impl PlanningRuntimeFacadeService {
                     max_auto_turns: request.max_auto_turns,
                     session_id: request.session_id,
                     stop_keyword: request.stop_keyword,
-                    last_message: request.last_message,
+                    last_message: request.last_message.trim(),
                     planning_prompt_fragment: request.snapshot.prompt_fragment(),
                 },
             ),
@@ -318,14 +319,7 @@ impl PlanningRuntimeFacadeService {
 }
 
 fn compact_projection_detail(text: &str, max_len: usize) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() <= max_len {
-        return compact;
-    }
-
-    let keep = max_len.saturating_sub(3);
-    let truncated = compact.chars().take(keep).collect::<String>();
-    format!("{truncated}...")
+    compact_whitespace_detail(text, max_len)
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ use super::{
     build_transcript_panel_view, build_transcript_title, format_conversation_lines, shell_layout,
     startup_ascii_art_enabled_from_value,
 };
+use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -54,7 +55,7 @@ use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
 };
-use crate::domain::planning::{PriorityQueueTask, TASK_LEDGER_FILE_PATH, TaskStatus};
+use crate::domain::planning::TASK_LEDGER_FILE_PATH;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -270,31 +271,6 @@ fn ready_conversation() -> ConversationViewModel {
         last_auto_followup_activity: None,
         status_text: "thread loaded".to_string(),
     }
-}
-
-fn sample_queue_head() -> PriorityQueueTask {
-    PriorityQueueTask {
-        rank: 1,
-        task_id: "task-1".to_string(),
-        direction_id: "general-workstream".to_string(),
-        direction_title: "General workstream".to_string(),
-        task_title: "Implement shell planning status".to_string(),
-        status: TaskStatus::Ready,
-        combined_priority: 10,
-        updated_at: "2026-04-10T00:00:00Z".to_string(),
-        rank_reasons: vec!["status=ready".to_string()],
-    }
-}
-
-fn sample_planning_runtime_snapshot(
-    prompt_fragment: &str,
-    queue_summary: &str,
-) -> PlanningRuntimeSnapshot {
-    PlanningRuntimeSnapshot::ready(
-        prompt_fragment.to_string(),
-        queue_summary.to_string(),
-        Some(sample_queue_head()),
-    )
 }
 
 #[test]

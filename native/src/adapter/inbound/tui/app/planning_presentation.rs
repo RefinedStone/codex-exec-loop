@@ -3,6 +3,7 @@ use crate::application::service::planning_runtime_facade_service::{
     PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
 };
+use crate::application::service::turn_prompt_assembly_service::PREVIEW_THREAD_ID_PLACEHOLDER;
 
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
 const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
@@ -67,7 +68,7 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                     snapshot: &conversation.planning_runtime_snapshot,
                 });
             let preview_thread_id = if conversation.thread_id.trim().is_empty() {
-                "draft-thread"
+                PREVIEW_THREAD_ID_PLACEHOLDER
             } else {
                 conversation.thread_id.as_str()
             };
@@ -140,6 +141,10 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     }),
                     max_detail_len: FOLLOWUP_PLANNING_DETAIL_LIMIT,
                 });
+            let planning_status_line = planning_projection.planning_status_line;
+            let repair_attempt_line = planning_projection.repair_attempt_line;
+            let queue_head_line = planning_projection.queue_head_line;
+            let failure_line = planning_projection.failure_line;
             let mut lines = vec![
                 Line::from(format!(
                     "auto follow-up: {}",
@@ -161,7 +166,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     "stop on no-file-change: {}",
                     conversation.auto_follow_state.no_file_change_stop_label()
                 )),
-                Line::from(planning_projection.planning_status_line.clone()),
+                Line::from(planning_status_line),
                 Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
                     conversation
@@ -185,14 +190,14 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     activity_line
                 }),
             ];
-            if let Some(repair_attempt_line) = planning_projection.repair_attempt_line.as_deref() {
-                lines.push(Line::from(repair_attempt_line.to_string()));
+            if let Some(repair_attempt_line) = repair_attempt_line {
+                lines.push(Line::from(repair_attempt_line));
             }
-            if let Some(queue_head_line) = planning_projection.queue_head_line.as_deref() {
-                lines.push(Line::from(queue_head_line.to_string()));
+            if let Some(queue_head_line) = queue_head_line {
+                lines.push(Line::from(queue_head_line));
             }
-            if let Some(failure_line) = planning_projection.failure_line.as_deref() {
-                lines.push(Line::from(failure_line.to_string()));
+            if let Some(failure_line) = failure_line {
+                lines.push(Line::from(failure_line));
             }
             if let Some(planning_notice_summary) =
                 conversation.planning_notice_summary(FOLLOWUP_PLANNING_DETAIL_LIMIT)
