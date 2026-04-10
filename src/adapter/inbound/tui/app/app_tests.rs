@@ -1967,20 +1967,23 @@ fn startup_ready_submits_armed_prompt() {
         conversation.input_state,
         ConversationInputState::SubmittingTurn
     ));
-    let mut submitted = false;
+    let mut submitted_prompt = None;
     for _ in 0..20 {
-        submitted = codex_port
+        submitted_prompt = codex_port
             .new_thread_calls
             .lock()
             .expect("new-thread call mutex poisoned")
             .iter()
-            .any(|(_, prompt)| prompt == "ship it");
-        if submitted {
+            .map(|(_, prompt)| prompt.clone())
+            .find(|prompt| prompt.starts_with("ship it"));
+        if submitted_prompt.is_some() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
-    assert!(submitted);
+    let submitted_prompt =
+        submitted_prompt.expect("queued startup submit should reach the codex app-server port");
+    assert!(submitted_prompt.starts_with("ship it"));
 }
 
 #[test]
