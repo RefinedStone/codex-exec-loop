@@ -37,13 +37,8 @@ pub struct PlanningRuntimeAutoFollowRequest<'a> {
 }
 
 impl<'a> PlanningRuntimeAutoFollowRequest<'a> {
-    fn uses_builtin_next_task_template(&self) -> bool {
-        is_builtin_next_task_template(self.template)
-    }
-
     fn should_refresh_planning_queue(&self) -> bool {
-        self.uses_builtin_next_task_template()
-            && self.snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        should_refresh_planning_queue(self.template, self.snapshot)
     }
 }
 
@@ -59,13 +54,8 @@ pub struct PlanningRuntimePreviewRequest<'a> {
 }
 
 impl<'a> PlanningRuntimePreviewRequest<'a> {
-    fn uses_builtin_next_task_template(&self) -> bool {
-        is_builtin_next_task_template(self.template)
-    }
-
     fn should_refresh_planning_queue(&self) -> bool {
-        self.uses_builtin_next_task_template()
-            && self.snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        should_refresh_planning_queue(self.template, self.snapshot)
     }
 }
 
@@ -432,6 +422,14 @@ fn compact_projection_detail(text: &str, max_len: usize) -> String {
 
 fn is_builtin_next_task_template(template: &FollowupTemplateDefinition) -> bool {
     template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
+}
+
+fn should_refresh_planning_queue(
+    template: &FollowupTemplateDefinition,
+    snapshot: &PlanningRuntimeSnapshot,
+) -> bool {
+    is_builtin_next_task_template(template)
+        && snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
 }
 
 fn default_auto_follow_transcript_text(template: &FollowupTemplateDefinition) -> String {
