@@ -1,7 +1,11 @@
 use anyhow::Result;
 
+use crate::application::service::planning_auto_follow_copy::{
+    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
+    PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
+};
 use crate::application::service::planning_prompt_service::{
-    PlanningPromptService, PlanningRuntimeSnapshot,
+    PlanningPromptService, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
@@ -32,6 +36,17 @@ pub struct PlanningRuntimeAutoFollowRequest<'a> {
     pub snapshot: &'a PlanningRuntimeSnapshot,
 }
 
+impl<'a> PlanningRuntimeAutoFollowRequest<'a> {
+    fn uses_builtin_next_task_template(&self) -> bool {
+        is_builtin_next_task_template(self.template)
+    }
+
+    fn should_refresh_planning_queue(&self) -> bool {
+        self.uses_builtin_next_task_template()
+            && self.snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimePreviewRequest<'a> {
     pub template: &'a FollowupTemplateDefinition,
@@ -41,6 +56,17 @@ pub struct PlanningRuntimePreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
     pub snapshot: &'a PlanningRuntimeSnapshot,
+}
+
+impl<'a> PlanningRuntimePreviewRequest<'a> {
+    fn uses_builtin_next_task_template(&self) -> bool {
+        is_builtin_next_task_template(self.template)
+    }
+
+    fn should_refresh_planning_queue(&self) -> bool {
+        self.uses_builtin_next_task_template()
+            && self.snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,10 +177,7 @@ impl PlanningRuntimeFacadeService {
         &self,
         request: PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeAutoFollowDecision {
-        if request.template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
-            && request.snapshot.workspace_status()
-                == crate::application::service::planning_prompt_service::PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        {
+        if request.should_refresh_planning_queue() {
             return PlanningRuntimeAutoFollowDecision::QueuePrompt(
                 self.build_planning_queue_refresh_prompt(&request),
             );
@@ -179,22 +202,17 @@ impl PlanningRuntimeFacadeService {
         let planning_view = self
             .planning_runtime_policy_service
             .build_preview_view(request.template, request.snapshot);
-        let rendered_prompt = if request.template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
-            && request.snapshot.workspace_status()
-                == crate::application::service::planning_prompt_service::PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        {
+        let rendered_prompt = if request.should_refresh_planning_queue() {
             self.turn_prompt_assembly_service
-                .build_planning_auto_follow_prompt_preview(
-                    PlanningAutoFollowPromptPreviewRequest {
-                        operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
-                        auto_turn: request.auto_turn,
-                        max_auto_turns: request.max_auto_turns,
-                        session_id: request.session_id,
-                        stop_keyword: request.stop_keyword,
-                        last_message: request.last_message,
-                        planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                    },
-                )
+                .build_planning_auto_follow_prompt_preview(PlanningAutoFollowPromptPreviewRequest {
+                    operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
+                    auto_turn: request.auto_turn,
+                    max_auto_turns: request.max_auto_turns,
+                    session_id: request.session_id,
+                    stop_keyword: request.stop_keyword,
+                    last_message: request.last_message,
+                    planning_prompt_fragment: request.snapshot.prompt_fragment(),
+                })
         } else {
             self.turn_prompt_assembly_service
                 .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
@@ -412,9 +430,13 @@ fn compact_projection_detail(text: &str, max_len: usize) -> String {
     compact_whitespace_detail(text, max_len)
 }
 
+fn is_builtin_next_task_template(template: &FollowupTemplateDefinition) -> bool {
+    template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
+}
+
 fn default_auto_follow_transcript_text(template: &FollowupTemplateDefinition) -> String {
-    if template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID {
-        "priority queue의 현재 next task 1개를 이어서 진행합니다.".to_string()
+    if is_builtin_next_task_template(template) {
+        BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string()
     } else {
         format!(
             "selected auto follow-up template `{}` 기준으로 다음 작업 1개를 진행합니다.",
@@ -425,9 +447,9 @@ fn default_auto_follow_transcript_text(template: &FollowupTemplateDefinition) ->
 
 fn planning_queue_refresh_transcript_text(snapshot: &PlanningRuntimeSnapshot) -> String {
     if snapshot.has_proposal_candidates() {
-        "previous answer와 existing proposal 작업 목록을 priority queue에 넣고, queue head 1개만 수행한 뒤 남은 queued work와 proposal을 정리합니다.".to_string()
+        PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT.to_string()
     } else {
-        "previous answer의 실행 가능한 작업 목록을 priority queue에 넣고, queue head 1개만 수행한 뒤 남은 queued work와 proposal을 정리합니다.".to_string()
+        PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT.to_string()
     }
 }
 
