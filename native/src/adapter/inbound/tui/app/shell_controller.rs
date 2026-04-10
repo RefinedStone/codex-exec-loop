@@ -181,29 +181,11 @@ impl NativeTuiApp {
 
     pub(super) fn open_planning_manual_editor(&mut self) {
         let workspace_directory = self.current_workspace_directory();
-        let status_text = match self
-            .planning_init_service
-            .stage_manual_editor_session(&workspace_directory)
-        {
-            Ok(session) => {
-                let draft_name = session.draft_name.clone();
-                let validation_ok = session.validation_report.is_valid();
-                self.planning_draft_editor_ui_state.open_session(session);
-                self.planning_init_overlay_ui_state.open_manual_editor();
-                format!(
-                    "planning draft editor ready / draft: {draft_name} / validation: {}",
-                    if validation_ok {
-                        "ok"
-                    } else {
-                        "needs attention"
-                    }
-                )
-            }
-            Err(error) => format!("planning init failed: {error}"),
-        };
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
+        self.open_guided_planning_editor_session(
+            self.planning_init_service
+                .stage_manual_editor_session(&workspace_directory),
+            "planning draft editor ready",
+        );
     }
 
     pub(super) fn save_planning_manual_editor(&mut self) {
@@ -354,29 +336,11 @@ impl NativeTuiApp {
 
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
         let workspace_directory = self.current_workspace_directory();
-        let status_text = match self
-            .planning_init_service
-            .stage_simple_editor_session(&workspace_directory)
-        {
-            Ok(session) => {
-                let draft_name = session.draft_name.clone();
-                let validation_ok = session.validation_report.is_valid();
-                self.planning_draft_editor_ui_state.open_session(session);
-                self.planning_init_overlay_ui_state.open_manual_editor();
-                format!(
-                    "planning simple draft ready / draft: {draft_name} / validation: {}",
-                    if validation_ok {
-                        "ok"
-                    } else {
-                        "needs attention"
-                    }
-                )
-            }
-            Err(error) => format!("planning init failed: {error}"),
-        };
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
+        self.open_guided_planning_editor_session(
+            self.planning_init_service
+                .stage_simple_editor_session(&workspace_directory),
+            "planning simple draft ready",
+        );
     }
 
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {
@@ -1163,6 +1127,36 @@ impl NativeTuiApp {
         }
 
         self.dispatch_conversation_intent(ConversationIntentEvent::CtrlCPressed);
+    }
+
+    fn open_guided_planning_editor_session(
+        &mut self,
+        session_result: anyhow::Result<
+            crate::application::service::planning_init_service::PlanningDraftEditorSession,
+        >,
+        ready_status_prefix: &str,
+    ) {
+        let status_text = match session_result {
+            Ok(session) => {
+                let validation_ok = session.validation_report.is_valid();
+                let status_text = format!(
+                    "{ready_status_prefix} / draft: {} / validation: {}",
+                    session.draft_name,
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                );
+                self.planning_draft_editor_ui_state.open_session(session);
+                self.planning_init_overlay_ui_state.open_manual_editor();
+                status_text
+            }
+            Err(error) => format!("planning init failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
     }
 }
 

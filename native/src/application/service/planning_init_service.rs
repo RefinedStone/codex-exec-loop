@@ -109,16 +109,14 @@ impl PlanningInitService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningDraftEditorSession> {
-        let staged = self.stage_bootstrap_draft(workspace_dir)?;
-        self.load_manual_editor_session(workspace_dir, &staged.draft_name)
+        self.stage_editor_session(workspace_dir, PlanningBootstrapMode::Detail)
     }
 
     pub fn stage_simple_editor_session(
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningDraftEditorSession> {
-        let staged = self.stage_simple_mode_draft(workspace_dir)?;
-        self.load_manual_editor_session(workspace_dir, &staged.draft_name)
+        self.stage_editor_session(workspace_dir, PlanningBootstrapMode::Simple)
     }
 
     pub fn load_manual_editor_session(
@@ -255,6 +253,15 @@ impl PlanningInitService {
             staged_file_count: stage_record.staged_files.len(),
             validation_report: validation_result.report,
         })
+    }
+
+    fn stage_editor_session(
+        &self,
+        workspace_dir: &str,
+        mode: PlanningBootstrapMode,
+    ) -> Result<PlanningDraftEditorSession> {
+        let staged = self.stage_draft(workspace_dir, mode)?;
+        self.load_manual_editor_session(workspace_dir, &staged.draft_name)
     }
 
     fn validate_loaded_draft(&self, loaded: &PlanningDraftLoadRecord) -> PlanningValidationReport {
