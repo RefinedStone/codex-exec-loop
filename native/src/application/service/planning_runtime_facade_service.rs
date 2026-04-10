@@ -560,6 +560,38 @@ mod tests {
     }
 
     #[test]
+    fn decide_auto_followup_queues_prompt_when_proposals_exist_without_queue_head() {
+        let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
+        let snapshot =
+            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
+                "Planning Context\nRuntime Follow-up Proposal Rules".to_string(),
+                "queue idle: no executable planning task".to_string(),
+                Some(
+                    "2 proposed follow-up tasks waiting for promotion: Draft roadmap | +1 more"
+                        .to_string(),
+                ),
+                None,
+            );
+
+        let decision = service.decide_auto_followup(PlanningRuntimeAutoFollowRequest {
+            template: &builtin_next_task_template(),
+            auto_turn: 1,
+            max_auto_turns: 3,
+            session_id: "thread-1",
+            stop_keyword: "AUTO_STOP",
+            last_message: "latest answer",
+            snapshot: &snapshot,
+        });
+
+        let PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) = decision else {
+            panic!("expected queued prompt when proposals can be promoted");
+        };
+        assert!(prompt.contains("latest answer"));
+        assert!(prompt.contains("Planning Context"));
+        assert!(prompt.contains("Runtime Follow-up Proposal Rules"));
+    }
+
+    #[test]
     fn build_auto_follow_preview_returns_rendered_prompt_and_planning_view() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
 

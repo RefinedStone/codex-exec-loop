@@ -7,7 +7,9 @@ use super::{
     ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
     TurnActivityState, format_conversation_lines,
 };
-use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
+use crate::adapter::inbound::tui::app::test_helpers::{
+    sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
     PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -635,6 +637,32 @@ fn builtin_next_task_skips_when_planning_queue_has_no_next_task() {
         conversation.decide_auto_followup(&planning_runtime_facade_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
+}
+
+#[test]
+fn builtin_next_task_continues_when_only_proposals_remain() {
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
+        "Planning Context\nRuntime Follow-up Proposal Rules",
+        "queue idle: no executable planning task",
+        "2 proposed follow-up tasks waiting for promotion: Plan A | +1 more",
+    ));
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+
+    let AutoFollowupDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_followup(&planning_runtime_facade_service())
+    else {
+        panic!("proposal-only planning state should still continue");
+    };
+
+    assert!(prompt.contains("latest answer"));
+    assert!(prompt.contains("Planning Context"));
+    assert!(prompt.contains("Runtime Follow-up Proposal Rules"));
 }
 
 #[test]

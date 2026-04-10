@@ -141,6 +141,10 @@ impl PlanningRuntimeSnapshot {
     pub fn has_actionable_queue_head(&self) -> bool {
         self.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask
     }
+
+    pub fn has_proposal_candidates(&self) -> bool {
+        self.proposal_summary.is_some()
+    }
 }
 
 impl PlanningPromptService {
@@ -420,6 +424,10 @@ fn build_prompt_fragment(
             .to_string(),
     );
     lines.push(
+        "- If `next_task` is `none` but `proposed_tasks` exist and you are told to keep going from the latest answer, prioritize the existing proposals, promote exactly one highest-priority proposal into executable work, perform only that one task, and then show the remaining proposal list in the final answer."
+            .to_string(),
+    );
+    lines.push(
         "- When the user later asks to prioritize, queue, or execute earlier proposals, update the relevant proposal tasks instead of inventing duplicate tasks."
             .to_string(),
     );
@@ -682,6 +690,11 @@ mod tests {
         assert!(prompt_fragment.contains("proposed_tasks: showing 1 of 1"));
         assert!(prompt_fragment.contains("task-followup-1 | Draft a sushi-chef roadmap"));
         assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
+        assert!(
+            prompt_fragment
+                .contains("promote exactly one highest-priority proposal into executable work")
+        );
+        assert!(result.has_proposal_candidates());
     }
 
     #[test]

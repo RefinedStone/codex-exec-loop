@@ -25,3 +25,16 @@ pub(crate) fn sample_planning_runtime_snapshot(
         Some(sample_queue_head()),
     )
 }
+
+pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
+    prompt_fragment: &str,
+    queue_summary: &str,
+    proposal_summary: &str,
+) -> PlanningRuntimeSnapshot {
+    PlanningRuntimeSnapshot::ready_with_details(
+        prompt_fragment.to_string(),
+        queue_summary.to_string(),
+        Some(proposal_summary.to_string()),
+        None,
+    )
+}

@@ -54,6 +54,7 @@ impl PlanningRuntimePolicyService {
 
         if template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
             && snapshot.workspace_status() != PlanningRuntimeWorkspaceStatus::ReadyWithTask
+            && !snapshot.has_proposal_candidates()
         {
             return Some(PlanningAutoFollowBlockReason::ActionableQueueRequired);
         }
@@ -228,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_next_task_preview_mentions_proposals_when_queue_is_empty() {
+    fn builtin_next_task_allows_proposals_when_queue_is_empty() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
@@ -237,12 +238,43 @@ mod tests {
             None,
         );
 
+        assert_eq!(
+            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
+            None
+        );
+
         let preview = service.build_preview_view(&builtin_next_task_template(), &snapshot);
 
-        assert_eq!(preview.status_label, "queue-empty");
+        assert_eq!(preview.status_label, "ready");
         assert!(preview.detail.as_deref().is_some_and(|detail| {
-            detail.contains("proposed follow-up tasks waiting for promotion")
+            detail.contains("queue idle: no executable planning task")
+                && detail.contains("proposed follow-up tasks waiting for promotion")
         }));
+    }
+
+    #[test]
+    fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "queue idle: no executable planning task".to_string(),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
+            Some(PlanningAutoFollowBlockReason::ActionableQueueRequired)
+        );
+        assert!(
+            service
+                .build_preview_view(&builtin_next_task_template(), &snapshot)
+                .detail
+                .as_deref()
+                .is_some_and(|detail| {
+                    detail.contains("selected template requires an actionable planning queue head")
+                })
+        );
     }
 
     #[test]
