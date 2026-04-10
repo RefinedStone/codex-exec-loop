@@ -91,6 +91,50 @@ struct PromptBufferView {
     cursor_column: usize,
 }
 
+#[derive(Clone, Copy)]
+enum ShellConversationState<'a> {
+    Loading,
+    Failed(&'a str),
+    Ready(&'a ConversationViewModel),
+}
+
+struct ShellCorePresentationContext<'a> {
+    show_startup_ascii_art: bool,
+    startup_state: &'a StartupState,
+    shell_action_availability: ShellActionAvailability,
+    recent_session_status_label: String,
+    github_review_polling_status_label: String,
+    transcript_viewport_status_label: String,
+    conversation_state: ShellConversationState<'a>,
+}
+
+impl<'a> ShellCorePresentationContext<'a> {
+    fn from_app(app: &'a NativeTuiApp) -> Self {
+        Self {
+            show_startup_ascii_art: app.show_startup_ascii_art,
+            startup_state: &app.startup_state,
+            shell_action_availability: app.shell_action_availability(),
+            recent_session_status_label: recent_session_status_label(app),
+            github_review_polling_status_label: app.github_review_polling_status_label(),
+            transcript_viewport_status_label: app.transcript_viewport_status_label(),
+            conversation_state: match &app.conversation_state {
+                ConversationState::Loading => ShellConversationState::Loading,
+                ConversationState::Failed(message) => ShellConversationState::Failed(message),
+                ConversationState::Ready(conversation) => {
+                    ShellConversationState::Ready(conversation)
+                }
+            },
+        }
+    }
+
+    fn ready_conversation(&self) -> Option<&'a ConversationViewModel> {
+        match self.conversation_state {
+            ShellConversationState::Ready(conversation) => Some(conversation),
+            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
+        }
+    }
+}
+
 pub(super) struct StartupOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
     pub(super) summary_lines: Vec<Line<'static>>,
@@ -148,7 +192,8 @@ pub(super) fn build_startup_banner_lines(
     app: &NativeTuiApp,
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
-    if !startup_banner_is_active(app) {
+    let context = ShellCorePresentationContext::from_app(app);
+    if !startup_banner_is_active_in_context(&context) {
         return None;
     }
 
@@ -161,7 +206,11 @@ pub(super) fn build_startup_banner_lines(
 }
 
 pub(super) fn startup_screen_is_active(app: &NativeTuiApp) -> bool {
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+    startup_screen_is_active_in_context(&ShellCorePresentationContext::from_app(app))
+}
+
+fn startup_screen_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
+    let Some(conversation) = context.ready_conversation() else {
         return false;
     };
 
@@ -171,31 +220,45 @@ pub(super) fn startup_screen_is_active(app: &NativeTuiApp) -> bool {
         && conversation.live_agent_message.is_none()
 }
 
-pub(super) fn startup_banner_is_active(app: &NativeTuiApp) -> bool {
-    app.show_startup_ascii_art && startup_screen_is_active(app)
+fn startup_banner_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
+    context.show_startup_ascii_art && startup_screen_is_active_in_context(context)
 }
 
 pub(super) fn build_conversation_shell_view(
     app: &NativeTuiApp,
     mode: ShellFrontendMode,
 ) -> ConversationShellView {
-    let mut header_lines = build_shell_header_lines(app);
+    let context = ShellCorePresentationContext::from_app(app);
+    let planning_summary_line = context.ready_conversation().and_then(|conversation| {
+        build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
+    });
+    let planning_notice_line = context.ready_conversation().and_then(|conversation| {
+        build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
+    });
+    let mut header_lines = build_shell_header_lines_with_context(&context);
     header_lines.push(build_frontend_summary_line(mode));
-    let mut footer_lines = build_shell_footer_lines(app);
-    if mode == ShellFrontendMode::InlineMainBuffer {
-        if let Some(live_agent_lines) = current_live_agent_lines(app) {
-            footer_lines.extend(live_agent_lines);
-        }
+    let mut footer_lines = build_shell_footer_lines_with_context(
+        &context,
+        app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
+        planning_summary_line,
+        planning_notice_line,
+    );
+    if mode == ShellFrontendMode::InlineMainBuffer
+        && let Some(live_agent_lines) = context
+            .ready_conversation()
+            .and_then(current_live_agent_lines)
+    {
+        footer_lines.extend(live_agent_lines);
     }
 
     ConversationShellView {
         shell_title: build_shell_title(mode),
         header_lines,
-        conversation_lines: build_conversation_lines(app),
+        conversation_lines: build_conversation_lines_with_context(&context),
         status_title: build_status_title(mode),
         footer_lines,
-        input_title: build_input_title(app, mode),
-        input_lines: build_input_lines(app),
+        input_title: build_input_title_with_context(&context, mode),
+        input_lines: build_input_lines_with_context(&context),
     }
 }
 
@@ -333,7 +396,10 @@ pub(super) fn build_transcript_panel_view(
     };
 
     TranscriptPanelView {
-        title: build_transcript_title(app, mode),
+        title: build_transcript_title_with_context(
+            &ShellCorePresentationContext::from_app(app),
+            mode,
+        ),
         lines,
         scroll_offset,
     }
@@ -844,11 +910,7 @@ fn planning_init_option_line(
     ])
 }
 
-fn current_live_agent_lines(app: &NativeTuiApp) -> Option<Vec<Line<'static>>> {
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
-        return None;
-    };
-
+fn current_live_agent_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
     let message = conversation.live_agent_message.as_ref()?;
     let label = message.kind.label(message.phase.as_deref());
     let content_lines = message.text.split('\n').collect::<Vec<_>>();
@@ -867,16 +929,38 @@ fn current_live_agent_lines(app: &NativeTuiApp) -> Option<Vec<Line<'static>>> {
     Some(lines)
 }
 
-fn build_conversation_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
+fn build_conversation_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> Vec<Line<'static>> {
+    if startup_banner_is_active_in_context(context) {
+        let startup_banner_lines = build_startup_banner_lines_from_context(context, None)
+            .expect("active startup banner should produce lines");
         return startup_banner_lines;
     }
 
-    match &app.conversation_state {
-        ConversationState::Loading => vec![Line::from("Loading thread history...")],
-        ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
+    match context.conversation_state {
+        ShellConversationState::Loading => vec![Line::from("Loading thread history...")],
+        ShellConversationState::Failed(message) => vec![Line::from(message.to_string())],
+        ShellConversationState::Ready(conversation) => {
+            conversation.cached_conversation_lines.clone()
+        }
     }
+}
+
+fn build_startup_banner_lines_from_context(
+    context: &ShellCorePresentationContext<'_>,
+    max_height: Option<u16>,
+) -> Option<Vec<Line<'static>>> {
+    if !startup_banner_is_active_in_context(context) {
+        return None;
+    }
+
+    let max_height = match max_height {
+        Some(0) => return None,
+        value => value,
+    };
+
+    Some(startup_ascii_art_lines(max_height))
 }
 
 fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
@@ -932,29 +1016,57 @@ pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec
     lines
 }
 
+#[cfg(test)]
 pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.conversation_state {
-        ConversationState::Loading => vec![
+    let planning_summary_line = match &app.conversation_state {
+        ConversationState::Ready(conversation) => {
+            build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+    let planning_notice_line = match &app.conversation_state {
+        ConversationState::Ready(conversation) => {
+            build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+
+    build_shell_footer_lines_with_context(
+        &ShellCorePresentationContext::from_app(app),
+        app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
+        planning_summary_line,
+        planning_notice_line,
+    )
+}
+
+fn build_shell_footer_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+    github_review_recent_changes_summary: Option<String>,
+    planning_summary_line: Option<String>,
+    planning_notice_line: Option<String>,
+) -> Vec<Line<'static>> {
+    match context.conversation_state {
+        ShellConversationState::Loading => vec![
             Line::from(format!(
                 "startup: {}  |  sessions: {}  |  github: {}",
-                shell_action_availability_label(app),
-                recent_session_status_label(app),
-                github_review_polling_status_label(app),
+                context.shell_action_availability.status_text(),
+                context.recent_session_status_label.as_str(),
+                context.github_review_polling_status_label.as_str(),
             )),
             Line::from("conversation state: loading thread metadata"),
             Line::from("status: waiting for thread history from codex app-server"),
         ],
-        ConversationState::Failed(message) => vec![
+        ShellConversationState::Failed(message) => vec![
             Line::from(format!(
                 "startup: {}  |  sessions: {}  |  github: {}",
-                shell_action_availability_label(app),
-                recent_session_status_label(app),
-                github_review_polling_status_label(app),
+                context.shell_action_availability.status_text(),
+                context.recent_session_status_label.as_str(),
+                context.github_review_polling_status_label.as_str(),
             )),
             Line::from("conversation state: failed"),
             Line::from(format!("status: {message}")),
         ],
-        ConversationState::Ready(conversation) => {
+        ShellConversationState::Ready(conversation) => {
             let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
             let runtime_notice_summary =
                 conversation.runtime_notice_summary(FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT);
@@ -967,8 +1079,8 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                 )),
                 Line::from(format!(
                     "startup: {}  |  gh: {}  |  auto: {} ({})  |  tmpl: {}",
-                    shell_action_availability_label(app),
-                    github_review_polling_status_label(app),
+                    context.shell_action_availability.status_text(),
+                    context.github_review_polling_status_label.as_str(),
                     conversation.auto_follow_state.status_label(),
                     conversation.auto_follow_state.progress_label(),
                     inline_template_label(conversation),
@@ -991,24 +1103,25 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
                     FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT,
                 ));
             } else if warning_summary == "clear" {
-                status_segments.push(format!("sessions: {}", recent_session_status_label(app)));
+                status_segments.push(format!(
+                    "sessions: {}",
+                    context.recent_session_status_label.as_str()
+                ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
 
-            if let Some(planning_line) =
-                build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
-            {
+            if let Some(planning_line) = planning_summary_line {
                 lines.push(Line::from(planning_line));
             }
-            if let Some(planning_notice_line) =
-                build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
-            {
+            if let Some(planning_notice_line) = planning_notice_line {
                 lines.push(Line::from(planning_notice_line));
             }
 
-            if let Some(notice_line) =
-                build_operator_notice_line(app, conversation, FOOTER_NOTICE_DETAIL_LIMIT)
-            {
+            if let Some(notice_line) = build_operator_notice_line(
+                github_review_recent_changes_summary.as_deref(),
+                conversation,
+                FOOTER_NOTICE_DETAIL_LIMIT,
+            ) {
                 lines.push(Line::from(format!("notice: {notice_line}")));
             }
 
@@ -1018,42 +1131,69 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
 }
 
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    if startup_screen_is_active(app) {
-        let mut lines = build_inline_startup_screen_lines(app);
-        lines.extend(build_inline_tail_prompt_lines(app));
+    let planning_summary_line = match &app.conversation_state {
+        ConversationState::Ready(conversation) => {
+            build_planning_summary_line(app, conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+    let planning_notice_line = match &app.conversation_state {
+        ConversationState::Ready(conversation) => {
+            build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+
+    build_inline_tail_lines_with_context(
+        &ShellCorePresentationContext::from_app(app),
+        app.github_review_recent_changes_summary(INLINE_TAIL_NOTICE_DETAIL_LIMIT),
+        planning_summary_line,
+        planning_notice_line,
+    )
+}
+
+fn build_inline_tail_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+    github_review_recent_changes_summary: Option<String>,
+    planning_summary_line: Option<String>,
+    planning_notice_line: Option<String>,
+) -> Vec<Line<'static>> {
+    if startup_screen_is_active_in_context(context) {
+        let mut lines = build_inline_startup_screen_lines_with_context(context);
+        lines.extend(build_inline_tail_prompt_lines_with_context(context));
         return lines;
     }
 
     let mut lines = Vec::new();
 
-    match &app.conversation_state {
-        ConversationState::Loading => {
+    match context.conversation_state {
+        ShellConversationState::Loading => {
             lines.push(Line::from(format!(
                 "thread: loading  |  startup: {}  |  sessions: {}",
-                shell_action_availability_label(app),
-                recent_session_status_label(app),
+                context.shell_action_availability.status_text(),
+                context.recent_session_status_label.as_str(),
             )));
             lines.push(Line::from(format!(
                 "github: {}  |  flow: terminal main buffer",
-                github_review_polling_status_label(app),
+                context.github_review_polling_status_label.as_str(),
             )));
             lines.push(Line::from(
                 "status: waiting for thread history from codex app-server",
             ));
         }
-        ConversationState::Failed(message) => {
+        ShellConversationState::Failed(message) => {
             lines.push(Line::from(format!(
                 "thread: unavailable  |  startup: {}  |  sessions: {}",
-                shell_action_availability_label(app),
-                recent_session_status_label(app),
+                context.shell_action_availability.status_text(),
+                context.recent_session_status_label.as_str(),
             )));
             lines.push(Line::from(format!(
                 "github: {}  |  flow: terminal main buffer",
-                github_review_polling_status_label(app),
+                context.github_review_polling_status_label.as_str(),
             )));
             lines.push(Line::from(format!("status: {message}")));
         }
-        ConversationState::Ready(conversation) => {
+        ShellConversationState::Ready(conversation) => {
             let warning_summary = compact_inline_summary_label(
                 &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
             );
@@ -1079,56 +1219,59 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
             if let Some(runtime_notice_summary) = runtime_notice_summary.as_deref() {
                 status_segments.push(runtime_notice_summary.to_string());
             } else {
-                status_segments.push(format!("startup: {}", shell_action_availability_label(app)));
-                status_segments.push(format!("gh: {}", github_review_polling_status_label(app)));
+                status_segments.push(format!(
+                    "startup: {}",
+                    context.shell_action_availability.status_text()
+                ));
+                status_segments.push(format!(
+                    "gh: {}",
+                    context.github_review_polling_status_label.as_str()
+                ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
-            if let Some(planning_line) = build_planning_summary_line(
-                app,
-                conversation,
-                INLINE_TAIL_PLANNING_DETAIL_LIMIT,
-                false,
-            ) {
+            if let Some(planning_line) = planning_summary_line {
                 lines.push(Line::from(planning_line));
             }
-            if let Some(planning_notice_line) =
-                build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
-            {
+            if let Some(planning_notice_line) = planning_notice_line {
                 lines.push(Line::from(planning_notice_line));
             }
 
-            if let Some(live_agent_lines) = current_live_agent_lines(app) {
+            if let Some(live_agent_lines) = current_live_agent_lines(conversation) {
                 lines.extend(live_agent_lines);
-            } else if let Some(notice_line) =
-                build_operator_notice_line(app, conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
-            {
+            } else if let Some(notice_line) = build_operator_notice_line(
+                github_review_recent_changes_summary.as_deref(),
+                conversation,
+                INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+            ) {
                 lines.push(Line::from(format!("notice: {notice_line}")));
             }
         }
     }
 
-    lines.extend(build_inline_tail_prompt_lines(app));
+    lines.extend(build_inline_tail_prompt_lines_with_context(context));
     lines
 }
 
-fn build_inline_startup_screen_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+fn build_inline_startup_screen_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(format!(
         "startup: {}  |  sessions: {}  |  gh: {}",
-        shell_action_availability_label(app),
-        recent_session_status_label(app),
-        github_review_polling_status_label(app),
+        context.shell_action_availability.status_text(),
+        context.recent_session_status_label.as_str(),
+        context.github_review_polling_status_label.as_str(),
     ))];
 
-    match &app.startup_state {
+    match context.startup_state {
         StartupState::Idle => {
             lines.push(Line::from("status: preparing startup checks"));
-            if let ConversationState::Ready(conversation) = &app.conversation_state {
+            if let Some(conversation) = context.ready_conversation() {
                 lines.push(Line::from(format!("workspace: {}", conversation.cwd)));
             }
         }
         StartupState::Loading => {
             lines.push(Line::from("status: initializing codex shell"));
-            lines.extend(build_startup_check_lines(app));
+            lines.extend(build_startup_check_lines_from_state(context.startup_state));
         }
         StartupState::Ready(diagnostics) => {
             lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
@@ -1148,11 +1291,14 @@ fn build_inline_startup_screen_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
             lines.push(Line::from(
                 "first reply appears here after you send the opening prompt",
             ));
-            lines.push(Line::from(format!("starter: {}", inline_starter_copy(app))));
+            lines.push(Line::from(format!(
+                "starter: {}",
+                inline_starter_copy_in_context(context)
+            )));
         }
         StartupState::Failed(message) => {
             lines.push(Line::from(format!("status: {message}")));
-            for warning_line in build_startup_warning_lines(app)
+            for warning_line in build_startup_warning_lines_from_state(context.startup_state)
                 .into_iter()
                 .filter(|line| !line.to_string().eq_ignore_ascii_case("no warnings"))
             {
@@ -1179,8 +1325,8 @@ fn inline_diagnostic_status(
     if ok { ready_label } else { blocked_label }
 }
 
-fn inline_starter_copy(app: &NativeTuiApp) -> &'static str {
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {
+    let Some(conversation) = context.ready_conversation() else {
         return "start with a task, file path, or bug summary";
     };
 
@@ -1192,13 +1338,19 @@ fn inline_starter_copy(app: &NativeTuiApp) -> &'static str {
 }
 
 fn build_inline_tail_prompt_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.conversation_state {
-        ConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
-        ConversationState::Failed(message) => {
+    build_inline_tail_prompt_lines_with_context(&ShellCorePresentationContext::from_app(app))
+}
+
+fn build_inline_tail_prompt_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> Vec<Line<'static>> {
+    match context.conversation_state {
+        ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
+        ShellConversationState::Failed(message) => {
             vec![Line::from(format!("prompt: unavailable  |  {message}"))]
         }
-        ConversationState::Ready(conversation) => {
-            build_inline_ready_prompt_lines(conversation, app.shell_action_availability())
+        ShellConversationState::Ready(conversation) => {
+            build_inline_ready_prompt_lines(conversation, context.shell_action_availability)
         }
     }
 }
@@ -1310,14 +1462,14 @@ fn compact_live_agent_line(text: &str, max_len: usize) -> String {
 }
 
 fn build_operator_notice_line(
-    app: &NativeTuiApp,
+    github_review_recent_changes_summary: Option<&str>,
     conversation: &ConversationViewModel,
     max_detail_len: usize,
 ) -> Option<String> {
-    if let Some(github_review_summary) = app.github_review_recent_changes_summary(max_detail_len) {
+    if let Some(github_review_summary) = github_review_recent_changes_summary {
         return Some(format!(
             "gh update: {}",
-            compact_inline_detail(&github_review_summary, max_detail_len)
+            compact_inline_detail(github_review_summary, max_detail_len)
         ));
     }
 
@@ -1383,15 +1535,17 @@ fn build_operator_notice_line(
     })
 }
 
-pub(super) fn build_input_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.conversation_state {
-        ConversationState::Loading => vec![
+fn build_input_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> Vec<Line<'static>> {
+    match context.conversation_state {
+        ShellConversationState::Loading => vec![
             Line::from("Thread is still loading."),
             Line::from("Input becomes available when the shell reaches ready state."),
         ],
-        ConversationState::Failed(message) => vec![Line::from(message.clone())],
-        ConversationState::Ready(conversation) => {
-            build_ready_input_lines(conversation, app.shell_action_availability())
+        ShellConversationState::Failed(message) => vec![Line::from(message.to_string())],
+        ShellConversationState::Ready(conversation) => {
+            build_ready_input_lines(conversation, context.shell_action_availability)
         }
     }
 }
@@ -1604,16 +1758,18 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
     ]
 }
 
-fn build_shell_header_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.conversation_state {
-        ConversationState::Loading => vec![
+fn build_shell_header_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> Vec<Line<'static>> {
+    match context.conversation_state {
+        ShellConversationState::Loading => vec![
             Line::from(vec![
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
                 Span::raw(" / loading thread"),
             ]),
             Line::from("Reading thread history from codex app-server."),
         ],
-        ConversationState::Ready(conversation) => vec![
+        ShellConversationState::Ready(conversation) => vec![
             Line::from(vec![
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" / {}", conversation.title)),
@@ -1633,17 +1789,17 @@ fn build_shell_header_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
                 ),
                 Span::raw("  |  startup: "),
                 Span::styled(
-                    shell_action_availability_label(app),
-                    startup_state_style(app),
+                    context.shell_action_availability.status_text(),
+                    startup_state_style_for_availability(context.shell_action_availability),
                 ),
             ]),
         ],
-        ConversationState::Failed(message) => vec![
+        ShellConversationState::Failed(message) => vec![
             Line::from(vec![
                 Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
                 Span::raw(" / failed"),
             ]),
-            Line::from(message.clone()),
+            Line::from(message.to_string()),
         ],
     }
 }
@@ -1653,11 +1809,19 @@ fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
     Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
 }
 
+#[cfg(test)]
 pub(super) fn build_transcript_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
+    build_transcript_title_with_context(&ShellCorePresentationContext::from_app(app), mode)
+}
+
+fn build_transcript_title_with_context(
+    context: &ShellCorePresentationContext<'_>,
+    mode: ShellFrontendMode,
+) -> Line<'static> {
     let _ = mode;
     Line::from(vec![
         Span::raw("Transcript / "),
-        Span::raw(app.transcript_viewport_status_label()),
+        Span::raw(context.transcript_viewport_status_label.clone()),
     ])
 }
 
@@ -1666,17 +1830,25 @@ pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
     Line::from("Controls / shell shortcuts and live status")
 }
 
+#[cfg(test)]
 pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
+    build_input_title_with_context(&ShellCorePresentationContext::from_app(app), mode)
+}
+
+fn build_input_title_with_context(
+    context: &ShellCorePresentationContext<'_>,
+    mode: ShellFrontendMode,
+) -> Line<'static> {
     if mode == ShellFrontendMode::InlineMainBuffer {
-        return match &app.conversation_state {
-            ConversationState::Loading => {
+        return match context.conversation_state {
+            ShellConversationState::Loading => {
                 Line::from(vec![Span::raw("Prompt"), Span::raw(" / loading")])
             }
-            ConversationState::Failed(_) => {
+            ShellConversationState::Failed(_) => {
                 Line::from(vec![Span::raw("Prompt"), Span::raw(" / unavailable")])
             }
-            ConversationState::Ready(conversation) => {
-                let submit_hint = build_primary_submit_hint(app);
+            ShellConversationState::Ready(conversation) => {
+                let submit_hint = build_primary_submit_hint_with_context(context);
                 Line::from(vec![
                     Span::raw("Prompt"),
                     Span::raw(" / "),
@@ -1694,15 +1866,15 @@ pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> 
 
     let prompt_label = "Input";
 
-    match &app.conversation_state {
-        ConversationState::Loading => {
+    match context.conversation_state {
+        ShellConversationState::Loading => {
             Line::from(vec![Span::raw(prompt_label), Span::raw(" / loading")])
         }
-        ConversationState::Failed(_) => {
+        ShellConversationState::Failed(_) => {
             Line::from(vec![Span::raw(prompt_label), Span::raw(" / unavailable")])
         }
-        ConversationState::Ready(conversation) => {
-            let submit_hint = build_primary_submit_hint(app);
+        ShellConversationState::Ready(conversation) => {
+            let submit_hint = build_primary_submit_hint_with_context(context);
             Line::from(vec![
                 Span::raw(prompt_label),
                 Span::raw(" / "),
@@ -1712,8 +1884,8 @@ pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> 
                 ),
                 Span::raw(" / startup "),
                 Span::styled(
-                    shell_action_availability_label(app).to_string(),
-                    startup_state_style(app),
+                    context.shell_action_availability.status_text().to_string(),
+                    startup_state_style_for_availability(context.shell_action_availability),
                 ),
                 Span::raw(" / "),
                 Span::raw(submit_hint),
@@ -1734,28 +1906,28 @@ fn build_frontend_summary_line(mode: ShellFrontendMode) -> Line<'static> {
     }
 }
 
-fn build_primary_submit_hint(app: &NativeTuiApp) -> &'static str {
-    match &app.conversation_state {
-        ConversationState::Ready(conversation) if conversation.startup_submit_armed => {
+fn build_primary_submit_hint_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> &'static str {
+    match context.conversation_state {
+        ShellConversationState::Ready(conversation) if conversation.startup_submit_armed => {
             "queued until ready"
         }
-        ConversationState::Ready(conversation) if conversation.has_running_turn() => {
+        ShellConversationState::Ready(conversation) if conversation.has_running_turn() => {
             "Enter send when idle"
         }
-        ConversationState::Ready(_) if !app.shell_action_availability().allows_actions() => {
+        ShellConversationState::Ready(_) if !context.shell_action_availability.allows_actions() => {
             "Enter send when ready"
         }
-        ConversationState::Ready(_) => "Enter send",
+        ShellConversationState::Ready(_) => "Enter send",
         _ => "",
     }
 }
 
-pub(super) fn shell_action_availability_label(app: &NativeTuiApp) -> &'static str {
-    app.shell_action_availability().status_text()
-}
-
-pub(super) fn startup_state_style(app: &NativeTuiApp) -> Style {
-    match app.shell_action_availability() {
+fn startup_state_style_for_availability(
+    shell_action_availability: ShellActionAvailability,
+) -> Style {
+    match shell_action_availability {
         ShellActionAvailability::Ready => Style::default().fg(Color::Green),
         ShellActionAvailability::Pending => Style::default().fg(Color::Yellow),
         ShellActionAvailability::Blocked => Style::default().fg(Color::Red),
@@ -1781,12 +1953,12 @@ fn recent_session_status_label(app: &NativeTuiApp) -> String {
     }
 }
 
-fn github_review_polling_status_label(app: &NativeTuiApp) -> String {
-    app.github_review_polling_status_label()
+fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    build_startup_check_lines_from_state(&app.startup_state)
 }
 
-fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.startup_state {
+fn build_startup_check_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
+    match startup_state {
         StartupState::Idle => vec![Line::from("startup check has not started")],
         StartupState::Loading => vec![
             Line::from("checking codex binary"),
@@ -1821,7 +1993,11 @@ fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 }
 
 fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.startup_state {
+    build_startup_warning_lines_from_state(&app.startup_state)
+}
+
+fn build_startup_warning_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
+    match startup_state {
         StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
             .warnings
             .iter()
