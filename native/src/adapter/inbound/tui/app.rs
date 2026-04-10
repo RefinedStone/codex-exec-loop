@@ -70,6 +70,8 @@ mod inline_shell_commands;
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
+#[path = "app/planning_presentation.rs"]
+mod planning_presentation;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/session_browser.rs"]
