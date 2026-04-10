@@ -6,7 +6,7 @@ Unless noted otherwise, file paths below are relative to `native/`.
 - reference branch: `origin/prerelease`
 - active feature split: `docs/plan/14-planning-init-manual-editor-rollout.md`
 - active planning-runtime follow-up: `docs/plan/15-planning-runtime-engagement-repair.md`
-- active app-cluster slimming slice: `feature/native-shell-controller-session-overlay-split`
+- active app-cluster slimming slice: `fix/native-session-shell-controller-review-followup`
 - treat the docs above as the live slice plans for current planning work
 
 ## Current Hotspots

@@ -2,7 +2,6 @@ use super::session_browser::{
     SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
 };
 use super::*;
-use crate::application::service::session_service::project_recent_sessions;
 
 impl NativeTuiApp {
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {
@@ -137,16 +136,11 @@ impl NativeTuiApp {
     }
 
     pub(super) fn cycle_session_project_filter(&mut self, delta: isize) {
-        let SessionState::Ready(recent_sessions) = &self.session_state else {
+        let Some(browser_view) = self.current_session_browser_view() else {
             return;
         };
 
-        let projection = project_recent_sessions(
-            recent_sessions,
-            self.session_overlay_ui_state.browser_state(),
-            Some(self.current_workspace_directory().as_str()),
-        );
-        let Some(next_filter) = projection.cycled_project_filter(delta) else {
+        let Some(next_filter) = browser_view.projection.cycled_project_filter(delta) else {
             return;
         };
 
@@ -156,16 +150,11 @@ impl NativeTuiApp {
     }
 
     pub(super) fn move_session_page(&mut self, delta: isize) {
-        let SessionState::Ready(recent_sessions) = &self.session_state else {
+        let Some(browser_view) = self.current_session_browser_view() else {
             return;
         };
 
-        let total_pages = project_recent_sessions(
-            recent_sessions,
-            self.session_overlay_ui_state.browser_state(),
-            Some(self.current_workspace_directory().as_str()),
-        )
-        .total_pages;
+        let total_pages = browser_view.projection.total_pages;
         self.session_overlay_ui_state.move_page(delta, total_pages);
         self.sync_session_browser_selection();
     }
