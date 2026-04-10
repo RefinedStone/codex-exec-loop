@@ -14,6 +14,7 @@ pub struct ConversationMessage {
     pub text: String,
     pub phase: Option<String>,
     pub item_id: Option<String>,
+    pub display_label: Option<String>,
 }
 
 impl ConversationMessage {
@@ -28,7 +29,19 @@ impl ConversationMessage {
             text: text.into(),
             phase,
             item_id,
+            display_label: None,
         }
+    }
+
+    pub fn with_display_label(mut self, label: impl Into<String>) -> Self {
+        self.display_label = Some(label.into());
+        self
+    }
+
+    pub fn label(&self) -> &str {
+        self.display_label
+            .as_deref()
+            .unwrap_or_else(|| self.kind.label(self.phase.as_deref()))
     }
 }
 

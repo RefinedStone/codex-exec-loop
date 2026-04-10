@@ -105,12 +105,14 @@ impl NativeTuiApp {
                 prompt,
                 queued_from_turn_id,
                 template_label,
+                transcript_text,
             } => {
                 self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
                         queued_from_turn_id,
                         template_label,
+                        transcript_text,
                     }),
                 );
             }
@@ -217,7 +219,7 @@ impl NativeTuiApp {
         }
 
         match conversation.decide_auto_followup(&self.planning_services.runtime_facade) {
-            super::AutoFollowupDecision::QueuePrompt(prompt) => {
+            super::AutoFollowupDecision::QueuePrompt(queued_prompt) => {
                 conversation.clear_auto_followup_skip();
                 let template_label = conversation.auto_follow_state.template_label().to_string();
                 conversation.record_auto_followup_queue(&queued_from_turn_id, &template_label);
@@ -232,9 +234,10 @@ impl NativeTuiApp {
                 self.conversation_state = ConversationState::Ready(conversation);
                 self.execute_conversation_runtime_effect(
                     ConversationRuntimeEffect::QueueAutoPrompt {
-                        prompt,
+                        prompt: queued_prompt.prompt,
                         queued_from_turn_id,
                         template_label,
+                        transcript_text: queued_prompt.transcript_text,
                     },
                 );
             }

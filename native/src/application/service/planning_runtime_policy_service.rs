@@ -53,8 +53,7 @@ impl PlanningRuntimePolicyService {
         }
 
         if template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
-            && snapshot.workspace_status() != PlanningRuntimeWorkspaceStatus::ReadyWithTask
-            && !snapshot.has_proposal_candidates()
+            && snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Uninitialized
         {
             return Some(PlanningAutoFollowBlockReason::ActionableQueueRequired);
         }
@@ -208,13 +207,9 @@ mod tests {
     }
 
     #[test]
-    fn builtin_next_task_requires_ready_with_task() {
+    fn builtin_next_task_blocks_when_planning_is_uninitialized() {
         let service = PlanningRuntimePolicyService::new();
-        let snapshot = PlanningRuntimeSnapshot::ready(
-            "Planning Context".to_string(),
-            "next_task: none".to_string(),
-            None,
-        );
+        let snapshot = PlanningRuntimeSnapshot::uninitialized();
 
         assert_eq!(
             service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
@@ -253,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
+    fn builtin_next_task_allows_ready_no_task_state_without_existing_proposals() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
@@ -261,6 +256,23 @@ mod tests {
             None,
             None,
         );
+
+        assert_eq!(
+            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
+            None
+        );
+        assert_eq!(
+            service
+                .build_preview_view(&builtin_next_task_template(), &snapshot)
+                .status_label,
+            "ready"
+        );
+    }
+
+    #[test]
+    fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::uninitialized();
 
         assert_eq!(
             service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),

@@ -8,7 +8,7 @@ use crate::application::service::planning_prompt_service::PlanningRuntimeSnapsho
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::application::service::planning_runtime_facade_service::{
     PlanningRuntimeAutoFollowDecision, PlanningRuntimeAutoFollowRequest,
-    PlanningRuntimeFacadeService,
+    PlanningRuntimeFacadeService, PlanningRuntimeQueuedAutoFollowPrompt,
 };
 use crate::application::service::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 use crate::domain::conversation::{
@@ -51,7 +51,7 @@ impl ConversationInputState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AutoFollowupDecision {
-    QueuePrompt(String),
+    QueuePrompt(PlanningRuntimeQueuedAutoFollowPrompt),
     Skip(AutoFollowupSkipReason),
 }
 

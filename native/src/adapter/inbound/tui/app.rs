@@ -157,6 +157,7 @@ use transcript_viewport::TranscriptViewportState;
 struct AutoFollowupSubmitContext {
     queued_from_turn_id: String,
     template_label: String,
+    transcript_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

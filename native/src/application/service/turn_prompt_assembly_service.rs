@@ -2,6 +2,18 @@ use crate::domain::followup_template::FollowupTemplateDefinition;
 
 pub(crate) const PREVIEW_THREAD_ID_PLACEHOLDER: &str = "draft-thread";
 pub(crate) const PREVIEW_LAST_MESSAGE_PLACEHOLDER: &str = "(waiting for next agent reply)";
+const PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY: &str = r#"대리인입니다.
+자동 후속 {auto_turn}/{max_auto_turns} 입니다.
+
+직전 답변을 실행 관점에서 정리해 planning priority queue를 갱신하세요.
+- 직전 답변에서 실행 가능한 보완, 수정, 후속 제안 사항을 `task-ledger.json`에 반영하세요.
+- 기존 proposal 또는 task와 의미가 겹치면 중복 생성 대신 기존 항목을 갱신하세요.
+- 실행 가능한 queue head가 없다면, 가장 우선순위가 높은 항목 1개만 승격해 이번 턴에서는 그 1개만 수행하세요.
+- 마지막에는 이번 턴에서 실제로 수행한 일과 남은 proposal 목록을 함께 정리하세요.
+더 이어갈 작업이 정말 없다면 마지막 줄에 {stop_keyword} 만 출력하세요.
+
+직전 답변:
+{last_message}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualPromptAssemblyRequest<'a> {
@@ -23,6 +35,33 @@ pub struct AutoFollowPromptAssemblyRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutoFollowPromptPreviewRequest<'a> {
     pub template: &'a FollowupTemplateDefinition,
+    pub auto_turn: usize,
+    pub max_auto_turns: usize,
+    pub session_id: &'a str,
+    pub stop_keyword: &'a str,
+    pub last_message: Option<&'a str>,
+    pub planning_prompt_fragment: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningAutoFollowOperation {
+    RefreshQueueFromLatestAnswer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningAutoFollowPromptAssemblyRequest<'a> {
+    pub operation: PlanningAutoFollowOperation,
+    pub auto_turn: usize,
+    pub max_auto_turns: usize,
+    pub session_id: &'a str,
+    pub stop_keyword: &'a str,
+    pub last_message: &'a str,
+    pub planning_prompt_fragment: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningAutoFollowPromptPreviewRequest<'a> {
+    pub operation: PlanningAutoFollowOperation,
     pub auto_turn: usize,
     pub max_auto_turns: usize,
     pub session_id: &'a str,
@@ -82,6 +121,41 @@ impl TurnPromptAssemblyService {
             planning_prompt_fragment: request.planning_prompt_fragment,
         })
     }
+
+    pub fn build_planning_auto_follow_prompt(
+        &self,
+        request: PlanningAutoFollowPromptAssemblyRequest<'_>,
+    ) -> String {
+        append_planning_fragment(
+            render_template_body(
+                planning_auto_follow_operation_body(request.operation),
+                request.auto_turn,
+                request.max_auto_turns,
+                request.session_id,
+                request.stop_keyword,
+                request.last_message,
+            ),
+            request.planning_prompt_fragment,
+        )
+    }
+
+    pub fn build_planning_auto_follow_prompt_preview(
+        &self,
+        request: PlanningAutoFollowPromptPreviewRequest<'_>,
+    ) -> String {
+        let preview_session_id = normalized_preview_session_id(request.session_id);
+        let preview_last_message = normalized_preview_last_message(request.last_message);
+
+        self.build_planning_auto_follow_prompt(PlanningAutoFollowPromptAssemblyRequest {
+            operation: request.operation,
+            auto_turn: request.auto_turn,
+            max_auto_turns: request.max_auto_turns,
+            session_id: preview_session_id,
+            stop_keyword: request.stop_keyword,
+            last_message: preview_last_message,
+            planning_prompt_fragment: request.planning_prompt_fragment,
+        })
+    }
 }
 
 fn render_template_body(
@@ -121,6 +195,14 @@ fn append_planning_fragment(
     result
 }
 
+fn planning_auto_follow_operation_body(operation: PlanningAutoFollowOperation) -> &'static str {
+    match operation {
+        PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer => {
+            PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY
+        }
+    }
+}
+
 fn normalized_preview_session_id(session_id: &str) -> &str {
     if session_id.trim().is_empty() {
         PREVIEW_THREAD_ID_PLACEHOLDER
@@ -140,7 +222,9 @@ fn normalized_preview_last_message(last_message: Option<&str>) -> &str {
 mod tests {
     use super::{
         AutoFollowPromptAssemblyRequest, AutoFollowPromptPreviewRequest,
-        ManualPromptAssemblyRequest, TurnPromptAssemblyService,
+        ManualPromptAssemblyRequest, PlanningAutoFollowOperation,
+        PlanningAutoFollowPromptAssemblyRequest, PlanningAutoFollowPromptPreviewRequest,
+        TurnPromptAssemblyService,
     };
     use crate::domain::followup_template::{FollowupTemplateDefinition, FollowupTemplateSource};
 
@@ -241,5 +325,45 @@ mod tests {
         });
 
         assert_eq!(prompt, "Planning Context");
+    }
+
+    #[test]
+    fn planning_auto_follow_prompt_builds_queue_refresh_instruction() {
+        let service = TurnPromptAssemblyService::new();
+
+        let prompt =
+            service.build_planning_auto_follow_prompt(PlanningAutoFollowPromptAssemblyRequest {
+                operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
+                auto_turn: 1,
+                max_auto_turns: 3,
+                session_id: "thread-1",
+                stop_keyword: "AUTO_STOP",
+                last_message: "latest answer",
+                planning_prompt_fragment: Some("Planning Context"),
+            });
+
+        assert!(prompt.contains("planning priority queue"));
+        assert!(prompt.contains("latest answer"));
+        assert!(prompt.ends_with("\n\nPlanning Context"));
+    }
+
+    #[test]
+    fn planning_auto_follow_preview_uses_placeholder_last_message() {
+        let service = TurnPromptAssemblyService::new();
+
+        let prompt = service.build_planning_auto_follow_prompt_preview(
+            PlanningAutoFollowPromptPreviewRequest {
+                operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
+                auto_turn: 1,
+                max_auto_turns: 3,
+                session_id: "",
+                stop_keyword: "AUTO_STOP",
+                last_message: None,
+                planning_prompt_fragment: None,
+            },
+        );
+
+        assert!(prompt.contains("자동 후속 1/3 입니다."));
+        assert!(prompt.contains("(waiting for next agent reply)"));
     }
 }

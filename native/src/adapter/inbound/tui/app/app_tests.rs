@@ -1897,6 +1897,7 @@ fn auto_follow_submission_respects_startup_gate() {
         PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
             queued_from_turn_id: "turn-0".to_string(),
             template_label: "builtin next-task".to_string(),
+            transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다.".to_string(),
         }),
     );
 
@@ -2912,7 +2913,7 @@ fn followup_template_preview_uses_placeholder_without_agent_reply() {
 }
 
 #[test]
-fn followup_template_preview_surfaces_queue_empty_for_builtin_next_task() {
+fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready(
@@ -2928,8 +2929,9 @@ fn followup_template_preview_surfaces_queue_empty_for_builtin_next_task() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("planning: queue-empty"));
-    assert!(rendered.contains("selected template requires an actionable planning queue head"));
+    assert!(rendered.contains("planning: ready"));
+    assert!(rendered.contains("planning detail: next_task: none"));
+    assert!(rendered.contains("planning priority queue"));
 }
 
 #[test]

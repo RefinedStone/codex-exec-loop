@@ -23,6 +23,7 @@ pub(super) enum ConversationRuntimeEffect {
         prompt: String,
         queued_from_turn_id: String,
         template_label: String,
+        transcript_text: String,
     },
     QueuePlanningRepairPrompt {
         prompt: String,
@@ -74,12 +75,22 @@ pub(super) fn reduce_conversation_runtime(
                 }
             }
             let auto_follow_progress = state.auto_follow_state.progress_label();
-            state.messages.push(ConversationMessage::new(
-                ConversationMessageKind::User,
-                prompt.clone(),
-                None,
-                None,
-            ));
+            let transcript_message = match &origin {
+                PromptOrigin::AutoFollow(context) => ConversationMessage::new(
+                    ConversationMessageKind::User,
+                    context.transcript_text.clone(),
+                    None,
+                    None,
+                )
+                .with_display_label("Auto Follow-up"),
+                _ => ConversationMessage::new(
+                    ConversationMessageKind::User,
+                    prompt.clone(),
+                    None,
+                    None,
+                ),
+            };
+            state.messages.push(transcript_message);
             state.refresh_conversation_lines();
             state.input_buffer.clear();
             state.mark_turn_submitting();
@@ -239,6 +250,8 @@ mod tests {
                 origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
+                    transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다."
+                        .to_string(),
                 }),
             },
         );
@@ -265,6 +278,11 @@ mod tests {
                 "queued after the previous turn completed; submitted with template builtin next-task"
             )
         );
+        assert_eq!(
+            reduced.state.messages[0].text,
+            "priority queue의 현재 next task 1개를 이어서 진행합니다."
+        );
+        assert_eq!(reduced.state.messages[0].label(), "Auto Follow-up");
     }
 
     #[test]

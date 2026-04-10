@@ -910,7 +910,7 @@ pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec
     let mut lines = Vec::new();
 
     for message in messages {
-        let label = message.kind.label(message.phase.as_deref());
+        let label = message.label();
         lines.push(Line::from(Span::styled(
             format!("{label}:"),
             label_style(message.kind),
