@@ -7,7 +7,7 @@ Usage:
   ./scripts/summarize_native_validation.sh [options]
 
 Options:
-  --records-dir <path>    Validation record directory. Default: native/docs/validation
+  --records-dir <path>    Validation record directory. Default: docs/validation
   --format <text|markdown>
                           Output format. Default: text
   --fail-on-incomplete    Exit non-zero unless every required row is recorded as pass
@@ -110,7 +110,7 @@ row_key() {
   printf '%s|%s|%s|%s' "$1" "$2" "$3" "$4"
 }
 
-records_dir="native/docs/validation"
+records_dir="docs/validation"
 output_format="text"
 fail_on_incomplete=0
 

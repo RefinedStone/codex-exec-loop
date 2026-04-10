@@ -293,7 +293,7 @@ mod tests {
             GithubPullRequestActivityKind::ReviewComment,
             "reviewer",
             None,
-            Some("native/src/adapter/inbound/tui/app/shell_presentation.rs"),
+            Some("src/adapter/inbound/tui/app/shell_presentation.rs"),
         );
 
         assert_eq!(

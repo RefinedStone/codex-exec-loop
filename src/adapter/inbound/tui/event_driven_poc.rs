@@ -863,7 +863,7 @@ mod tests {
             account_ok: true,
             account_detail: "logged in".to_string(),
             warnings: Vec::new(),
-            schema_snapshot: "native/schema/codex_app_server_protocol.v2.schemas.json".to_string(),
+            schema_snapshot: "schema/codex_app_server_protocol.v2.schemas.json".to_string(),
         }
     }
 

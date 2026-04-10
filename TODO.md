@@ -3,8 +3,7 @@
 ## Product Direction
 
 - Primary product: Rust native client on top of `codex app-server`
-- Python CLI: legacy compatibility path only
-- No new feature work should start on the Python CLI unless it is required to unblock native parity or migration
+- Repository root is the product root
 
 ## Current Focus
 
@@ -53,15 +52,10 @@
   - stable streaming-history buffering for inline mode, with live output kept separate from committed transcript history and lifecycle markers committed into stable history
   - inline shell chrome collapsed toward one tail prompt region, with transcript pinned to tail, compact prompt guidance, and no dedicated tail title row
 - migration docs
-  - repository root README now presents native as the main product path
-  - Python CLI instructions are reduced to compatibility guidance
+  - repository root now hosts the native crate, schema snapshot, docs, and scripts directly
 
 ## Next
 
 - remove the remaining inline repeated redraw path so host terminal scrollback stops replaying shell frames
 - keep moving inline mode toward top-to-bottom terminal flow where host terminal scroll is the primary history mechanism
 - run real terminal validation on macOS and Windows and land only focused compatibility fixes when findings exist
-
-## Migration
-
-- keep Python CLI as a compatibility path until its final removal plan is explicit

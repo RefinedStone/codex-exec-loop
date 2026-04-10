@@ -1,6 +1,6 @@
 # Parallel Worktree Plan
 
-Unless noted otherwise, file paths below are relative to `native/`.
+Unless noted otherwise, file paths below are relative to the repository root.
 
 ## Current Posture
 - reference branch: `origin/prerelease`

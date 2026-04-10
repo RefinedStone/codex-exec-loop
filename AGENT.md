@@ -4,8 +4,7 @@
 
 `codex-exec-loop` is now a native-first project.
 
-- Rust native client: the primary product track, built on `codex app-server`
-- Python CLI: legacy compatibility path only, kept temporarily during native migration
+- Rust native client: the product, built on `codex app-server`
 
 The product goal is a cross-platform Codex-style CLI that feels interactive and can continue work automatically with canned follow-up prompts.
 
@@ -42,7 +41,7 @@ Prefer Spring Boot Kotlin style port-and-adapter hexagonal architecture.
 
 - Use official Codex interfaces first.
   - `codex app-server`
-  - keep `codex exec` / `codex exec resume` only for legacy compatibility work
+  - use `codex exec` / `codex exec resume` only when an explicit task still requires them
 - GitHub writes in this repo must authenticate as `RefinedStone`.
   - keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`
   - prefer the repo-local `.git/refinedstone-credentials`; if another `credential.helper` is inherited, override it in this repo's local `.git/config` only and do not touch global GitHub credentials for other repositories

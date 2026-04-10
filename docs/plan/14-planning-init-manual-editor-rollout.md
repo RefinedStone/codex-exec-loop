@@ -4,7 +4,7 @@ This plan refines item 3 from `docs/design/06-direction-task-ledger-and-priority
 
 The goal is to land detail-mode manual authoring without collapsing multiple risky UI and filesystem changes into one branch.
 
-Unless noted otherwise, file paths below are relative to `native/`.
+Unless noted otherwise, file paths below are relative to the repository root.
 
 ## Merge Order
 

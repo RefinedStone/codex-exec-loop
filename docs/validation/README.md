@@ -26,7 +26,7 @@ Recommended helper usage from the repository root:
   --frontend inline \
   --terminal "iTerm2 3.5" \
   --result pass \
-  --output-dir native/docs/validation
+  --output-dir docs/validation
 ```
 
 Windows PowerShell:
@@ -36,7 +36,7 @@ Windows PowerShell:
   -Frontend inline `
   -Terminal "Windows Terminal 1.22" `
   -Result pass `
-  -OutputDir native\docs\validation
+  -OutputDir docs\validation
 ```
 
 Coverage summary from the repository root:

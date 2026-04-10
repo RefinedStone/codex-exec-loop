@@ -44,7 +44,7 @@ The native client currently supports two frontend modes:
 Build once before a validation pass:
 
 ```bash
-cd <path-to-repo>/native
+cd <path-to-repo>
 . "$HOME/.cargo/env"
 cargo build
 ```
@@ -52,7 +52,7 @@ cargo build
 Run in inline mode:
 
 ```bash
-cd <path-to-repo>/native
+cd <path-to-repo>
 . "$HOME/.cargo/env"
 CODEX_EXEC_LOOP_FRONTEND=inline cargo run
 ```
@@ -60,7 +60,7 @@ CODEX_EXEC_LOOP_FRONTEND=inline cargo run
 Run in alternate-screen mode:
 
 ```bash
-cd <path-to-repo>/native
+cd <path-to-repo>
 . "$HOME/.cargo/env"
 CODEX_EXEC_LOOP_FRONTEND=alternate cargo run
 ```
@@ -68,7 +68,7 @@ CODEX_EXEC_LOOP_FRONTEND=alternate cargo run
 Run with the legacy alternate-screen flag:
 
 ```bash
-cd <path-to-repo>/native
+cd <path-to-repo>
 . "$HOME/.cargo/env"
 CODEX_EXEC_LOOP_ALT_SCREEN=1 cargo run
 ```
@@ -76,7 +76,7 @@ CODEX_EXEC_LOOP_ALT_SCREEN=1 cargo run
 PowerShell equivalents:
 
 ```powershell
-Set-Location <path-to-repo>\native
+Set-Location <path-to-repo>
 cargo build
 $env:CODEX_EXEC_LOOP_FRONTEND = "inline"; cargo run
 $env:CODEX_EXEC_LOOP_FRONTEND = "alternate"; cargo run
@@ -92,7 +92,7 @@ cd <path-to-repo>
   --frontend inline \
   --terminal "iTerm2 3.5" \
   --result pass \
-  --output-dir native/docs/validation
+  --output-dir docs/validation
 ```
 
 When this helper runs inside WSL, it records the Windows host OS plus the WSL distro and prefers `TERMINAL_EMULATOR` when an IDE terminal does not expose `WT_SESSION`.
@@ -105,7 +105,7 @@ Set-Location <path-to-repo>
   -Frontend inline `
   -Terminal "Windows Terminal 1.22" `
   -Result pass `
-  -OutputDir native\docs\validation
+  -OutputDir docs\validation
 ```
 
 Committed validation records live under [`../validation/`](../validation/).

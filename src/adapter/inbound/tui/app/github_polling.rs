@@ -616,7 +616,7 @@ mod tests {
                         GithubPullRequestActivityKind::ReviewComment,
                         "2026-04-08T10:30:00Z",
                     )
-                    .with_path("native/src/adapter/inbound/tui/app/shell_presentation.rs"),
+                    .with_path("src/adapter/inbound/tui/app/shell_presentation.rs"),
                 ],
                 vec![
                     event(
@@ -624,7 +624,7 @@ mod tests {
                         GithubPullRequestActivityKind::ReviewComment,
                         "2026-04-08T10:30:00Z",
                     )
-                    .with_path("native/src/adapter/inbound/tui/app/shell_presentation.rs"),
+                    .with_path("src/adapter/inbound/tui/app/shell_presentation.rs"),
                 ],
             )),
         );

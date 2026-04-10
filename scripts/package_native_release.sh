@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/package_native_release.sh [--target <triple>] [--out-dir <path>] [--profile <release|debug>]
 
-Build the native Rust client and stage a distributable bundle under dist/native/.
+Build the Rust client and stage a distributable bundle under dist/native/.
 
 Examples:
   ./scripts/package_native_release.sh
@@ -16,8 +16,8 @@ EOF
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
-native_dir="${repo_root}/native"
-runbook_path="${native_dir}/docs/plan/13-native-packaging-and-operator-runbook.md"
+manifest_path="${repo_root}/Cargo.toml"
+runbook_path="${repo_root}/docs/plan/13-native-packaging-and-operator-runbook.md"
 
 checksum_tool=""
 profile="release"
@@ -96,14 +96,14 @@ if [[ "${artifact_target}" == *windows* ]]; then
   binary_file_name="${binary_name}.exe"
 fi
 
-build_args=(cargo build --locked --manifest-path "${native_dir}/Cargo.toml")
+build_args=(cargo build --locked --manifest-path "${manifest_path}")
 build_args+=("${cargo_profile_args[@]}")
 if [[ -n "${target}" ]]; then
   build_args+=(--target "${target}")
 fi
 "${build_args[@]}"
 
-binary_path="${native_dir}/target"
+binary_path="${repo_root}/target"
 if [[ -n "${target}" ]]; then
   binary_path="${binary_path}/${target}"
 fi
@@ -115,10 +115,10 @@ if [[ ! -f "${binary_path}" ]]; then
 fi
 
 version="$(
-  sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "${native_dir}/Cargo.toml" | head -n 1
+  sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "${manifest_path}" | head -n 1
 )"
 if [[ -z "${version}" ]]; then
-  echo "package_native_release: failed to read native crate version" >&2
+  echo "package_native_release: failed to read crate version" >&2
   exit 1
 fi
 
@@ -135,7 +135,7 @@ rm -f "${archive_checksum_path}"
 mkdir -p "${bundle_dir}"
 
 cp "${binary_path}" "${bundle_dir}/${binary_file_name}"
-cp "${native_dir}/README.md" "${bundle_dir}/README.md"
+cp "${repo_root}/README.md" "${bundle_dir}/README.md"
 cp "${runbook_path}" "${bundle_dir}/OPERATOR.md"
 
 cat > "${bundle_dir}/VERSION.txt" <<EOF

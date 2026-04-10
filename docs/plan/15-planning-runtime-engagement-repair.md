@@ -4,7 +4,7 @@ This plan refines `docs/design/06-direction-task-ledger-and-priority-queue.md` a
 
 The immediate goal is not another local planning overlay fix. The goal is to remove the structural split that keeps letting planning-aware behavior work in one path and disappear in another.
 
-Unless noted otherwise, file paths below are relative to `native/`.
+Unless noted otherwise, file paths below are relative to the repository root.
 
 ## Problem Summary
 

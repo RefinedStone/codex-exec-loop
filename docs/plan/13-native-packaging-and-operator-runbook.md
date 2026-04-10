@@ -22,7 +22,7 @@ cd /path/to/codex-exec-loop
 
 Notes:
 
-- the script builds `native/` with `cargo build --release` by default
+- the script builds the repository-root crate with `cargo build --release` by default
 - `--profile debug` is available for local validation bundles
 - `--target` assumes the target toolchain and linker already work on the current machine
 - for Windows bundles, prefer running the script on a Windows Rust toolchain instead of relying on unvalidated cross-linking from Linux or macOS
@@ -145,7 +145,7 @@ cd /path/to/codex-exec-loop
 ./scripts/capture_native_validation.sh \
   --frontend inline \
   --result pass \
-  --output-dir native/docs/validation
+  --output-dir docs/validation
 ```
 
 Windows PowerShell:
@@ -155,10 +155,10 @@ Set-Location C:\path\to\codex-exec-loop
 .\scripts\capture_native_validation.ps1 `
   -Frontend inline `
   -Result pass `
-  -OutputDir native\docs\validation
+  -OutputDir docs\validation
 ```
 
-Keep the recorded files under `native/docs/validation/` so later platform follow-ups can point to a checked-in row instead of a transient comment.
+Keep the recorded files under `docs/validation/` so later platform follow-ups can point to a checked-in row instead of a transient comment.
 
 Check current matrix coverage from the repository root:
 

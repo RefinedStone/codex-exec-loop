@@ -1,10 +1,10 @@
 # Repository Guidelines
 
 ## Scope
-This file refines the root [`AGENT.md`](../AGENT.md) for `native/`. The current product direction is the Rust client, so optimize for the TUI and `codex app-server` flow first. Keep guidance here Rust-specific; do not add Python workflow notes.
+This file refines the root [`AGENT.md`](./AGENT.md) for the repository root after the native lift. The Rust client is the product, so optimize for the TUI and `codex app-server` flow first.
 
 ## Project Structure & Module Organization
-`native/` is a Rust crate rooted at `Cargo.toml`.
+The repository root is the Rust crate rooted at `Cargo.toml`.
 
 - `src/domain/`: pure models such as session summaries and startup diagnostics
 - `src/application/service/`: use-case orchestration like `StartupService` and `ConversationService`
@@ -12,7 +12,7 @@ This file refines the root [`AGENT.md`](../AGENT.md) for `native/`. The current 
 - `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
 - `src/adapter/outbound/`: `codex app-server` integration and filesystem adapters
 - `schema/`: checked-in protocol snapshot used to pin app-server shapes
-- `docs/`: current native design notes, state docs, and validation references
+- `docs/`: current design notes, state docs, and validation references
 
 Keep mapping logic in adapters, not domain models.
 
@@ -20,10 +20,10 @@ Keep mapping logic in adapters, not domain models.
 Dependency flow should point inward: `adapter -> application -> domain`. Inbound adapters translate user events into service calls. Application services orchestrate use cases and depend on ports defined in `src/application/port/`. Outbound adapters implement those ports and own process, stdio, JSON, and filesystem details. `domain/` stays free of TUI types, transport formats, and external I/O. When adding a new external capability, define the boundary as a port first, then implement it in an adapter.
 
 ## Build, Test, and Development Commands
-- `cd native && . "$HOME/.cargo/env" && cargo run`: launch the TUI
-- `cd native && . "$HOME/.cargo/env" && cargo build`: compile the crate
-- `cd native && . "$HOME/.cargo/env" && cargo test`: run tests
-- `cd native && . "$HOME/.cargo/env" && cargo fmt`: format source
+- `. "$HOME/.cargo/env" && cargo run`: launch the TUI
+- `. "$HOME/.cargo/env" && cargo build`: compile the crate
+- `. "$HOME/.cargo/env" && cargo test`: run tests
+- `. "$HOME/.cargo/env" && cargo fmt`: format source
 
 Run these before opening a PR. Add `cargo clippy --all-targets --all-features -D warnings` when touching lint-sensitive code.
 
@@ -31,7 +31,7 @@ Run these before opening a PR. Add `cargo clippy --all-targets --all-features -D
 Write Rust so a Spring Boot Kotlin developer can read it quickly. Use 4-space indentation, `snake_case` for functions/modules, and `PascalCase` for types. Prefer explicit names and straightforward structs over clever abstractions. Keep functions small and single-purpose. Use names such as `Service`, `Port`, `Adapter`, `Request`, `Response`, and `State` consistently.
 
 ## Testing Guidelines
-Place unit tests next to the module with `#[cfg(test)] mod tests`. Add integration tests under `native/tests/` when a flow spans multiple layers. Prioritize startup checks, app-server response parsing, stream reduction, and session list mapping. New adapter or service logic should usually ship with tests.
+Place unit tests next to the module with `#[cfg(test)] mod tests`. Add integration tests under `tests/` when a flow spans multiple layers. Prioritize startup checks, app-server response parsing, stream reduction, and session list mapping. New adapter or service logic should usually ship with tests.
 
 ## GitHub Identity
 All GitHub writes for this repo must authenticate as `RefinedStone`.
@@ -39,14 +39,14 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`
 - prefer the repo-local `.git/refinedstone-credentials`; if another `credential.helper` is inherited, override it in this repo's local `.git/config` only and do not touch global GitHub credentials for other repositories
 - before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`
-- use `bash ../scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies; do not use GitHub MCP tools for them in this repo because they authenticate as `seungjoo-1ee`
+- use `bash scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies; do not use GitHub MCP tools for them in this repo because they authenticate as `seungjoo-1ee`
 - if the RefinedStone identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment
 - once a change reaches a reviewable milestone, the default is `commit -> push -> PR`; do not stop at a local commit unless the user explicitly says to hold
 - after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
 - for final integration, do not use GitHub merge-commit flow; rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits
 
 ## Parallel Worktree Rule
-When multiple native slices move in parallel, treat worktree setup as part of the design work, not as an afterthought.
+When multiple slices move in parallel, treat worktree setup as part of the design work, not as an afterthought.
 
 - create one git worktree per live branch, normally from the latest `origin/prerelease`
 - keep one reviewable slice and one PR per worktree; do not mix unrelated backlog items in one branch

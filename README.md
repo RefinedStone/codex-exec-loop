@@ -1,63 +1,65 @@
 # codex-exec-loop
 
-`codex-exec-loop` 는 이제 `codex app-server` 기반 Rust native client 를 메인 제품으로 삼습니다.
+`codex-exec-loop` is a Rust TUI client built on `codex app-server`.
 
-Python CLI 는 이전 migration/compatibility 경로로만 유지합니다. 새 기능 기준의 기본 설명과 운영 경로는 모두 native 쪽을 우선합니다.
+The repository root is now the product root. Run the app, tests, packaging helpers, docs, and schema snapshot from here.
 
-## Native Quick Start
+## Quick Start
 
-필수 조건:
+Requirements:
 
-- Codex CLI 설치
-- Codex 로그인 완료
-- Rust toolchain 사용 가능
+- Codex CLI installed
+- Codex login completed
+- Rust toolchain available
 
-실행:
+Run the client:
 
 ```bash
-cd /path/to/codex-exec-loop/native
+cd /path/to/codex-exec-loop
 . "$HOME/.cargo/env"
 cargo run
 ```
 
-frontend 선택:
+Frontend selection:
 
-- `CODEX_EXEC_LOOP_FRONTEND=inline`: 기본 inline main-buffer mode
+- `CODEX_EXEC_LOOP_FRONTEND=inline`: inline main-buffer mode
 - `CODEX_EXEC_LOOP_FRONTEND=alternate`: fullscreen alternate-screen mode
 - `CODEX_EXEC_LOOP_ALT_SCREEN=1`: legacy alternate-screen fallback
 
-선택 사항:
+Optional GitHub polling:
 
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
 
-## Current Native Capability
+## Current Capability
 
-- startup diagnostics 와 draft shell 진입
-- recent session browse, search, paging, current-project filter
-- existing thread resume, new thread start, `turn/start` streaming
-- startup 진행 중 manual prompt queue 후 자동 제출
-- inline shell inspections for diagnostics, sessions, and follow-up templates
-- builtin/workspace follow-up templates, reload, editable max turns, stop rules
-- approval, tool activity, runtime warning, GitHub review-change notice visibility
-- packaging, checksum, verification helper scripts
+- startup diagnostics and draft shell entry
+- recent session browse, search, paging, and current-project filter
+- existing thread resume, new thread start, and `turn/start` streaming
+- startup-pending manual prompt queue then auto-submit
+- inline inspections for diagnostics, sessions, and follow-up templates
+- builtin and workspace follow-up templates, reload, editable max turns, and stop rules
+- approval, tool activity, runtime warning, and GitHub review-change visibility
+- packaging, checksum, and validation helper scripts
 
-세부 제품/설계 문서는 아래를 우선 보세요.
+## Docs
 
-- [native/README.md](./native/README.md)
-- [native/docs/design/01-current-product-state.md](./native/docs/design/01-current-product-state.md)
-- [native/docs/README.md](./native/docs/README.md)
+Start here:
+
+- [docs/README.md](./docs/README.md)
+- [docs/design/01-current-product-state.md](./docs/design/01-current-product-state.md)
+- [docs/plan/13-native-packaging-and-operator-runbook.md](./docs/plan/13-native-packaging-and-operator-runbook.md)
+- [docs/plan/12-platform-validation-matrix.md](./docs/plan/12-platform-validation-matrix.md)
 
 ## Packaging And Validation
 
-배포 번들 생성:
+Build a release bundle:
 
 ```bash
-cd /path/to/codex-exec-loop
 ./scripts/package_native_release.sh
 ```
 
-생성물 검증:
+Verify a generated bundle:
 
 ```bash
 ./scripts/verify_native_release.sh \
@@ -65,64 +67,31 @@ cd /path/to/codex-exec-loop
   --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
 ```
 
-validation 결과 템플릿 캡처:
+Capture a validation report scaffold:
 
 ```bash
 ./scripts/capture_native_validation.sh \
   --frontend inline \
   --result pass \
-  --output-dir native/docs/validation
+  --output-dir docs/validation
 ```
 
-기록된 validation row 요약:
+Summarize recorded validation rows:
 
 ```bash
 ./scripts/summarize_native_validation.sh
 ```
 
-PR/issue용 markdown 요약:
+Render the summary as markdown:
 
 ```bash
 ./scripts/summarize_native_validation.sh --format markdown
 ```
 
-운영자 runbook 과 플랫폼 검증 기준:
-
-- [native/docs/plan/13-native-packaging-and-operator-runbook.md](./native/docs/plan/13-native-packaging-and-operator-runbook.md)
-- [native/docs/plan/12-platform-validation-matrix.md](./native/docs/plan/12-platform-validation-matrix.md)
-
 ## Repository Guide
 
-- `native/`: main product crate
-- `native/docs/`: current native design, plan, validation, packaging notes
-- `scripts/`: native packaging / verification helpers
+- `src/`: Rust application code
+- `schema/`: checked-in app-server schema snapshot
+- `docs/`: design, plan, validation, and operator notes
+- `scripts/`: packaging, validation, and repo helpers
 - `examples/`, `.codex-exec-loop/followups/`: sample prompts and follow-up templates
-- `src/codex_exec_loop/`: legacy Python CLI compatibility path
-
-## Legacy Python CLI
-
-Python CLI 는 native migration 이 끝날 때까지 compatibility 용으로만 남겨둡니다. 새 기능 작업은 이 경로에서 시작하지 않습니다.
-
-설치:
-
-```bash
-cd /path/to/codex-exec-loop
-python3 -m venv .venv
-. .venv/bin/activate
-PYTHONPATH=/usr/lib/python3/dist-packages python -m pip install --no-build-isolation -e .
-```
-
-최소 사용 예:
-
-```bash
-codex-exec-loop [PROMPT]
-codex-exec-loop sessions --limit 20
-codex-exec-loop verify --summary logs/demo-run/summary.json
-```
-
-legacy follow-up examples and placeholders:
-
-- [examples/followup_prompt.txt](./examples/followup_prompt.txt)
-- [examples/followups/](./examples/followups/)
-- [.codex-exec-loop/followups/10-review-queue.md](./.codex-exec-loop/followups/10-review-queue.md)
-- [.codex-exec-loop/followups/20-docs-and-verify.md](./.codex-exec-loop/followups/20-docs-and-verify.md)

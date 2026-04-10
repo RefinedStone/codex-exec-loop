@@ -688,7 +688,7 @@ mod tests {
                     "body": "Please rename this field",
                     "updated_at": "2026-04-08T10:30:00Z",
                     "html_url": "https://github.com/acme/widgets/pull/42#discussion_r300",
-                    "path": "native/src/application/service/github_review_poller_service.rs",
+                    "path": "src/application/service/github_review_poller_service.rs",
                     "user": { "login": "reviewer-b" }
                 }]"#,
                 "/repos/acme/widgets/pulls/42/comments?page=1",
@@ -729,7 +729,7 @@ mod tests {
         assert_eq!(snapshot.events[2].state.as_deref(), Some("APPROVED"));
         assert_eq!(
             snapshot.events[1].path.as_deref(),
-            Some("native/src/application/service/github_review_poller_service.rs")
+            Some("src/application/service/github_review_poller_service.rs")
         );
     }
 
