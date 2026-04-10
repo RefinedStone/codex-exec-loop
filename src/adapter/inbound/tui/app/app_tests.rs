@@ -1974,16 +1974,17 @@ fn startup_ready_submits_armed_prompt() {
             .lock()
             .expect("new-thread call mutex poisoned")
             .iter()
-            .map(|(_, prompt)| prompt.clone())
-            .find(|prompt| prompt.starts_with("ship it"));
+            .find(|(_, prompt)| prompt.starts_with("ship it"))
+            .map(|(_, prompt)| prompt.clone());
         if submitted_prompt.is_some() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
-    let submitted_prompt =
-        submitted_prompt.expect("queued startup submit should reach the codex app-server port");
-    assert!(submitted_prompt.starts_with("ship it"));
+    assert!(
+        submitted_prompt.is_some(),
+        "queued startup submit should reach the codex app-server port"
+    );
 }
 
 #[test]
