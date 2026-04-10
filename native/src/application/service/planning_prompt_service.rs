@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::domain::planning::{
     DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles,
     PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH, TaskStatus,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -335,46 +335,42 @@ fn build_prompt_fragment(
         }
     }
 
-    let proposed_tasks = queue_snapshot
-        .skipped_tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::Proposed)
-        .collect::<Vec<_>>();
-    if !proposed_tasks.is_empty() {
+    if !queue_snapshot.proposed_tasks.is_empty() {
+        let proposed_tasks = queue_snapshot.visible_proposed_tasks(MAX_VISIBLE_PROPOSED_TASKS);
         lines.push(format!(
-            "- proposed_tasks: showing {} of {}",
-            proposed_tasks.len().min(MAX_VISIBLE_PROPOSED_TASKS),
-            proposed_tasks.len()
+            "- proposed_tasks: top {} of {} promotable proposals",
+            proposed_tasks.len(),
+            queue_snapshot.proposed_tasks.len()
         ));
-        for proposed_task in proposed_tasks.iter().take(MAX_VISIBLE_PROPOSED_TASKS) {
+        for proposed_task in proposed_tasks {
             lines.push(format!(
-                "  - {} | {} | direction={} | status={} | reason={}",
+                "  - proposal rank {} | {} | {} | direction={} | status={} | combined_priority={}",
+                proposed_task.rank,
                 proposed_task.task_id.trim(),
                 proposed_task.task_title.trim(),
                 proposed_task.direction_id.trim(),
                 proposed_task.status.label(),
-                proposed_task.reason.trim(),
+                proposed_task.combined_priority,
+            ));
+            lines.push(format!(
+                "    rank_reasons: {}",
+                proposed_task.rank_reasons.join(" | ")
             ));
         }
     }
 
-    let non_proposed_skipped_tasks = queue_snapshot
-        .skipped_tasks
-        .iter()
-        .filter(|task| task.status != TaskStatus::Proposed)
-        .collect::<Vec<_>>();
-    if !non_proposed_skipped_tasks.is_empty() {
-        lines.push(format!(
-            "- skipped_tasks: showing {} of {}",
-            non_proposed_skipped_tasks
-                .len()
-                .min(MAX_SKIPPED_QUEUE_TASKS),
-            non_proposed_skipped_tasks.len()
-        ));
-        for skipped_task in non_proposed_skipped_tasks
+    if !queue_snapshot.skipped_tasks.is_empty() {
+        let skipped_tasks = queue_snapshot
+            .skipped_tasks
             .iter()
             .take(MAX_SKIPPED_QUEUE_TASKS)
-        {
+            .collect::<Vec<_>>();
+        lines.push(format!(
+            "- skipped_tasks: showing {} of {}",
+            skipped_tasks.len(),
+            queue_snapshot.skipped_tasks.len()
+        ));
+        for skipped_task in skipped_tasks {
             lines.push(format!(
                 "  - {} | {} | direction={} | status={} | reason={}",
                 skipped_task.task_id.trim(),
@@ -424,7 +420,7 @@ fn build_prompt_fragment(
             .to_string(),
     );
     lines.push(
-        "- If `next_task` is `none` but `proposed_tasks` exist and you are told to keep going from the latest answer, prioritize the existing proposals, promote exactly one highest-priority proposal into executable work, perform only that one task, and then show the remaining proposal list in the final answer."
+        "- If `next_task` is `none` but `proposed_tasks` exist and you are told to keep going from the latest answer, move the actionable worklist into normal queue tasks with priorities, keep the remaining queue intact, execute only the single highest-priority executable task in this turn, and then show the remaining queued or proposed work in the final answer."
             .to_string(),
     );
     lines.push(
@@ -449,22 +445,21 @@ fn build_queue_summary(queue_snapshot: &PriorityQueueSnapshot) -> String {
 }
 
 fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<String> {
-    let proposed_tasks = queue_snapshot
-        .skipped_tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::Proposed)
-        .collect::<Vec<_>>();
-    if proposed_tasks.is_empty() {
+    if queue_snapshot.proposed_tasks.is_empty() {
         return None;
     }
 
-    let task_titles = proposed_tasks
+    let task_titles = queue_snapshot
+        .proposed_tasks
         .iter()
         .map(|task| task.task_title.trim())
         .filter(|title| !title.is_empty())
         .take(MAX_PROPOSAL_SUMMARY_TITLES)
         .collect::<Vec<_>>();
-    let remaining_count = proposed_tasks.len().saturating_sub(task_titles.len());
+    let remaining_count = queue_snapshot
+        .proposed_tasks
+        .len()
+        .saturating_sub(task_titles.len());
     let title_segment = if task_titles.is_empty() {
         String::new()
     } else {
@@ -476,9 +471,13 @@ fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<Stri
     };
 
     Some(format!(
-        "{} proposed follow-up task{} waiting for promotion{}",
-        proposed_tasks.len(),
-        if proposed_tasks.len() == 1 { "" } else { "s" },
+        "{} promotable follow-up proposal{} available{}",
+        queue_snapshot.proposed_tasks.len(),
+        if queue_snapshot.proposed_tasks.len() == 1 {
+            ""
+        } else {
+            "s"
+        },
         title_segment,
     ))
 }
@@ -682,19 +681,81 @@ mod tests {
         );
         assert_eq!(
             result.proposal_summary(),
-            Some("1 proposed follow-up task waiting for promotion: Draft a sushi-chef roadmap")
+            Some("1 promotable follow-up proposal available: Draft a sushi-chef roadmap")
         );
         let prompt_fragment = result
             .prompt_fragment()
             .expect("valid workspace should expose a prompt fragment");
-        assert!(prompt_fragment.contains("proposed_tasks: showing 1 of 1"));
-        assert!(prompt_fragment.contains("task-followup-1 | Draft a sushi-chef roadmap"));
+        assert!(prompt_fragment.contains("proposed_tasks: top 1 of 1 promotable proposals"));
+        assert!(
+            prompt_fragment
+                .contains("proposal rank 1 | task-followup-1 | Draft a sushi-chef roadmap")
+        );
+        assert!(prompt_fragment.contains("combined_priority=30"));
         assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
         assert!(
             prompt_fragment
-                .contains("promote exactly one highest-priority proposal into executable work")
+                .contains("move the actionable worklist into normal queue tasks with priorities")
         );
         assert!(result.has_proposal_candidates());
+    }
+
+    #[test]
+    fn non_promotable_proposals_do_not_surface_as_proposal_candidates() {
+        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let result = sample_service(PlanningWorkspaceLoadRecord {
+            directions_toml: Some(
+                r#"
+version = 1
+
+[[directions]]
+id = "example-direction"
+title = "Example direction"
+summary = "Keep the product moving"
+success_criteria = ["done"]
+scope_hints = ["stay focused"]
+state = "paused"
+"#
+                .to_string(),
+            ),
+            task_ledger_json: Some(
+                r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-followup-1",
+      "direction_id": "example-direction",
+      "direction_relation_note": "The answer offered a concrete next-step variant under the current direction.",
+      "title": "Draft a sushi-chef roadmap",
+      "description": "Persist the offered roadmap option as a follow-up candidate.",
+      "status": "proposed",
+      "base_priority": 30,
+      "dynamic_priority_delta": 4,
+      "priority_reason": "Suggested follow-up option from the latest answer.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-09T09:00:00Z"
+    }
+  ]
+}"#
+                .to_string(),
+            ),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
+        })
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
+
+        assert_eq!(result.proposal_summary(), None);
+        assert!(!result.has_proposal_candidates());
+        let prompt_fragment = result
+            .prompt_fragment()
+            .expect("valid workspace should expose a prompt fragment");
+        assert!(prompt_fragment.contains("skipped_tasks: showing 1 of 1"));
+        assert!(prompt_fragment.contains("direction example-direction is paused"));
     }
 
     #[test]

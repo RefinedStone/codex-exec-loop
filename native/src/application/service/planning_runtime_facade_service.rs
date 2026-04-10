@@ -425,9 +425,9 @@ fn default_auto_follow_transcript_text(template: &FollowupTemplateDefinition) ->
 
 fn planning_queue_refresh_transcript_text(snapshot: &PlanningRuntimeSnapshot) -> String {
     if snapshot.has_proposal_candidates() {
-        "previous answer와 existing proposal을 정리해 priority queue를 갱신하고, 가장 높은 우선순위 1개만 수행한 뒤 남은 proposal을 정리합니다.".to_string()
+        "previous answer와 existing proposal 작업 목록을 priority queue에 넣고, queue head 1개만 수행한 뒤 남은 queued work와 proposal을 정리합니다.".to_string()
     } else {
-        "previous answer에서 실행 가능한 후속 작업을 추출해 priority queue에 반영하고, 가장 높은 우선순위 1개만 수행한 뒤 남은 proposal을 정리합니다.".to_string()
+        "previous answer의 실행 가능한 작업 목록을 priority queue에 넣고, queue head 1개만 수행한 뒤 남은 queued work와 proposal을 정리합니다.".to_string()
     }
 }
 
@@ -647,9 +647,9 @@ mod tests {
         assert!(prompt.prompt.contains("latest answer"));
         assert!(prompt.prompt.contains("Planning Context"));
         assert!(
-            prompt.transcript_text.contains(
-                "previous answer에서 실행 가능한 후속 작업을 추출해 priority queue에 반영"
-            )
+            prompt
+                .transcript_text
+                .contains("previous answer의 실행 가능한 작업 목록을 priority queue에 넣고")
         );
     }
 
@@ -661,7 +661,7 @@ mod tests {
                 "Planning Context\nRuntime Follow-up Proposal Rules".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 Some(
-                    "2 proposed follow-up tasks waiting for promotion: Draft roadmap | +1 more"
+                    "2 promotable follow-up proposals available: Draft roadmap | +1 more"
                         .to_string(),
                 ),
                 None,
@@ -687,7 +687,7 @@ mod tests {
         assert!(
             prompt
                 .transcript_text
-                .contains("existing proposal을 정리해 priority queue를 갱신")
+                .contains("existing proposal 작업 목록을 priority queue에 넣고")
         );
     }
 
@@ -782,7 +782,7 @@ mod tests {
                 "Planning Context".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 Some(
-                    "2 proposed follow-up tasks waiting for promotion: Draft roadmap | Draft checklist"
+                    "2 promotable follow-up proposals available: Draft roadmap | Draft checklist"
                         .to_string(),
                 ),
                 None,
@@ -801,7 +801,7 @@ mod tests {
 
         let summary_line = summary_line.expect("summary line should be projected");
         assert!(summary_line.contains("queue: queue idle:"));
-        assert!(summary_line.contains("proposals: 2 proposed"));
+        assert!(summary_line.contains("proposals: 2 promotable"));
     }
 
     #[test]
@@ -849,7 +849,7 @@ mod tests {
                 "Planning Context".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 Some(
-                    "1 proposed follow-up task waiting for promotion: Draft sushi roadmap"
+                    "1 promotable follow-up proposal available: Draft sushi roadmap"
                         .to_string(),
                 ),
                 None,
@@ -865,10 +865,8 @@ mod tests {
                 max_detail_len: 48,
             });
 
-        assert!(
-            projection.proposal_line.as_deref().is_some_and(
-                |line| line.starts_with("planning proposals: 1 proposed follow-up task")
-            )
-        );
+        assert!(projection.proposal_line.as_deref().is_some_and(|line| {
+            line.starts_with("planning proposals: 1 promotable follow-up proposal")
+        }));
     }
 }

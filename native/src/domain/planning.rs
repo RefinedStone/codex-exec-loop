@@ -196,6 +196,7 @@ pub enum TaskActor {
 pub struct PriorityQueueSnapshot {
     pub next_task: Option<PriorityQueueTask>,
     pub active_tasks: Vec<PriorityQueueTask>,
+    pub proposed_tasks: Vec<PriorityQueueTask>,
     pub skipped_tasks: Vec<PriorityQueueSkippedTask>,
 }
 
@@ -293,6 +294,10 @@ impl PlanningValidationResult {
 impl PriorityQueueSnapshot {
     pub fn visible_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.active_tasks.iter().take(limit).cloned().collect()
+    }
+
+    pub fn visible_proposed_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
+        self.proposed_tasks.iter().take(limit).cloned().collect()
     }
 }
 

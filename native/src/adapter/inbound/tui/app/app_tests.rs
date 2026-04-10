@@ -3575,7 +3575,7 @@ fn followup_template_status_lines_surface_proposed_followups_when_queue_is_idle(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         Some(
-            "2 proposed follow-up tasks waiting for promotion: Draft roadmap | Draft checklist"
+            "2 promotable follow-up proposals available: Draft roadmap | Draft checklist"
                 .to_string(),
         ),
         None,
@@ -3590,7 +3590,7 @@ fn followup_template_status_lines_surface_proposed_followups_when_queue_is_idle(
 
     assert!(rendered.contains("planning status: valid"));
     assert!(rendered.contains("planning queue: queue idle: no executable planning task"));
-    assert!(rendered.contains("planning proposals: 2 proposed follow-up tasks"));
+    assert!(rendered.contains("planning proposals: 2 promotable follow-up proposals"));
 }
 
 #[test]

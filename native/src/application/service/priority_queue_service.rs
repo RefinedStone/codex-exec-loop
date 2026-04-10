@@ -40,6 +40,7 @@ impl PriorityQueueService {
             .collect::<HashMap<_, _>>();
 
         let mut candidates = Vec::new();
+        let mut proposed_candidates = Vec::new();
         let mut skipped_tasks = Vec::new();
 
         for task in &task_ledger.tasks {
@@ -56,6 +57,38 @@ impl PriorityQueueService {
                     task,
                     format!("direction {} is {}", direction.id, direction.state_label()),
                 ));
+                continue;
+            }
+
+            if task.status == crate::domain::planning::TaskStatus::Proposed {
+                if let Some(reason) = self.unresolved_dependency_reason(task, &task_map) {
+                    skipped_tasks.push(self.skipped_task(task, reason));
+                    continue;
+                }
+
+                if let Some(reason) = self.unresolved_blocker_reason(task, &task_map) {
+                    skipped_tasks.push(self.skipped_task(task, reason));
+                    continue;
+                }
+
+                proposed_candidates.push(QueueCandidate {
+                    readiness_rank: 0,
+                    combined_priority: task.combined_priority(),
+                    updated_at_epoch_millis: parse_updated_at_epoch_millis(
+                        task.updated_at.as_str(),
+                    ),
+                    task: PriorityQueueTask {
+                        rank: 0,
+                        task_id: task.id.clone(),
+                        direction_id: task.direction_id.clone(),
+                        direction_title: direction.title.clone(),
+                        task_title: task.title.clone(),
+                        status: task.status,
+                        combined_priority: task.combined_priority(),
+                        updated_at: task.updated_at.clone(),
+                        rank_reasons: build_rank_reasons(task),
+                    },
+                });
                 continue;
             }
 
@@ -116,9 +149,30 @@ impl PriorityQueueService {
             .collect::<Vec<_>>();
         let next_task = active_tasks.first().cloned();
 
+        proposed_candidates.sort_by(|left, right| {
+            right
+                .combined_priority
+                .cmp(&left.combined_priority)
+                .then_with(|| {
+                    left.updated_at_epoch_millis
+                        .cmp(&right.updated_at_epoch_millis)
+                })
+                .then_with(|| left.task.task_id.cmp(&right.task.task_id))
+        });
+
+        let proposed_tasks = proposed_candidates
+            .into_iter()
+            .enumerate()
+            .map(|(index, candidate)| PriorityQueueTask {
+                rank: index + 1,
+                ..candidate.task
+            })
+            .collect::<Vec<_>>();
+
         PriorityQueueSnapshot {
             next_task,
             active_tasks,
+            proposed_tasks,
             skipped_tasks,
         }
     }
@@ -432,16 +486,83 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["review-open", "dependency-open"]
         );
+        assert_eq!(
+            snapshot
+                .proposed_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["proposed-followup"]
+        );
+        assert_eq!(snapshot.proposed_tasks[0].combined_priority, 10);
         let skipped = snapshot
             .skipped_tasks
             .iter()
             .map(|task| (task.task_id.as_str(), task.reason.as_str()))
             .collect::<HashMap<_, _>>();
-        assert_eq!(skipped.len(), 4);
+        assert_eq!(skipped.len(), 3);
         assert!(skipped["paused-task"].contains("paused"));
         assert!(skipped["waiting-on-dependency"].contains("dependency-open(ready)"));
         assert!(skipped["blocked-by-review"].contains("review-open(in_progress)"));
-        assert!(skipped["proposed-followup"].contains("status proposed is not executable"));
+    }
+
+    #[test]
+    fn excludes_non_promotable_proposals_from_proposed_queue() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[
+            ("direction-a", DirectionState::Active),
+            ("direction-b", DirectionState::Paused),
+        ]);
+        let mut blocked_proposal = task(
+            "blocked-proposal",
+            "direction-a",
+            TaskStatus::Proposed,
+            70,
+            5,
+            "2026-04-09T09:30:00Z",
+        );
+        blocked_proposal.depends_on = vec!["missing-dependency".to_string()];
+
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![
+                task(
+                    "ready-proposal",
+                    "direction-a",
+                    TaskStatus::Proposed,
+                    50,
+                    10,
+                    "2026-04-09T08:00:00Z",
+                ),
+                blocked_proposal,
+                task(
+                    "paused-proposal",
+                    "direction-b",
+                    TaskStatus::Proposed,
+                    90,
+                    0,
+                    "2026-04-09T07:00:00Z",
+                ),
+            ],
+        };
+
+        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+
+        assert_eq!(
+            snapshot
+                .proposed_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready-proposal"]
+        );
+        let skipped = snapshot
+            .skipped_tasks
+            .iter()
+            .map(|task| (task.task_id.as_str(), task.reason.as_str()))
+            .collect::<HashMap<_, _>>();
+        assert!(skipped["blocked-proposal"].contains("missing-dependency(missing)"));
+        assert!(skipped["paused-proposal"].contains("direction direction-b is paused"));
     }
 
     #[test]

@@ -229,7 +229,7 @@ mod tests {
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
             "queue idle: no executable planning task".to_string(),
-            Some("2 proposed follow-up tasks waiting for promotion: Plan A | +1 more".to_string()),
+            Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
             None,
         );
 
@@ -243,7 +243,7 @@ mod tests {
         assert_eq!(preview.status_label, "ready");
         assert!(preview.detail.as_deref().is_some_and(|detail| {
             detail.contains("queue idle: no executable planning task")
-                && detail.contains("proposed follow-up tasks waiting for promotion")
+                && detail.contains("promotable follow-up proposals available")
         }));
     }
 
@@ -330,9 +330,7 @@ mod tests {
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
             "queue idle: no executable planning task".to_string(),
-            Some(
-                "1 proposed follow-up task waiting for promotion: Draft sushi roadmap".to_string(),
-            ),
+            Some("1 promotable follow-up proposal available: Draft sushi roadmap".to_string()),
             None,
         );
 
@@ -346,7 +344,7 @@ mod tests {
         assert_eq!(summary.workspace_state, PlanningWorkspaceState::Ready);
         assert_eq!(
             summary.proposal_summary.as_deref(),
-            Some("1 proposed follow-up task waiting for promotion: Draft sushi roadmap")
+            Some("1 promotable follow-up proposal available: Draft sushi roadmap")
         );
     }
 

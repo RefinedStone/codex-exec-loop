@@ -648,7 +648,7 @@ fn builtin_next_task_refreshes_queue_when_planning_queue_has_no_next_task() {
     assert!(
         prompt
             .transcript_text
-            .contains("previous answer에서 실행 가능한 후속 작업을 추출해 priority queue에 반영")
+            .contains("previous answer의 실행 가능한 작업 목록을 priority queue에 넣고")
     );
 }
 
@@ -658,7 +658,7 @@ fn builtin_next_task_continues_when_only_proposals_remain() {
     conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
         "Planning Context\nRuntime Follow-up Proposal Rules",
         "queue idle: no executable planning task",
-        "2 proposed follow-up tasks waiting for promotion: Plan A | +1 more",
+        "2 promotable follow-up proposals available: Plan A | +1 more",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -680,7 +680,7 @@ fn builtin_next_task_continues_when_only_proposals_remain() {
     assert!(
         prompt
             .transcript_text
-            .contains("existing proposal을 정리해 priority queue를 갱신")
+            .contains("existing proposal 작업 목록을 priority queue에 넣고")
     );
 }
 
