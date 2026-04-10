@@ -1,62 +1,30 @@
 # Repository Guidelines
 
 ## Scope
-This file refines the root [`AGENT.md`](./AGENT.md) for the repository root after the native lift. The Rust client is the product, so optimize for the TUI and `codex app-server` flow first.
 
-## Project Structure & Module Organization
-The repository root is the Rust crate rooted at `Cargo.toml`.
+This file is the fast path for Codex in this repo. Read it first, then open only the referenced markdown that matches the task.
 
-- `src/domain/`: pure models such as session summaries and startup diagnostics
-- `src/application/service/`: use-case orchestration like `StartupService` and `ConversationService`
-- `src/application/port/`: interfaces owned by the application layer
-- `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
-- `src/adapter/outbound/`: `codex app-server` integration and filesystem adapters
-- `schema/`: checked-in protocol snapshot used to pin app-server shapes
-- `docs/`: current design notes, state docs, and validation references
+- Product: native-first Rust client on `codex app-server`
+- Optimize for the TUI and `codex app-server` flow first
+- Keep agent files compact; move detail into `docs/agent/`
 
-Keep mapping logic in adapters, not domain models.
+## Quick Rules
 
-## Hexagonal Architecture
-Dependency flow should point inward: `adapter -> application -> domain`. Inbound adapters translate user events into service calls. Application services orchestrate use cases and depend on ports defined in `src/application/port/`. Outbound adapters implement those ports and own process, stdio, JSON, and filesystem details. `domain/` stays free of TUI types, transport formats, and external I/O. When adding a new external capability, define the boundary as a port first, then implement it in an adapter.
+- Layout: `src/domain`, `src/application/service`, `src/application/port`, `src/adapter/inbound/tui`, `src/adapter/outbound`, `schema`, and `docs`
+- Architecture: `adapter -> application -> domain`; define ports before adding a real outbound boundary; keep mapping logic in adapters
+- Style: explicit, Kotlin-readable Rust; small single-purpose functions; consistent `Service` / `Port` / `Adapter` / `Request` / `Response` / `State` naming
+- Commands: `. "$HOME/.cargo/env" && cargo run|build|test|fmt`; add `cargo clippy --all-targets --all-features -D warnings` for lint-sensitive work
+- Tests: unit tests beside modules, integration tests under `tests/`; focus on startup checks, app-server parsing, stream reduction, and session list mapping
+- Working style: use official Codex interfaces first; keep commits small; add ports only for real boundaries; include a terminal capture in meaningful TUI PRs when practical
+- GitHub writes: authenticate as `RefinedStone`, keep `origin` on the RefinedStone repo, use `bash scripts/gh-refinedstone.sh` for PR and review-thread writes, and do not write to GitHub if identity is uncertain
+- Delivery default: once a change is reviewable, finish with `commit -> push -> PR` unless the user says to hold locally
+- Parallel work: one worktree and one reviewable slice per branch, usually from `origin/prerelease`; inspect active work before choosing a lane
+- Do not expand this file into backlog or design notes; keep that in `docs/design` or `docs/plan`
 
-## Build, Test, and Development Commands
-- `. "$HOME/.cargo/env" && cargo run`: launch the TUI
-- `. "$HOME/.cargo/env" && cargo build`: compile the crate
-- `. "$HOME/.cargo/env" && cargo test`: run tests
-- `. "$HOME/.cargo/env" && cargo fmt`: format source
+## Open When Needed
 
-Run these before opening a PR. Add `cargo clippy --all-targets --all-features -D warnings` when touching lint-sensitive code.
-
-## Coding Style & Naming Conventions
-Write Rust so a Spring Boot Kotlin developer can read it quickly. Use 4-space indentation, `snake_case` for functions/modules, and `PascalCase` for types. Prefer explicit names and straightforward structs over clever abstractions. Keep functions small and single-purpose. Use names such as `Service`, `Port`, `Adapter`, `Request`, `Response`, and `State` consistently.
-
-## Testing Guidelines
-Place unit tests next to the module with `#[cfg(test)] mod tests`. Add integration tests under `tests/` when a flow spans multiple layers. Prioritize startup checks, app-server response parsing, stream reduction, and session list mapping. New adapter or service logic should usually ship with tests.
-
-## GitHub Identity
-All GitHub writes for this repo must authenticate as `RefinedStone`.
-
-- keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`
-- prefer the repo-local `.git/refinedstone-credentials`; if another `credential.helper` is inherited, override it in this repo's local `.git/config` only and do not touch global GitHub credentials for other repositories
-- before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`
-- use `bash scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies; do not use GitHub MCP tools for them in this repo because they authenticate as `seungjoo-1ee`
-- if the RefinedStone identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment
-- once a change reaches a reviewable milestone, the default is `commit -> push -> PR`; do not stop at a local commit unless the user explicitly says to hold
-- after a PR merges or closes, start the next task from the latest base branch on a new feature branch instead of continuing on the old branch
-- for final integration, do not use GitHub merge-commit flow; rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits
-
-## Parallel Worktree Rule
-When multiple slices move in parallel, treat worktree setup as part of the design work, not as an afterthought.
-
-- create one git worktree per live branch, normally from the latest `origin/prerelease`
-- keep one reviewable slice and one PR per worktree; do not mix unrelated backlog items in one branch
-- inspect active local worktrees, unmerged branches, and open PRs before naming a new branch
-- assume another unmerged worktree may already own a nearby file boundary and prefer a disjoint lane when two workers are active
-- use names that expose location such as `feature/native-<lane>-<zone>-<slice>`, `fix/native-<lane>-<zone>-<slice>`, `docs/native-<lane>-<zone>-<slice>`, or `chore/native-<lane>-<zone>-<slice>`
-- keep `prerelease` checked out in one integration checkout only; feature worktrees should rebase onto `origin/prerelease` without checking out local `prerelease`
-- do not branch a new worktree from another in-flight feature branch unless the dependency is explicitly documented
-- if overlap is intentional, document the expected conflict surface and resolve it consciously during rebase or merge
-- before starting concurrent work, map the slice to [`docs/plan/04-worktree-branch-rules.md`](docs/plan/04-worktree-branch-rules.md) and the current concurrency snapshot in [`docs/plan/11-parallel-worktree-plan.md`](docs/plan/11-parallel-worktree-plan.md)
-
-## Working Rules
-Use official Codex interfaces first: `codex app-server`, `codex exec`, and `codex exec resume`. Keep commits small and milestone-based. Do not introduce unnecessary traits; add a port only when it improves a real boundary. For TUI changes, include a screenshot or short terminal capture in the PR when practical.
+- [`docs/agent/README.md`](./docs/agent/README.md)
+- [`docs/agent/01-project-playbook.md`](./docs/agent/01-project-playbook.md)
+- [`docs/agent/02-github-and-worktree.md`](./docs/agent/02-github-and-worktree.md)
+- [`docs/plan/04-worktree-branch-rules.md`](./docs/plan/04-worktree-branch-rules.md)
+- [`docs/plan/11-parallel-worktree-plan.md`](./docs/plan/11-parallel-worktree-plan.md)
