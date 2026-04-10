@@ -16,12 +16,14 @@ use crate::application::port::outbound::followup_template_port::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
+use crate::application::service::planning_bootstrap_service::PlanningBootstrapMode;
 use crate::application::service::planning_init_service::{
-    PlanningDraftEditorFile, PlanningDraftEditorSession,
+    PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningInitStageResult,
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+use crate::domain::planning::PlanningValidationReport;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -250,9 +252,49 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
     assert!(rendered.contains("Files"));
     assert!(rendered.contains("directions.toml"));
     assert!(rendered.contains("Ctrl+S: save + validate"));
-    assert!(rendered.contains("Ctrl+P: promote"));
+    assert!(rendered.contains("Ctrl+P: save + promote active planning"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_planning_simple_review_renders_promote_and_edit_actions() {
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning_init_overlay_ui_state
+        .open_simple_review(PlanningInitStageResult {
+            mode: PlanningBootstrapMode::Simple,
+            draft_name: "bootstrap-1".to_string(),
+            draft_directory: "/tmp/bootstrap-1".to_string(),
+            staged_files: Vec::new(),
+            staged_file_count: 4,
+            validation_report: PlanningValidationReport::default(),
+        });
+
+    let view = build_planning_init_overlay_view(&app);
+    let header = view
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let options = view
+        .option_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let keys = view
+        .key_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(header.contains("simple mode"));
+    assert!(options.contains("bootstrap-1"));
+    assert!(keys.contains("Enter/Ctrl+P: promote staged scaffold"));
+    assert!(keys.contains("Ctrl+E: inspect/edit draft"));
 }
 
 #[test]

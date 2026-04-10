@@ -450,14 +450,14 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
     assert!(
         conversation
             .status_text
-            .contains("planning simple draft ready")
+            .contains("planning simple draft staged")
     );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
-        PlanningInitOverlayStep::ManualEditor
+        PlanningInitOverlayStep::SimpleReview
     );
-    assert!(app.planning_draft_editor_ui_state.is_open());
+    assert!(!app.planning_draft_editor_ui_state.is_open());
     assert!(staged_drafts_dir.exists());
     let draft_directories = std::fs::read_dir(&staged_drafts_dir)
         .expect("drafts directory should be readable")
@@ -486,6 +486,15 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
+fn open_planning_simple_review(app: &mut NativeTuiApp) {
+    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::SimpleReview
+    );
+}
+
 #[test]
 fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context() {
     let (mut app, _) = make_test_app();
@@ -496,12 +505,11 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
     };
     conversation.cwd = workspace_dir.clone();
 
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    open_planning_simple_review(&mut app);
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
-        PlanningInitOverlayStep::ManualEditor
+        PlanningInitOverlayStep::SimpleReview
     );
 
     assert!(
@@ -529,6 +537,35 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
     let directions = std::fs::read_to_string(planning_dir.join("directions.toml"))
         .expect("promoted directions should be readable");
     assert!(directions.contains("general-workstream"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_simple_mode_review_can_open_embedded_editor() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-simple-editor-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+
+    open_planning_simple_review(&mut app);
+
+    assert!(
+        app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL,))
+    );
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ManualEditor
+    );
+    assert!(app.planning_draft_editor_ui_state.is_open());
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("planning simple draft editor ready")
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -589,6 +626,8 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
 
     open_planning_manual_editor(&mut app);
 
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
     assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
 
@@ -600,6 +639,7 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
         panic!("app should stay in ready state");
     };
     assert!(conversation.status_text.contains("planning draft saved"));
+    assert!(conversation.status_text.contains("Ctrl+P"));
     assert!(!app.planning_draft_editor_ui_state.has_dirty_buffers());
 
     let draft_directory = std::fs::read_dir(
@@ -613,9 +653,9 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
     .map(|entry| entry.path())
     .next()
     .expect("draft directory should exist");
-    let directions = std::fs::read_to_string(draft_directory.join("directions.toml"))
-        .expect("staged directions should be readable");
-    assert!(directions.starts_with('#'));
+    let result_output = std::fs::read_to_string(draft_directory.join("result-output.md"))
+        .expect("staged result output should be readable");
+    assert!(result_output.starts_with('#'));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

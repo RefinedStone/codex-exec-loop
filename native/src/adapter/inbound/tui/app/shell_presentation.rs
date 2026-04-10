@@ -490,6 +490,82 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("Backspace/Left: back    Enter: act    Esc/Ctrl+C: cancel"),
             ],
         },
+        PlanningInitOverlayStep::SimpleReview => {
+            let simple_review = app.planning_init_overlay_ui_state.simple_review();
+            let draft_name = simple_review
+                .map(|review| review.draft_name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let draft_directory = simple_review
+                .map(|review| review.draft_directory().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let staged_file_count = simple_review
+                .map(|review| review.staged_file_count())
+                .unwrap_or_default();
+            let validation_report = simple_review.map(|review| review.validation_report());
+            let validation_ok = validation_report.map_or(true, |report| report.is_valid());
+            let first_error = validation_report
+                .and_then(|report| report.errors().into_iter().next())
+                .map(|issue| {
+                    compact_inline_detail(issue.message.as_str(), FOOTER_NOTICE_DETAIL_LIMIT)
+                });
+
+            PlanningInitOverlayView {
+                header_lines: vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Planning Initialization",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" / simple mode"),
+                    ]),
+                    Line::from(
+                        "Review the staged generic scaffold before it becomes active planning.",
+                    ),
+                ],
+                summary_lines: vec![
+                    Line::from(
+                        "Simple mode keeps the direction catalog generic and leaves the task ledger empty.",
+                    ),
+                    Line::from(
+                        "No active planning files change until you explicitly promote this staged draft.",
+                    ),
+                ],
+                option_lines: vec![
+                    Line::from(format!("draft: {draft_name}")),
+                    Line::from(format!("draft dir: {draft_directory}")),
+                    Line::from(format!("staged files: {staged_file_count}")),
+                    Line::from(
+                        "Use Ctrl+E if you want to inspect or edit the staged files before promote.",
+                    ),
+                ],
+                status_lines: {
+                    let mut lines = vec![
+                        Line::from(format!(
+                            "validation: {}",
+                            if validation_ok {
+                                "ok"
+                            } else {
+                                "needs attention"
+                            }
+                        )),
+                        Line::from("next: Enter or Ctrl+P promotes the staged simple scaffold."),
+                        Line::from(
+                            "next: Esc closes this review and leaves the staged draft on disk.",
+                        ),
+                    ];
+                    if let Some(first_error) = first_error {
+                        lines.push(Line::from(format!("first validation error: {first_error}")));
+                    }
+                    lines
+                },
+                key_lines: vec![
+                    Line::from("Enter/Ctrl+P: promote staged scaffold"),
+                    Line::from("Ctrl+E: inspect/edit draft    Esc/Ctrl+C: close review"),
+                ],
+            }
+        }
         PlanningInitOverlayStep::ManualEditor => PlanningInitOverlayView {
             header_lines: vec![
                 Line::from(vec![
@@ -526,6 +602,13 @@ pub(super) fn build_planning_draft_editor_overlay_view(
     let validation_report = app.planning_draft_editor_ui_state.validation_report()?;
     let pending_close_risk = app.planning_draft_editor_ui_state.pending_close_risk();
     let close_risk = pending_close_risk.or_else(|| app.planning_draft_editor_ui_state.close_risk());
+    let next_action = if !dirty_labels.is_empty() {
+        "next action: Ctrl+S re-runs validation, or Ctrl+P saves current edits and promotes if valid"
+    } else if validation_report.is_valid() {
+        "next action: Ctrl+P promotes this draft into active planning files"
+    } else {
+        "next action: fix validation errors before promoting this draft"
+    };
 
     let file_lines = buffers
         .iter()
@@ -632,6 +715,7 @@ pub(super) fn build_planning_draft_editor_overlay_view(
             "validation note: the status above reflects the last saved draft until Ctrl+S re-runs checks",
         ));
     }
+    status_lines.push(Line::from(next_action));
     if let Some(risk) = close_risk {
         status_lines.push(Line::from(vec![
             Span::styled(
@@ -662,7 +746,10 @@ pub(super) fn build_planning_draft_editor_overlay_view(
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / guided draft"),
+                Span::raw(match app.planning_init_overlay_ui_state.selected_mode() {
+                    PlanningInitModeSelection::Simple => " / simple scaffold editor",
+                    PlanningInitModeSelection::Detail => " / detail draft editor",
+                }),
             ]),
             Line::from(format!(
                 "draft dir: {}",
@@ -680,7 +767,7 @@ pub(super) fn build_planning_draft_editor_overlay_view(
         key_lines: vec![
             Line::from("Tab/BackTab: switch file    arrows: move cursor"),
             Line::from("Enter: newline    Backspace: delete    Ctrl+W: delete previous word"),
-            Line::from("Ctrl+S: save + validate    Ctrl+P: promote"),
+            Line::from("Ctrl+S: save + validate    Ctrl+P: save + promote active planning"),
             planning_draft_editor_close_key_line(close_risk, pending_close_risk.is_some()),
         ],
     })

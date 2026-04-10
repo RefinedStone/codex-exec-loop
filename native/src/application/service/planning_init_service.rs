@@ -176,18 +176,26 @@ impl PlanningInitService {
         draft_name: &str,
         files: &[PlanningDraftEditorFile],
     ) -> Result<PlanningDraftPromoteResult> {
-        let save_result = self.save_draft_editor_files(workspace_dir, draft_name, files)?;
-        if !save_result.validation_report.is_valid() {
-            return Ok(PlanningDraftPromoteResult {
-                draft_name: draft_name.to_string(),
-                promoted_file_count: 0,
-                validation_report: save_result.validation_report,
-            });
-        }
+        self.save_draft_editor_files(workspace_dir, draft_name, files)?;
+        self.promote_staged_draft(workspace_dir, draft_name)
+    }
 
+    pub fn promote_staged_draft(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+    ) -> Result<PlanningDraftPromoteResult> {
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(workspace_dir, draft_name)?;
+        let validation_report = self.validate_loaded_draft(&loaded);
+        if !validation_report.is_valid() {
+            return Ok(PlanningDraftPromoteResult {
+                draft_name: draft_name.to_string(),
+                promoted_file_count: 0,
+                validation_report,
+            });
+        }
         for file in &loaded.staged_files {
             self.planning_workspace_port
                 .replace_planning_workspace_file(
@@ -200,7 +208,7 @@ impl PlanningInitService {
         Ok(PlanningDraftPromoteResult {
             draft_name: draft_name.to_string(),
             promoted_file_count: loaded.staged_files.len(),
-            validation_report: save_result.validation_report,
+            validation_report,
         })
     }
 
@@ -579,6 +587,35 @@ mod tests {
                 &session.draft_name,
                 &session.editable_files,
             )
+            .expect("valid staged draft should promote");
+
+        assert!(result.validation_report.is_valid());
+        assert_eq!(result.promoted_file_count, 4);
+        let active_files = workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned");
+        assert!(active_files.contains_key(DIRECTIONS_FILE_PATH));
+        assert!(active_files.contains_key(TASK_LEDGER_FILE_PATH));
+        assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
+        assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
+    }
+
+    #[test]
+    fn promote_staged_draft_writes_active_planning_files_without_editor_buffers() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let staged = service
+            .stage_simple_mode_draft("/tmp/workspace")
+            .expect("simple staged draft should be created");
+
+        let result = service
+            .promote_staged_draft("/tmp/workspace", &staged.draft_name)
             .expect("valid staged draft should promote");
 
         assert!(result.validation_report.is_valid());

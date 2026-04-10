@@ -185,6 +185,7 @@ impl NativeTuiApp {
             self.planning_init_service
                 .stage_manual_editor_session(&workspace_directory),
             "planning draft editor ready",
+            PlanningInitModeSelection::Detail,
         );
     }
 
@@ -210,13 +211,18 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state
                     .apply_save_result(result.validation_report.clone());
                 format!(
-                    "planning draft saved / draft: {} / validation: {}",
+                    "planning draft saved / draft: {} / validation: {} / next: {}",
                     result.draft_name,
                     if validation_ok {
                         "ok"
                     } else {
                         "needs attention"
-                    }
+                    },
+                    if validation_ok {
+                        "press Ctrl+P to promote into active planning files"
+                    } else {
+                        "fix validation issues before promoting"
+                    },
                 )
             }
             Err(error) => format!("planning draft save failed: {error}"),
@@ -249,7 +255,7 @@ impl NativeTuiApp {
                     .apply_save_result(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "planning draft promote blocked / draft: {} / validation: {}",
+                        "planning draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -336,11 +342,90 @@ impl NativeTuiApp {
 
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
         let workspace_directory = self.current_workspace_directory();
+        let status_text = match self
+            .planning_init_service
+            .stage_simple_mode_draft(&workspace_directory)
+        {
+            Ok(stage_result) => {
+                let validation_ok = stage_result.validation_report.is_valid();
+                let draft_name = stage_result.draft_name.clone();
+                self.planning_init_overlay_ui_state
+                    .open_simple_review(stage_result);
+                format!(
+                    "planning simple draft staged / draft: {} / validation: {} / next: Enter or Ctrl+P to promote, Ctrl+E to inspect",
+                    draft_name,
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                )
+            }
+            Err(error) => format!("planning init failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    pub(super) fn open_simple_mode_planning_editor(&mut self) {
+        let Some(draft_name) = self
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .map(|review| review.draft_name().to_string())
+        else {
+            return;
+        };
+        let workspace_directory = self.current_workspace_directory();
         self.open_guided_planning_editor_session(
             self.planning_init_service
-                .stage_simple_editor_session(&workspace_directory),
-            "planning simple draft ready",
+                .load_manual_editor_session(&workspace_directory, &draft_name),
+            "planning simple draft editor ready",
+            PlanningInitModeSelection::Simple,
         );
+    }
+
+    pub(super) fn promote_simple_mode_planning_draft(&mut self) {
+        let Some(draft_name) = self
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .map(|review| review.draft_name().to_string())
+        else {
+            return;
+        };
+        let workspace_directory = self.current_workspace_directory();
+        let status_text = match self
+            .planning_init_service
+            .promote_staged_draft(&workspace_directory, &draft_name)
+        {
+            Ok(result) => {
+                let validation_ok = result.validation_report.is_valid();
+                self.planning_init_overlay_ui_state
+                    .apply_simple_review_validation(result.validation_report.clone());
+                if result.promoted_file_count == 0 {
+                    format!(
+                        "planning simple draft promote blocked / draft: {} / validation: {} / next: press Ctrl+E to inspect or fix the staged draft",
+                        result.draft_name,
+                        if validation_ok {
+                            "ok"
+                        } else {
+                            "needs attention"
+                        }
+                    )
+                } else {
+                    self.close_shell_overlay();
+                    self.refresh_ready_conversation_planning_prompt_context();
+                    format!(
+                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                        result.draft_name, result.promoted_file_count
+                    )
+                }
+            }
+            Err(error) => format!("planning draft promote failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
     }
 
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {
@@ -1026,6 +1111,18 @@ impl NativeTuiApp {
                     }
                     _ => {}
                 },
+                PlanningInitOverlayStep::SimpleReview => match key.code {
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        self.promote_simple_mode_planning_draft()
+                    }
+                    KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.open_simple_mode_planning_editor()
+                    }
+                    KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.promote_simple_mode_planning_draft()
+                    }
+                    _ => {}
+                },
                 PlanningInitOverlayStep::ManualEditor => {
                     if self.handle_planning_manual_editor_close_confirmation_key(key) {
                         return true;
@@ -1135,6 +1232,7 @@ impl NativeTuiApp {
             crate::application::service::planning_init_service::PlanningDraftEditorSession,
         >,
         ready_status_prefix: &str,
+        mode: PlanningInitModeSelection,
     ) {
         let status_text = match session_result {
             Ok(session) => {
@@ -1149,7 +1247,14 @@ impl NativeTuiApp {
                     }
                 );
                 self.planning_draft_editor_ui_state.open_session(session);
-                self.planning_init_overlay_ui_state.open_manual_editor();
+                match mode {
+                    PlanningInitModeSelection::Simple => {
+                        self.planning_init_overlay_ui_state.open_simple_editor()
+                    }
+                    PlanningInitModeSelection::Detail => {
+                        self.planning_init_overlay_ui_state.open_manual_editor()
+                    }
+                }
                 status_text
             }
             Err(error) => format!("planning init failed: {error}"),
