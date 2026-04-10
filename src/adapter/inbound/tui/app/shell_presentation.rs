@@ -932,9 +932,7 @@ fn current_live_agent_lines(conversation: &ConversationViewModel) -> Option<Vec<
 fn build_conversation_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
-    if startup_banner_is_active_in_context(context) {
-        let startup_banner_lines = build_startup_banner_lines_from_context(context, None)
-            .expect("active startup banner should produce lines");
+    if let Some(startup_banner_lines) = build_startup_banner_lines_from_context(context, None) {
         return startup_banner_lines;
     }
 
@@ -1018,21 +1016,16 @@ pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec
 
 #[cfg(test)]
 pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let planning_summary_line = match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
-        }
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    };
-    let planning_notice_line = match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
-        }
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    };
+    let context = ShellCorePresentationContext::from_app(app);
+    let planning_summary_line = context.ready_conversation().and_then(|conversation| {
+        build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
+    });
+    let planning_notice_line = context.ready_conversation().and_then(|conversation| {
+        build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
+    });
 
     build_shell_footer_lines_with_context(
-        &ShellCorePresentationContext::from_app(app),
+        &context,
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
@@ -1131,21 +1124,16 @@ fn build_shell_footer_lines_with_context(
 }
 
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let planning_summary_line = match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            build_planning_summary_line(app, conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
-        }
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    };
-    let planning_notice_line = match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
-        }
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    };
+    let context = ShellCorePresentationContext::from_app(app);
+    let planning_summary_line = context.ready_conversation().and_then(|conversation| {
+        build_planning_summary_line(app, conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
+    });
+    let planning_notice_line = context.ready_conversation().and_then(|conversation| {
+        build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+    });
 
     build_inline_tail_lines_with_context(
-        &ShellCorePresentationContext::from_app(app),
+        &context,
         app.github_review_recent_changes_summary(INLINE_TAIL_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
