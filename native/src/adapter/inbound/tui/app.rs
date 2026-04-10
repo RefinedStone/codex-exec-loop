@@ -78,6 +78,8 @@ mod ratatui_frontend;
 mod session_browser;
 #[path = "app/session_overlay_ui.rs"]
 mod session_overlay_ui;
+#[path = "app/session_shell_controller.rs"]
+mod session_shell_controller;
 #[path = "app/shell_controller.rs"]
 mod shell_controller;
 #[path = "app/shell_entrypoint.rs"]

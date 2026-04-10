@@ -6,7 +6,7 @@ Unless noted otherwise, file paths below are relative to `native/`.
 - reference branch: `origin/prerelease`
 - active feature split: `docs/plan/14-planning-init-manual-editor-rollout.md`
 - active planning-runtime follow-up: `docs/plan/15-planning-runtime-engagement-repair.md`
-- active app-cluster slimming slice: `feature/native-runtime-adapter-planning-turn-split`
+- active app-cluster slimming slice: `feature/native-shell-controller-session-overlay-split`
 - treat the docs above as the live slice plans for current planning work
 
 ## Current Hotspots
@@ -16,6 +16,7 @@ Unless noted otherwise, file paths below are relative to `native/`.
 - planning draft authoring boundary: `src/application/port/outbound/planning_workspace_port.rs`, `src/adapter/outbound/filesystem_planning_workspace_adapter.rs`, `src/application/service/planning_init_service.rs`, and planning-init shell overlays
 - planning shell presentation boundary: `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/planning_presentation.rs`, and follow-up preview/status tests under `src/adapter/inbound/tui/app/`
 - planning turn submission boundary: `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/turn_submission_runtime.rs`, and prompt/follow-up runtime tests under `src/adapter/inbound/tui/app/`
+- session shell controller boundary: `src/adapter/inbound/tui/app/shell_controller.rs`, `src/adapter/inbound/tui/app/session_shell_controller.rs`, and session overlay tests under `src/adapter/inbound/tui/app/`
 - docs and operator contract: `docs/README.md`, `docs/design/*.md`, `docs/plan/10-inline-scrollback-shell.md`, and `docs/plan/12-platform-validation-matrix.md`
 
 ## Worktree Posture
