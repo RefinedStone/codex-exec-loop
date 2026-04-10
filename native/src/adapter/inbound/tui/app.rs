@@ -94,6 +94,8 @@ mod shell_rendering;
 mod shell_runtime;
 #[path = "app/transcript_viewport.rs"]
 mod transcript_viewport;
+#[path = "app/turn_submission_runtime.rs"]
+mod turn_submission_runtime;
 
 use app_runtime::BackgroundMessage;
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
