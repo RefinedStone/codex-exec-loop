@@ -10,11 +10,11 @@ use crate::application::port::outbound::codex_app_server_port::CodexAppServerPor
 use crate::application::port::outbound::followup_template_port::FollowupTemplatePort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
+use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 
 use super::github_polling::GithubReviewPollingBootstrap;
-use super::planning_services::PlanningServices;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
 use super::{NativeTuiApp, ShellChromeEvent};

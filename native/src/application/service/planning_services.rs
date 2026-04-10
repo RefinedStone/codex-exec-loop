@@ -11,15 +11,14 @@ use crate::application::service::planning_validation_service::PlanningValidation
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 
-pub(super) struct PlanningServices {
-    pub(super) init_service: PlanningInitService,
-    pub(super) runtime_facade: PlanningRuntimeFacadeService,
+#[derive(Clone)]
+pub struct PlanningServices {
+    pub init_service: PlanningInitService,
+    pub runtime_facade: PlanningRuntimeFacadeService,
 }
 
 impl PlanningServices {
-    pub(super) fn from_workspace_port(
-        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-    ) -> Self {
+    pub fn from_workspace_port(planning_workspace_port: Arc<dyn PlanningWorkspacePort>) -> Self {
         let validation_service = PlanningValidationService::new();
         let priority_queue_service = PriorityQueueService::new();
         let init_service = PlanningInitService::new(

@@ -8,7 +8,6 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use super::conversation_model::PlanningRepairState;
-use super::planning_services::PlanningServices;
 use super::shell_presentation::{
     build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
 };
@@ -41,6 +40,7 @@ use crate::application::service::planning_prompt_service::PlanningRuntimeSnapsho
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningRepairRequest,
 };
+use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{

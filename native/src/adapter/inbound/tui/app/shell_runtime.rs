@@ -238,7 +238,6 @@ mod tests {
     use crossterm::event::KeyEventState;
 
     use super::*;
-    use crate::adapter::inbound::tui::app::planning_services::PlanningServices;
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -250,6 +249,7 @@ mod tests {
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::followup_template_service::FollowupTemplateService;
     use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+    use crate::application::service::planning_services::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};

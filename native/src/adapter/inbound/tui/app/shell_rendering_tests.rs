@@ -8,7 +8,6 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 
 use super::*;
-use crate::adapter::inbound::tui::app::planning_services::PlanningServices;
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -22,6 +21,7 @@ use crate::application::service::planning_bootstrap_service::PlanningBootstrapMo
 use crate::application::service::planning_init_service::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningInitStageResult,
 };
+use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};

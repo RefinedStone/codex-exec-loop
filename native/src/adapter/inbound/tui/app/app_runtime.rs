@@ -6,6 +6,7 @@ use crate::application::service::followup_template_service::FollowupTemplateServ
 use crate::application::service::planning_reconciliation_service::{
     PlanningReconciliationResult, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
+use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestPollResult;
@@ -14,7 +15,6 @@ use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::conversation_model::PlanningRepairState;
-use super::planning_services::PlanningServices;
 use super::{
     ActiveTurnPlanningSnapshot, AutoFollowupSubmitContext, ConversationInputEvent,
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
