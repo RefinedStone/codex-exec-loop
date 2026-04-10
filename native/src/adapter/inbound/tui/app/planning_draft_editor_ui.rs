@@ -385,30 +385,24 @@ impl PlanningDraftEditorBufferState {
     }
 
     fn delete_previous_word(&mut self) {
-        let cursor_byte_index = self.cursor_byte_index();
-        if cursor_byte_index == 0 {
-            return;
+        let original_position = (self.cursor_line_index, self.cursor_column);
+
+        while self
+            .character_before_cursor()
+            .is_some_and(|character| character.is_whitespace())
+        {
+            self.backspace();
+        }
+        while self
+            .character_before_cursor()
+            .is_some_and(|character| !character.is_whitespace())
+        {
+            self.backspace();
         }
 
-        let body = self.body();
-        let before_cursor = &body[..cursor_byte_index];
-        let trimmed_before_cursor =
-            before_cursor.trim_end_matches(|character: char| character.is_whitespace());
-        let word_start = trimmed_before_cursor
-            .char_indices()
-            .rev()
-            .find(|(_, character)| character.is_whitespace())
-            .map(|(index, character)| index + character.len_utf8())
-            .unwrap_or(0);
-        if word_start == cursor_byte_index {
-            return;
+        if original_position != (self.cursor_line_index, self.cursor_column) {
+            self.dirty = true;
         }
-
-        let mut next_body = String::with_capacity(body.len() - (cursor_byte_index - word_start));
-        next_body.push_str(&body[..word_start]);
-        next_body.push_str(&body[cursor_byte_index..]);
-        self.replace_body_and_cursor(next_body, word_start);
-        self.dirty = true;
     }
 
     fn move_cursor_left(&mut self) {
@@ -456,24 +450,17 @@ impl PlanningDraftEditorBufferState {
             .min(self.lines[self.cursor_line_index].chars().count());
     }
 
-    fn cursor_byte_index(&self) -> usize {
-        let preceding_lines_len = self
-            .lines
-            .iter()
-            .take(self.cursor_line_index)
-            .map(|line| line.len() + 1)
-            .sum::<usize>();
-        preceding_lines_len
-            + char_to_byte_index(&self.lines[self.cursor_line_index], self.cursor_column)
-    }
+    fn character_before_cursor(&self) -> Option<char> {
+        if self.cursor_column > 0 {
+            return self.lines[self.cursor_line_index]
+                .chars()
+                .nth(self.cursor_column - 1);
+        }
+        if self.cursor_line_index > 0 {
+            return Some('\n');
+        }
 
-    fn replace_body_and_cursor(&mut self, body: String, cursor_byte_index: usize) {
-        self.lines = lines_from_body(body.as_str());
-        let (cursor_line_index, cursor_column) =
-            line_and_column_from_byte_index(body.as_str(), cursor_byte_index);
-        self.cursor_line_index = cursor_line_index;
-        self.cursor_column = cursor_column;
-        self.preferred_column = cursor_column;
+        None
     }
 
     fn sync_editor_scroll(&mut self, visible_height: u16) {
@@ -512,35 +499,11 @@ impl From<PlanningDraftEditorFile> for PlanningDraftEditorBufferState {
     }
 }
 
-fn lines_from_body(body: &str) -> Vec<String> {
-    if body.is_empty() {
-        vec![String::new()]
-    } else {
-        body.split('\n').map(|line| line.to_string()).collect()
-    }
-}
-
 fn char_to_byte_index(line: &str, column: usize) -> usize {
     line.char_indices()
         .nth(column)
         .map(|(index, _)| index)
         .unwrap_or(line.len())
-}
-
-fn line_and_column_from_byte_index(body: &str, byte_index: usize) -> (usize, usize) {
-    let mut line_index = 0;
-    let mut line_start = 0;
-    for (index, character) in body.char_indices() {
-        if index >= byte_index {
-            break;
-        }
-        if character == '\n' {
-            line_index += 1;
-            line_start = index + character.len_utf8();
-        }
-    }
-
-    (line_index, body[line_start..byte_index].chars().count())
 }
 
 #[cfg(test)]

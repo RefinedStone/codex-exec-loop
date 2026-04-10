@@ -12,6 +12,34 @@ use super::shell_presentation::{
 };
 use super::*;
 
+pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
+    if app.shell_overlay != ShellOverlay::PlanningInit
+        || app.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::ManualEditor
+    {
+        return;
+    }
+
+    let editor_content_height = match mode {
+        ShellFrontendMode::InlineMainBuffer => {
+            let inspection_area = build_inline_terminal_flow_layout(app, area)[0];
+            inspection_area
+                .height
+                .saturating_sub(14)
+                .max(6)
+                .saturating_sub(1)
+                .max(1)
+        }
+        ShellFrontendMode::AlternateScreen => centered_rect(92, 82, area)
+            .height
+            .saturating_sub(14)
+            .max(8)
+            .saturating_sub(2)
+            .max(1),
+    };
+    app.planning_draft_editor_ui_state
+        .sync_editor_scroll(editor_content_height);
+}
+
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     draw_conversation_shell(frame, app, mode);
 
@@ -509,7 +537,9 @@ fn draw_inline_planning_draft_editor_inspection(
     app: &NativeTuiApp,
 ) {
     let editor_height = area.height.saturating_sub(14).max(6);
-    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_height) else {
+    let editor_content_height = editor_height.saturating_sub(1).max(1);
+    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_content_height)
+    else {
         return;
     };
     let PlanningDraftEditorOverlayView {
@@ -789,8 +819,6 @@ fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
     frame.render_widget(Clear, popup_area);
 
     let editor_height = popup_area.height.saturating_sub(14).max(8);
-    app.planning_draft_editor_ui_state
-        .sync_editor_scroll(editor_height.saturating_sub(2).max(1));
     let Some(overlay_view) =
         build_planning_draft_editor_overlay_view(app, editor_height.saturating_sub(2).max(1))
     else {

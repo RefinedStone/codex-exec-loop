@@ -260,6 +260,42 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
 }
 
 #[test]
+fn prepare_render_state_syncs_inline_planning_editor_scroll_before_render() {
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning_init_overlay_ui_state.open_manual_editor();
+    app.planning_draft_editor_ui_state
+        .open_session(sample_long_planning_editor_session());
+    for _ in 0..10 {
+        app.planning_draft_editor_ui_state.move_cursor_down();
+    }
+
+    assert_eq!(
+        app.planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("buffer")
+            .editor_scroll(),
+        0
+    );
+
+    let area = Rect::new(0, 0, 96, 28);
+    prepare_render_state(&mut app, ShellFrontendMode::InlineMainBuffer, area);
+
+    let inspection_area = build_inline_terminal_flow_layout(&app, area)[0];
+    let editor_content_height = inspection_area
+        .height
+        .saturating_sub(14)
+        .max(6)
+        .saturating_sub(1)
+        .max(1);
+    let view = build_planning_draft_editor_overlay_view(&app, editor_content_height)
+        .expect("planning draft editor overlay view should be available");
+
+    assert!(view.editor_scroll > 0);
+    assert!(view.editor_cursor_offset.expect("cursor").1 < editor_content_height);
+}
+
+#[test]
 fn inline_planning_simple_review_renders_promote_and_edit_actions() {
     let mut app = make_test_app();
     app.shell_overlay = ShellOverlay::PlanningInit;
@@ -476,6 +512,24 @@ fn sample_planning_editor_session() -> PlanningDraftEditorSession {
                 body: "# result\n".to_string(),
             },
         ],
+        validation_report: Default::default(),
+    }
+}
+
+fn sample_long_planning_editor_session() -> PlanningDraftEditorSession {
+    PlanningDraftEditorSession {
+        draft_name: "bootstrap-test".to_string(),
+        draft_directory: "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test".to_string(),
+        editable_files: vec![PlanningDraftEditorFile {
+            active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
+            staged_path:
+                "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/directions.toml"
+                    .to_string(),
+            body: (1..=12)
+                .map(|index| format!("line {index}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }],
         validation_report: Default::default(),
     }
 }

@@ -19,7 +19,7 @@ use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::shell_frontend::ShellFrontend;
 use super::shell_presentation::{build_inline_tail_lines, build_startup_banner_lines};
-use super::shell_rendering::draw;
+use super::shell_rendering::{draw, prepare_render_state};
 use super::shell_runtime::ShellRuntime;
 use super::{
     ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp,
@@ -61,6 +61,12 @@ fn run_event_loop(
             let should_draw =
                 sync_inline_viewport(terminal, runtime, frontend.mode(), inline_viewport)?;
             if should_draw {
+                let terminal_size = terminal.size()?;
+                prepare_render_state(
+                    runtime.app_mut(),
+                    frontend.mode(),
+                    ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height),
+                );
                 terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
             }
         }
