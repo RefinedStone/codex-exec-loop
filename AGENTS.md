@@ -13,7 +13,7 @@ This file is the fast path for Codex in this repo. Read it first, then open only
 - Layout: `src/domain`, `src/application/service`, `src/application/port`, `src/adapter/inbound/tui`, `src/adapter/outbound`, `schema`, and `docs`
 - Architecture: `adapter -> application -> domain`; define ports before adding a real outbound boundary; keep mapping logic in adapters
 - Style: explicit, Kotlin-readable Rust; small single-purpose functions; consistent `Service` / `Port` / `Adapter` / `Request` / `Response` / `State` naming
-- Commands: `. "$HOME/.cargo/env" && cargo run|build|test|fmt`; add `cargo clippy --all-targets --all-features -D warnings` for lint-sensitive work
+- Commands: source `"$HOME/.cargo/env"`, then run `cargo run`, `cargo build`, `cargo test`, or `cargo fmt`; add `cargo clippy --all-targets --all-features -D warnings` for lint-sensitive work
 - Tests: unit tests beside modules, integration tests under `tests/`; focus on startup checks, app-server parsing, stream reduction, and session list mapping
 - Working style: use official Codex interfaces first; keep commits small; add ports only for real boundaries; include a terminal capture in meaningful TUI PRs when practical
 - GitHub writes: authenticate as `RefinedStone`, keep `origin` on the RefinedStone repo, use `bash scripts/gh-refinedstone.sh` for PR and review-thread writes, and do not write to GitHub if identity is uncertain

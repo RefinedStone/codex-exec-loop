@@ -40,4 +40,4 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - Keep `prerelease` checked out in one integration checkout only. Feature worktrees should rebase onto `origin/prerelease` without checking out local `prerelease`.
 - Do not branch a new worktree from another in-flight feature branch unless the dependency is explicitly documented.
 - If overlap is intentional, document the expected conflict surface and resolve it consciously during rebase or merge.
-- Before starting concurrent work, map the slice to `docs/plan/04-worktree-branch-rules.md` and the current snapshot in `docs/plan/11-parallel-worktree-plan.md`.
+- Before starting concurrent work, map the slice to `../plan/04-worktree-branch-rules.md` and the current snapshot in `../plan/11-parallel-worktree-plan.md`.
