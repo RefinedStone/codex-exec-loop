@@ -1,9 +1,8 @@
 use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
-use crate::application::service::planning_runtime_policy_service::PlanningRuntimeSummaryRequest;
 use crate::application::service::session_service::SessionProjectFilter;
 use crate::domain::followup_template::FollowupTemplateDefinition;
-use crate::domain::planning::{PlanningValidationSeverity, PlanningWorkspaceState};
+use crate::domain::planning::PlanningValidationSeverity;
 
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
@@ -1320,60 +1319,29 @@ fn build_planning_summary_line(
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<String> {
-    let planning_summary = planning_summary_view(app, conversation);
-    let planning_state = planning_summary.workspace_state;
-    if !always_show
-        && planning_state == PlanningWorkspaceState::Uninitialized
-        && conversation
-            .planning_notice_summary(max_detail_len)
-            .is_none()
-    {
-        return None;
-    }
-
-    let mut segments = vec![format!("planning: {}", planning_summary.status_label)];
-    if let Some(repair_state) = conversation.planning_repair_state.as_ref() {
-        segments.push(format!(
-            "repair: {}/{}",
-            repair_state.attempts_used, repair_state.max_attempts
-        ));
-    }
-
-    match planning_state {
-        PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
-            if let Some(queue_summary) = planning_summary.queue_summary.as_deref() {
-                segments.push(format!(
-                    "queue: {}",
-                    compact_inline_detail(queue_summary, max_detail_len)
-                ));
-            }
-        }
-        PlanningWorkspaceState::Repairing => {
-            if let Some(failure_summary) = planning_summary.failure_summary.as_deref() {
-                segments.push(format!(
-                    "failure: {}",
-                    compact_inline_detail(failure_summary, max_detail_len)
-                ));
-            }
-            if let Some(queue_summary) = planning_summary.queue_summary.as_deref() {
-                segments.push(format!(
-                    "queue: {}",
-                    compact_inline_detail(queue_summary, max_detail_len)
-                ));
-            }
-        }
-        PlanningWorkspaceState::BlockedInvalid => {
-            if let Some(failure_summary) = planning_summary.failure_summary.as_deref() {
-                segments.push(format!(
-                    "failure: {}",
-                    compact_inline_detail(failure_summary, max_detail_len)
-                ));
-            }
-        }
-        PlanningWorkspaceState::Uninitialized | PlanningWorkspaceState::Authoring => {}
-    }
-
-    Some(segments.join("  |  "))
+    app.planning_services
+        .runtime_facade
+        .build_summary_line(
+            crate::application::service::planning_runtime_facade_service::PlanningRuntimeSummaryLineRequest {
+            snapshot: &conversation.planning_runtime_snapshot,
+            has_running_turn: conversation.has_running_turn(),
+            is_repairing: conversation.planning_repair_state.is_some(),
+            repair_failure_summary: conversation
+                .planning_repair_state
+                .as_ref()
+                .map(|state| state.latest_request.failure_summary.as_str()),
+                repair_attempt: conversation
+                    .planning_repair_state
+                    .as_ref()
+                    .map(|state| crate::application::service::planning_runtime_facade_service::PlanningRuntimeRepairAttempt {
+                        attempts_used: state.attempts_used,
+                        max_attempts: state.max_attempts,
+                    }),
+                has_notice: conversation.planning_notice_summary(max_detail_len).is_some(),
+                max_detail_len,
+                always_show,
+            },
+        )
 }
 
 fn build_planning_notice_line(
@@ -1383,23 +1351,6 @@ fn build_planning_notice_line(
     conversation
         .planning_notice_summary(max_detail_len)
         .map(|summary| format!("planning notice: {summary}"))
-}
-
-fn planning_summary_view(
-    app: &NativeTuiApp,
-    conversation: &ConversationViewModel,
-) -> crate::application::service::planning_runtime_policy_service::PlanningRuntimeSummaryView {
-    app.planning_services
-        .runtime_facade
-        .build_summary_view(PlanningRuntimeSummaryRequest {
-            snapshot: &conversation.planning_runtime_snapshot,
-            has_running_turn: conversation.has_running_turn(),
-            is_repairing: conversation.planning_repair_state.is_some(),
-            repair_failure_summary: conversation
-                .planning_repair_state
-                .as_ref()
-                .map(|state| state.latest_request.failure_summary.as_str()),
-        })
 }
 
 fn build_operator_notice_line(
@@ -1713,12 +1664,9 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                     "preview last_message: placeholder until an agent reply exists",
                 ));
             }
-            lines.push(Line::from(format!(
-                "planning: {}",
-                preview.planning_view.status_label
-            )));
-            if let Some(detail) = preview.planning_view.detail.as_deref() {
-                lines.push(Line::from(format!("planning detail: {detail}")));
+            lines.push(Line::from(preview.planning_status_line));
+            if let Some(detail_line) = preview.planning_detail_line.as_deref() {
+                lines.push(Line::from(detail_line.to_string()));
             }
 
             lines.push(Line::from(""));
@@ -1750,7 +1698,28 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
                 app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
-            let planning_summary = planning_summary_view(app, conversation);
+            let planning_projection = app
+                .planning_services
+                .runtime_facade
+                .build_followup_status_projection(
+                    crate::application::service::planning_runtime_facade_service::PlanningRuntimeStatusProjectionRequest {
+                        snapshot: &conversation.planning_runtime_snapshot,
+                        has_running_turn: turn_running,
+                        is_repairing: conversation.planning_repair_state.is_some(),
+                        repair_failure_summary: conversation
+                            .planning_repair_state
+                            .as_ref()
+                            .map(|state| state.latest_request.failure_summary.as_str()),
+                        repair_attempt: conversation
+                            .planning_repair_state
+                            .as_ref()
+                            .map(|state| crate::application::service::planning_runtime_facade_service::PlanningRuntimeRepairAttempt {
+                                attempts_used: state.attempts_used,
+                                max_attempts: state.max_attempts,
+                            }),
+                        max_detail_len: FOLLOWUP_PLANNING_DETAIL_LIMIT,
+                    },
+                );
             let mut lines = vec![
                 Line::from(format!(
                     "auto follow-up: {}",
@@ -1772,10 +1741,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     "stop on no-file-change: {}",
                     conversation.auto_follow_state.no_file_change_stop_label()
                 )),
-                Line::from(format!(
-                    "planning status: {}",
-                    planning_summary.status_label
-                )),
+                Line::from(planning_projection.planning_status_line.clone()),
                 Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
                     conversation
@@ -1799,23 +1765,14 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     activity_line
                 }),
             ];
-            if let Some(repair_state) = conversation.planning_repair_state.as_ref() {
-                lines.push(Line::from(format!(
-                    "planning repair attempt: {}/{}",
-                    repair_state.attempts_used, repair_state.max_attempts
-                )));
+            if let Some(repair_attempt_line) = planning_projection.repair_attempt_line.as_deref() {
+                lines.push(Line::from(repair_attempt_line.to_string()));
             }
-            if let Some(queue_summary) = planning_summary.queue_summary.as_deref() {
-                lines.push(Line::from(format!(
-                    "planning queue head: {}",
-                    compact_inline_detail(queue_summary, FOLLOWUP_PLANNING_DETAIL_LIMIT)
-                )));
+            if let Some(queue_head_line) = planning_projection.queue_head_line.as_deref() {
+                lines.push(Line::from(queue_head_line.to_string()));
             }
-            if let Some(failure_summary) = planning_summary.failure_summary.as_deref() {
-                lines.push(Line::from(format!(
-                    "last planning failure: {}",
-                    compact_inline_detail(failure_summary, FOLLOWUP_PLANNING_DETAIL_LIMIT)
-                )));
+            if let Some(failure_line) = planning_projection.failure_line.as_deref() {
+                lines.push(Line::from(failure_line.to_string()));
             }
             if let Some(planning_notice_summary) =
                 conversation.planning_notice_summary(FOLLOWUP_PLANNING_DETAIL_LIMIT)

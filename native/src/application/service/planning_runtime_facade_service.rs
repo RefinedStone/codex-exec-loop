@@ -7,14 +7,15 @@ use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
 use crate::application::service::planning_runtime_policy_service::{
-    PlanningAutoFollowBlockReason, PlanningRuntimePolicyService, PlanningRuntimePreviewView,
-    PlanningRuntimeSummaryRequest, PlanningRuntimeSummaryView,
+    PlanningAutoFollowBlockReason, PlanningRuntimePolicyService, PlanningRuntimeSummaryRequest,
+    PlanningRuntimeSummaryView,
 };
 use crate::application::service::turn_prompt_assembly_service::{
     AutoFollowPromptAssemblyRequest, AutoFollowPromptPreviewRequest, ManualPromptAssemblyRequest,
     TurnPromptAssemblyService,
 };
 use crate::domain::followup_template::FollowupTemplateDefinition;
+use crate::domain::planning::PlanningWorkspaceState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeAutoFollowRequest<'a> {
@@ -47,7 +48,44 @@ pub enum PlanningRuntimeAutoFollowDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeRenderedPreview {
     pub rendered_prompt: String,
-    pub planning_view: PlanningRuntimePreviewView,
+    pub planning_status_line: String,
+    pub planning_detail_line: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanningRuntimeRepairAttempt {
+    pub attempts_used: usize,
+    pub max_attempts: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanningRuntimeSummaryLineRequest<'a> {
+    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub has_running_turn: bool,
+    pub is_repairing: bool,
+    pub repair_failure_summary: Option<&'a str>,
+    pub repair_attempt: Option<PlanningRuntimeRepairAttempt>,
+    pub has_notice: bool,
+    pub max_detail_len: usize,
+    pub always_show: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanningRuntimeStatusProjectionRequest<'a> {
+    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub has_running_turn: bool,
+    pub is_repairing: bool,
+    pub repair_failure_summary: Option<&'a str>,
+    pub repair_attempt: Option<PlanningRuntimeRepairAttempt>,
+    pub max_detail_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningRuntimeStatusProjection {
+    pub planning_status_line: String,
+    pub repair_attempt_line: Option<String>,
+    pub queue_head_line: Option<String>,
+    pub failure_line: Option<String>,
 }
 
 #[derive(Clone)]
@@ -128,6 +166,9 @@ impl PlanningRuntimeFacadeService {
         &self,
         request: PlanningRuntimePreviewRequest<'_>,
     ) -> PlanningRuntimeRenderedPreview {
+        let planning_view = self
+            .planning_runtime_policy_service
+            .build_preview_view(request.template, request.snapshot);
         PlanningRuntimeRenderedPreview {
             rendered_prompt: self
                 .turn_prompt_assembly_service
@@ -140,9 +181,10 @@ impl PlanningRuntimeFacadeService {
                     last_message: request.last_message,
                     planning_prompt_fragment: request.snapshot.prompt_fragment(),
                 }),
-            planning_view: self
-                .planning_runtime_policy_service
-                .build_preview_view(request.template, request.snapshot),
+            planning_status_line: format!("planning: {}", planning_view.status_label),
+            planning_detail_line: planning_view
+                .detail
+                .map(|detail| format!("planning detail: {detail}")),
         }
     }
 
@@ -152,6 +194,103 @@ impl PlanningRuntimeFacadeService {
     ) -> PlanningRuntimeSummaryView {
         self.planning_runtime_policy_service
             .build_summary_view(request)
+    }
+
+    pub fn build_summary_line(
+        &self,
+        request: PlanningRuntimeSummaryLineRequest<'_>,
+    ) -> Option<String> {
+        let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
+            snapshot: request.snapshot,
+            has_running_turn: request.has_running_turn,
+            is_repairing: request.is_repairing,
+            repair_failure_summary: request.repair_failure_summary,
+        });
+        let planning_state = summary.workspace_state;
+        if !request.always_show
+            && planning_state == PlanningWorkspaceState::Uninitialized
+            && !request.has_notice
+        {
+            return None;
+        }
+
+        let mut segments = vec![format!("planning: {}", summary.status_label)];
+        if let Some(repair_attempt) = request.repair_attempt {
+            segments.push(format!(
+                "repair: {}/{}",
+                repair_attempt.attempts_used, repair_attempt.max_attempts
+            ));
+        }
+
+        match planning_state {
+            PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
+                if let Some(queue_summary) = summary.queue_summary.as_deref() {
+                    segments.push(format!(
+                        "queue: {}",
+                        compact_projection_detail(queue_summary, request.max_detail_len)
+                    ));
+                }
+            }
+            PlanningWorkspaceState::Repairing => {
+                if let Some(failure_summary) = summary.failure_summary.as_deref() {
+                    segments.push(format!(
+                        "failure: {}",
+                        compact_projection_detail(failure_summary, request.max_detail_len)
+                    ));
+                }
+                if let Some(queue_summary) = summary.queue_summary.as_deref() {
+                    segments.push(format!(
+                        "queue: {}",
+                        compact_projection_detail(queue_summary, request.max_detail_len)
+                    ));
+                }
+            }
+            PlanningWorkspaceState::BlockedInvalid => {
+                if let Some(failure_summary) = summary.failure_summary.as_deref() {
+                    segments.push(format!(
+                        "failure: {}",
+                        compact_projection_detail(failure_summary, request.max_detail_len)
+                    ));
+                }
+            }
+            PlanningWorkspaceState::Uninitialized | PlanningWorkspaceState::Authoring => {}
+        }
+
+        Some(segments.join("  |  "))
+    }
+
+    pub fn build_followup_status_projection(
+        &self,
+        request: PlanningRuntimeStatusProjectionRequest<'_>,
+    ) -> PlanningRuntimeStatusProjection {
+        let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
+            snapshot: request.snapshot,
+            has_running_turn: request.has_running_turn,
+            is_repairing: request.is_repairing,
+            repair_failure_summary: request.repair_failure_summary,
+        });
+
+        PlanningRuntimeStatusProjection {
+            planning_status_line: format!("planning status: {}", summary.status_label),
+            repair_attempt_line: request.repair_attempt.map(|repair_attempt| {
+                format!(
+                    "planning repair attempt: {}/{}",
+                    repair_attempt.attempts_used, repair_attempt.max_attempts
+                )
+            }),
+            queue_head_line: summary.queue_summary.as_deref().map(|queue_summary| {
+                format!(
+                    "planning queue head: {}",
+                    compact_projection_detail(queue_summary, request.max_detail_len)
+                )
+            }),
+            failure_line: summary.failure_summary.as_deref().map(|failure_summary| {
+                format!(
+                    "last planning failure: {}",
+                    compact_projection_detail(failure_summary, request.max_detail_len)
+                )
+            }),
+        }
     }
 
     pub fn load_execution_snapshot(
@@ -178,6 +317,17 @@ impl PlanningRuntimeFacadeService {
     }
 }
 
+fn compact_projection_detail(text: &str, max_len: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_len {
+        return compact;
+    }
+
+    let keep = max_len.saturating_sub(3);
+    let truncated = compact.chars().take(keep).collect::<String>();
+    format!("{truncated}...")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -186,7 +336,8 @@ mod tests {
 
     use super::{
         PlanningRuntimeAutoFollowDecision, PlanningRuntimeAutoFollowRequest,
-        PlanningRuntimeFacadeService, PlanningRuntimePreviewRequest,
+        PlanningRuntimeFacadeService, PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
+        PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
@@ -405,10 +556,75 @@ mod tests {
         });
 
         assert!(preview.rendered_prompt.contains("session=draft-thread"));
-        assert_eq!(preview.planning_view.status_label, "ready");
+        assert_eq!(preview.planning_status_line, "planning: ready");
         assert_eq!(
-            preview.planning_view.detail.as_deref(),
-            Some("next task: rank 1 / task-1")
+            preview.planning_detail_line.as_deref(),
+            Some("planning detail: next task: rank 1 / task-1")
+        );
+    }
+
+    #[test]
+    fn build_summary_line_compacts_queue_and_failure_segments() {
+        let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
+        let snapshot = ready_snapshot();
+
+        let summary_line = service.build_summary_line(PlanningRuntimeSummaryLineRequest {
+            snapshot: &snapshot,
+            has_running_turn: false,
+            is_repairing: true,
+            repair_failure_summary: Some(
+                "task-ledger.json is missing direction_id and contains extra trailing data",
+            ),
+            repair_attempt: Some(PlanningRuntimeRepairAttempt {
+                attempts_used: 1,
+                max_attempts: 2,
+            }),
+            has_notice: true,
+            max_detail_len: 24,
+            always_show: true,
+        });
+
+        let summary_line = summary_line.expect("summary line should be projected");
+        assert!(summary_line.contains("planning: repairing"));
+        assert!(summary_line.contains("repair: 1/2"));
+        assert!(summary_line.contains("failure: task-ledger.json is m..."));
+        assert!(summary_line.contains("queue: next task: rank 1 / t..."));
+    }
+
+    #[test]
+    fn build_followup_status_projection_formats_planning_lines() {
+        let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
+        let projection =
+            service.build_followup_status_projection(PlanningRuntimeStatusProjectionRequest {
+                snapshot: &ready_snapshot(),
+                has_running_turn: false,
+                is_repairing: true,
+                repair_failure_summary: Some("task-ledger.json is missing direction_id"),
+                repair_attempt: Some(PlanningRuntimeRepairAttempt {
+                    attempts_used: 1,
+                    max_attempts: 2,
+                }),
+                max_detail_len: 30,
+            });
+
+        assert_eq!(
+            projection.planning_status_line,
+            "planning status: repairing"
+        );
+        assert_eq!(
+            projection.repair_attempt_line.as_deref(),
+            Some("planning repair attempt: 1/2")
+        );
+        assert_eq!(
+            projection.queue_head_line.as_deref(),
+            Some("planning queue head: next task: rank 1 / task-1")
+        );
+        assert!(
+            projection
+                .failure_line
+                .as_deref()
+                .expect("failure line should exist")
+                .starts_with("last planning failure: task-ledger.json is mi")
         );
     }
 }
