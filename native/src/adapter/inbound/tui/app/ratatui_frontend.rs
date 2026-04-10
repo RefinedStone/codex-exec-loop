@@ -292,8 +292,10 @@ mod tests {
     use ratatui::text::Line;
 
     use super::{InlineHistoryState, InlineViewportState, current_inline_history_lines};
+    use crate::adapter::inbound::tui::app::planning_services::PlanningServices;
     use crate::adapter::inbound::tui::app::{MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp};
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
+    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
@@ -558,6 +560,9 @@ mod tests {
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
             FollowupTemplateService::new(followup_port),
+            PlanningServices::from_workspace_port(Arc::new(
+                FilesystemPlanningWorkspaceAdapter::new(),
+            )),
         )
     }
 }

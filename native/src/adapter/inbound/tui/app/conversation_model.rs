@@ -1,9 +1,14 @@
 use ratatui::text::Line;
 
-use crate::application::service::planning_prompt_service::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+use super::{
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
+    format_conversation_lines,
 };
+use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
+use crate::application::service::planning_runtime_policy_service::{
+    PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
+};
 use crate::application::service::turn_prompt_assembly_service::{
     AutoFollowPromptAssemblyRequest, TurnPromptAssemblyService,
 };
@@ -13,12 +18,6 @@ use crate::domain::conversation::{
 };
 use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
-};
-use crate::domain::planning::PlanningWorkspaceState;
-
-use super::{
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
-    format_conversation_lines,
 };
 
 #[derive(Debug, Clone)]
@@ -66,6 +65,7 @@ pub(crate) enum AutoFollowupSkipReason {
     StopKeywordMatched,
     NoFileChanges,
     PlanningBlocked,
+    PlanningQueueHeadRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +113,10 @@ impl AutoFollowupSkipReason {
                 "planning files are invalid or incomplete; auto follow-up stays paused until they validate"
                     .to_string()
             }
+            Self::PlanningQueueHeadRequired => {
+                "the selected auto follow-up template requires an actionable planning queue head"
+                    .to_string()
+            }
         }
     }
 
@@ -125,6 +129,7 @@ impl AutoFollowupSkipReason {
             Self::StopKeywordMatched => "stopped: stop keyword matched",
             Self::NoFileChanges => "stopped: no file changes",
             Self::PlanningBlocked => "paused: planning files invalid",
+            Self::PlanningQueueHeadRequired => "paused: planning queue empty",
         }
     }
 
@@ -150,6 +155,10 @@ impl AutoFollowupSkipReason {
             }
             Self::PlanningBlocked => {
                 "turn completed / auto follow-up paused: planning files invalid".to_string()
+            }
+            Self::PlanningQueueHeadRequired => {
+                "turn completed / auto follow-up paused: planning queue has no next task"
+                    .to_string()
             }
         }
     }
@@ -739,47 +748,6 @@ impl ConversationViewModel {
         })
     }
 
-    pub(crate) fn planning_workspace_state(&self) -> PlanningWorkspaceState {
-        if self.planning_repair_state.is_some() {
-            return PlanningWorkspaceState::Repairing;
-        }
-
-        match self.planning_runtime_snapshot.workspace_status() {
-            PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningWorkspaceState::Uninitialized,
-            PlanningRuntimeWorkspaceStatus::Invalid => PlanningWorkspaceState::BlockedInvalid,
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            | PlanningRuntimeWorkspaceStatus::ReadyWithTask
-                if self.has_running_turn() =>
-            {
-                PlanningWorkspaceState::Executing
-            }
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            | PlanningRuntimeWorkspaceStatus::ReadyWithTask => PlanningWorkspaceState::Ready,
-        }
-    }
-
-    pub(crate) fn planning_status_label(&self) -> &'static str {
-        match self.planning_workspace_state() {
-            PlanningWorkspaceState::Uninitialized => "inactive",
-            PlanningWorkspaceState::Authoring => "authoring",
-            PlanningWorkspaceState::Ready => "valid",
-            PlanningWorkspaceState::Executing => "stale",
-            PlanningWorkspaceState::Repairing => "repairing",
-            PlanningWorkspaceState::BlockedInvalid => "invalid",
-        }
-    }
-
-    pub(crate) fn planning_queue_summary(&self) -> Option<&str> {
-        self.planning_runtime_snapshot.queue_summary()
-    }
-
-    pub(crate) fn planning_failure_summary(&self) -> Option<&str> {
-        self.planning_repair_state
-            .as_ref()
-            .map(|state| state.latest_request.failure_summary.as_str())
-            .or_else(|| self.planning_runtime_snapshot.failure_reason())
-    }
-
     pub(crate) fn planning_notice_summary(&self, max_detail_len: usize) -> Option<String> {
         let planning_notices = self
             .runtime_notices
@@ -1101,6 +1069,7 @@ impl ConversationViewModel {
     pub(crate) fn decide_auto_followup(
         &self,
         turn_prompt_assembly_service: &TurnPromptAssemblyService,
+        planning_runtime_policy_service: &PlanningRuntimePolicyService,
     ) -> AutoFollowupDecision {
         if !self.auto_follow_state.enabled {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
@@ -1135,8 +1104,18 @@ impl ConversationViewModel {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
         }
 
-        if self.planning_runtime_snapshot.blocks_auto_followup() {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked);
+        if let Some(block_reason) = planning_runtime_policy_service.auto_follow_block_reason(
+            self.auto_follow_state.selected_template(),
+            &self.planning_runtime_snapshot,
+        ) {
+            return AutoFollowupDecision::Skip(match block_reason {
+                PlanningAutoFollowBlockReason::InvalidWorkspace => {
+                    AutoFollowupSkipReason::PlanningBlocked
+                }
+                PlanningAutoFollowBlockReason::ActionableQueueRequired => {
+                    AutoFollowupSkipReason::PlanningQueueHeadRequired
+                }
+            });
         }
 
         AutoFollowupDecision::QueuePrompt(turn_prompt_assembly_service.build_auto_follow_prompt(

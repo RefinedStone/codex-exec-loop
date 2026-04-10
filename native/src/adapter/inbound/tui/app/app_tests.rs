@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use super::conversation_model::PlanningRepairState;
+use super::planning_services::PlanningServices;
 use super::shell_presentation::{
     build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
 };
@@ -27,6 +28,7 @@ use super::{
     build_transcript_panel_view, build_transcript_title, format_conversation_lines, shell_layout,
     startup_ascii_art_enabled_from_value,
 };
+use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
@@ -149,6 +151,7 @@ fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port.clone()),
         FollowupTemplateService::new(followup_port),
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
     );
     app.show_startup_ascii_art = false;
 
@@ -2933,6 +2936,27 @@ fn followup_template_preview_uses_placeholder_without_agent_reply() {
 }
 
 #[test]
+fn followup_template_preview_surfaces_queue_empty_for_builtin_next_task() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready(
+        "Planning Context".to_string(),
+        "next_task: none".to_string(),
+        None,
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_followup_template_preview_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning: queue-empty"));
+    assert!(rendered.contains("selected template requires an actionable planning queue head"));
+}
+
+#[test]
 fn followup_template_overlay_navigation_updates_selection() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::Ready(ready_conversation());
@@ -3737,6 +3761,10 @@ fn auto_followup_skip_reason_is_visible_in_status_footer() {
 fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
+    ));
     conversation.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
         summary: "stopped: auto follow-up off".to_string(),
         detail: "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
@@ -3774,6 +3802,10 @@ fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
 fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
+    ));
     conversation
         .turn_activity
         .last_completed_turn_file_change_count = 1;

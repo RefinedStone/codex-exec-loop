@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
 use crate::adapter::outbound::filesystem_followup_template_adapter::FilesystemFollowupTemplateAdapter;
+use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
 use crate::application::port::outbound::followup_template_port::FollowupTemplatePort;
 use crate::application::service::conversation_service::ConversationService;
@@ -13,6 +14,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 
 use super::github_polling::GithubReviewPollingBootstrap;
+use super::planning_services::PlanningServices;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
 use super::{NativeTuiApp, ShellChromeEvent};
@@ -34,11 +36,14 @@ fn build_default_app() -> NativeTuiApp {
     let session_service = SessionService::new(codex_app_server_port.clone());
     let conversation_service = ConversationService::new(codex_app_server_port);
     let followup_template_service = FollowupTemplateService::new(followup_template_port);
+    let planning_services =
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
     let mut app = NativeTuiApp::new(
         startup_service,
         session_service,
         conversation_service,
         followup_template_service,
+        planning_services,
     );
     let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
     app.configure_github_review_polling(GithubReviewPollingBootstrap::from_environment(
@@ -63,6 +68,7 @@ mod tests {
 
     use super::*;
     use crate::adapter::inbound::tui::shell_chrome::StartupState;
+    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
@@ -142,6 +148,9 @@ mod tests {
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
             FollowupTemplateService::new(followup_port),
+            PlanningServices::from_workspace_port(Arc::new(
+                FilesystemPlanningWorkspaceAdapter::new(),
+            )),
         )
     }
 

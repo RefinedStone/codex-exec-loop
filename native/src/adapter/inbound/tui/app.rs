@@ -16,11 +16,7 @@ use crate::application::service::followup_template_service::{
     FollowupTemplateReloadResult, FollowupTemplateService,
 };
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::planning_init_service::PlanningInitService;
-use crate::application::service::planning_prompt_service::PlanningPromptService;
-use crate::application::service::planning_reconciliation_service::{
-    PlanningExecutionSnapshot, PlanningReconciliationService,
-};
+use crate::application::service::planning_reconciliation_service::PlanningExecutionSnapshot;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -73,6 +69,8 @@ mod inline_shell_commands;
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
+#[path = "app/planning_services.rs"]
+mod planning_services;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/session_browser.rs"]
@@ -127,6 +125,7 @@ use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningInitOverlayUiState,
 };
+use planning_services::PlanningServices;
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
@@ -190,9 +189,7 @@ struct NativeTuiApp {
     session_service: SessionService,
     conversation_service: ConversationService,
     followup_template_service: FollowupTemplateService,
-    planning_init_service: PlanningInitService,
-    planning_prompt_service: PlanningPromptService,
-    planning_reconciliation_service: PlanningReconciliationService,
+    planning_services: PlanningServices,
     active_turn_planning_snapshot: Option<ActiveTurnPlanningSnapshot>,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,

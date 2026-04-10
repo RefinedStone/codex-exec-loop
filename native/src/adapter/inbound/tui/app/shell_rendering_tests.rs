@@ -8,6 +8,8 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 
 use super::*;
+use crate::adapter::inbound::tui::app::planning_services::PlanningServices;
+use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
@@ -396,6 +398,7 @@ fn make_test_app() -> NativeTuiApp {
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
         FollowupTemplateService::new(followup_port),
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
     );
     app.show_startup_ascii_art = false;
     app

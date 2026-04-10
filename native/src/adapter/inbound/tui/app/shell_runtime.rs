@@ -238,6 +238,8 @@ mod tests {
     use crossterm::event::KeyEventState;
 
     use super::*;
+    use crate::adapter::inbound::tui::app::planning_services::PlanningServices;
+    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
@@ -345,6 +347,9 @@ mod tests {
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
             FollowupTemplateService::new(followup_port),
+            PlanningServices::from_workspace_port(Arc::new(
+                FilesystemPlanningWorkspaceAdapter::new(),
+            )),
         );
 
         ShellRuntime::new(app, frontend_mode)

@@ -182,7 +182,8 @@ impl NativeTuiApp {
     pub(super) fn open_planning_manual_editor(&mut self) {
         let workspace_directory = self.current_workspace_directory();
         self.open_guided_planning_editor_session(
-            self.planning_init_service
+            self.planning_services
+                .init_service
                 .stage_manual_editor_session(&workspace_directory),
             "planning draft editor ready",
             PlanningInitModeSelection::Detail,
@@ -201,7 +202,7 @@ impl NativeTuiApp {
             .clear_close_confirmation();
         let workspace_directory = self.current_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self.planning_init_service.save_draft_editor_files(
+        let status_text = match self.planning_services.init_service.save_draft_editor_files(
             &workspace_directory,
             &draft_name,
             &editable_files,
@@ -244,11 +245,11 @@ impl NativeTuiApp {
             .clear_close_confirmation();
         let workspace_directory = self.current_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self.planning_init_service.promote_draft_editor_files(
-            &workspace_directory,
-            &draft_name,
-            &editable_files,
-        ) {
+        let status_text = match self
+            .planning_services
+            .init_service
+            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
+        {
             Ok(result) => {
                 let validation_ok = result.validation_report.is_valid();
                 self.planning_draft_editor_ui_state
@@ -343,7 +344,8 @@ impl NativeTuiApp {
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
         let workspace_directory = self.current_workspace_directory();
         let status_text = match self
-            .planning_init_service
+            .planning_services
+            .init_service
             .stage_simple_mode_draft(&workspace_directory)
         {
             Ok(stage_result) => {
@@ -378,7 +380,8 @@ impl NativeTuiApp {
         };
         let workspace_directory = self.current_workspace_directory();
         self.open_guided_planning_editor_session(
-            self.planning_init_service
+            self.planning_services
+                .init_service
                 .load_manual_editor_session(&workspace_directory, &draft_name),
             "planning simple draft editor ready",
             PlanningInitModeSelection::Simple,
@@ -395,7 +398,8 @@ impl NativeTuiApp {
         };
         let workspace_directory = self.current_workspace_directory();
         let status_text = match self
-            .planning_init_service
+            .planning_services
+            .init_service
             .promote_staged_draft(&workspace_directory, &draft_name)
         {
             Ok(result) => {
@@ -722,9 +726,8 @@ impl NativeTuiApp {
         &self,
         workspace_directory: &str,
     ) -> PlanningRuntimeSnapshot {
-        self.planning_prompt_service
+        self.planning_services
             .load_runtime_snapshot(workspace_directory)
-            .unwrap_or_else(|error| planning_runtime_snapshot_load_failed(error.to_string()))
     }
 
     pub(super) fn refresh_ready_conversation_planning_runtime_snapshot(&mut self) {
@@ -1263,10 +1266,6 @@ impl NativeTuiApp {
             status_text,
         });
     }
-}
-
-pub(super) fn planning_runtime_snapshot_load_failed(error: String) -> PlanningRuntimeSnapshot {
-    PlanningRuntimeSnapshot::invalid(format!("failed to load planning workspace: {error}"))
 }
 
 fn planning_manual_editor_close_warning_status(risk: PlanningDraftEditorCloseRisk) -> String {

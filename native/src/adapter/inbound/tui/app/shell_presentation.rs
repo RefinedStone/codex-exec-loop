@@ -1,9 +1,8 @@
 use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
+use crate::application::service::planning_runtime_policy_service::PlanningRuntimeSummaryRequest;
 use crate::application::service::session_service::SessionProjectFilter;
-use crate::application::service::turn_prompt_assembly_service::{
-    AutoFollowPromptPreviewRequest, TurnPromptAssemblyService,
-};
+use crate::application::service::turn_prompt_assembly_service::AutoFollowPromptPreviewRequest;
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::{PlanningValidationSeverity, PlanningWorkspaceState};
 
@@ -996,7 +995,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
             lines.push(Line::from(status_segments.join("  |  ")));
 
             if let Some(planning_line) =
-                build_planning_summary_line(conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
+                build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
             {
                 lines.push(Line::from(planning_line));
             }
@@ -1083,9 +1082,12 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
                 status_segments.push(format!("gh: {}", github_review_polling_status_label(app)));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
-            if let Some(planning_line) =
-                build_planning_summary_line(conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
-            {
+            if let Some(planning_line) = build_planning_summary_line(
+                app,
+                conversation,
+                INLINE_TAIL_PLANNING_DETAIL_LIMIT,
+                false,
+            ) {
                 lines.push(Line::from(planning_line));
             }
             if let Some(planning_notice_line) =
@@ -1314,11 +1316,13 @@ fn compact_live_agent_line(text: &str, max_len: usize) -> String {
 }
 
 fn build_planning_summary_line(
+    app: &NativeTuiApp,
     conversation: &ConversationViewModel,
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<String> {
-    let planning_state = conversation.planning_workspace_state();
+    let planning_summary = planning_summary_view(app, conversation);
+    let planning_state = planning_summary.workspace_state;
     if !always_show
         && planning_state == PlanningWorkspaceState::Uninitialized
         && conversation
@@ -1328,10 +1332,7 @@ fn build_planning_summary_line(
         return None;
     }
 
-    let mut segments = vec![format!(
-        "planning: {}",
-        conversation.planning_status_label()
-    )];
+    let mut segments = vec![format!("planning: {}", planning_summary.status_label)];
     if let Some(repair_state) = conversation.planning_repair_state.as_ref() {
         segments.push(format!(
             "repair: {}/{}",
@@ -1341,7 +1342,7 @@ fn build_planning_summary_line(
 
     match planning_state {
         PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
-            if let Some(queue_summary) = conversation.planning_queue_summary() {
+            if let Some(queue_summary) = planning_summary.queue_summary.as_deref() {
                 segments.push(format!(
                     "queue: {}",
                     compact_inline_detail(queue_summary, max_detail_len)
@@ -1349,13 +1350,13 @@ fn build_planning_summary_line(
             }
         }
         PlanningWorkspaceState::Repairing => {
-            if let Some(failure_summary) = conversation.planning_failure_summary() {
+            if let Some(failure_summary) = planning_summary.failure_summary.as_deref() {
                 segments.push(format!(
                     "failure: {}",
                     compact_inline_detail(failure_summary, max_detail_len)
                 ));
             }
-            if let Some(queue_summary) = conversation.planning_queue_summary() {
+            if let Some(queue_summary) = planning_summary.queue_summary.as_deref() {
                 segments.push(format!(
                     "queue: {}",
                     compact_inline_detail(queue_summary, max_detail_len)
@@ -1363,7 +1364,7 @@ fn build_planning_summary_line(
             }
         }
         PlanningWorkspaceState::BlockedInvalid => {
-            if let Some(failure_summary) = conversation.planning_failure_summary() {
+            if let Some(failure_summary) = planning_summary.failure_summary.as_deref() {
                 segments.push(format!(
                     "failure: {}",
                     compact_inline_detail(failure_summary, max_detail_len)
@@ -1383,6 +1384,23 @@ fn build_planning_notice_line(
     conversation
         .planning_notice_summary(max_detail_len)
         .map(|summary| format!("planning notice: {summary}"))
+}
+
+fn planning_summary_view(
+    app: &NativeTuiApp,
+    conversation: &ConversationViewModel,
+) -> crate::application::service::planning_runtime_policy_service::PlanningRuntimeSummaryView {
+    app.planning_services
+        .policy_service
+        .build_summary_view(PlanningRuntimeSummaryRequest {
+            snapshot: &conversation.planning_runtime_snapshot,
+            has_running_turn: conversation.has_running_turn(),
+            is_repairing: conversation.planning_repair_state.is_some(),
+            repair_failure_summary: conversation
+                .planning_repair_state
+                .as_ref()
+                .map(|state| state.latest_request.failure_summary.as_str()),
+        })
 }
 
 fn build_operator_notice_line(
@@ -1661,13 +1679,19 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => {
             let template = conversation.auto_follow_state.selected_template();
+            let planning_preview = app
+                .planning_services
+                .policy_service
+                .build_preview_view(template, &conversation.planning_runtime_snapshot);
             let preview_thread_id = if conversation.thread_id.trim().is_empty() {
                 "draft-thread"
             } else {
                 conversation.thread_id.as_str()
             };
             let latest_agent_message = conversation.latest_agent_message_text();
-            let rendered_preview = TurnPromptAssemblyService::new()
+            let rendered_preview = app
+                .planning_services
+                .turn_prompt_assembly_service
                 .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
                     template,
                     auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
@@ -1697,11 +1721,9 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             }
             lines.push(Line::from(format!(
                 "planning: {}",
-                conversation
-                    .planning_runtime_snapshot
-                    .preview_status_label()
+                planning_preview.status_label
             )));
-            if let Some(detail) = conversation.planning_runtime_snapshot.preview_detail() {
+            if let Some(detail) = planning_preview.detail.as_deref() {
                 lines.push(Line::from(format!("planning detail: {detail}")));
             }
 
@@ -1734,6 +1756,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
                 app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
+            let planning_summary = planning_summary_view(app, conversation);
             let mut lines = vec![
                 Line::from(format!(
                     "auto follow-up: {}",
@@ -1757,7 +1780,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 )),
                 Line::from(format!(
                     "planning status: {}",
-                    conversation.planning_status_label()
+                    planning_summary.status_label
                 )),
                 Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
@@ -1788,13 +1811,13 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     repair_state.attempts_used, repair_state.max_attempts
                 )));
             }
-            if let Some(queue_summary) = conversation.planning_queue_summary() {
+            if let Some(queue_summary) = planning_summary.queue_summary.as_deref() {
                 lines.push(Line::from(format!(
                     "planning queue head: {}",
                     compact_inline_detail(queue_summary, FOLLOWUP_PLANNING_DETAIL_LIMIT)
                 )));
             }
-            if let Some(failure_summary) = conversation.planning_failure_summary() {
+            if let Some(failure_summary) = planning_summary.failure_summary.as_deref() {
                 lines.push(Line::from(format!(
                     "last planning failure: {}",
                     compact_inline_detail(failure_summary, FOLLOWUP_PLANNING_DETAIL_LIMIT)

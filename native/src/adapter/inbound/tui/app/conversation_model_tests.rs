@@ -4,7 +4,7 @@ use super::{
     TurnActivityState, format_conversation_lines,
 };
 use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
+use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
 use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
@@ -13,7 +13,7 @@ use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
     FollowupTemplateSource,
 };
-use crate::domain::planning::{PlanningWorkspaceState, PriorityQueueTask, TaskStatus};
+use crate::domain::planning::{PriorityQueueTask, TaskStatus};
 
 fn sample_template_catalog() -> FollowupTemplateCatalog {
     FollowupTemplateCatalog {
@@ -74,6 +74,10 @@ fn turn_prompt_assembly_service() -> TurnPromptAssemblyService {
     TurnPromptAssemblyService::new()
 }
 
+fn planning_runtime_policy_service() -> PlanningRuntimePolicyService {
+    PlanningRuntimePolicyService::new()
+}
+
 fn sample_queue_head() -> PriorityQueueTask {
     PriorityQueueTask {
         rank: 1,
@@ -102,6 +106,10 @@ fn sample_planning_runtime_snapshot(
 #[test]
 fn auto_followup_prompt_renders_builtin_template() {
     let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
+    ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -109,9 +117,10 @@ fn auto_followup_prompt_renders_builtin_template() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&turn_prompt_assembly_service())
-    else {
+    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup(
+        &turn_prompt_assembly_service(),
+        &planning_runtime_policy_service(),
+    ) else {
         panic!("auto follow-up prompt should render");
     };
 
@@ -271,7 +280,10 @@ fn auto_followup_prompt_skips_when_manual_input_is_buffered() {
     conversation.input_buffer = "manual prompt".to_string();
 
     assert_eq!(
-        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
     );
 }
@@ -300,9 +312,10 @@ fn auto_followup_prompt_uses_selected_template_item() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&turn_prompt_assembly_service())
-    else {
+    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup(
+        &turn_prompt_assembly_service(),
+        &planning_runtime_policy_service(),
+    ) else {
         panic!("plan queue prompt should render");
     };
 
@@ -412,7 +425,10 @@ fn auto_followup_stops_when_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -428,7 +444,10 @@ fn auto_followup_stops_when_stop_keyword_case_varies() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -447,7 +466,10 @@ fn auto_followup_stops_when_custom_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -467,7 +489,10 @@ fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
     );
 }
@@ -475,6 +500,10 @@ fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
 #[test]
 fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
+    ));
     conversation
         .auto_follow_state
         .stop_rules
@@ -489,9 +518,10 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&turn_prompt_assembly_service())
-    else {
+    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup(
+        &turn_prompt_assembly_service(),
+        &planning_runtime_policy_service(),
+    ) else {
         panic!("auto follow-up should continue when file changes exist");
     };
 
@@ -512,9 +542,10 @@ fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&turn_prompt_assembly_service())
-    else {
+    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup(
+        &turn_prompt_assembly_service(),
+        &planning_runtime_policy_service(),
+    ) else {
         panic!("planning-aware auto follow-up prompt should render");
     };
 
@@ -537,62 +568,35 @@ fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
     );
 }
 
 #[test]
-fn planning_workspace_state_marks_ready_context_as_stale_during_running_turn() {
+fn builtin_next_task_skips_when_planning_queue_has_no_next_task() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context",
-        "next task: task-1",
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready(
+        "Planning Context".to_string(),
+        "next_task: none".to_string(),
+        None,
     ));
-    conversation.input_state = ConversationInputState::StreamingTurn;
-    conversation.active_turn_id = Some("turn-1".to_string());
-
-    assert_eq!(
-        conversation.planning_workspace_state(),
-        PlanningWorkspaceState::Executing
-    );
-    assert_eq!(conversation.planning_status_label(), "stale");
-    assert_eq!(
-        conversation.planning_queue_summary(),
-        Some("next task: task-1")
-    );
-}
-
-#[test]
-fn planning_workspace_state_prefers_repairing_failure_over_ready_queue_context() {
-    let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context",
-        "next task: task-1",
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
     ));
-    conversation.planning_repair_state = Some(super::PlanningRepairState {
-        root_turn_id: "turn-root".to_string(),
-        attempts_used: 1,
-        max_attempts: 2,
-        latest_request: PlanningRepairRequest {
-            failure_summary: "task-ledger.json is missing direction_id".to_string(),
-            validation_errors: vec!["task-ledger.json is missing direction_id".to_string()],
-            directions_toml: "version = 1".to_string(),
-            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
-            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
-            rejected_task_ledger_json: None,
-            rejected_archive_path: None,
-        },
-    });
 
     assert_eq!(
-        conversation.planning_workspace_state(),
-        PlanningWorkspaceState::Repairing
-    );
-    assert_eq!(conversation.planning_status_label(), "repairing");
-    assert_eq!(
-        conversation.planning_failure_summary(),
-        Some("task-ledger.json is missing direction_id")
+        conversation.decide_auto_followup(
+            &turn_prompt_assembly_service(),
+            &planning_runtime_policy_service(),
+        ),
+        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
 }
 

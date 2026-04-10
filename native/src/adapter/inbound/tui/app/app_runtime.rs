@@ -1,30 +1,20 @@
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
-use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
-use crate::application::service::planning_init_service::PlanningInitService;
-use crate::application::service::planning_prompt_service::PlanningPromptService;
 use crate::application::service::planning_reconciliation_service::{
-    PlanningReconciliationResult, PlanningReconciliationService, PlanningRepairRetryReason,
-    build_planning_repair_prompt,
+    PlanningReconciliationResult, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
-use crate::application::service::planning_validation_service::PlanningValidationService;
-use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::application::service::turn_prompt_assembly_service::{
-    ManualPromptAssemblyRequest, TurnPromptAssemblyService,
-};
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::conversation_model::PlanningRepairState;
+use super::planning_services::PlanningServices;
 use super::{
     ActiveTurnPlanningSnapshot, AutoFollowupSubmitContext, ConversationInputEvent,
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
@@ -73,34 +63,18 @@ impl NativeTuiApp {
         session_service: SessionService,
         conversation_service: ConversationService,
         followup_template_service: FollowupTemplateService,
+        planning_services: PlanningServices,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let workspace_directory = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
-        let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let planning_prompt_service = PlanningPromptService::new(
-            planning_workspace_port.clone(),
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
-        );
-        let planning_reconciliation_service = PlanningReconciliationService::new(
-            planning_workspace_port.clone(),
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
-        );
         let mut initial_conversation = ConversationViewModel::new_draft(
             workspace_directory.clone(),
             followup_template_service.load_catalog(&workspace_directory),
         );
         initial_conversation.replace_planning_runtime_snapshot(
-            planning_prompt_service
-                .load_runtime_snapshot(&workspace_directory)
-                .unwrap_or_else(|error| {
-                    super::shell_controller::planning_runtime_snapshot_load_failed(
-                        error.to_string(),
-                    )
-                }),
+            planning_services.load_runtime_snapshot(&workspace_directory),
         );
         Self {
             shell_overlay: ShellOverlay::Hidden,
@@ -119,13 +93,7 @@ impl NativeTuiApp {
             session_service,
             conversation_service,
             followup_template_service,
-            planning_init_service: PlanningInitService::new(
-                planning_workspace_port.clone(),
-                PlanningBootstrapService::new(),
-                PlanningValidationService::new(),
-            ),
-            planning_prompt_service,
-            planning_reconciliation_service,
+            planning_services,
             active_turn_planning_snapshot: None,
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
@@ -514,8 +482,10 @@ impl NativeTuiApp {
             return;
         }
 
-        let turn_prompt_assembly_service = TurnPromptAssemblyService::new();
-        match conversation.decide_auto_followup(&turn_prompt_assembly_service) {
+        match conversation.decide_auto_followup(
+            &self.planning_services.turn_prompt_assembly_service,
+            &self.planning_services.policy_service,
+        ) {
             super::AutoFollowupDecision::QueuePrompt(prompt) => {
                 conversation.clear_auto_followup_skip();
                 let template_label = conversation.auto_follow_state.template_label().to_string();
@@ -556,7 +526,8 @@ impl NativeTuiApp {
         workspace_directory: &str,
     ) -> ActiveTurnPlanningSnapshot {
         match self
-            .planning_reconciliation_service
+            .planning_services
+            .reconciliation_service
             .load_execution_snapshot(workspace_directory)
         {
             Ok(snapshot) => ActiveTurnPlanningSnapshot::Ready(snapshot),
@@ -606,7 +577,7 @@ impl NativeTuiApp {
             }
         };
 
-        match self.planning_reconciliation_service.reconcile_after_turn(
+        match self.planning_services.reconciliation_service.reconcile_after_turn(
             workspace_directory,
             turn_id,
             changed_planning_file_paths,
@@ -839,9 +810,15 @@ impl NativeTuiApp {
     }
 
     fn assemble_manual_prompt(&self, conversation: &ConversationViewModel) -> Option<String> {
-        TurnPromptAssemblyService::new().build_manual_prompt(ManualPromptAssemblyRequest {
-            operator_prompt: &conversation.input_buffer,
-            planning_prompt_fragment: conversation.planning_runtime_snapshot.prompt_fragment(),
-        })
+        self.planning_services
+            .turn_prompt_assembly_service
+            .build_manual_prompt(
+                crate::application::service::turn_prompt_assembly_service::ManualPromptAssemblyRequest {
+                    operator_prompt: &conversation.input_buffer,
+                    planning_prompt_fragment: conversation
+                        .planning_runtime_snapshot
+                        .prompt_fragment(),
+                },
+            )
     }
 }
