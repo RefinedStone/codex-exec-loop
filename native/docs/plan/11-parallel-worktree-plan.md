@@ -5,7 +5,8 @@ Unless noted otherwise, file paths below are relative to `native/`.
 ## Current Posture
 - reference branch: `origin/prerelease`
 - active feature split: `docs/plan/14-planning-init-manual-editor-rollout.md`
-- treat the feature doc above as the live slice plan for planning-init/manual-editor work
+- active planning-runtime follow-up: `docs/plan/15-planning-runtime-engagement-repair.md`
+- treat the docs above as the live slice plans for current planning work
 
 ## Current Hotspots
 - shell flow and rendering: `src/adapter/inbound/tui/app.rs`, `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/ratatui_frontend.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`, `src/adapter/inbound/tui/app/transcript_viewport.rs`
