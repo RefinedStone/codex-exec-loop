@@ -70,7 +70,7 @@ if [[ -f "${HOME}/.cargo/env" ]]; then
   . "${HOME}/.cargo/env"
 fi
 
-for cmd in cargo rustc tar; do
+for cmd in cargo git rustc tar; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     echo "package_native_release: ${cmd} is required" >&2
     exit 1
@@ -146,6 +146,17 @@ profile=${profile}
 binary=${binary_file_name}
 EOF
 
+copy_tracked_bundle_samples() {
+  while IFS= read -r relative_path; do
+    [[ -z "${relative_path}" ]] && continue
+
+    local source_path="${repo_root}/${relative_path}"
+    local destination_path="${bundle_dir}/${relative_path}"
+    mkdir -p "$(dirname "${destination_path}")"
+    cp "${source_path}" "${destination_path}"
+  done < <(git -C "${repo_root}" ls-files examples .codex-exec-loop/followups)
+}
+
 compute_sha256() {
   local path="$1"
   local output
@@ -172,12 +183,15 @@ write_checksum_entry() {
   printf '%s  %s\n' "$(compute_sha256 "${path}")" "${display_name}"
 }
 
-{
-  write_checksum_entry "${bundle_dir}/${binary_file_name}" "${binary_file_name}"
-  write_checksum_entry "${bundle_dir}/README.md" "README.md"
-  write_checksum_entry "${bundle_dir}/OPERATOR.md" "OPERATOR.md"
-  write_checksum_entry "${bundle_dir}/VERSION.txt" "VERSION.txt"
-} > "${bundle_checksum_path}"
+write_bundle_checksums() {
+  while IFS= read -r artifact_path; do
+    local relative_path="${artifact_path#${bundle_dir}/}"
+    write_checksum_entry "${artifact_path}" "${relative_path}"
+  done < <(find "${bundle_dir}" -type f ! -name 'SHA256SUMS.txt' | sort)
+}
+
+copy_tracked_bundle_samples
+write_bundle_checksums > "${bundle_checksum_path}"
 
 tar -C "${out_dir}" -czf "${archive_path}" "${package_name}"
 write_checksum_entry "${archive_path}" "$(basename "${archive_path}")" > "${archive_checksum_path}"

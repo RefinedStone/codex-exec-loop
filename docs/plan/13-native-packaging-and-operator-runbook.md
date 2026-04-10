@@ -44,6 +44,8 @@ Bundle contents:
 - `README.md`
 - `OPERATOR.md`
 - `VERSION.txt`
+- `examples/`
+- `.codex-exec-loop/followups/`
 - `SHA256SUMS.txt`
 
 Archive sidecar:
@@ -56,6 +58,8 @@ The packaging script emits two checksum artifacts:
 
 - `SHA256SUMS.txt` inside the bundle directory for the unpacked files
 - `<archive>.tar.gz.sha256` next to the release archive for the tarball itself
+
+`SHA256SUMS.txt` covers every packaged file in the bundle, including the checked-in sample prompts and follow-up templates.
 
 Examples:
 

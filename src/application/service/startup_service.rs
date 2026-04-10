@@ -41,7 +41,7 @@ impl StartupService {
             account_ok: startup_context.account_ok,
             account_detail: startup_context.account_detail,
             warnings: startup_context.warnings,
-            schema_snapshot: "schema/codex_app_server_protocol.v2.schemas.json".to_string(),
+            schema_snapshot: StartupDiagnostics::bundled_schema_snapshot_label(),
         })
     }
 

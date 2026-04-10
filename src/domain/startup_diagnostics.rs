@@ -1,3 +1,7 @@
+const BUNDLED_SCHEMA_SNAPSHOT_PATH: &str = "schema/codex_app_server_protocol.v2.schemas.json";
+const BUNDLED_SCHEMA_SNAPSHOT_CONTENTS: &str =
+    include_str!("../../schema/codex_app_server_protocol.v2.schemas.json");
+
 #[derive(Debug, Clone)]
 pub struct StartupDiagnostics {
     pub cwd: String,
@@ -15,6 +19,13 @@ pub struct StartupDiagnostics {
 }
 
 impl StartupDiagnostics {
+    pub fn bundled_schema_snapshot_label() -> String {
+        format!(
+            "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({} bytes)",
+            BUNDLED_SCHEMA_SNAPSHOT_CONTENTS.len()
+        )
+    }
+
     pub fn can_continue(&self) -> bool {
         self.codex_binary_ok && self.workspace_ok && self.initialize_ok && self.account_ok
     }

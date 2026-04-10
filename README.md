@@ -88,6 +88,8 @@ Render the summary as markdown:
 ./scripts/summarize_native_validation.sh --format markdown
 ```
 
+The release bundle carries the checked-in sample prompt assets under `examples/` and `.codex-exec-loop/followups/` in addition to the binary and operator docs.
+
 ## Repository Guide
 
 - `src/`: Rust application code
