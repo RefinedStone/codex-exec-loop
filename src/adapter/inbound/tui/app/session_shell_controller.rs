@@ -1,7 +1,7 @@
-use super::session_browser::{
+use super::*;
+use crate::application::service::session_service::{
     SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
 };
-use super::*;
 
 impl NativeTuiApp {
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {

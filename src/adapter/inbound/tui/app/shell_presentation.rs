@@ -2,9 +2,10 @@ pub(super) use super::planning_presentation::{
     build_followup_template_preview_lines, build_followup_template_status_lines,
 };
 use super::planning_presentation::{build_planning_notice_line, build_planning_summary_line};
-use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
-use crate::application::service::session_service::SessionProjectFilter;
+use crate::application::service::session_service::{
+    SessionBrowserView, SessionProjectFilter, build_session_browser_view,
+};
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::PlanningValidationSeverity;
 use crate::domain::text::compact_whitespace_detail;

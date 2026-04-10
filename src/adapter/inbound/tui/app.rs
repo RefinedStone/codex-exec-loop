@@ -74,8 +74,6 @@ mod planning_init_overlay_ui;
 mod planning_presentation;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
-#[path = "app/session_browser.rs"]
-mod session_browser;
 #[path = "app/session_overlay_ui.rs"]
 mod session_overlay_ui;
 #[path = "app/session_shell_controller.rs"]
