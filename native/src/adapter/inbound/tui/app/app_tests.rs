@@ -35,9 +35,7 @@ use crate::application::port::outbound::followup_template_port::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
-use crate::application::service::planning_prompt_service::{
-    PlanningPromptContext, PlanningPromptContextLoadResult,
-};
+use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningRepairRequest,
 };
@@ -54,7 +52,7 @@ use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
 };
-use crate::domain::planning::TASK_LEDGER_FILE_PATH;
+use crate::domain::planning::{PriorityQueueTask, TASK_LEDGER_FILE_PATH, TaskStatus};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -263,12 +261,37 @@ fn ready_conversation() -> ConversationViewModel {
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
-        planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
+        planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
         status_text: "thread loaded".to_string(),
     }
+}
+
+fn sample_queue_head() -> PriorityQueueTask {
+    PriorityQueueTask {
+        rank: 1,
+        task_id: "task-1".to_string(),
+        direction_id: "general-workstream".to_string(),
+        direction_title: "General workstream".to_string(),
+        task_title: "Implement shell planning status".to_string(),
+        status: TaskStatus::Ready,
+        combined_priority: 10,
+        updated_at: "2026-04-10T00:00:00Z".to_string(),
+        rank_reasons: vec!["status=ready".to_string()],
+    }
+}
+
+fn sample_planning_runtime_snapshot(
+    prompt_fragment: &str,
+    queue_summary: &str,
+) -> PlanningRuntimeSnapshot {
+    PlanningRuntimeSnapshot::ready(
+        prompt_fragment.to_string(),
+        queue_summary.to_string(),
+        Some(sample_queue_head()),
+    )
 }
 
 #[test]
@@ -522,7 +545,9 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
     assert!(conversation.status_text.contains("planning draft promoted"));
     assert_eq!(
-        conversation.planning_prompt_context.preview_status_label(),
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
         "ready"
     );
 
@@ -816,7 +841,9 @@ fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_conte
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
     assert!(conversation.status_text.contains("planning draft promoted"));
     assert_eq!(
-        conversation.planning_prompt_context.preview_status_label(),
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
         "ready"
     );
 
@@ -863,7 +890,9 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
             .contains("planning draft promote blocked")
     );
     assert_eq!(
-        conversation.planning_prompt_context.preview_status_label(),
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
         "inactive"
     );
     assert!(
@@ -998,7 +1027,9 @@ fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
 
     assert_eq!(restored_task_ledger, bootstrap_artifacts.task_ledger_json);
     assert_eq!(
-        conversation.planning_prompt_context.preview_status_label(),
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
         "ready"
     );
     assert!(
@@ -1364,12 +1395,14 @@ fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
     };
     assert!(conversation.planning_repair_state.is_none());
     assert_eq!(
-        conversation.planning_prompt_context.preview_status_label(),
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
         "blocked"
     );
     assert!(
         conversation
-            .planning_prompt_context
+            .planning_runtime_snapshot
             .preview_detail()
             .is_some_and(|detail| detail.contains("planning repair exhausted after 2 attempts"))
     );
@@ -1413,12 +1446,14 @@ fn snapshot_capture_failure_blocks_followup_without_claiming_reconciliation() {
     };
 
     assert_eq!(
-        conversation.planning_prompt_context.preview_status_label(),
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
         "blocked"
     );
     assert!(
         conversation
-            .planning_prompt_context
+            .planning_runtime_snapshot
             .preview_detail()
             .is_some_and(
                 |detail| detail.contains("could not capture the accepted planning snapshot")
@@ -1976,11 +2011,9 @@ fn manual_submit_appends_planning_context_when_ready() {
         panic!("app should start with a draft conversation");
     };
     conversation.input_buffer = "ship it".to_string();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context\nQueue Summary".to_string(),
-            summary: "next task: task-1".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
     ));
 
     app.start_turn_submission();
@@ -3497,11 +3530,9 @@ fn followup_template_status_lines_include_runtime_notice_summary() {
 fn followup_template_status_lines_surface_planning_queue_failure_and_notice() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context".to_string(),
-            summary: "next task: rank 1 / task-1 / Implement shell planning status".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: rank 1 / task-1 / Implement shell planning status",
     ));
     conversation.planning_repair_state = Some(PlanningRepairState {
         root_turn_id: "turn-root".to_string(),
@@ -3775,11 +3806,9 @@ fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
 fn inline_tail_surfaces_stale_planning_status_while_turn_is_running() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context".to_string(),
-            summary: "next task: rank 1 / task-1 / Implement shell planning status".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: rank 1 / task-1 / Implement shell planning status",
     ));
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-1".to_string());
@@ -3882,11 +3911,9 @@ fn shell_footer_surfaces_runtime_notice_summary() {
 fn shell_footer_surfaces_planning_summary_and_notice() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context".to_string(),
-            summary: "next task: rank 1 / task-1 / Implement shell planning status".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: rank 1 / task-1 / Implement shell planning status",
     ));
     conversation.runtime_notices =
         vec!["planning reconciliation restored protected directions.toml".to_string()];

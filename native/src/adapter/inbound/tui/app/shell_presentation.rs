@@ -1676,7 +1676,7 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                     stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
                     last_message: latest_agent_message,
                     planning_prompt_fragment: conversation
-                        .planning_prompt_context
+                        .planning_runtime_snapshot
                         .prompt_fragment(),
                 });
 
@@ -1697,9 +1697,11 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             }
             lines.push(Line::from(format!(
                 "planning: {}",
-                conversation.planning_prompt_context.preview_status_label()
+                conversation
+                    .planning_runtime_snapshot
+                    .preview_status_label()
             )));
-            if let Some(detail) = conversation.planning_prompt_context.preview_detail() {
+            if let Some(detail) = conversation.planning_runtime_snapshot.preview_detail() {
                 lines.push(Line::from(format!("planning detail: {detail}")));
             }
 

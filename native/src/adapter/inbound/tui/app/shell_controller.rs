@@ -5,7 +5,7 @@ use super::session_browser::{
     SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
 };
 use super::*;
-use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::session_service::project_recent_sessions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +89,7 @@ impl NativeTuiApp {
             workspace_directory: workspace_directory.to_string(),
             template_load_result: self.load_followup_template_catalog(workspace_directory),
         });
-        self.refresh_ready_conversation_planning_prompt_context();
+        self.refresh_ready_conversation_planning_runtime_snapshot();
     }
 
     pub(super) fn reload_followup_templates(&mut self) {
@@ -265,7 +265,7 @@ impl NativeTuiApp {
                     )
                 } else {
                     self.close_shell_overlay();
-                    self.refresh_ready_conversation_planning_prompt_context();
+                    self.refresh_ready_conversation_planning_runtime_snapshot();
                     format!(
                         "planning draft promoted / draft: {} / files: {} / planning context refreshed",
                         result.draft_name, result.promoted_file_count
@@ -414,7 +414,7 @@ impl NativeTuiApp {
                     )
                 } else {
                     self.close_shell_overlay();
-                    self.refresh_ready_conversation_planning_prompt_context();
+                    self.refresh_ready_conversation_planning_runtime_snapshot();
                     format!(
                         "planning draft promoted / draft: {} / files: {} / planning context refreshed",
                         result.draft_name, result.promoted_file_count
@@ -718,22 +718,22 @@ impl NativeTuiApp {
             .load_catalog(workspace_directory)
     }
 
-    pub(super) fn load_planning_prompt_context(
+    pub(super) fn load_planning_runtime_snapshot(
         &self,
         workspace_directory: &str,
-    ) -> PlanningPromptContextLoadResult {
+    ) -> PlanningRuntimeSnapshot {
         self.planning_prompt_service
-            .load_prompt_context(workspace_directory)
-            .unwrap_or_else(|error| planning_prompt_context_load_failed(error.to_string()))
+            .load_runtime_snapshot(workspace_directory)
+            .unwrap_or_else(|error| planning_runtime_snapshot_load_failed(error.to_string()))
     }
 
-    pub(super) fn refresh_ready_conversation_planning_prompt_context(&mut self) {
+    pub(super) fn refresh_ready_conversation_planning_runtime_snapshot(&mut self) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
         let workspace_directory = conversation.cwd.clone();
-        conversation.replace_planning_prompt_context(
-            self.load_planning_prompt_context(&workspace_directory),
+        conversation.replace_planning_runtime_snapshot(
+            self.load_planning_runtime_snapshot(&workspace_directory),
         );
         self.conversation_state = ConversationState::Ready(conversation);
     }
@@ -1265,10 +1265,8 @@ impl NativeTuiApp {
     }
 }
 
-pub(super) fn planning_prompt_context_load_failed(
-    error: String,
-) -> PlanningPromptContextLoadResult {
-    PlanningPromptContextLoadResult::blocked(format!("failed to load planning workspace: {error}"))
+pub(super) fn planning_runtime_snapshot_load_failed(error: String) -> PlanningRuntimeSnapshot {
+    PlanningRuntimeSnapshot::invalid(format!("failed to load planning workspace: {error}"))
 }
 
 fn planning_manual_editor_close_warning_status(risk: PlanningDraftEditorCloseRisk) -> String {

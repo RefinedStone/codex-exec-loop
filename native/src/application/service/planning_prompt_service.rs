@@ -7,7 +7,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::domain::planning::{
     DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles,
-    PriorityQueueSnapshot, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+    PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
@@ -24,78 +24,101 @@ pub struct PlanningPromptService {
     priority_queue_service: PriorityQueueService,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningPromptContext {
-    pub prompt_fragment: String,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanningPromptContextAvailability {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningRuntimeWorkspaceStatus {
     Uninitialized,
-    Ready(PlanningPromptContext),
-    Blocked { reason: String },
+    Invalid,
+    ReadyNoTask,
+    ReadyWithTask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningPromptContextLoadResult {
-    pub availability: PlanningPromptContextAvailability,
+pub struct PlanningRuntimeSnapshot {
+    workspace_status: PlanningRuntimeWorkspaceStatus,
+    prompt_fragment: Option<String>,
+    queue_summary: Option<String>,
+    queue_head: Option<PriorityQueueTask>,
+    failure_reason: Option<String>,
 }
 
-impl PlanningPromptContextLoadResult {
+impl PlanningRuntimeSnapshot {
     pub fn uninitialized() -> Self {
         Self {
-            availability: PlanningPromptContextAvailability::Uninitialized,
+            workspace_status: PlanningRuntimeWorkspaceStatus::Uninitialized,
+            prompt_fragment: None,
+            queue_summary: None,
+            queue_head: None,
+            failure_reason: None,
         }
     }
 
-    pub fn ready(prompt_context: PlanningPromptContext) -> Self {
+    pub fn invalid(reason: impl Into<String>) -> Self {
         Self {
-            availability: PlanningPromptContextAvailability::Ready(prompt_context),
+            workspace_status: PlanningRuntimeWorkspaceStatus::Invalid,
+            prompt_fragment: None,
+            queue_summary: None,
+            queue_head: None,
+            failure_reason: Some(reason.into()),
         }
     }
 
-    pub fn blocked(reason: impl Into<String>) -> Self {
+    pub fn ready(
+        prompt_fragment: String,
+        queue_summary: String,
+        queue_head: Option<PriorityQueueTask>,
+    ) -> Self {
         Self {
-            availability: PlanningPromptContextAvailability::Blocked {
-                reason: reason.into(),
+            workspace_status: if queue_head.is_some() {
+                PlanningRuntimeWorkspaceStatus::ReadyWithTask
+            } else {
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
             },
+            prompt_fragment: Some(prompt_fragment),
+            queue_summary: Some(queue_summary),
+            queue_head,
+            failure_reason: None,
         }
+    }
+
+    pub fn workspace_status(&self) -> PlanningRuntimeWorkspaceStatus {
+        self.workspace_status
     }
 
     pub fn prompt_fragment(&self) -> Option<&str> {
-        match &self.availability {
-            PlanningPromptContextAvailability::Ready(prompt_context) => {
-                Some(prompt_context.prompt_fragment.as_str())
-            }
-            PlanningPromptContextAvailability::Uninitialized
-            | PlanningPromptContextAvailability::Blocked { .. } => None,
-        }
+        self.prompt_fragment.as_deref()
+    }
+
+    pub fn queue_summary(&self) -> Option<&str> {
+        self.queue_summary.as_deref()
+    }
+
+    pub fn queue_head(&self) -> Option<&PriorityQueueTask> {
+        self.queue_head.as_ref()
+    }
+
+    pub fn failure_reason(&self) -> Option<&str> {
+        self.failure_reason.as_deref()
     }
 
     pub fn preview_status_label(&self) -> &'static str {
-        match &self.availability {
-            PlanningPromptContextAvailability::Uninitialized => "inactive",
-            PlanningPromptContextAvailability::Ready(_) => "ready",
-            PlanningPromptContextAvailability::Blocked { .. } => "blocked",
+        match self.workspace_status {
+            PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
+            PlanningRuntimeWorkspaceStatus::Invalid => "blocked",
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "ready",
         }
     }
 
     pub fn preview_detail(&self) -> Option<&str> {
-        match &self.availability {
-            PlanningPromptContextAvailability::Uninitialized => None,
-            PlanningPromptContextAvailability::Ready(prompt_context) => {
-                Some(prompt_context.summary.as_str())
-            }
-            PlanningPromptContextAvailability::Blocked { reason } => Some(reason.as_str()),
-        }
+        self.failure_reason().or_else(|| self.queue_summary())
     }
 
     pub fn blocks_auto_followup(&self) -> bool {
-        matches!(
-            &self.availability,
-            PlanningPromptContextAvailability::Blocked { .. }
-        )
+        self.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid
+    }
+
+    pub fn has_actionable_queue_head(&self) -> bool {
+        self.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask
     }
 }
 
@@ -112,21 +135,18 @@ impl PlanningPromptService {
         }
     }
 
-    pub fn load_prompt_context(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<PlanningPromptContextLoadResult> {
+    pub fn load_runtime_snapshot(&self, workspace_dir: &str) -> Result<PlanningRuntimeSnapshot> {
         let workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
 
         if !workspace_record.has_any_files() {
-            return Ok(PlanningPromptContextLoadResult::uninitialized());
+            return Ok(PlanningRuntimeSnapshot::uninitialized());
         }
 
         let missing_paths = missing_workspace_paths(&workspace_record);
         if !missing_paths.is_empty() {
-            return Ok(PlanningPromptContextLoadResult::blocked(format!(
+            return Ok(PlanningRuntimeSnapshot::invalid(format!(
                 "planning files incomplete: missing {}",
                 missing_paths.join(", ")
             )));
@@ -143,7 +163,7 @@ impl PlanningPromptService {
                 .first()
                 .map(|issue| issue.message.clone())
                 .unwrap_or_else(|| "planning validation failed".to_string());
-            return Ok(PlanningPromptContextLoadResult::blocked(format!(
+            return Ok(PlanningRuntimeSnapshot::invalid(format!(
                 "planning validation failed: {first_error}"
             )));
         }
@@ -161,16 +181,14 @@ impl PlanningPromptService {
             .result_output_markdown
             .as_deref()
             .expect("complete planning workspace should include result output");
+        let queue_summary = build_queue_summary(&queue_snapshot);
+        let prompt_fragment =
+            build_prompt_fragment(&directions, &queue_snapshot, result_output_markdown);
 
-        Ok(PlanningPromptContextLoadResult::ready(
-            PlanningPromptContext {
-                prompt_fragment: build_prompt_fragment(
-                    &directions,
-                    &queue_snapshot,
-                    result_output_markdown,
-                ),
-                summary: build_queue_summary(&queue_snapshot),
-            },
+        Ok(PlanningRuntimeSnapshot::ready(
+            prompt_fragment,
+            queue_summary,
+            queue_snapshot.next_task.clone(),
         ))
     }
 }
@@ -373,7 +391,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{PlanningPromptContextAvailability, PlanningPromptService};
+    use super::{PlanningPromptService, PlanningRuntimeWorkspaceStatus};
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
@@ -454,16 +472,17 @@ mod tests {
     }
 
     #[test]
-    fn missing_all_planning_files_keeps_prompt_context_uninitialized() {
+    fn missing_all_planning_files_keeps_runtime_snapshot_uninitialized() {
         let result = sample_service(PlanningWorkspaceLoadRecord::default())
-            .load_prompt_context("/tmp/workspace")
-            .expect("planning prompt context should load");
+            .load_runtime_snapshot("/tmp/workspace")
+            .expect("planning runtime snapshot should load");
 
         assert_eq!(
-            result.availability,
-            PlanningPromptContextAvailability::Uninitialized
+            result.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::Uninitialized
         );
         assert!(!result.blocks_auto_followup());
+        assert!(!result.has_actionable_queue_head());
     }
 
     #[test]
@@ -475,14 +494,43 @@ mod tests {
             task_ledger_schema_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
-        .load_prompt_context("/tmp/workspace")
-        .expect("planning prompt context should load");
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
 
-        let PlanningPromptContextAvailability::Blocked { ref reason } = result.availability else {
-            panic!("partial workspace should block auto follow-up");
-        };
+        assert_eq!(
+            result.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::Invalid
+        );
+        let reason = result
+            .failure_reason()
+            .expect("partial workspace should capture a failure reason");
         assert!(reason.contains("task-ledger.schema.json"));
         assert!(result.blocks_auto_followup());
+    }
+
+    #[test]
+    fn valid_planning_workspace_without_queue_head_is_ready_no_task() {
+        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let result = sample_service(PlanningWorkspaceLoadRecord {
+            directions_toml: Some(bootstrap_artifacts.directions_toml),
+            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
+        })
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
+
+        assert_eq!(
+            result.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+        assert_eq!(result.queue_head(), None);
+        assert_eq!(
+            result.queue_summary(),
+            Some("queue idle: no executable planning task")
+        );
+        assert!(!result.has_actionable_queue_head());
+        assert!(!result.blocks_auto_followup());
     }
 
     #[test]
@@ -517,22 +565,35 @@ mod tests {
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
-        .load_prompt_context("/tmp/workspace")
-        .expect("planning prompt context should load");
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
 
-        let PlanningPromptContextAvailability::Ready(prompt_context) = result.availability else {
-            panic!("valid workspace should produce a ready planning prompt context");
-        };
-        assert!(prompt_context.prompt_fragment.contains("Planning Context"));
-        assert!(prompt_context.prompt_fragment.contains("Direction Summary"));
-        assert!(prompt_context.prompt_fragment.contains("Queue Summary"));
-        assert!(prompt_context.prompt_fragment.contains("task-1"));
-        assert!(
-            prompt_context
-                .prompt_fragment
-                .contains("Result Output Prompt")
+        assert_eq!(
+            result.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask
         );
-        assert!(prompt_context.summary.contains("task-1"));
+        let prompt_fragment = result
+            .prompt_fragment()
+            .expect("valid workspace should expose a prompt fragment");
+        assert!(prompt_fragment.contains("Planning Context"));
+        assert!(prompt_fragment.contains("Direction Summary"));
+        assert!(prompt_fragment.contains("Queue Summary"));
+        assert!(prompt_fragment.contains("task-1"));
+        assert!(prompt_fragment.contains("Result Output Prompt"));
+        assert!(
+            result
+                .queue_summary()
+                .expect("valid workspace should expose a queue summary")
+                .contains("task-1")
+        );
+        assert_eq!(
+            result
+                .queue_head()
+                .expect("valid workspace should expose the queue head")
+                .task_id,
+            "task-1"
+        );
+        assert!(result.has_actionable_queue_head());
     }
 
     #[test]
@@ -554,12 +615,16 @@ mod tests {
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
-        .load_prompt_context("/tmp/workspace")
-        .expect("planning prompt context should load");
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
 
-        let PlanningPromptContextAvailability::Blocked { ref reason } = result.availability else {
-            panic!("invalid planning workspace should block auto follow-up");
-        };
+        assert_eq!(
+            result.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::Invalid
+        );
+        let reason = result
+            .failure_reason()
+            .expect("invalid planning workspace should expose a failure reason");
         assert!(reason.contains("planning validation failed"));
     }
 }

@@ -3,9 +3,7 @@ use super::{
     ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
     TurnActivityState, format_conversation_lines,
 };
-use crate::application::service::planning_prompt_service::{
-    PlanningPromptContext, PlanningPromptContextLoadResult,
-};
+use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 use crate::domain::conversation::{
@@ -15,7 +13,7 @@ use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
     FollowupTemplateSource,
 };
-use crate::domain::planning::PlanningWorkspaceState;
+use crate::domain::planning::{PlanningWorkspaceState, PriorityQueueTask, TaskStatus};
 
 fn sample_template_catalog() -> FollowupTemplateCatalog {
     FollowupTemplateCatalog {
@@ -64,7 +62,7 @@ fn ready_conversation() -> ConversationViewModel {
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
-        planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
+        planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
@@ -74,6 +72,31 @@ fn ready_conversation() -> ConversationViewModel {
 
 fn turn_prompt_assembly_service() -> TurnPromptAssemblyService {
     TurnPromptAssemblyService::new()
+}
+
+fn sample_queue_head() -> PriorityQueueTask {
+    PriorityQueueTask {
+        rank: 1,
+        task_id: "task-1".to_string(),
+        direction_id: "general-workstream".to_string(),
+        direction_title: "General workstream".to_string(),
+        task_title: "Implement shell planning status".to_string(),
+        status: TaskStatus::Ready,
+        combined_priority: 10,
+        updated_at: "2026-04-10T00:00:00Z".to_string(),
+        rank_reasons: vec!["status=ready".to_string()],
+    }
+}
+
+fn sample_planning_runtime_snapshot(
+    prompt_fragment: &str,
+    queue_summary: &str,
+) -> PlanningRuntimeSnapshot {
+    PlanningRuntimeSnapshot::ready(
+        prompt_fragment.to_string(),
+        queue_summary.to_string(),
+        Some(sample_queue_head()),
+    )
 }
 
 #[test]
@@ -478,11 +501,9 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
 #[test]
 fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context\nQueue Summary".to_string(),
-            summary: "next task: task-1".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -503,9 +524,9 @@ fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
 }
 
 #[test]
-fn auto_followup_skips_when_planning_prompt_context_is_blocked() {
+fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::blocked(
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::invalid(
         "planning validation failed: task-ledger.json is invalid",
     ));
     conversation.messages.push(ConversationMessage::new(
@@ -524,11 +545,9 @@ fn auto_followup_skips_when_planning_prompt_context_is_blocked() {
 #[test]
 fn planning_workspace_state_marks_ready_context_as_stale_during_running_turn() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context".to_string(),
-            summary: "next task: task-1".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
     ));
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-1".to_string());
@@ -547,11 +566,9 @@ fn planning_workspace_state_marks_ready_context_as_stale_during_running_turn() {
 #[test]
 fn planning_workspace_state_prefers_repairing_failure_over_ready_queue_context() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
-        PlanningPromptContext {
-            prompt_fragment: "Planning Context".to_string(),
-            summary: "next task: task-1".to_string(),
-        },
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
     ));
     conversation.planning_repair_state = Some(super::PlanningRepairState {
         root_turn_id: "turn-root".to_string(),

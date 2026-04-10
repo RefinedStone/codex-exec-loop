@@ -188,7 +188,7 @@ pub(super) fn reduce_conversation_runtime(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
-    use crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult;
+    use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
     use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
@@ -866,7 +866,7 @@ mod tests {
                     source: FollowupTemplateSource::Builtin,
                 }],
             }),
-            planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
+            planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,

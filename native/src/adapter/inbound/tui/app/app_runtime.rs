@@ -93,11 +93,13 @@ impl NativeTuiApp {
             workspace_directory.clone(),
             followup_template_service.load_catalog(&workspace_directory),
         );
-        initial_conversation.replace_planning_prompt_context(
+        initial_conversation.replace_planning_runtime_snapshot(
             planning_prompt_service
-                .load_prompt_context(&workspace_directory)
+                .load_runtime_snapshot(&workspace_directory)
                 .unwrap_or_else(|error| {
-                    super::shell_controller::planning_prompt_context_load_failed(error.to_string())
+                    super::shell_controller::planning_runtime_snapshot_load_failed(
+                        error.to_string(),
+                    )
                 }),
         );
         Self {
@@ -328,7 +330,7 @@ impl NativeTuiApp {
                     workspace_directory: workspace_directory.clone(),
                     template_load_result,
                 });
-                self.refresh_ready_conversation_planning_prompt_context();
+                self.refresh_ready_conversation_planning_runtime_snapshot();
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                     stop_keyword: self.current_stop_keyword_value(),
                     max_auto_turns: self.current_max_auto_turns_value().to_string(),
@@ -443,18 +445,18 @@ impl NativeTuiApp {
             &changed_planning_file_paths,
             &reconciliation_result,
         );
-        let planning_prompt_context = if let Some(block_reason) = planning_repair_resolution
+        let planning_runtime_snapshot = if let Some(block_reason) = planning_repair_resolution
             .block_reason
             .clone()
             .or_else(|| reconciliation_result.auto_followup_block_reason.clone())
         {
-            crate::application::service::planning_prompt_service::PlanningPromptContextLoadResult::blocked(
+            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::invalid(
                 block_reason,
             )
         } else if changed_planning_file_paths.is_empty() {
-            conversation.planning_prompt_context.clone()
+            conversation.planning_runtime_snapshot.clone()
         } else {
-            self.load_planning_prompt_context(&conversation.cwd)
+            self.load_planning_runtime_snapshot(&conversation.cwd)
         };
         for notice in reconciliation_result.notices {
             if !conversation.runtime_notices.contains(&notice) {
@@ -466,7 +468,7 @@ impl NativeTuiApp {
                 conversation.runtime_notices.push(notice);
             }
         }
-        conversation.replace_planning_prompt_context(planning_prompt_context);
+        conversation.replace_planning_runtime_snapshot(planning_runtime_snapshot);
 
         if let Some(queued_prompt) = planning_repair_resolution.queued_prompt {
             if !conversation.input_buffer.trim().is_empty() {
@@ -839,7 +841,7 @@ impl NativeTuiApp {
     fn assemble_manual_prompt(&self, conversation: &ConversationViewModel) -> Option<String> {
         TurnPromptAssemblyService::new().build_manual_prompt(ManualPromptAssemblyRequest {
             operator_prompt: &conversation.input_buffer,
-            planning_prompt_fragment: conversation.planning_prompt_context.prompt_fragment(),
+            planning_prompt_fragment: conversation.planning_runtime_snapshot.prompt_fragment(),
         })
     }
 }

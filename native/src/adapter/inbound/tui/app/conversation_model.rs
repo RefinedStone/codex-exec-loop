@@ -1,7 +1,7 @@
 use ratatui::text::Line;
 
 use crate::application::service::planning_prompt_service::{
-    PlanningPromptContextAvailability, PlanningPromptContextLoadResult,
+    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::application::service::turn_prompt_assembly_service::{
@@ -554,7 +554,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
-    pub(crate) planning_prompt_context: PlanningPromptContextLoadResult,
+    pub(crate) planning_runtime_snapshot: PlanningRuntimeSnapshot,
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
@@ -588,7 +588,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
-            planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
+            planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
@@ -630,7 +630,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
-            planning_prompt_context: PlanningPromptContextLoadResult::uninitialized(),
+            planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
@@ -744,17 +744,17 @@ impl ConversationViewModel {
             return PlanningWorkspaceState::Repairing;
         }
 
-        match &self.planning_prompt_context.availability {
-            PlanningPromptContextAvailability::Uninitialized => {
-                PlanningWorkspaceState::Uninitialized
-            }
-            PlanningPromptContextAvailability::Ready(_) if self.has_running_turn() => {
+        match self.planning_runtime_snapshot.workspace_status() {
+            PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningWorkspaceState::Uninitialized,
+            PlanningRuntimeWorkspaceStatus::Invalid => PlanningWorkspaceState::BlockedInvalid,
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            | PlanningRuntimeWorkspaceStatus::ReadyWithTask
+                if self.has_running_turn() =>
+            {
                 PlanningWorkspaceState::Executing
             }
-            PlanningPromptContextAvailability::Ready(_) => PlanningWorkspaceState::Ready,
-            PlanningPromptContextAvailability::Blocked { .. } => {
-                PlanningWorkspaceState::BlockedInvalid
-            }
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            | PlanningRuntimeWorkspaceStatus::ReadyWithTask => PlanningWorkspaceState::Ready,
         }
     }
 
@@ -770,24 +770,14 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn planning_queue_summary(&self) -> Option<&str> {
-        match &self.planning_prompt_context.availability {
-            PlanningPromptContextAvailability::Ready(prompt_context) => {
-                Some(prompt_context.summary.as_str())
-            }
-            PlanningPromptContextAvailability::Uninitialized
-            | PlanningPromptContextAvailability::Blocked { .. } => None,
-        }
+        self.planning_runtime_snapshot.queue_summary()
     }
 
     pub(crate) fn planning_failure_summary(&self) -> Option<&str> {
         self.planning_repair_state
             .as_ref()
             .map(|state| state.latest_request.failure_summary.as_str())
-            .or_else(|| match &self.planning_prompt_context.availability {
-                PlanningPromptContextAvailability::Blocked { reason } => Some(reason.as_str()),
-                PlanningPromptContextAvailability::Uninitialized
-                | PlanningPromptContextAvailability::Ready(_) => None,
-            })
+            .or_else(|| self.planning_runtime_snapshot.failure_reason())
     }
 
     pub(crate) fn planning_notice_summary(&self, max_detail_len: usize) -> Option<String> {
@@ -822,11 +812,11 @@ impl ConversationViewModel {
         self.warnings = Self::merge_warnings(&self.base_warnings, &self.template_warnings);
     }
 
-    pub(crate) fn replace_planning_prompt_context(
+    pub(crate) fn replace_planning_runtime_snapshot(
         &mut self,
-        planning_prompt_context: PlanningPromptContextLoadResult,
+        planning_runtime_snapshot: PlanningRuntimeSnapshot,
     ) {
-        self.planning_prompt_context = planning_prompt_context;
+        self.planning_runtime_snapshot = planning_runtime_snapshot;
     }
 
     pub(crate) fn set_status_with_warnings(&mut self, base_status: String) {
@@ -1145,7 +1135,7 @@ impl ConversationViewModel {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
         }
 
-        if self.planning_prompt_context.blocks_auto_followup() {
+        if self.planning_runtime_snapshot.blocks_auto_followup() {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked);
         }
 
@@ -1157,7 +1147,7 @@ impl ConversationViewModel {
                 session_id: &self.thread_id,
                 stop_keyword: self.auto_follow_state.stop_keyword_value(),
                 last_message: last_message.trim(),
-                planning_prompt_fragment: self.planning_prompt_context.prompt_fragment(),
+                planning_prompt_fragment: self.planning_runtime_snapshot.prompt_fragment(),
             },
         ))
     }
