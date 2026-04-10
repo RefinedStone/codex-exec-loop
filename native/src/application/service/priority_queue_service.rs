@@ -126,6 +126,7 @@ impl PriorityQueueService {
     fn skipped_task(&self, task: &TaskDefinition, reason: String) -> PriorityQueueSkippedTask {
         PriorityQueueSkippedTask {
             task_id: task.id.clone(),
+            task_title: task.title.clone(),
             direction_id: task.direction_id.clone(),
             status: task.status,
             reason,

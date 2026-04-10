@@ -20,6 +20,7 @@ pub struct PlanningRuntimeSummaryView {
     pub workspace_state: PlanningWorkspaceState,
     pub status_label: &'static str,
     pub queue_summary: Option<String>,
+    pub proposal_summary: Option<String>,
     pub failure_summary: Option<String>,
 }
 
@@ -86,6 +87,7 @@ impl PlanningRuntimePolicyService {
         PlanningRuntimeSummaryView {
             status_label: workspace_status_label(workspace_state),
             queue_summary: request.snapshot.queue_summary().map(str::to_string),
+            proposal_summary: request.snapshot.proposal_summary().map(str::to_string),
             failure_summary: request
                 .repair_failure_summary
                 .or_else(|| request.snapshot.failure_reason())
@@ -100,9 +102,23 @@ impl PlanningRuntimePolicyService {
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningRuntimePreviewView {
         if let Some(reason) = self.auto_follow_block_reason(template, snapshot) {
+            let detail = match reason {
+                PlanningAutoFollowBlockReason::InvalidWorkspace => {
+                    "planning files are invalid or incomplete".to_string()
+                }
+                PlanningAutoFollowBlockReason::ActionableQueueRequired => {
+                    if let Some(proposal_summary) = snapshot.proposal_summary() {
+                        format!(
+                            "selected template requires an actionable planning queue head; {proposal_summary}"
+                        )
+                    } else {
+                        "selected template requires an actionable planning queue head".to_string()
+                    }
+                }
+            };
             return PlanningRuntimePreviewView {
                 status_label: preview_block_label(reason),
-                detail: Some(preview_block_detail(reason).to_string()),
+                detail: Some(detail),
             };
         }
 
@@ -113,10 +129,7 @@ impl PlanningRuntimePolicyService {
                 PlanningRuntimeWorkspaceStatus::ReadyNoTask
                 | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "ready",
             },
-            detail: snapshot
-                .failure_reason()
-                .or_else(|| snapshot.queue_summary())
-                .map(str::to_string),
+            detail: non_blocked_preview_detail(snapshot),
         }
     }
 }
@@ -139,14 +152,14 @@ fn preview_block_label(reason: PlanningAutoFollowBlockReason) -> &'static str {
     }
 }
 
-fn preview_block_detail(reason: PlanningAutoFollowBlockReason) -> &'static str {
-    match reason {
-        PlanningAutoFollowBlockReason::InvalidWorkspace => {
-            "planning files are invalid or incomplete"
+fn non_blocked_preview_detail(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
+    match (snapshot.queue_summary(), snapshot.proposal_summary()) {
+        (Some(queue_summary), Some(proposal_summary)) => {
+            Some(format!("{queue_summary}  |  {proposal_summary}"))
         }
-        PlanningAutoFollowBlockReason::ActionableQueueRequired => {
-            "selected template requires an actionable planning queue head"
-        }
+        (Some(queue_summary), None) => Some(queue_summary.to_string()),
+        (None, Some(proposal_summary)) => Some(proposal_summary.to_string()),
+        (None, None) => snapshot.failure_reason().map(str::to_string),
     }
 }
 
@@ -215,6 +228,24 @@ mod tests {
     }
 
     #[test]
+    fn builtin_next_task_preview_mentions_proposals_when_queue_is_empty() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "queue idle: no executable planning task".to_string(),
+            Some("2 proposed follow-up tasks waiting for promotion: Plan A | +1 more".to_string()),
+            None,
+        );
+
+        let preview = service.build_preview_view(&builtin_next_task_template(), &snapshot);
+
+        assert_eq!(preview.status_label, "queue-empty");
+        assert!(preview.detail.as_deref().is_some_and(|detail| {
+            detail.contains("proposed follow-up tasks waiting for promotion")
+        }));
+    }
+
+    #[test]
     fn workspace_template_stays_allowed_without_planning_queue_head() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::uninitialized();
@@ -246,6 +277,32 @@ mod tests {
         assert_eq!(
             summary.queue_summary.as_deref(),
             Some("next task: rank 1 / task-1")
+        );
+    }
+
+    #[test]
+    fn summary_view_keeps_proposal_summary_when_present() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "queue idle: no executable planning task".to_string(),
+            Some(
+                "1 proposed follow-up task waiting for promotion: Draft sushi roadmap".to_string(),
+            ),
+            None,
+        );
+
+        let summary = service.build_summary_view(PlanningRuntimeSummaryRequest {
+            snapshot: &snapshot,
+            has_running_turn: false,
+            is_repairing: false,
+            repair_failure_summary: None,
+        });
+
+        assert_eq!(summary.workspace_state, PlanningWorkspaceState::Ready);
+        assert_eq!(
+            summary.proposal_summary.as_deref(),
+            Some("1 proposed follow-up task waiting for promotion: Draft sushi roadmap")
         );
     }
 

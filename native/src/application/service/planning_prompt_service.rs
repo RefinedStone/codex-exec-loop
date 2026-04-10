@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::domain::planning::{
     DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles,
     PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH, TaskStatus,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -16,6 +16,8 @@ use super::priority_queue_service::PriorityQueueService;
 
 const MAX_VISIBLE_QUEUE_TASKS: usize = 5;
 const MAX_SKIPPED_QUEUE_TASKS: usize = 3;
+const MAX_VISIBLE_PROPOSED_TASKS: usize = 3;
+const MAX_PROPOSAL_SUMMARY_TITLES: usize = 2;
 
 #[derive(Clone)]
 pub struct PlanningPromptService {
@@ -37,6 +39,7 @@ pub struct PlanningRuntimeSnapshot {
     workspace_status: PlanningRuntimeWorkspaceStatus,
     prompt_fragment: Option<String>,
     queue_summary: Option<String>,
+    proposal_summary: Option<String>,
     queue_head: Option<PriorityQueueTask>,
     failure_reason: Option<String>,
 }
@@ -47,6 +50,7 @@ impl PlanningRuntimeSnapshot {
             workspace_status: PlanningRuntimeWorkspaceStatus::Uninitialized,
             prompt_fragment: None,
             queue_summary: None,
+            proposal_summary: None,
             queue_head: None,
             failure_reason: None,
         }
@@ -57,6 +61,7 @@ impl PlanningRuntimeSnapshot {
             workspace_status: PlanningRuntimeWorkspaceStatus::Invalid,
             prompt_fragment: None,
             queue_summary: None,
+            proposal_summary: None,
             queue_head: None,
             failure_reason: Some(reason.into()),
         }
@@ -67,6 +72,15 @@ impl PlanningRuntimeSnapshot {
         queue_summary: String,
         queue_head: Option<PriorityQueueTask>,
     ) -> Self {
+        Self::ready_with_details(prompt_fragment, queue_summary, None, queue_head)
+    }
+
+    pub fn ready_with_details(
+        prompt_fragment: String,
+        queue_summary: String,
+        proposal_summary: Option<String>,
+        queue_head: Option<PriorityQueueTask>,
+    ) -> Self {
         Self {
             workspace_status: if queue_head.is_some() {
                 PlanningRuntimeWorkspaceStatus::ReadyWithTask
@@ -75,6 +89,7 @@ impl PlanningRuntimeSnapshot {
             },
             prompt_fragment: Some(prompt_fragment),
             queue_summary: Some(queue_summary),
+            proposal_summary,
             queue_head,
             failure_reason: None,
         }
@@ -90,6 +105,10 @@ impl PlanningRuntimeSnapshot {
 
     pub fn queue_summary(&self) -> Option<&str> {
         self.queue_summary.as_deref()
+    }
+
+    pub fn proposal_summary(&self) -> Option<&str> {
+        self.proposal_summary.as_deref()
     }
 
     pub fn queue_head(&self) -> Option<&PriorityQueueTask> {
@@ -110,7 +129,9 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn preview_detail(&self) -> Option<&str> {
-        self.failure_reason().or_else(|| self.queue_summary())
+        self.failure_reason()
+            .or_else(|| self.queue_summary())
+            .or_else(|| self.proposal_summary())
     }
 
     pub fn blocks_auto_followup(&self) -> bool {
@@ -182,12 +203,14 @@ impl PlanningPromptService {
             .as_deref()
             .expect("complete planning workspace should include result output");
         let queue_summary = build_queue_summary(&queue_snapshot);
+        let proposal_summary = build_proposal_summary(&queue_snapshot);
         let prompt_fragment =
             build_prompt_fragment(&directions, &queue_snapshot, result_output_markdown);
 
-        Ok(PlanningRuntimeSnapshot::ready(
+        Ok(PlanningRuntimeSnapshot::ready_with_details(
             prompt_fragment,
             queue_summary,
+            proposal_summary,
             queue_snapshot.next_task.clone(),
         ))
     }
@@ -308,24 +331,50 @@ fn build_prompt_fragment(
         }
     }
 
-    if !queue_snapshot.skipped_tasks.is_empty() {
+    let proposed_tasks = queue_snapshot
+        .skipped_tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Proposed)
+        .collect::<Vec<_>>();
+    if !proposed_tasks.is_empty() {
+        lines.push(format!(
+            "- proposed_tasks: showing {} of {}",
+            proposed_tasks.len().min(MAX_VISIBLE_PROPOSED_TASKS),
+            proposed_tasks.len()
+        ));
+        for proposed_task in proposed_tasks.iter().take(MAX_VISIBLE_PROPOSED_TASKS) {
+            lines.push(format!(
+                "  - {} | {} | direction={} | status={} | reason={}",
+                proposed_task.task_id.trim(),
+                proposed_task.task_title.trim(),
+                proposed_task.direction_id.trim(),
+                proposed_task.status.label(),
+                proposed_task.reason.trim(),
+            ));
+        }
+    }
+
+    let non_proposed_skipped_tasks = queue_snapshot
+        .skipped_tasks
+        .iter()
+        .filter(|task| task.status != TaskStatus::Proposed)
+        .collect::<Vec<_>>();
+    if !non_proposed_skipped_tasks.is_empty() {
         lines.push(format!(
             "- skipped_tasks: showing {} of {}",
-            queue_snapshot
-                .skipped_tasks
-                .iter()
-                .take(MAX_SKIPPED_QUEUE_TASKS)
-                .count(),
-            queue_snapshot.skipped_tasks.len()
+            non_proposed_skipped_tasks
+                .len()
+                .min(MAX_SKIPPED_QUEUE_TASKS),
+            non_proposed_skipped_tasks.len()
         ));
-        for skipped_task in queue_snapshot
-            .skipped_tasks
+        for skipped_task in non_proposed_skipped_tasks
             .iter()
             .take(MAX_SKIPPED_QUEUE_TASKS)
         {
             lines.push(format!(
-                "  - {} | direction={} | status={} | reason={}",
+                "  - {} | {} | direction={} | status={} | reason={}",
                 skipped_task.task_id.trim(),
+                skipped_task.task_title.trim(),
                 skipped_task.direction_id.trim(),
                 skipped_task.status.label(),
                 skipped_task.reason.trim(),
@@ -360,6 +409,20 @@ fn build_prompt_fragment(
     if !result_output_markdown.is_empty() {
         lines.push(result_output_markdown.to_string());
     }
+    lines.push(String::new());
+    lines.push("Runtime Follow-up Proposal Rules".to_string());
+    lines.push(
+        "- If your final answer offers concrete follow-up options or variants, also add each option to `task-ledger.json` as a separate `proposed` task linked to an existing direction."
+            .to_string(),
+    );
+    lines.push(
+        "- Use `proposed` only for direction-linked follow-up candidates that should stay out of normal execution until the user explicitly promotes, prioritizes, queues, or executes them."
+            .to_string(),
+    );
+    lines.push(
+        "- When the user later asks to prioritize, queue, or execute earlier proposals, update the relevant proposal tasks instead of inventing duplicate tasks."
+            .to_string(),
+    );
 
     lines.join("\n")
 }
@@ -375,6 +438,41 @@ fn build_queue_summary(queue_snapshot: &PriorityQueueSnapshot) -> String {
         ),
         None => "queue idle: no executable planning task".to_string(),
     }
+}
+
+fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<String> {
+    let proposed_tasks = queue_snapshot
+        .skipped_tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Proposed)
+        .collect::<Vec<_>>();
+    if proposed_tasks.is_empty() {
+        return None;
+    }
+
+    let task_titles = proposed_tasks
+        .iter()
+        .map(|task| task.task_title.trim())
+        .filter(|title| !title.is_empty())
+        .take(MAX_PROPOSAL_SUMMARY_TITLES)
+        .collect::<Vec<_>>();
+    let remaining_count = proposed_tasks.len().saturating_sub(task_titles.len());
+    let title_segment = if task_titles.is_empty() {
+        String::new()
+    } else {
+        let mut segment = format!(": {}", task_titles.join(" | "));
+        if remaining_count > 0 {
+            segment.push_str(&format!(" | +{remaining_count} more"));
+        }
+        segment
+    };
+
+    Some(format!(
+        "{} proposed follow-up task{} waiting for promotion{}",
+        proposed_tasks.len(),
+        if proposed_tasks.len() == 1 { "" } else { "s" },
+        title_segment,
+    ))
 }
 
 fn direction_state_label(state: DirectionState) -> &'static str {
@@ -529,8 +627,61 @@ mod tests {
             result.queue_summary(),
             Some("queue idle: no executable planning task")
         );
+        assert_eq!(result.proposal_summary(), None);
         assert!(!result.has_actionable_queue_head());
         assert!(!result.blocks_auto_followup());
+    }
+
+    #[test]
+    fn proposed_followups_are_surfaceable_when_no_executable_queue_head_exists() {
+        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let result = sample_service(PlanningWorkspaceLoadRecord {
+            directions_toml: Some(bootstrap_artifacts.directions_toml),
+            task_ledger_json: Some(
+                r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-followup-1",
+      "direction_id": "example-direction",
+      "direction_relation_note": "The answer offered a concrete next-step variant under the current direction.",
+      "title": "Draft a sushi-chef roadmap",
+      "description": "Persist the offered roadmap option as a follow-up candidate.",
+      "status": "proposed",
+      "base_priority": 30,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Suggested follow-up option from the latest answer.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-09T09:00:00Z"
+    }
+  ]
+}"#
+                .to_string(),
+            ),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
+        })
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
+
+        assert_eq!(
+            result.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+        assert_eq!(
+            result.proposal_summary(),
+            Some("1 proposed follow-up task waiting for promotion: Draft a sushi-chef roadmap")
+        );
+        let prompt_fragment = result
+            .prompt_fragment()
+            .expect("valid workspace should expose a prompt fragment");
+        assert!(prompt_fragment.contains("proposed_tasks: showing 1 of 1"));
+        assert!(prompt_fragment.contains("task-followup-1 | Draft a sushi-chef roadmap"));
+        assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
     }
 
     #[test]
@@ -580,6 +731,7 @@ mod tests {
         assert!(prompt_fragment.contains("Queue Summary"));
         assert!(prompt_fragment.contains("task-1"));
         assert!(prompt_fragment.contains("Result Output Prompt"));
+        assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
         assert!(
             result
                 .queue_summary()

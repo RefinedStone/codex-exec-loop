@@ -144,6 +144,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let planning_status_line = planning_projection.planning_status_line;
             let repair_attempt_line = planning_projection.repair_attempt_line;
             let queue_head_line = planning_projection.queue_head_line;
+            let proposal_line = planning_projection.proposal_line;
             let failure_line = planning_projection.failure_line;
             let mut lines = vec![
                 Line::from(format!(
@@ -195,6 +196,9 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             }
             if let Some(queue_head_line) = queue_head_line {
                 lines.push(Line::from(queue_head_line));
+            }
+            if let Some(proposal_line) = proposal_line {
+                lines.push(Line::from(proposal_line));
             }
             if let Some(failure_line) = failure_line {
                 lines.push(Line::from(failure_line));

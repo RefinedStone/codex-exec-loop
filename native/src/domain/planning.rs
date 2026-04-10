@@ -215,6 +215,7 @@ pub struct PriorityQueueTask {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PriorityQueueSkippedTask {
     pub task_id: String,
+    pub task_title: String,
     pub direction_id: String,
     pub status: TaskStatus,
     pub reason: String,

@@ -3566,6 +3566,32 @@ fn followup_template_status_lines_surface_planning_queue_failure_and_notice() {
 }
 
 #[test]
+fn followup_template_status_lines_surface_proposed_followups_when_queue_is_idle() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
+        "Planning Context".to_string(),
+        "queue idle: no executable planning task".to_string(),
+        Some(
+            "2 proposed follow-up tasks waiting for promotion: Draft roadmap | Draft checklist"
+                .to_string(),
+        ),
+        None,
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_followup_template_status_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning status: valid"));
+    assert!(rendered.contains("planning queue: queue idle: no executable planning task"));
+    assert!(rendered.contains("planning proposals: 2 proposed follow-up tasks"));
+}
+
+#[test]
 fn followup_template_status_lines_include_max_auto_turns_value() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();

@@ -86,6 +86,7 @@ pub struct PlanningRuntimeStatusProjection {
     pub planning_status_line: String,
     pub repair_attempt_line: Option<String>,
     pub queue_head_line: Option<String>,
+    pub proposal_line: Option<String>,
     pub failure_line: Option<String>,
 }
 
@@ -231,6 +232,12 @@ impl PlanningRuntimeFacadeService {
                         compact_projection_detail(queue_summary, request.max_detail_len)
                     ));
                 }
+                if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
+                    segments.push(format!(
+                        "proposals: {}",
+                        compact_projection_detail(proposal_summary, request.max_detail_len)
+                    ));
+                }
             }
             PlanningWorkspaceState::Repairing => {
                 if let Some(failure_summary) = summary.failure_summary.as_deref() {
@@ -243,6 +250,12 @@ impl PlanningRuntimeFacadeService {
                     segments.push(format!(
                         "queue: {}",
                         compact_projection_detail(queue_summary, request.max_detail_len)
+                    ));
+                }
+                if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
+                    segments.push(format!(
+                        "proposals: {}",
+                        compact_projection_detail(proposal_summary, request.max_detail_len)
                     ));
                 }
             }
@@ -280,9 +293,20 @@ impl PlanningRuntimeFacadeService {
                 )
             }),
             queue_head_line: summary.queue_summary.as_deref().map(|queue_summary| {
+                let queue_label = if request.snapshot.queue_head().is_some() {
+                    "planning queue head"
+                } else {
+                    "planning queue"
+                };
                 format!(
-                    "planning queue head: {}",
+                    "{queue_label}: {}",
                     compact_projection_detail(queue_summary, request.max_detail_len)
+                )
+            }),
+            proposal_line: summary.proposal_summary.as_deref().map(|proposal_summary| {
+                format!(
+                    "planning proposals: {}",
+                    compact_projection_detail(proposal_summary, request.max_detail_len)
                 )
             }),
             failure_line: summary.failure_summary.as_deref().map(|failure_summary| {
@@ -586,6 +610,36 @@ mod tests {
     }
 
     #[test]
+    fn build_summary_line_includes_proposals_when_queue_is_idle() {
+        let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
+        let snapshot =
+            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
+                "Planning Context".to_string(),
+                "queue idle: no executable planning task".to_string(),
+                Some(
+                    "2 proposed follow-up tasks waiting for promotion: Draft roadmap | Draft checklist"
+                        .to_string(),
+                ),
+                None,
+            );
+
+        let summary_line = service.build_summary_line(PlanningRuntimeSummaryLineRequest {
+            snapshot: &snapshot,
+            has_running_turn: false,
+            is_repairing: false,
+            repair_failure_summary: None,
+            repair_attempt: None,
+            has_notice: false,
+            max_detail_len: 36,
+            always_show: true,
+        });
+
+        let summary_line = summary_line.expect("summary line should be projected");
+        assert!(summary_line.contains("queue: queue idle:"));
+        assert!(summary_line.contains("proposals: 2 proposed"));
+    }
+
+    #[test]
     fn build_followup_status_projection_formats_planning_lines() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let projection =
@@ -619,6 +673,37 @@ mod tests {
                 .as_deref()
                 .expect("failure line should exist")
                 .starts_with("last planning failure: task-ledger.json is mi")
+        );
+    }
+
+    #[test]
+    fn build_followup_status_projection_surfaces_proposal_line() {
+        let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
+        let snapshot =
+            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
+                "Planning Context".to_string(),
+                "queue idle: no executable planning task".to_string(),
+                Some(
+                    "1 proposed follow-up task waiting for promotion: Draft sushi roadmap"
+                        .to_string(),
+                ),
+                None,
+            );
+
+        let projection =
+            service.build_followup_status_projection(PlanningRuntimeStatusProjectionRequest {
+                snapshot: &snapshot,
+                has_running_turn: false,
+                is_repairing: false,
+                repair_failure_summary: None,
+                repair_attempt: None,
+                max_detail_len: 48,
+            });
+
+        assert!(
+            projection.proposal_line.as_deref().is_some_and(
+                |line| line.starts_with("planning proposals: 1 proposed follow-up task")
+            )
         );
     }
 }
