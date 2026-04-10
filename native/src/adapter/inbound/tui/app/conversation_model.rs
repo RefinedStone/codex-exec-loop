@@ -4,6 +4,9 @@ use crate::application::service::planning_prompt_service::{
     PlanningPromptContextAvailability, PlanningPromptContextLoadResult,
 };
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
+use crate::application::service::turn_prompt_assembly_service::{
+    AutoFollowPromptAssemblyRequest, TurnPromptAssemblyService,
+};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
     ConversationToolActivity, ConversationToolActivityKind,
@@ -317,56 +320,6 @@ impl AutoFollowState {
 
     pub(crate) fn cycle_template_kind_backward(&mut self) {
         self.template_state.cycle_previous();
-    }
-
-    pub(crate) fn render_prompt(
-        &self,
-        thread_id: &str,
-        last_message: &str,
-        planning_prompt_fragment: Option<&str>,
-    ) -> String {
-        let rendered_prompt = self
-            .template_state
-            .current()
-            .body
-            .as_str()
-            .replace("{auto_turn}", &self.next_auto_turn_index().to_string())
-            .replace("{max_auto_turns}", &self.max_auto_turns.to_string())
-            .replace("{session_id}", thread_id)
-            .replace("{stop_keyword}", self.stop_rules.stop_keyword.value())
-            .replace("{last_message}", last_message);
-
-        match planning_prompt_fragment
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            Some(planning_prompt_fragment) => {
-                format!("{rendered_prompt}\n\n{planning_prompt_fragment}")
-            }
-            None => rendered_prompt,
-        }
-    }
-
-    pub(crate) fn render_prompt_preview(
-        &self,
-        thread_id: &str,
-        last_message: Option<&str>,
-        planning_prompt_fragment: Option<&str>,
-    ) -> String {
-        let preview_thread_id = if thread_id.trim().is_empty() {
-            "draft-thread"
-        } else {
-            thread_id
-        };
-        let preview_last_message = last_message
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("(waiting for next agent reply)");
-        self.render_prompt(
-            preview_thread_id,
-            preview_last_message,
-            planning_prompt_fragment,
-        )
     }
 
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
@@ -1155,7 +1108,10 @@ impl ConversationViewModel {
             .map(|message| message.text.as_str())
     }
 
-    pub(crate) fn decide_auto_followup(&self) -> AutoFollowupDecision {
+    pub(crate) fn decide_auto_followup(
+        &self,
+        turn_prompt_assembly_service: &TurnPromptAssemblyService,
+    ) -> AutoFollowupDecision {
         if !self.auto_follow_state.enabled {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
         }
@@ -1193,10 +1149,16 @@ impl ConversationViewModel {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked);
         }
 
-        AutoFollowupDecision::QueuePrompt(self.auto_follow_state.render_prompt(
-            &self.thread_id,
-            last_message.trim(),
-            self.planning_prompt_context.prompt_fragment(),
+        AutoFollowupDecision::QueuePrompt(turn_prompt_assembly_service.build_auto_follow_prompt(
+            AutoFollowPromptAssemblyRequest {
+                template: self.auto_follow_state.selected_template(),
+                auto_turn: self.auto_follow_state.next_auto_turn_index(),
+                max_auto_turns: self.auto_follow_state.max_auto_turns_value(),
+                session_id: &self.thread_id,
+                stop_keyword: self.auto_follow_state.stop_keyword_value(),
+                last_message: last_message.trim(),
+                planning_prompt_fragment: self.planning_prompt_context.prompt_fragment(),
+            },
         ))
     }
 }

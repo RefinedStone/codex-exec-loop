@@ -9,3 +9,4 @@ pub mod planning_validation_service;
 pub mod priority_queue_service;
 pub mod session_service;
 pub mod startup_service;
+pub mod turn_prompt_assembly_service;

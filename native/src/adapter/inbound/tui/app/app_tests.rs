@@ -1969,6 +1969,45 @@ fn startup_ready_submits_armed_prompt() {
 }
 
 #[test]
+fn manual_submit_appends_planning_context_when_ready() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.input_buffer = "ship it".to_string();
+    conversation.replace_planning_prompt_context(PlanningPromptContextLoadResult::ready(
+        PlanningPromptContext {
+            prompt_fragment: "Planning Context\nQueue Summary".to_string(),
+            summary: "next task: task-1".to_string(),
+        },
+    ));
+
+    app.start_turn_submission();
+
+    let mut submitted_prompt = None;
+    for _ in 0..20 {
+        submitted_prompt = codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .next();
+        if submitted_prompt.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let submitted_prompt =
+        submitted_prompt.expect("manual submit should reach the codex app-server port");
+    assert!(submitted_prompt.starts_with("ship it"));
+    assert!(submitted_prompt.contains("Planning Context"));
+    assert!(submitted_prompt.contains("Queue Summary"));
+}
+
+#[test]
 fn editing_buffer_cancels_armed_startup_submit() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Loading;

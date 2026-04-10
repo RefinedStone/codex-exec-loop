@@ -1,6 +1,9 @@
 use super::session_browser::{SessionBrowserView, build_session_browser_view};
 use super::*;
 use crate::application::service::session_service::SessionProjectFilter;
+use crate::application::service::turn_prompt_assembly_service::{
+    AutoFollowPromptPreviewRequest, TurnPromptAssemblyService,
+};
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::{PlanningValidationSeverity, PlanningWorkspaceState};
 
@@ -1664,11 +1667,18 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                 conversation.thread_id.as_str()
             };
             let latest_agent_message = conversation.latest_agent_message_text();
-            let rendered_preview = conversation.auto_follow_state.render_prompt_preview(
-                &conversation.thread_id,
-                latest_agent_message,
-                conversation.planning_prompt_context.prompt_fragment(),
-            );
+            let rendered_preview = TurnPromptAssemblyService::new()
+                .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
+                    template,
+                    auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
+                    max_auto_turns: conversation.auto_follow_state.max_auto_turns_value(),
+                    session_id: &conversation.thread_id,
+                    stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
+                    last_message: latest_agent_message,
+                    planning_prompt_fragment: conversation
+                        .planning_prompt_context
+                        .prompt_fragment(),
+                });
 
             let mut lines = vec![
                 Line::from(format!("selected: {}", template.label)),

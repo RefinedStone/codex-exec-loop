@@ -7,6 +7,7 @@ use crate::application::service::planning_prompt_service::{
     PlanningPromptContext, PlanningPromptContextLoadResult,
 };
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
+use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
 };
@@ -71,6 +72,10 @@ fn ready_conversation() -> ConversationViewModel {
     }
 }
 
+fn turn_prompt_assembly_service() -> TurnPromptAssemblyService {
+    TurnPromptAssemblyService::new()
+}
+
 #[test]
 fn auto_followup_prompt_renders_builtin_template() {
     let mut conversation = ready_conversation();
@@ -81,7 +86,9 @@ fn auto_followup_prompt_renders_builtin_template() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+    let AutoFollowupDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_followup(&turn_prompt_assembly_service())
+    else {
         panic!("auto follow-up prompt should render");
     };
 
@@ -241,7 +248,7 @@ fn auto_followup_prompt_skips_when_manual_input_is_buffered() {
     conversation.input_buffer = "manual prompt".to_string();
 
     assert_eq!(
-        conversation.decide_auto_followup(),
+        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
     );
 }
@@ -270,7 +277,9 @@ fn auto_followup_prompt_uses_selected_template_item() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+    let AutoFollowupDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_followup(&turn_prompt_assembly_service())
+    else {
         panic!("plan queue prompt should render");
     };
 
@@ -289,17 +298,6 @@ fn auto_followup_activity_exposes_workspace_template_source() {
             .template_source_label()
             .contains(".codex-exec-loop/followups/custom-review.md")
     );
-}
-
-#[test]
-fn render_prompt_preview_uses_placeholders_for_blank_thread_and_reply() {
-    let mut state = AutoFollowState::new(sample_template_catalog());
-    state.template_state.items[0].body = "session={session_id}\nlast={last_message}".to_string();
-
-    let preview = state.render_prompt_preview("", Some("   "), None);
-
-    assert!(preview.contains("session=draft-thread"));
-    assert!(preview.contains("(waiting for next agent reply)"));
 }
 
 #[test]
@@ -391,7 +389,7 @@ fn auto_followup_stops_when_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(),
+        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -407,7 +405,7 @@ fn auto_followup_stops_when_stop_keyword_case_varies() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(),
+        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -426,7 +424,7 @@ fn auto_followup_stops_when_custom_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(),
+        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -446,7 +444,7 @@ fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(),
+        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
     );
 }
@@ -468,7 +466,9 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+    let AutoFollowupDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_followup(&turn_prompt_assembly_service())
+    else {
         panic!("auto follow-up should continue when file changes exist");
     };
 
@@ -491,7 +491,9 @@ fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) = conversation.decide_auto_followup() else {
+    let AutoFollowupDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_followup(&turn_prompt_assembly_service())
+    else {
         panic!("planning-aware auto follow-up prompt should render");
     };
 
@@ -514,7 +516,7 @@ fn auto_followup_skips_when_planning_prompt_context_is_blocked() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(),
+        conversation.decide_auto_followup(&turn_prompt_assembly_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
     );
 }

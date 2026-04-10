@@ -16,6 +16,9 @@ use crate::application::service::planning_validation_service::PlanningValidation
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::application::service::turn_prompt_assembly_service::{
+    ManualPromptAssemblyRequest, TurnPromptAssemblyService,
+};
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
 use crate::domain::recent_sessions::RecentSessions;
@@ -233,13 +236,13 @@ impl NativeTuiApp {
 
         let prompt = match &self.conversation_state {
             ConversationState::Ready(conversation) if conversation.can_submit_prompt() => {
-                conversation.input_buffer.trim().to_string()
+                self.assemble_manual_prompt(conversation)
             }
             _ => return,
         };
-        if prompt.is_empty() {
+        let Some(prompt) = prompt else {
             return;
-        }
+        };
         self.submit_prompt(prompt, PromptOrigin::Manual);
     }
 
@@ -509,7 +512,8 @@ impl NativeTuiApp {
             return;
         }
 
-        match conversation.decide_auto_followup() {
+        let turn_prompt_assembly_service = TurnPromptAssemblyService::new();
+        match conversation.decide_auto_followup(&turn_prompt_assembly_service) {
             super::AutoFollowupDecision::QueuePrompt(prompt) => {
                 conversation.clear_auto_followup_skip();
                 let template_label = conversation.auto_follow_state.template_label().to_string();
@@ -775,7 +779,7 @@ impl NativeTuiApp {
         let (startup_submit_armed, prompt) = match &self.conversation_state {
             ConversationState::Ready(conversation) => (
                 conversation.startup_submit_armed,
-                conversation.input_buffer.trim().to_string(),
+                self.assemble_manual_prompt(conversation),
             ),
             ConversationState::Loading | ConversationState::Failed(_) => return,
         };
@@ -784,12 +788,14 @@ impl NativeTuiApp {
         }
 
         match self.shell_action_availability() {
-            super::ShellActionAvailability::Ready if prompt.is_empty() => {
+            super::ShellActionAvailability::Ready if prompt.is_none() => {
                 self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
                     status_text: None,
                 });
             }
             super::ShellActionAvailability::Ready => {
+                let prompt =
+                    prompt.expect("ready startup submit should preserve a non-empty prompt");
                 self.submit_prompt(prompt, PromptOrigin::Manual);
             }
             super::ShellActionAvailability::Pending => {}
@@ -828,5 +834,12 @@ impl NativeTuiApp {
             prompt,
             origin: prompt_origin,
         });
+    }
+
+    fn assemble_manual_prompt(&self, conversation: &ConversationViewModel) -> Option<String> {
+        TurnPromptAssemblyService::new().build_manual_prompt(ManualPromptAssemblyRequest {
+            operator_prompt: &conversation.input_buffer,
+            planning_prompt_fragment: conversation.planning_prompt_context.prompt_fragment(),
+        })
     }
 }
