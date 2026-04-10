@@ -662,7 +662,7 @@ pub(super) fn build_planning_draft_editor_overlay_view(
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / detail mode manual"),
+                Span::raw(" / guided draft"),
             ]),
             Line::from(format!(
                 "draft dir: {}",

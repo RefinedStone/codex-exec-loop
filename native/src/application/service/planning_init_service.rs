@@ -113,6 +113,14 @@ impl PlanningInitService {
         self.load_manual_editor_session(workspace_dir, &staged.draft_name)
     }
 
+    pub fn stage_simple_editor_session(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningDraftEditorSession> {
+        let staged = self.stage_simple_mode_draft(workspace_dir)?;
+        self.load_manual_editor_session(workspace_dir, &staged.draft_name)
+    }
+
     pub fn load_manual_editor_session(
         &self,
         workspace_dir: &str,
@@ -519,6 +527,30 @@ mod tests {
                 .iter()
                 .any(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
         );
+    }
+
+    #[test]
+    fn stage_simple_editor_session_returns_promotable_simple_draft() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        let service = PlanningInitService::new(
+            workspace_port,
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let session = service
+            .stage_simple_editor_session("/tmp/workspace")
+            .expect("simple editor session should stage");
+
+        assert!(session.validation_report.is_valid());
+        assert_eq!(session.editable_files.len(), 3);
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .map(|file| file.body.as_str())
+            .expect("directions file should remain editable");
+        assert!(directions.contains("general-workstream"));
     }
 
     #[test]

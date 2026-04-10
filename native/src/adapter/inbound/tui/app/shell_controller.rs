@@ -356,11 +356,21 @@ impl NativeTuiApp {
         let workspace_directory = self.current_workspace_directory();
         let status_text = match self
             .planning_init_service
-            .stage_simple_mode_draft(&workspace_directory)
+            .stage_simple_editor_session(&workspace_directory)
         {
-            Ok(result) => {
-                self.close_shell_overlay();
-                result.status_text()
+            Ok(session) => {
+                let draft_name = session.draft_name.clone();
+                let validation_ok = session.validation_report.is_valid();
+                self.planning_draft_editor_ui_state.open_session(session);
+                self.planning_init_overlay_ui_state.open_manual_editor();
+                format!(
+                    "planning simple draft ready / draft: {draft_name} / validation: {}",
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                )
             }
             Err(error) => format!("planning init failed: {error}"),
         };
