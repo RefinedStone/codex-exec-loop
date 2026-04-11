@@ -98,6 +98,7 @@ impl PlanningBootstrapService {
                 "title": "Task Ledger",
                 "type": "object",
                 "required": ["version", "tasks"],
+                "additionalProperties": false,
                 "properties": {
                     "version": {
                         "type": "integer",
@@ -107,6 +108,7 @@ impl PlanningBootstrapService {
                         "type": "array",
                         "items": {
                             "type": "object",
+                            "additionalProperties": false,
                             "required": [
                                 "id",
                                 "direction_id",
@@ -119,11 +121,23 @@ impl PlanningBootstrapService {
                                 "updated_at"
                             ],
                             "properties": {
-                                "id": { "type": "string" },
-                                "direction_id": { "type": "string" },
+                                "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "direction_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
                                 "direction_relation_note": { "type": "string" },
-                                "title": { "type": "string" },
-                                "description": { "type": "string" },
+                                "title": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
                                 "status": {
                                     "type": "string",
                                     "enum": [
@@ -156,7 +170,10 @@ impl PlanningBootstrapService {
                                     "enum": ["user", "llm", "system"]
                                 },
                                 "source_turn_id": { "type": ["string", "null"] },
-                                "updated_at": { "type": "string" }
+                                "updated_at": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
                             }
                         }
                     }

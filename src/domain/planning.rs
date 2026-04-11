@@ -116,12 +116,14 @@ impl PlanningValidationReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DirectionCatalogDocument {
     pub version: u32,
     pub directions: Vec<DirectionDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DirectionDefinition {
     pub id: String,
     pub title: String,
@@ -141,6 +143,7 @@ pub enum DirectionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskLedgerDocument {
     pub version: u32,
     #[serde(default)]
@@ -148,6 +151,7 @@ pub struct TaskLedgerDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskDefinition {
     pub id: String,
     pub direction_id: String,
