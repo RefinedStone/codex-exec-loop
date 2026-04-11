@@ -12,6 +12,10 @@ use crate::domain::planning::{
 #[derive(Default, Clone)]
 pub struct PlanningValidationService;
 
+const PLACEHOLDER_MARKERS: &[&str] = &[
+    "{{", "}}", "todo", "tbd", "<replace", "[replace", "<fill", "[fill",
+];
+
 impl PlanningValidationService {
     pub fn new() -> Self {
         Self
@@ -491,30 +495,17 @@ impl PlanningValidationService {
         task_map: &HashMap<String, &crate::domain::planning::TaskDefinition>,
         report: &mut PlanningValidationReport,
     ) {
-        let in_progress_task_ids = task_ledger
-            .tasks
-            .iter()
-            .filter(|task| task.status == TaskStatus::InProgress)
-            .map(|task| task.id.trim().to_string())
-            .collect::<Vec<_>>();
-        if in_progress_task_ids.len() > 1 {
-            report.push_error(
-                PlanningFileKind::TaskLedger,
-                "multiple_in_progress_tasks",
-                format!(
-                    "task-ledger.json may contain at most one in_progress task; found {}: {}",
-                    in_progress_task_ids.len(),
-                    in_progress_task_ids.join(", ")
-                ),
-            );
-        }
+        let mut in_progress_task_ids = Vec::new();
 
         for task in &task_ledger.tasks {
+            let task_id = task.id.trim();
+            if task.status == TaskStatus::InProgress {
+                in_progress_task_ids.push(task_id);
+            }
             if task.status != TaskStatus::Done {
                 continue;
             }
 
-            let task_id = task.id.trim();
             for dependency_id in &task.depends_on {
                 let normalized_dependency_id = dependency_id.trim();
                 if let Some(dependency) = task_map.get(normalized_dependency_id)
@@ -546,6 +537,18 @@ impl PlanningValidationService {
                     );
                 }
             }
+        }
+
+        if in_progress_task_ids.len() > 1 {
+            report.push_error(
+                PlanningFileKind::TaskLedger,
+                "multiple_in_progress_tasks",
+                format!(
+                    "task-ledger.json may contain at most one in_progress task; found {}: {}",
+                    in_progress_task_ids.len(),
+                    in_progress_task_ids.join(", ")
+                ),
+            );
         }
     }
 
@@ -715,11 +718,10 @@ fn display_json_location(path: String) -> String {
 
 fn placeholder_marker(line: &str) -> Option<&'static str> {
     let normalized = line.to_ascii_lowercase();
-    [
-        "{{", "}}", "todo", "tbd", "<replace", "[replace", "<fill", "[fill",
-    ]
-    .into_iter()
-    .find(|marker| normalized.contains(marker))
+    PLACEHOLDER_MARKERS
+        .iter()
+        .copied()
+        .find(|marker| normalized.contains(marker))
 }
 
 #[cfg(test)]

@@ -254,15 +254,17 @@ impl PriorityQueueService {
         direction_map: &HashMap<&'a str, &'a DirectionDefinition>,
         task_map: &HashMap<&'a str, &'a TaskDefinition>,
     ) -> Result<HashMap<&'a str, i64>, PriorityQueueBuildError> {
-        let in_progress_task_ids = task_ledger
+        let in_progress_tasks = task_ledger
             .tasks
             .iter()
             .filter(|task| task.status == crate::domain::planning::TaskStatus::InProgress)
-            .map(|task| task.id.trim().to_string())
             .collect::<Vec<_>>();
-        if in_progress_task_ids.len() > 1 {
+        if in_progress_tasks.len() > 1 {
             return Err(PriorityQueueBuildError::MultipleInProgressTasks {
-                task_ids: in_progress_task_ids,
+                task_ids: in_progress_tasks
+                    .into_iter()
+                    .map(|task| task.id.trim().to_string())
+                    .collect(),
             });
         }
 

@@ -8,6 +8,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::domain::planning::{
     DIRECTIONS_FILE_PATH, PlanningWorkspaceFiles, QUEUE_SNAPSHOT_FILE_PATH,
     RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    canonical_active_planning_file_path,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -31,14 +32,7 @@ pub struct PlanningExecutionSnapshot {
 
 impl PlanningExecutionSnapshot {
     pub fn captures_path(path: &str) -> bool {
-        matches!(
-            path,
-            DIRECTIONS_FILE_PATH
-                | TASK_LEDGER_FILE_PATH
-                | TASK_LEDGER_SCHEMA_FILE_PATH
-                | RESULT_OUTPUT_FILE_PATH
-                | QUEUE_SNAPSHOT_FILE_PATH
-        )
+        canonical_active_planning_file_path(path).is_some()
     }
 }
 
@@ -95,12 +89,12 @@ impl PlanningChangeSet {
     fn from_paths(paths: &[String]) -> Self {
         let mut change_set = Self::default();
         for path in paths {
-            match path.as_str() {
-                DIRECTIONS_FILE_PATH => change_set.directions_changed = true,
-                TASK_LEDGER_FILE_PATH => change_set.task_ledger_changed = true,
-                TASK_LEDGER_SCHEMA_FILE_PATH => change_set.task_ledger_schema_changed = true,
-                RESULT_OUTPUT_FILE_PATH => change_set.result_output_changed = true,
-                QUEUE_SNAPSHOT_FILE_PATH => change_set.queue_snapshot_changed = true,
+            match canonical_active_planning_file_path(path) {
+                Some(DIRECTIONS_FILE_PATH) => change_set.directions_changed = true,
+                Some(TASK_LEDGER_FILE_PATH) => change_set.task_ledger_changed = true,
+                Some(TASK_LEDGER_SCHEMA_FILE_PATH) => change_set.task_ledger_schema_changed = true,
+                Some(RESULT_OUTPUT_FILE_PATH) => change_set.result_output_changed = true,
+                Some(QUEUE_SNAPSHOT_FILE_PATH) => change_set.queue_snapshot_changed = true,
                 _ => {}
             }
         }
@@ -950,6 +944,51 @@ mod tests {
                 &workspace_dir,
                 "turn-queue-only",
                 &[QUEUE_SNAPSHOT_FILE_PATH.to_string()],
+                &execution_snapshot,
+            )
+            .expect("reconciliation should succeed");
+
+        let restored_queue_snapshot = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
+            .expect("restored queue snapshot should read");
+
+        assert_eq!(
+            result.queue_snapshot_action,
+            Some(PlanningQueueSnapshotAction::RestoredFromExecutionSnapshot)
+        );
+        assert_eq!(
+            restored_queue_snapshot,
+            execution_snapshot
+                .queue_snapshot_json
+                .expect("execution snapshot should keep the accepted queue snapshot")
+        );
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn absolute_queue_snapshot_path_is_canonicalized_for_change_detection() {
+        let workspace_dir = create_temp_workspace("planning-reconcile-absolute-queue");
+        let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
+        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
+        fs::write(
+            planning_dir.join("queue.snapshot.json"),
+            "{\"next_task\":\"stale\"}",
+        )
+        .expect("mutated queue snapshot should write");
+
+        let absolute_queue_snapshot_path = planning_dir
+            .join("queue.snapshot.json")
+            .display()
+            .to_string();
+        assert!(PlanningExecutionSnapshot::captures_path(
+            absolute_queue_snapshot_path.as_str()
+        ));
+
+        let result = service()
+            .reconcile_after_turn(
+                &workspace_dir,
+                "turn-absolute-queue",
+                &[absolute_queue_snapshot_path],
                 &execution_snapshot,
             )
             .expect("reconciliation should succeed");
