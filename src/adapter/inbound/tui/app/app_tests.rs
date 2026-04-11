@@ -12,7 +12,7 @@ use super::shell_presentation::{
     build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
 };
 use super::{
-    ActiveTurnPlanningSnapshot, AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage,
+    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage,
     ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
     ConversationState, ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
     DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP,
@@ -64,6 +64,14 @@ use crate::domain::startup_diagnostics::StartupDiagnostics;
 struct FakeCodexAppServerPort {
     new_thread_calls: Mutex<Vec<(String, String)>>,
     turn_calls: Mutex<Vec<(String, String)>>,
+    new_thread_stream_behavior: Mutex<FakeStreamBehavior>,
+    turn_stream_behavior: Mutex<FakeStreamBehavior>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FakeStreamBehavior {
+    events: Vec<ConversationStreamEvent>,
+    error: Option<String>,
 }
 
 impl CodexAppServerPort for FakeCodexAppServerPort {
@@ -99,25 +107,52 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
         &self,
         cwd: &str,
         prompt: &str,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         self.new_thread_calls
             .lock()
             .expect("new-thread call mutex poisoned")
             .push((cwd.to_string(), prompt.to_string()));
-        Ok(())
+        run_fake_stream(
+            event_sender,
+            self.new_thread_stream_behavior
+                .lock()
+                .expect("new-thread stream behavior mutex poisoned")
+                .clone(),
+        )
     }
 
     fn run_turn_stream(
         &self,
         thread_id: &str,
         prompt: &str,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         self.turn_calls
             .lock()
             .expect("turn call mutex poisoned")
             .push((thread_id.to_string(), prompt.to_string()));
+        run_fake_stream(
+            event_sender,
+            self.turn_stream_behavior
+                .lock()
+                .expect("turn stream behavior mutex poisoned")
+                .clone(),
+        )
+    }
+}
+
+fn run_fake_stream(
+    event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+    behavior: FakeStreamBehavior,
+) -> Result<()> {
+    for event in behavior.events {
+        let _ = event_sender.send(event);
+    }
+
+    if let Some(error) = behavior.error {
+        Err(anyhow::anyhow!(error))
+    } else {
         Ok(())
     }
 }
@@ -276,6 +311,20 @@ fn count_staged_planning_drafts(workspace_dir: &str) -> usize {
 fn sync_draft_conversation_to_startup_workspace(app: &mut NativeTuiApp) {
     let workspace_dir = app.current_workspace_directory();
     app.sync_draft_shell_workspace(&workspace_dir);
+}
+
+fn ready_turn_planning_capture(
+    workspace_directory: &str,
+    snapshot: PlanningExecutionSnapshot,
+) -> ActiveTurnPlanningCapture {
+    ActiveTurnPlanningCapture::ready(workspace_directory.to_string(), snapshot)
+}
+
+fn failed_turn_planning_capture(
+    workspace_directory: &str,
+    message: impl Into<String>,
+) -> ActiveTurnPlanningCapture {
+    ActiveTurnPlanningCapture::capture_failed(workspace_directory.to_string(), message.into())
 }
 
 fn ready_conversation() -> ConversationViewModel {
@@ -1029,7 +1078,8 @@ fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
         Some("agent-1".to_string()),
     ));
     app.conversation_state = ConversationState::Ready(conversation);
-    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+    app.active_turn_planning_capture = Some(ready_turn_planning_capture(
+        &workspace_dir,
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
@@ -1238,7 +1288,8 @@ fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
         Some("agent-1".to_string()),
     ));
     app.conversation_state = ConversationState::Ready(conversation);
-    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+    app.active_turn_planning_capture = Some(ready_turn_planning_capture(
+        &workspace_dir,
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
@@ -1317,7 +1368,8 @@ fn buffered_manual_input_pauses_planning_repair_submission() {
         Some("agent-1".to_string()),
     ));
     app.conversation_state = ConversationState::Ready(conversation);
-    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+    app.active_turn_planning_capture = Some(ready_turn_planning_capture(
+        &workspace_dir,
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
@@ -1409,7 +1461,8 @@ fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
         Some("agent-1".to_string()),
     ));
     app.conversation_state = ConversationState::Ready(conversation);
-    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::Ready(
+    app.active_turn_planning_capture = Some(ready_turn_planning_capture(
+        &workspace_dir,
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
@@ -1469,9 +1522,9 @@ fn snapshot_capture_failure_blocks_followup_without_claiming_reconciliation() {
         Some("agent-1".to_string()),
     ));
     app.conversation_state = ConversationState::Ready(conversation);
-    app.active_turn_planning_snapshot = Some(ActiveTurnPlanningSnapshot::CaptureFailed(
-        "planning reconciliation could not capture the accepted planning snapshot before the turn started: failed to read task-ledger.json"
-            .to_string(),
+    app.active_turn_planning_capture = Some(failed_turn_planning_capture(
+        &workspace_dir,
+        "planning reconciliation could not capture the accepted planning snapshot before the turn started: failed to read task-ledger.json",
     ));
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
@@ -1513,6 +1566,121 @@ fn snapshot_capture_failure_blocks_followup_without_claiming_reconciliation() {
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
+    let (mut app, codex_port) = make_test_app();
+    let current_workspace = create_temp_workspace("planning-capture-current");
+    let stale_workspace = create_temp_workspace("planning-capture-stale");
+    let mut conversation = ready_conversation();
+    conversation.cwd = current_workspace.clone();
+    conversation.active_turn_workspace_directory = Some(current_workspace.clone());
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-mismatch".to_string());
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_capture = Some(ready_turn_planning_capture(
+        &stale_workspace,
+        PlanningExecutionSnapshot {
+            directions_toml: Some("version = 1".to_string()),
+            task_ledger_json: Some("{\"version\":1,\"tasks\":[]}".to_string()),
+        },
+    ));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-mismatch".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert_eq!(
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
+        "blocked"
+    );
+    assert!(
+        conversation
+            .planning_runtime_snapshot
+            .preview_detail()
+            .is_some_and(|detail| detail.contains("stale planning snapshot"))
+    );
+    assert!(conversation.runtime_notices.iter().any(|notice| {
+        notice.contains(&stale_workspace) && notice.contains(&current_workspace)
+    }));
+
+    std::fs::remove_dir_all(current_workspace).expect("current workspace should be removed");
+    std::fs::remove_dir_all(stale_workspace).expect("stale workspace should be removed");
+}
+
+#[test]
+fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
+    let (app, codex_port) = make_test_app();
+    let mut runtime =
+        super::shell_runtime::ShellRuntime::new(app, ShellFrontendMode::InlineMainBuffer);
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("conversation should start ready");
+    };
+    conversation.thread_id = "thread-123".to_string();
+    codex_port
+        .turn_stream_behavior
+        .lock()
+        .expect("turn stream behavior mutex poisoned")
+        .error = Some("transport closed".to_string());
+
+    runtime
+        .app_mut()
+        .submit_prompt("ship it".to_string(), PromptOrigin::Manual);
+
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(5));
+        runtime.poll_background_messages();
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            continue;
+        };
+        if conversation.input_state == ConversationInputState::ReadyToContinue
+            && conversation.status_text == "turn failed"
+        {
+            break;
+        }
+    }
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert_eq!(
+        conversation.input_state,
+        ConversationInputState::ReadyToContinue
+    );
+    assert_eq!(conversation.status_text, "turn failed");
+    assert!(conversation.messages.iter().any(|message| {
+        message.kind == ConversationMessageKind::Status
+            && message
+                .text
+                .contains("turn stream failed before a terminal event: transport closed")
+    }));
+    assert!(conversation.runtime_notices.iter().any(|notice| {
+        notice.contains("turn stream returned an error before a terminal event: transport closed")
+    }));
 }
 
 #[test]

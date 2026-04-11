@@ -173,6 +173,28 @@ enum PromptOrigin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveTurnPlanningCapture {
+    workspace_directory: String,
+    snapshot: ActiveTurnPlanningSnapshot,
+}
+
+impl ActiveTurnPlanningCapture {
+    fn ready(workspace_directory: impl Into<String>, snapshot: PlanningExecutionSnapshot) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            snapshot: ActiveTurnPlanningSnapshot::Ready(snapshot),
+        }
+    }
+
+    fn capture_failed(workspace_directory: impl Into<String>, message: String) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            snapshot: ActiveTurnPlanningSnapshot::CaptureFailed(message),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ActiveTurnPlanningSnapshot {
     Ready(PlanningExecutionSnapshot),
     CaptureFailed(String),
@@ -196,7 +218,7 @@ struct NativeTuiApp {
     conversation_service: ConversationService,
     followup_template_service: FollowupTemplateService,
     planning_services: PlanningServices,
-    active_turn_planning_snapshot: Option<ActiveTurnPlanningSnapshot>,
+    active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     show_startup_ascii_art: bool,

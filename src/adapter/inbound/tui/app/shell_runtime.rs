@@ -96,6 +96,11 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::StreamUpdated(event),
                     );
                 }
+                BackgroundMessage::ConversationRuntimeNotice(notice) => {
+                    self.app.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::StreamExecutionObserved { notice },
+                    );
+                }
                 BackgroundMessage::GithubReviewPollLoaded(result) => self
                     .app
                     .record_github_review_poll_result(Instant::now(), result),

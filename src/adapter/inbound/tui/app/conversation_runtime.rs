@@ -9,6 +9,9 @@ pub(super) enum ConversationRuntimeEvent {
         origin: PromptOrigin,
     },
     StreamUpdated(ConversationStreamEvent),
+    StreamExecutionObserved {
+        notice: String,
+    },
     PostTurnEvaluated {
         evaluation: Box<ConversationPostTurnEvaluation>,
     },
@@ -196,6 +199,9 @@ pub(super) fn reduce_conversation_runtime(
                 state.fail_turn(message);
             }
         },
+        ConversationRuntimeEvent::StreamExecutionObserved { notice } => {
+            state.extend_runtime_notices([notice]);
+        }
         ConversationRuntimeEvent::PostTurnEvaluated { evaluation } => {
             let evaluation = *evaluation;
             state.replace_planning_runtime_snapshot(evaluation.planning_runtime_snapshot);
@@ -1039,6 +1045,28 @@ mod tests {
                 .runtime_notices
                 .iter()
                 .any(|notice| notice.contains("planning repair retry 1/2"))
+        );
+    }
+
+    #[test]
+    fn stream_execution_observed_accumulates_runtime_notice_without_effects() {
+        let state = sample_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamExecutionObserved {
+                notice: "turn stream returned an error after the terminal event: transport closed"
+                    .to_string(),
+            },
+        );
+
+        assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.state.runtime_notices,
+            vec![
+                "turn stream returned an error after the terminal event: transport closed"
+                    .to_string()
+            ]
         );
     }
 

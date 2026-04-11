@@ -30,6 +30,7 @@ pub(super) enum BackgroundMessage {
     SessionsLoaded(Result<RecentSessions, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
+    ConversationRuntimeNotice(String),
     GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
 
@@ -72,7 +73,7 @@ impl NativeTuiApp {
             conversation_service,
             followup_template_service,
             planning_services,
-            active_turn_planning_snapshot: None,
+            active_turn_planning_capture: None,
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
@@ -193,7 +194,7 @@ impl NativeTuiApp {
         let reduction = reduce_conversation_runtime(conversation, event);
         self.conversation_state = ConversationState::Ready(reduction.state);
         if clear_turn_snapshot {
-            self.active_turn_planning_snapshot = None;
+            self.active_turn_planning_capture = None;
         }
         for effect in reduction.effects {
             self.execute_conversation_runtime_effect(effect);
