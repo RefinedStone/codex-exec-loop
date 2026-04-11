@@ -109,6 +109,7 @@ After a platform-facing change, record the validation result instead of rewritin
 ```bash
 ./scripts/capture_native_validation.sh \
   --frontend inline \
+  --terminal "iTerm2 3.5" \
   --result pass \
   --output-dir docs/validation
 ```

@@ -33,7 +33,7 @@ This file describes the planning feature that already ships on `prerelease`.
 - if the LLM changes a protected file, the runtime restores the pre-turn snapshot and can archive the rejected candidate
 - `task-ledger.json` becomes authoritative only after schema validation and business-rule validation both pass
 - invalid task-ledger writes are rolled back, archived under `rejected/`, and followed by a bounded repair retry prompt
-- builtin `next-task` uses the accepted queue head when one exists; if planning is valid but there is no actionable head, the runtime sends a queue-refresh prompt from the latest answer instead of hard-blocking
+- builtin `next-task` uses the accepted queue head when one exists; if planning is valid but there is no actionable head, the runtime sends a planning-refresh prompt from the latest answer instead of hard-blocking
 
 ## Draft Editor Contract
 

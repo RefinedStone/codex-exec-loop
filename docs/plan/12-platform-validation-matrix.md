@@ -46,6 +46,7 @@ Record a validation row:
 ```bash
 ./scripts/capture_native_validation.sh \
   --frontend inline \
+  --terminal "iTerm2 3.5" \
   --result pass \
   --output-dir docs/validation
 ```
