@@ -10,7 +10,8 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::domain::planning::{
     DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY, PlanningFileKind,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 #[derive(Default)]
@@ -179,6 +180,10 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
                 workspace_dir,
                 TASK_LEDGER_SCHEMA_FILE_PATH,
             )?,
+            queue_snapshot_json: Self::read_optional_workspace_file(
+                workspace_dir,
+                QUEUE_SNAPSHOT_FILE_PATH,
+            )?,
             result_output_markdown: Self::read_optional_workspace_file(
                 workspace_dir,
                 RESULT_OUTPUT_FILE_PATH,
@@ -308,6 +313,11 @@ mod tests {
             "{\"type\":\"object\"}",
         )
         .expect("schema should write");
+        fs::write(
+            planning_dir.join("queue.snapshot.json"),
+            "{\"next_task\":null}",
+        )
+        .expect("queue snapshot should write");
         fs::write(planning_dir.join("result-output.md"), "# result")
             .expect("result output should write");
 
@@ -324,6 +334,10 @@ mod tests {
         assert_eq!(
             result.task_ledger_schema_json.as_deref(),
             Some("{\"type\":\"object\"}")
+        );
+        assert_eq!(
+            result.queue_snapshot_json.as_deref(),
+            Some("{\"next_task\":null}")
         );
         assert_eq!(result.result_output_markdown.as_deref(), Some("# result"));
 
@@ -430,6 +444,7 @@ mod tests {
         assert!(result.directions_toml.is_none());
         assert!(result.task_ledger_json.is_none());
         assert!(result.task_ledger_schema_json.is_none());
+        assert!(result.queue_snapshot_json.is_none());
         assert!(result.result_output_markdown.is_none());
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");

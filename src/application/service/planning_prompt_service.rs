@@ -597,6 +597,7 @@ mod tests {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
             task_ledger_schema_json: None,
+            queue_snapshot_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
         .load_runtime_snapshot("/tmp/workspace")
@@ -620,6 +621,7 @@ mod tests {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            queue_snapshot_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
         .load_runtime_snapshot("/tmp/workspace")
@@ -670,6 +672,7 @@ mod tests {
                 .to_string(),
             ),
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            queue_snapshot_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
         .load_runtime_snapshot("/tmp/workspace")
@@ -744,6 +747,7 @@ state = "paused"
                 .to_string(),
             ),
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            queue_snapshot_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
         .load_runtime_snapshot("/tmp/workspace")
@@ -788,6 +792,7 @@ state = "paused"
                 .to_string(),
             ),
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            queue_snapshot_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
         .load_runtime_snapshot("/tmp/workspace")
@@ -839,6 +844,7 @@ state = "paused"
                 .to_string(),
             ),
             task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+            queue_snapshot_json: None,
             result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
         })
         .load_runtime_snapshot("/tmp/workspace")

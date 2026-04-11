@@ -1,8 +1,9 @@
 use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::{
-    PlanningReconciliationResult, PlanningRepairRetryReason, build_planning_repair_prompt,
+    PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRetryReason,
+    build_planning_repair_prompt,
 };
-use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
+use crate::domain::planning::TASK_LEDGER_FILE_PATH;
 
 use super::super::conversation_model::PlanningRepairState;
 use super::super::conversation_runtime::{
@@ -138,7 +139,7 @@ impl NativeTuiApp {
         let requires_execution_snapshot = request
             .changed_planning_file_paths
             .iter()
-            .any(|path| path == DIRECTIONS_FILE_PATH || path == TASK_LEDGER_FILE_PATH);
+            .any(|path| PlanningExecutionSnapshot::captures_path(path));
 
         if !requires_execution_snapshot {
             self.active_turn_planning_capture = None;

@@ -38,6 +38,7 @@ pub struct PlanningWorkspaceLoadRecord {
     pub directions_toml: Option<String>,
     pub task_ledger_json: Option<String>,
     pub task_ledger_schema_json: Option<String>,
+    pub queue_snapshot_json: Option<String>,
     pub result_output_markdown: Option<String>,
 }
 
@@ -46,6 +47,7 @@ impl PlanningWorkspaceLoadRecord {
         self.directions_toml.is_some()
             || self.task_ledger_json.is_some()
             || self.task_ledger_schema_json.is_some()
+            || self.queue_snapshot_json.is_some()
             || self.result_output_markdown.is_some()
     }
 }

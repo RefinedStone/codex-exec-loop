@@ -1083,6 +1083,9 @@ fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json.clone()),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown.clone()),
+            queue_snapshot_json: None,
         },
     ));
 
@@ -1293,6 +1296,9 @@ fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json.clone()),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown.clone()),
+            queue_snapshot_json: None,
         },
     ));
 
@@ -1373,6 +1379,9 @@ fn buffered_manual_input_pauses_planning_repair_submission() {
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json.clone()),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown.clone()),
+            queue_snapshot_json: None,
         },
     ));
 
@@ -1466,6 +1475,9 @@ fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
         PlanningExecutionSnapshot {
             directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json.clone()),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown.clone()),
+            queue_snapshot_json: None,
         },
     ));
 
@@ -1590,6 +1602,9 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
         PlanningExecutionSnapshot {
             directions_toml: Some("version = 1".to_string()),
             task_ledger_json: Some("{\"version\":1,\"tasks\":[]}".to_string()),
+            task_ledger_schema_json: None,
+            result_output_markdown: None,
+            queue_snapshot_json: None,
         },
     ));
 
