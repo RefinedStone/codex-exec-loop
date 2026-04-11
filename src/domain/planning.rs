@@ -260,7 +260,7 @@ impl TaskStatus {
     }
 
     pub fn clears_blocker(self) -> bool {
-        matches!(self, Self::Done | Self::Cancelled)
+        matches!(self, Self::Done | Self::Cancelled | Self::AwaitingUser)
     }
 }
 

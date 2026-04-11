@@ -359,7 +359,10 @@ impl PlanningReconciliationService {
             })?;
             let queue_snapshot = self
                 .priority_queue_service
-                .build_snapshot(directions, task_ledger);
+                .build_snapshot(directions, task_ledger)
+                .map_err(|error| {
+                    anyhow!("planning validation passed but queue build failed: {error}")
+                })?;
             let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)
                 .context("failed to serialize queue snapshot")?;
             self.planning_workspace_port
@@ -620,7 +623,9 @@ mod tests {
             toml::from_str(&artifacts.directions_toml).expect("bootstrap directions should parse");
         let task_ledger = serde_json::from_str(&artifacts.task_ledger_json)
             .expect("bootstrap task ledger should parse");
-        let queue_snapshot = PriorityQueueService::new().build_snapshot(&directions, &task_ledger);
+        let queue_snapshot = PriorityQueueService::new()
+            .build_snapshot(&directions, &task_ledger)
+            .expect("bootstrap queue snapshot should build");
         let queue_snapshot_json =
             serde_json::to_string_pretty(&queue_snapshot).expect("queue snapshot should serialize");
         fs::write(

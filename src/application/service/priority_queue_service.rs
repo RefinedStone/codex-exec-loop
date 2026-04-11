@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use chrono::DateTime;
 
@@ -9,6 +9,76 @@ use crate::domain::planning::{
 
 #[derive(Default, Clone)]
 pub struct PriorityQueueService;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PriorityQueueBuildError {
+    MultipleInProgressTasks {
+        task_ids: Vec<String>,
+    },
+    UnknownDirection {
+        task_id: String,
+        direction_id: String,
+    },
+    MissingDependency {
+        task_id: String,
+        dependency_id: String,
+    },
+    MissingBlocker {
+        task_id: String,
+        blocker_id: String,
+    },
+    InvalidUpdatedAt {
+        task_id: String,
+        updated_at: String,
+    },
+}
+
+impl fmt::Display for PriorityQueueBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MultipleInProgressTasks { task_ids } => write!(
+                formatter,
+                "task-ledger.json may contain at most one in_progress task; found {}: {}",
+                task_ids.len(),
+                task_ids.join(", ")
+            ),
+            Self::UnknownDirection {
+                task_id,
+                direction_id,
+            } => write!(
+                formatter,
+                "task {task_id} references unknown direction_id {}",
+                display_reference(direction_id)
+            ),
+            Self::MissingDependency {
+                task_id,
+                dependency_id,
+            } => write!(
+                formatter,
+                "task {task_id} references unknown dependency {}",
+                display_reference(dependency_id)
+            ),
+            Self::MissingBlocker {
+                task_id,
+                blocker_id,
+            } => write!(
+                formatter,
+                "task {task_id} references unknown blocker {}",
+                display_reference(blocker_id)
+            ),
+            Self::InvalidUpdatedAt {
+                task_id,
+                updated_at,
+            } => write!(
+                formatter,
+                "task {task_id} must use RFC3339 updated_at for queue ordering, got {}",
+                display_reference(updated_at)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PriorityQueueBuildError {}
 
 #[derive(Debug, Clone)]
 struct QueueCandidate {
@@ -27,7 +97,7 @@ impl PriorityQueueService {
         &self,
         directions: &DirectionCatalogDocument,
         task_ledger: &TaskLedgerDocument,
-    ) -> PriorityQueueSnapshot {
+    ) -> Result<PriorityQueueSnapshot, PriorityQueueBuildError> {
         let direction_map = directions
             .directions
             .iter()
@@ -38,6 +108,8 @@ impl PriorityQueueService {
             .iter()
             .map(|task| (task.id.trim(), task))
             .collect::<HashMap<_, _>>();
+        let updated_at_epoch_millis_by_task_id =
+            self.validate_queue_inputs(task_ledger, &direction_map, &task_map)?;
 
         let mut candidates = Vec::new();
         let mut proposed_candidates = Vec::new();
@@ -45,12 +117,9 @@ impl PriorityQueueService {
 
         for task in &task_ledger.tasks {
             let normalized_direction_id = task.direction_id.trim();
-            let Some(direction) = direction_map.get(normalized_direction_id) else {
-                skipped_tasks.push(
-                    self.skipped_task(task, format!("unknown direction_id {}", task.direction_id)),
-                );
-                continue;
-            };
+            let direction = direction_map
+                .get(normalized_direction_id)
+                .expect("queue build preflight should validate direction references");
 
             if !direction.state.allows_queue_execution() {
                 skipped_tasks.push(self.skipped_task(
@@ -74,9 +143,9 @@ impl PriorityQueueService {
                 proposed_candidates.push(QueueCandidate {
                     readiness_rank: 0,
                     combined_priority: task.combined_priority(),
-                    updated_at_epoch_millis: parse_updated_at_epoch_millis(
-                        task.updated_at.as_str(),
-                    ),
+                    updated_at_epoch_millis: *updated_at_epoch_millis_by_task_id
+                        .get(task.id.trim())
+                        .expect("queue build preflight should validate updated_at"),
                     task: PriorityQueueTask {
                         rank: 0,
                         task_id: task.id.clone(),
@@ -113,7 +182,9 @@ impl PriorityQueueService {
             candidates.push(QueueCandidate {
                 readiness_rank,
                 combined_priority: task.combined_priority(),
-                updated_at_epoch_millis: parse_updated_at_epoch_millis(task.updated_at.as_str()),
+                updated_at_epoch_millis: *updated_at_epoch_millis_by_task_id
+                    .get(task.id.trim())
+                    .expect("queue build preflight should validate updated_at"),
                 task: PriorityQueueTask {
                     rank: 0,
                     task_id: task.id.clone(),
@@ -169,12 +240,73 @@ impl PriorityQueueService {
             })
             .collect::<Vec<_>>();
 
-        PriorityQueueSnapshot {
+        Ok(PriorityQueueSnapshot {
             next_task,
             active_tasks,
             proposed_tasks,
             skipped_tasks,
+        })
+    }
+
+    fn validate_queue_inputs<'a>(
+        &self,
+        task_ledger: &'a TaskLedgerDocument,
+        direction_map: &HashMap<&'a str, &'a DirectionDefinition>,
+        task_map: &HashMap<&'a str, &'a TaskDefinition>,
+    ) -> Result<HashMap<&'a str, i64>, PriorityQueueBuildError> {
+        let in_progress_task_ids = task_ledger
+            .tasks
+            .iter()
+            .filter(|task| task.status == crate::domain::planning::TaskStatus::InProgress)
+            .map(|task| task.id.trim().to_string())
+            .collect::<Vec<_>>();
+        if in_progress_task_ids.len() > 1 {
+            return Err(PriorityQueueBuildError::MultipleInProgressTasks {
+                task_ids: in_progress_task_ids,
+            });
         }
+
+        let mut updated_at_epoch_millis_by_task_id = HashMap::new();
+        for task in &task_ledger.tasks {
+            let task_id = task.id.trim();
+            if !direction_map.contains_key(task.direction_id.trim()) {
+                return Err(PriorityQueueBuildError::UnknownDirection {
+                    task_id: task_id.to_string(),
+                    direction_id: task.direction_id.trim().to_string(),
+                });
+            }
+
+            let updated_at_epoch_millis = parse_updated_at_epoch_millis(task.updated_at.as_str())
+                .map_err(|_| {
+                PriorityQueueBuildError::InvalidUpdatedAt {
+                    task_id: task_id.to_string(),
+                    updated_at: task.updated_at.clone(),
+                }
+            })?;
+            updated_at_epoch_millis_by_task_id.insert(task_id, updated_at_epoch_millis);
+
+            for dependency_id in &task.depends_on {
+                let normalized_dependency_id = dependency_id.trim();
+                if !task_map.contains_key(normalized_dependency_id) {
+                    return Err(PriorityQueueBuildError::MissingDependency {
+                        task_id: task_id.to_string(),
+                        dependency_id: normalized_dependency_id.to_string(),
+                    });
+                }
+            }
+
+            for blocker_id in &task.blocked_by {
+                let normalized_blocker_id = blocker_id.trim();
+                if !task_map.contains_key(normalized_blocker_id) {
+                    return Err(PriorityQueueBuildError::MissingBlocker {
+                        task_id: task_id.to_string(),
+                        blocker_id: normalized_blocker_id.to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(updated_at_epoch_millis_by_task_id)
     }
 
     fn skipped_task(&self, task: &TaskDefinition, reason: String) -> PriorityQueueSkippedTask {
@@ -204,7 +336,9 @@ impl PriorityQueueService {
                         normalized_dependency_id,
                         dependency.status.label()
                     )),
-                    None => Some(format!("{normalized_dependency_id}(missing)")),
+                    None => {
+                        unreachable!("queue build preflight should validate dependency references")
+                    }
                 }
             })
             .collect::<Vec<_>>();
@@ -236,7 +370,9 @@ impl PriorityQueueService {
                         normalized_blocker_id,
                         blocker.status.label()
                     )),
-                    None => Some(format!("{normalized_blocker_id}(missing)")),
+                    None => {
+                        unreachable!("queue build preflight should validate blocker references")
+                    }
                 }
             })
             .collect::<Vec<_>>();
@@ -252,10 +388,12 @@ impl PriorityQueueService {
     }
 }
 
-fn parse_updated_at_epoch_millis(updated_at: &str) -> i64 {
-    DateTime::parse_from_rfc3339(updated_at)
-        .map(|timestamp| timestamp.timestamp_millis())
-        .unwrap_or(i64::MAX)
+fn parse_updated_at_epoch_millis(updated_at: &str) -> Result<i64, chrono::ParseError> {
+    DateTime::parse_from_rfc3339(updated_at).map(|timestamp| timestamp.timestamp_millis())
+}
+
+fn display_reference(value: &str) -> &str {
+    if value.is_empty() { "<blank>" } else { value }
 }
 
 fn build_rank_reasons(task: &TaskDefinition) -> Vec<String> {
@@ -297,7 +435,7 @@ impl DirectionQueueLabel for DirectionDefinition {
 mod tests {
     use std::collections::HashMap;
 
-    use super::PriorityQueueService;
+    use super::{PriorityQueueBuildError, PriorityQueueService};
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, TaskActor, TaskDefinition,
         TaskLedgerDocument, TaskStatus,
@@ -385,7 +523,9 @@ mod tests {
             ],
         };
 
-        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+        let snapshot = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect("queue snapshot should build");
 
         assert_eq!(
             snapshot
@@ -476,7 +616,9 @@ mod tests {
             ],
         };
 
-        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+        let snapshot = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect("queue snapshot should build");
 
         assert_eq!(
             snapshot
@@ -521,11 +663,19 @@ mod tests {
             5,
             "2026-04-09T09:30:00Z",
         );
-        blocked_proposal.depends_on = vec!["missing-dependency".to_string()];
+        blocked_proposal.depends_on = vec!["blocking-ready".to_string()];
 
         let task_ledger = TaskLedgerDocument {
             version: 1,
             tasks: vec![
+                task(
+                    "blocking-ready",
+                    "direction-a",
+                    TaskStatus::Ready,
+                    95,
+                    0,
+                    "2026-04-09T07:30:00Z",
+                ),
                 task(
                     "ready-proposal",
                     "direction-a",
@@ -546,7 +696,9 @@ mod tests {
             ],
         };
 
-        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+        let snapshot = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect("queue snapshot should build");
 
         assert_eq!(
             snapshot
@@ -561,7 +713,7 @@ mod tests {
             .iter()
             .map(|task| (task.task_id.as_str(), task.reason.as_str()))
             .collect::<HashMap<_, _>>();
-        assert!(skipped["blocked-proposal"].contains("missing-dependency(missing)"));
+        assert!(skipped["blocked-proposal"].contains("blocking-ready(ready)"));
         assert!(skipped["paused-proposal"].contains("direction direction-b is paused"));
     }
 
@@ -603,7 +755,9 @@ mod tests {
             ],
         };
 
-        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+        let snapshot = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect("queue snapshot should build");
 
         assert_eq!(
             snapshot
@@ -652,7 +806,9 @@ mod tests {
             ],
         };
 
-        let snapshot = queue_service.build_snapshot(&directions, &task_ledger);
+        let snapshot = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect("queue snapshot should build");
 
         assert_eq!(
             snapshot
@@ -669,5 +825,181 @@ mod tests {
                 .any(|reason| reason.contains("priority_reason=recent result raised urgency"))
         );
         assert_eq!(snapshot.visible_tasks(1)[0].task_id, "older-task");
+    }
+
+    #[test]
+    fn awaiting_user_blockers_clear_for_downstream_queue_tasks() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[("direction-a", DirectionState::Active)]);
+        let mut blocked_task = task(
+            "blocked-task",
+            "direction-a",
+            TaskStatus::Ready,
+            40,
+            0,
+            "2026-04-09T09:30:00Z",
+        );
+        blocked_task.blocked_by = vec!["user-input".to_string()];
+
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![
+                task(
+                    "user-input",
+                    "direction-a",
+                    TaskStatus::AwaitingUser,
+                    20,
+                    0,
+                    "2026-04-09T09:00:00Z",
+                ),
+                blocked_task,
+            ],
+        };
+
+        let snapshot = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect("queue snapshot should build");
+
+        assert_eq!(
+            snapshot
+                .active_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["blocked-task"]
+        );
+        assert!(
+            snapshot
+                .skipped_tasks
+                .iter()
+                .all(|task| task.task_id != "blocked-task")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_direction_references_instead_of_skipping_them() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[("direction-a", DirectionState::Active)]);
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![task(
+                "task-1",
+                "missing-direction",
+                TaskStatus::Ready,
+                30,
+                0,
+                "2026-04-09T09:00:00Z",
+            )],
+        };
+
+        let error = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect_err("queue build should reject unknown directions");
+
+        assert_eq!(
+            error,
+            PriorityQueueBuildError::UnknownDirection {
+                task_id: "task-1".to_string(),
+                direction_id: "missing-direction".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_missing_dependency_references_instead_of_skipping_them() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[("direction-a", DirectionState::Active)]);
+        let mut blocked_task = task(
+            "blocked-task",
+            "direction-a",
+            TaskStatus::Ready,
+            30,
+            0,
+            "2026-04-09T09:00:00Z",
+        );
+        blocked_task.depends_on = vec!["missing-task".to_string()];
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![blocked_task],
+        };
+
+        let error = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect_err("queue build should reject missing dependency references");
+
+        assert_eq!(
+            error,
+            PriorityQueueBuildError::MissingDependency {
+                task_id: "blocked-task".to_string(),
+                dependency_id: "missing-task".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_updated_at_instead_of_silently_reordering() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[("direction-a", DirectionState::Active)]);
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![task(
+                "task-1",
+                "direction-a",
+                TaskStatus::Ready,
+                30,
+                0,
+                "not-a-timestamp",
+            )],
+        };
+
+        let error = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect_err("queue build should reject invalid updated_at values");
+
+        assert_eq!(
+            error,
+            PriorityQueueBuildError::InvalidUpdatedAt {
+                task_id: "task-1".to_string(),
+                updated_at: "not-a-timestamp".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_multiple_in_progress_tasks_during_queue_build() {
+        let queue_service = PriorityQueueService::new();
+        let directions = directions(&[("direction-a", DirectionState::Active)]);
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![
+                task(
+                    "task-1",
+                    "direction-a",
+                    TaskStatus::InProgress,
+                    30,
+                    0,
+                    "2026-04-09T09:00:00Z",
+                ),
+                task(
+                    "task-2",
+                    "direction-a",
+                    TaskStatus::InProgress,
+                    20,
+                    0,
+                    "2026-04-09T09:10:00Z",
+                ),
+            ],
+        };
+
+        let error = queue_service
+            .build_snapshot(&directions, &task_ledger)
+            .expect_err("queue build should reject multiple in_progress tasks");
+
+        assert_eq!(
+            error,
+            PriorityQueueBuildError::MultipleInProgressTasks {
+                task_ids: vec!["task-1".to_string(), "task-2".to_string()],
+            }
+        );
     }
 }

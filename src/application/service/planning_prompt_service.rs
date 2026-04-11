@@ -199,9 +199,17 @@ impl PlanningPromptService {
         let task_ledger = validation_result
             .task_ledger
             .expect("valid planning task ledger should be available");
-        let queue_snapshot = self
+        let queue_snapshot = match self
             .priority_queue_service
-            .build_snapshot(&directions, &task_ledger);
+            .build_snapshot(&directions, &task_ledger)
+        {
+            Ok(queue_snapshot) => queue_snapshot,
+            Err(error) => {
+                return Ok(PlanningRuntimeSnapshot::invalid(format!(
+                    "planning queue build failed: {error}"
+                )));
+            }
+        };
         let result_output_markdown = workspace_record
             .result_output_markdown
             .as_deref()
