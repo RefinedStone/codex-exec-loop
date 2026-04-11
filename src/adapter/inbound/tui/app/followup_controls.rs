@@ -46,17 +46,7 @@ pub(super) fn reduce_followup_controls(
             workspace_directory,
             template_load_result,
         } => {
-            if !state.has_active_thread() && state.cwd != workspace_directory {
-                let template_count = template_load_result.catalog.items.len();
-                let warnings = template_load_result.warnings;
-                state.cwd = workspace_directory;
-                state.auto_follow_state = AutoFollowState::new(template_load_result.catalog);
-                state.base_warnings.clear();
-                state.replace_template_warnings(warnings);
-                state.clear_auto_followup_skip();
-                state.set_status_with_warnings(format!(
-                    "draft workspace synced / templates: {template_count}"
-                ));
+            if state.sync_draft_workspace(workspace_directory, template_load_result) {
                 effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
             }
         }

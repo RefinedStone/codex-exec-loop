@@ -63,6 +63,7 @@ fn ready_conversation() -> ConversationViewModel {
         thread_id: "thread-1".to_string(),
         title: "Existing session".to_string(),
         cwd: "/tmp/workspace".to_string(),
+        draft_workspace_directory: "/tmp/workspace".to_string(),
         messages: Vec::new(),
         cached_conversation_lines: format_conversation_lines(&[]),
         live_agent_message: None,
@@ -74,6 +75,7 @@ fn ready_conversation() -> ConversationViewModel {
         input_buffer: String::new(),
         startup_submit_armed: false,
         active_turn_id: None,
+        active_turn_workspace_directory: None,
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
@@ -252,6 +254,7 @@ fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
             catalog: sample_template_catalog(),
             warnings: Vec::new(),
         },
+        "/tmp/draft-workspace".to_string(),
     );
 
     assert_eq!(conversation.status_text, "thread loaded / templates: 3");
@@ -321,6 +324,7 @@ fn snapshot_status_keeps_base_status_with_compact_warning_label() {
             catalog: sample_template_catalog(),
             warnings: vec!["workspace template missing".to_string()],
         },
+        "/tmp/draft-workspace".to_string(),
     );
 
     assert_eq!(
@@ -349,6 +353,38 @@ fn auto_followup_prompt_skips_when_manual_input_is_buffered() {
     assert_eq!(
         conversation.decide_auto_followup(&planning_runtime_facade_service()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
+    );
+}
+
+#[test]
+fn record_submitted_prompt_refreshes_cached_lines_and_tracks_turn_workspace() {
+    let mut conversation = ready_conversation();
+
+    conversation.record_submitted_prompt(
+        ConversationMessage::new(ConversationMessageKind::User, "ship it", None, None),
+        "/tmp/turn-workspace".to_string(),
+    );
+
+    assert_eq!(
+        conversation.cached_conversation_lines,
+        format_conversation_lines(&conversation.messages)
+    );
+    assert_eq!(
+        conversation.active_turn_workspace_directory.as_deref(),
+        Some("/tmp/turn-workspace")
+    );
+}
+
+#[test]
+fn planning_workspace_directory_prefers_draft_workspace_for_new_threads() {
+    let mut conversation = ready_conversation();
+    conversation.thread_id.clear();
+    conversation.cwd = "/tmp/thread-workspace".to_string();
+    conversation.draft_workspace_directory = "/tmp/draft-workspace".to_string();
+
+    assert_eq!(
+        conversation.planning_workspace_directory(),
+        "/tmp/draft-workspace"
     );
 }
 

@@ -273,11 +273,17 @@ fn count_staged_planning_drafts(workspace_dir: &str) -> usize {
         .unwrap_or(0)
 }
 
+fn sync_draft_conversation_to_startup_workspace(app: &mut NativeTuiApp) {
+    let workspace_dir = app.current_workspace_directory();
+    app.sync_draft_shell_workspace(&workspace_dir);
+}
+
 fn ready_conversation() -> ConversationViewModel {
     ConversationViewModel {
         thread_id: "thread-1".to_string(),
         title: "Existing session".to_string(),
         cwd: "/tmp/workspace".to_string(),
+        draft_workspace_directory: "/tmp/workspace".to_string(),
         messages: Vec::new(),
         cached_conversation_lines: format_conversation_lines(&[]),
         live_agent_message: None,
@@ -289,6 +295,7 @@ fn ready_conversation() -> ConversationViewModel {
         input_buffer: String::new(),
         startup_submit_armed: false,
         active_turn_id: None,
+        active_turn_workspace_directory: None,
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
@@ -464,6 +471,7 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-init-app");
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
     let staged_drafts_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning")
@@ -516,6 +524,7 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
 }
 
 fn open_planning_simple_review(app: &mut NativeTuiApp) {
+    sync_draft_conversation_to_startup_workspace(app);
     app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(
@@ -610,6 +619,7 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
         .join("planning")
         .join("drafts");
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
 
     app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
@@ -639,6 +649,7 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
 }
 
 fn open_planning_manual_editor(app: &mut NativeTuiApp) {
+    sync_draft_conversation_to_startup_workspace(app);
     app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
@@ -1334,7 +1345,7 @@ fn buffered_manual_input_pauses_planning_repair_submission() {
     assert!(conversation.planning_repair_state.is_some());
     assert_eq!(
         conversation.status_text,
-        "turn completed / planning repair paused: manual input buffered"
+        "turn completed / planning repair paused: manual input buffered (1/2)"
     );
     assert!(conversation.runtime_notices.iter().any(|notice| {
         notice.contains("planning repair retry 1/2 is waiting because manual input is buffered")
@@ -1807,6 +1818,7 @@ fn draft_workspace_sync_preserves_buffered_input() {
         panic!("app should start with a draft conversation");
     };
     conversation.cwd = "/tmp/subdir".to_string();
+    conversation.draft_workspace_directory = "/tmp/subdir".to_string();
     conversation.input_buffer = "buffered prompt".to_string();
 
     app.sync_draft_shell_workspace("/tmp/root");
@@ -1829,6 +1841,7 @@ fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() 
         panic!("app should start with a draft conversation");
     };
     conversation.cwd = "/tmp/subdir".to_string();
+    conversation.draft_workspace_directory = "/tmp/subdir".to_string();
 
     runtime
         .app()

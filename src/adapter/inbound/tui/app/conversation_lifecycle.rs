@@ -12,6 +12,7 @@ pub(super) enum ConversationLifecycleEvent {
     ConversationLoaded {
         result: Result<ConversationSnapshot, String>,
         template_load_result: Option<FollowupTemplateCatalogLoadResult>,
+        draft_workspace_directory: String,
     },
 }
 
@@ -58,12 +59,17 @@ pub(super) fn reduce_conversation_lifecycle(
         ConversationLifecycleEvent::ConversationLoaded {
             result,
             template_load_result,
+            draft_workspace_directory,
         } => {
             state.conversation_state = match result {
                 Ok(snapshot) => match template_load_result {
-                    Some(template_load_result) => ConversationState::Ready(
-                        ConversationViewModel::from_snapshot(snapshot, template_load_result),
-                    ),
+                    Some(template_load_result) => {
+                        ConversationState::Ready(ConversationViewModel::from_snapshot(
+                            snapshot,
+                            template_load_result,
+                            draft_workspace_directory,
+                        ))
+                    }
                     None => ConversationState::Failed(
                         "loaded snapshot missing follow-up template data".to_string(),
                     ),

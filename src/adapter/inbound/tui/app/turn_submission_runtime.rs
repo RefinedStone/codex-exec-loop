@@ -8,6 +8,7 @@ use crate::domain::conversation::ConversationStreamEvent;
 use crate::domain::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
 
 use super::conversation_model::PlanningRepairState;
+use super::conversation_runtime::{ConversationPostTurnAction, ConversationPostTurnEvaluation};
 use super::*;
 
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
@@ -22,6 +23,7 @@ struct QueuedPlanningRepairPrompt {
 
 #[derive(Debug, Clone, Default)]
 struct PlanningRepairResolution {
+    next_planning_repair_state: Option<PlanningRepairState>,
     queued_prompt: Option<QueuedPlanningRepairPrompt>,
     notices: Vec<String>,
     block_reason: Option<String>,
@@ -58,12 +60,12 @@ impl NativeTuiApp {
     ) {
         match effect {
             ConversationRuntimeEffect::StartStream {
-                cwd,
+                workspace_directory,
                 thread_id,
                 prompt,
             } => {
                 self.active_turn_planning_snapshot =
-                    Some(self.load_planning_execution_snapshot(&cwd));
+                    Some(self.load_planning_execution_snapshot(&workspace_directory));
                 let outer_tx = self.tx.clone();
                 let service = self.conversation_service.clone();
                 thread::spawn(move || {
@@ -74,7 +76,11 @@ impl NativeTuiApp {
                             Some(thread_id) => {
                                 service.run_turn_stream(&thread_id, &prompt, event_tx)
                             }
-                            None => service.run_new_thread_stream(&cwd, &prompt, event_tx),
+                            None => service.run_new_thread_stream(
+                                &workspace_directory,
+                                &prompt,
+                                event_tx,
+                            ),
                         };
                         let _ = result;
                     });
@@ -95,9 +101,11 @@ impl NativeTuiApp {
                 });
             }
             ConversationRuntimeEffect::EvaluateAutoFollowup {
+                workspace_directory,
                 queued_from_turn_id,
                 changed_planning_file_paths,
             } => self.evaluate_auto_followup_after_turn(
+                workspace_directory,
                 queued_from_turn_id,
                 changed_planning_file_paths,
             ),
@@ -136,22 +144,42 @@ impl NativeTuiApp {
 
     fn evaluate_auto_followup_after_turn(
         &mut self,
+        workspace_directory: String,
         queued_from_turn_id: String,
         changed_planning_file_paths: Vec<String>,
     ) {
-        let Some(mut conversation) = self.take_ready_conversation_state() else {
+        let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
 
-        let reconciliation_result = self.reconcile_planning_after_turn(
-            &conversation.cwd,
+        let evaluation = self.build_post_turn_evaluation(
+            &conversation,
+            &workspace_directory,
             &queued_from_turn_id,
             &changed_planning_file_paths,
         );
+        self.conversation_state = ConversationState::Ready(conversation);
+        self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
+            evaluation: Box::new(evaluation),
+        });
+    }
+
+    fn build_post_turn_evaluation(
+        &mut self,
+        conversation: &ConversationViewModel,
+        workspace_directory: &str,
+        queued_from_turn_id: &str,
+        changed_planning_file_paths: &[String],
+    ) -> ConversationPostTurnEvaluation {
+        let reconciliation_result = self.reconcile_planning_after_turn(
+            workspace_directory,
+            queued_from_turn_id,
+            changed_planning_file_paths,
+        );
         let planning_repair_resolution = self.resolve_planning_repair_after_turn(
-            &mut conversation,
-            &queued_from_turn_id,
-            &changed_planning_file_paths,
+            conversation,
+            queued_from_turn_id,
+            changed_planning_file_paths,
             &reconciliation_result,
         );
         let planning_runtime_snapshot = if let Some(block_reason) = planning_repair_resolution
@@ -165,93 +193,54 @@ impl NativeTuiApp {
         } else if changed_planning_file_paths.is_empty() {
             conversation.planning_runtime_snapshot.clone()
         } else {
-            self.load_planning_runtime_snapshot(&conversation.cwd)
+            self.load_planning_runtime_snapshot(workspace_directory)
         };
-        extend_unique_runtime_notices(
-            &mut conversation,
-            reconciliation_result
-                .notices
-                .into_iter()
-                .chain(planning_repair_resolution.notices),
-        );
-        conversation.replace_planning_runtime_snapshot(planning_runtime_snapshot);
 
-        if let Some(queued_prompt) = planning_repair_resolution.queued_prompt {
+        let mut runtime_notices = reconciliation_result.notices;
+        runtime_notices.extend(planning_repair_resolution.notices);
+
+        let action = if let Some(queued_prompt) = planning_repair_resolution.queued_prompt {
             if !conversation.input_buffer.trim().is_empty() {
-                let pause_notice = format!(
+                runtime_notices.push(format!(
                     "planning repair retry {}/{} is waiting because manual input is buffered",
                     queued_prompt.attempt_number, queued_prompt.max_attempts
-                );
-                push_unique_runtime_notice(&mut conversation, pause_notice);
-                conversation.status_text =
-                    "turn completed / planning repair paused: manual input buffered".to_string();
-                let should_refresh_lines =
-                    conversation.append_status_message(conversation.status_text.clone());
-                if should_refresh_lines {
-                    conversation.refresh_conversation_lines();
+                ));
+                ConversationPostTurnAction::PausePlanningRepair {
+                    attempt_number: queued_prompt.attempt_number,
+                    max_attempts: queued_prompt.max_attempts,
                 }
-                self.conversation_state = ConversationState::Ready(conversation);
-                return;
-            }
-            conversation.record_planning_repair_queue(
-                queued_prompt.attempt_number,
-                queued_prompt.max_attempts,
-            );
-            conversation.status_text = format!(
-                "turn completed / queued planning repair {}/{}",
-                queued_prompt.attempt_number, queued_prompt.max_attempts
-            );
-            let should_refresh_lines =
-                conversation.append_status_message(conversation.status_text.clone());
-            if should_refresh_lines {
-                conversation.refresh_conversation_lines();
-            }
-            self.conversation_state = ConversationState::Ready(conversation);
-            self.execute_conversation_runtime_effect(
-                ConversationRuntimeEffect::QueuePlanningRepairPrompt {
+            } else {
+                ConversationPostTurnAction::QueuePlanningRepair {
                     prompt: queued_prompt.prompt,
                     queued_from_turn_id: queued_prompt.queued_from_turn_id,
                     attempt_number: queued_prompt.attempt_number,
                     max_attempts: queued_prompt.max_attempts,
-                },
-            );
-            return;
-        }
-
-        match conversation.decide_auto_followup(&self.planning_services.runtime_facade) {
-            super::AutoFollowupDecision::QueuePrompt(queued_prompt) => {
-                conversation.clear_auto_followup_skip();
-                let template_label = conversation.auto_follow_state.template_label().to_string();
-                conversation.record_auto_followup_queue(&queued_from_turn_id, &template_label);
-                conversation.status_text = format!(
-                    "turn completed / queued auto follow-up with template {template_label}"
-                );
-                let should_refresh_lines =
-                    conversation.append_status_message(conversation.status_text.clone());
-                if should_refresh_lines {
-                    conversation.refresh_conversation_lines();
                 }
-                self.conversation_state = ConversationState::Ready(conversation);
-                self.execute_conversation_runtime_effect(
-                    ConversationRuntimeEffect::QueueAutoPrompt {
+            }
+        } else {
+            match conversation.decide_auto_followup_with_snapshot(
+                &self.planning_services.runtime_facade,
+                &planning_runtime_snapshot,
+            ) {
+                super::AutoFollowupDecision::QueuePrompt(queued_prompt) => {
+                    ConversationPostTurnAction::QueueAutoPrompt {
                         prompt: queued_prompt.prompt,
-                        queued_from_turn_id,
-                        template_label,
+                        queued_from_turn_id: queued_from_turn_id.to_string(),
+                        template_label: conversation.auto_follow_state.template_label().to_string(),
                         transcript_text: queued_prompt.transcript_text,
-                    },
-                );
-            }
-            super::AutoFollowupDecision::Skip(skip_reason) => {
-                conversation.record_auto_followup_skip(skip_reason);
-                conversation.status_text =
-                    skip_reason.runtime_status(&conversation.auto_follow_state);
-                let should_refresh_lines =
-                    conversation.append_status_message(conversation.status_text.clone());
-                if should_refresh_lines {
-                    conversation.refresh_conversation_lines();
+                    }
                 }
-                self.conversation_state = ConversationState::Ready(conversation);
+                super::AutoFollowupDecision::Skip(reason) => {
+                    ConversationPostTurnAction::SkipAutoFollowup { reason }
+                }
             }
+        };
+
+        ConversationPostTurnEvaluation {
+            planning_runtime_snapshot,
+            planning_repair_state: planning_repair_resolution.next_planning_repair_state,
+            runtime_notices,
+            action,
         }
     }
 
@@ -331,7 +320,7 @@ impl NativeTuiApp {
 
     fn resolve_planning_repair_after_turn(
         &self,
-        conversation: &mut ConversationViewModel,
+        conversation: &ConversationViewModel,
         queued_from_turn_id: &str,
         changed_planning_file_paths: &[String],
         reconciliation_result: &PlanningReconciliationResult,
@@ -354,7 +343,6 @@ impl NativeTuiApp {
         };
 
         if reconciliation_result.auto_followup_block_reason.is_some() {
-            conversation.planning_repair_state = None;
             return PlanningRepairResolution::default();
         }
 
@@ -362,8 +350,8 @@ impl NativeTuiApp {
             .iter()
             .any(|path| path == TASK_LEDGER_FILE_PATH);
         if task_ledger_changed && !reconciliation_result.rejected_task_ledger {
-            conversation.planning_repair_state = None;
             return PlanningRepairResolution {
+                next_planning_repair_state: None,
                 notices: vec![format!(
                     "planning repair accepted task-ledger.json on retry {}/{}",
                     active_repair_state.attempts_used, active_repair_state.max_attempts
@@ -386,7 +374,7 @@ impl NativeTuiApp {
 
     fn queue_planning_repair_attempt(
         &self,
-        conversation: &mut ConversationViewModel,
+        conversation: &ConversationViewModel,
         root_turn_id: &str,
         repair_request: &crate::application::service::planning_reconciliation_service::PlanningRepairRequest,
         retry_reason: Option<PlanningRepairRetryReason>,
@@ -399,8 +387,8 @@ impl NativeTuiApp {
             };
 
         if next_attempt > max_attempts {
-            conversation.planning_repair_state = None;
             return PlanningRepairResolution {
+                next_planning_repair_state: None,
                 notices: vec![format!(
                     "planning repair exhausted after {max_attempts} attempts; operator intervention is required"
                 )],
@@ -413,13 +401,14 @@ impl NativeTuiApp {
 
         let prompt =
             build_planning_repair_prompt(repair_request, next_attempt, max_attempts, retry_reason);
-        conversation.planning_repair_state = Some(PlanningRepairState {
+        let next_planning_repair_state = Some(PlanningRepairState {
             root_turn_id: root_turn_id.to_string(),
             attempts_used: next_attempt,
             max_attempts,
             latest_request: repair_request.clone(),
         });
         PlanningRepairResolution {
+            next_planning_repair_state,
             notices: vec![format!(
                 "planning repair queued retry {next_attempt}/{max_attempts} for task-ledger.json"
             )],
@@ -499,20 +488,5 @@ impl NativeTuiApp {
             &conversation.input_buffer,
             &conversation.planning_runtime_snapshot,
         )
-    }
-}
-
-fn extend_unique_runtime_notices<I>(conversation: &mut ConversationViewModel, notices: I)
-where
-    I: IntoIterator<Item = String>,
-{
-    for notice in notices {
-        push_unique_runtime_notice(conversation, notice);
-    }
-}
-
-fn push_unique_runtime_notice(conversation: &mut ConversationViewModel, notice: String) {
-    if !conversation.runtime_notices.contains(&notice) {
-        conversation.runtime_notices.push(notice);
     }
 }

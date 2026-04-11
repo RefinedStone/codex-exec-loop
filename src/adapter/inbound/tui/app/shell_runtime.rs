@@ -69,6 +69,7 @@ impl ShellRuntime {
                     self.app.session_overlay_ui_state.reset();
                 }
                 BackgroundMessage::ConversationLoaded(result) => {
+                    let draft_workspace_directory = self.app.current_workspace_directory();
                     let template_load_result = match &result {
                         Ok(snapshot) => {
                             Some(self.app.load_followup_template_catalog(&snapshot.cwd))
@@ -79,6 +80,7 @@ impl ShellRuntime {
                         ConversationLifecycleEvent::ConversationLoaded {
                             result,
                             template_load_result,
+                            draft_workspace_directory,
                         },
                     );
                     self.app

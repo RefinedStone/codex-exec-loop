@@ -548,6 +548,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) thread_id: String,
     pub(crate) title: String,
     pub(crate) cwd: String,
+    pub(crate) draft_workspace_directory: String,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) cached_conversation_lines: Vec<Line<'static>>,
     pub(crate) live_agent_message: Option<ConversationMessage>,
@@ -559,6 +560,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) input_buffer: String,
     pub(crate) startup_submit_armed: bool,
     pub(crate) active_turn_id: Option<String>,
+    pub(crate) active_turn_workspace_directory: Option<String>,
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
@@ -581,7 +583,8 @@ impl ConversationViewModel {
         let mut view_model = Self {
             thread_id: String::new(),
             title: "New conversation".to_string(),
-            cwd,
+            cwd: cwd.clone(),
+            draft_workspace_directory: cwd,
             messages: Vec::new(),
             cached_conversation_lines: Vec::new(),
             live_agent_message: None,
@@ -593,6 +596,7 @@ impl ConversationViewModel {
             input_buffer: String::new(),
             startup_submit_armed: false,
             active_turn_id: None,
+            active_turn_workspace_directory: None,
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
@@ -610,6 +614,7 @@ impl ConversationViewModel {
     pub(crate) fn from_snapshot(
         snapshot: ConversationSnapshot,
         template_load_result: FollowupTemplateCatalogLoadResult,
+        draft_workspace_directory: String,
     ) -> Self {
         let base_warnings = snapshot.warnings;
         let runtime_notices = snapshot.runtime_notices;
@@ -624,6 +629,7 @@ impl ConversationViewModel {
             thread_id: snapshot.thread_id,
             title: snapshot.title,
             cwd: snapshot.cwd,
+            draft_workspace_directory,
             messages: snapshot.messages,
             cached_conversation_lines: Vec::new(),
             live_agent_message: None,
@@ -635,6 +641,7 @@ impl ConversationViewModel {
             input_buffer: String::new(),
             startup_submit_armed: false,
             active_turn_id: None,
+            active_turn_workspace_directory: None,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
@@ -820,6 +827,87 @@ impl ConversationViewModel {
         self.cached_conversation_lines = format_conversation_lines(&self.messages);
     }
 
+    fn push_message(&mut self, message: ConversationMessage) {
+        self.messages.push(message);
+        self.refresh_conversation_lines();
+    }
+
+    fn push_messages<I>(&mut self, messages: I)
+    where
+        I: IntoIterator<Item = ConversationMessage>,
+    {
+        let mut changed = false;
+        for message in messages {
+            self.messages.push(message);
+            changed = true;
+        }
+
+        if changed {
+            self.refresh_conversation_lines();
+        }
+    }
+
+    pub(crate) fn draft_workspace_directory(&self) -> &str {
+        self.draft_workspace_directory.as_str()
+    }
+
+    pub(crate) fn planning_workspace_directory(&self) -> &str {
+        if self.has_active_thread() {
+            self.cwd.as_str()
+        } else {
+            self.draft_workspace_directory()
+        }
+    }
+
+    pub(crate) fn sync_draft_workspace(
+        &mut self,
+        workspace_directory: String,
+        template_load_result: FollowupTemplateCatalogLoadResult,
+    ) -> bool {
+        if self.has_active_thread() || self.draft_workspace_directory == workspace_directory {
+            return false;
+        }
+
+        let template_count = template_load_result.catalog.items.len();
+        let warnings = template_load_result.warnings;
+        self.draft_workspace_directory = workspace_directory.clone();
+        self.cwd = workspace_directory;
+        self.auto_follow_state = AutoFollowState::new(template_load_result.catalog);
+        self.base_warnings.clear();
+        self.replace_template_warnings(warnings);
+        self.clear_auto_followup_skip();
+        self.set_status_with_warnings(format!(
+            "draft workspace synced / templates: {template_count}"
+        ));
+
+        true
+    }
+
+    pub(crate) fn record_submitted_prompt(
+        &mut self,
+        transcript_message: ConversationMessage,
+        workspace_directory: String,
+    ) {
+        self.push_message(transcript_message);
+        self.input_buffer.clear();
+        self.mark_turn_submitting(workspace_directory);
+    }
+
+    pub(crate) fn record_thread_prepared(&mut self, thread_id: String, title: String, cwd: String) {
+        self.thread_id = thread_id;
+        self.title = title.clone();
+        self.cwd = cwd;
+        self.status_text = "thread started".to_string();
+        self.append_status_message("thread opened / ".to_string() + &title);
+    }
+
+    pub(crate) fn record_turn_started(&mut self, turn_id: String) {
+        self.mark_turn_started(turn_id);
+        self.live_agent_message = None;
+        self.status_text = "turn started".to_string();
+        self.append_status_message("turn started");
+    }
+
     pub(crate) fn append_status_message(&mut self, text: impl Into<String>) -> bool {
         let text = text.into();
         if text.trim().is_empty() {
@@ -832,7 +920,7 @@ impl ConversationViewModel {
             return false;
         }
 
-        self.messages.push(ConversationMessage::new(
+        self.push_message(ConversationMessage::new(
             ConversationMessageKind::Status,
             text,
             None,
@@ -860,7 +948,8 @@ impl ConversationViewModel {
             return false;
         }
 
-        self.messages.append(&mut self.buffered_tool_messages);
+        let buffered_messages = std::mem::take(&mut self.buffered_tool_messages);
+        self.push_messages(buffered_messages);
         true
     }
 
@@ -869,25 +958,24 @@ impl ConversationViewModel {
         item_id: String,
         phase: Option<String>,
         delta: String,
-    ) -> bool {
-        if let Some(message) = self.live_agent_message.as_mut() {
-            if message.item_id.as_deref() == Some(item_id.as_str()) {
-                message.text.push_str(&delta);
-                if phase.is_some() {
-                    message.phase = phase;
-                }
-                return false;
+    ) {
+        if let Some(message) = self.live_agent_message.as_mut()
+            && message.item_id.as_deref() == Some(item_id.as_str())
+        {
+            message.text.push_str(&delta);
+            if phase.is_some() {
+                message.phase = phase;
             }
+            return;
         }
 
-        let committed_previous_live_message = self.commit_live_agent_message();
+        self.commit_live_agent_message();
         self.live_agent_message = Some(ConversationMessage::new(
             ConversationMessageKind::Agent,
             delta,
             phase,
             Some(item_id),
         ));
-        committed_previous_live_message
     }
 
     pub(crate) fn complete_live_agent_message(
@@ -900,11 +988,11 @@ impl ConversationViewModel {
             if message.item_id.as_deref() == Some(item_id.as_str()) {
                 message.text = text;
                 message.phase = phase;
-                self.messages.push(message);
+                self.push_message(message);
                 return true;
             }
 
-            self.messages.push(message);
+            self.push_message(message);
         }
 
         if let Some(message) = self
@@ -915,10 +1003,11 @@ impl ConversationViewModel {
         {
             message.text = text;
             message.phase = phase;
+            self.refresh_conversation_lines();
             return true;
         }
 
-        self.messages.push(ConversationMessage::new(
+        self.push_message(ConversationMessage::new(
             ConversationMessageKind::Agent,
             text,
             phase,
@@ -932,7 +1021,7 @@ impl ConversationViewModel {
             return false;
         };
 
-        self.messages.push(message);
+        self.push_message(message);
         true
     }
 
@@ -971,9 +1060,10 @@ impl ConversationViewModel {
         std::mem::replace(&mut self.startup_submit_armed, false)
     }
 
-    pub(crate) fn mark_turn_submitting(&mut self) {
+    pub(crate) fn mark_turn_submitting(&mut self, workspace_directory: String) {
         self.startup_submit_armed = false;
         self.input_state = ConversationInputState::SubmittingTurn;
+        self.active_turn_workspace_directory = Some(workspace_directory);
     }
 
     pub(crate) fn mark_turn_started(&mut self, turn_id: String) {
@@ -986,7 +1076,43 @@ impl ConversationViewModel {
 
     pub(crate) fn mark_turn_finished(&mut self) {
         self.active_turn_id = None;
+        self.active_turn_workspace_directory = None;
         self.input_state = self.ready_input_state();
+    }
+
+    pub(crate) fn finish_turn(&mut self, changed_planning_file_paths: &[String]) -> String {
+        let workspace_directory = self
+            .active_turn_workspace_directory
+            .clone()
+            .unwrap_or_else(|| self.planning_workspace_directory().to_string());
+
+        self.commit_live_agent_message();
+        self.flush_buffered_tool_messages();
+        self.turn_activity
+            .register_changed_planning_file_paths(changed_planning_file_paths);
+        self.turn_activity.complete_turn();
+        self.mark_turn_finished();
+
+        workspace_directory
+    }
+
+    pub(crate) fn fail_turn(&mut self, message: String) {
+        self.commit_live_agent_message();
+        self.flush_buffered_tool_messages();
+        self.mark_turn_finished();
+        self.status_text = "turn failed".to_string();
+        self.append_status_message(message);
+    }
+
+    pub(crate) fn extend_runtime_notices<I>(&mut self, notices: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        for notice in notices {
+            if !self.runtime_notices.contains(&notice) {
+                self.runtime_notices.push(notice);
+            }
+        }
     }
 
     pub(crate) fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
@@ -1065,9 +1191,21 @@ impl ConversationViewModel {
             .map(|message| message.text.as_str())
     }
 
+    #[cfg(test)]
     pub(crate) fn decide_auto_followup(
         &self,
         planning_runtime_facade_service: &PlanningRuntimeFacadeService,
+    ) -> AutoFollowupDecision {
+        self.decide_auto_followup_with_snapshot(
+            planning_runtime_facade_service,
+            &self.planning_runtime_snapshot,
+        )
+    }
+
+    pub(crate) fn decide_auto_followup_with_snapshot(
+        &self,
+        planning_runtime_facade_service: &PlanningRuntimeFacadeService,
+        planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> AutoFollowupDecision {
         if !self.auto_follow_state.enabled {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
@@ -1110,7 +1248,7 @@ impl ConversationViewModel {
                 session_id: &self.thread_id,
                 stop_keyword: self.auto_follow_state.stop_keyword_value(),
                 last_message: last_message.trim(),
-                snapshot: &self.planning_runtime_snapshot,
+                snapshot: planning_runtime_snapshot,
             },
         ) {
             PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {

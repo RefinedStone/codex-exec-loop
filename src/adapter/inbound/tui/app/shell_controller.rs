@@ -78,7 +78,8 @@ impl NativeTuiApp {
         let should_refresh_draft = matches!(
             &self.conversation_state,
             ConversationState::Ready(conversation)
-                if !conversation.has_active_thread() && conversation.cwd != workspace_directory
+                if !conversation.has_active_thread()
+                    && conversation.draft_workspace_directory() != workspace_directory
         );
         if !should_refresh_draft {
             return;
@@ -93,7 +94,9 @@ impl NativeTuiApp {
 
     pub(super) fn reload_followup_templates(&mut self) {
         let workspace_directory = match &self.conversation_state {
-            ConversationState::Ready(conversation) => conversation.cwd.clone(),
+            ConversationState::Ready(conversation) => {
+                conversation.planning_workspace_directory().to_string()
+            }
             ConversationState::Loading | ConversationState::Failed(_) => return,
         };
 
@@ -663,8 +666,8 @@ impl NativeTuiApp {
 
     pub(super) fn planning_workspace_directory(&self) -> String {
         match &self.conversation_state {
-            ConversationState::Ready(conversation) if conversation.has_active_thread() => {
-                conversation.cwd.clone()
+            ConversationState::Ready(conversation) => {
+                conversation.planning_workspace_directory().to_string()
             }
             _ => self.current_workspace_directory(),
         }
