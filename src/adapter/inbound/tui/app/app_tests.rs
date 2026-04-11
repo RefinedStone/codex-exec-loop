@@ -246,6 +246,33 @@ fn create_temp_workspace(prefix: &str) -> String {
     path.display().to_string()
 }
 
+fn bootstrap_active_planning_workspace(workspace_dir: &str) {
+    let planning_services =
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let stage_result = planning_services
+        .init_service
+        .stage_simple_mode_draft(workspace_dir)
+        .expect("planning workspace should stage");
+    let promote_result = planning_services
+        .init_service
+        .promote_staged_draft(workspace_dir, &stage_result.draft_name)
+        .expect("planning workspace should promote");
+    assert!(
+        promote_result.promoted_file_count > 0,
+        "bootstrap planning workspace should become ready"
+    );
+}
+
+fn count_staged_planning_drafts(workspace_dir: &str) -> usize {
+    let drafts_dir = std::path::Path::new(workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning")
+        .join("drafts");
+    std::fs::read_dir(drafts_dir)
+        .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+        .unwrap_or(0)
+}
+
 fn ready_conversation() -> ConversationViewModel {
     ConversationViewModel {
         thread_id: "thread-1".to_string(),
@@ -840,14 +867,29 @@ fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_conte
 #[test]
 fn planning_manual_editor_promote_stays_open_when_validation_fails() {
     let (mut app, _) = make_test_app();
+    let startup_workspace_dir =
+        create_temp_workspace("planning-editor-promote-invalid-startup-app");
     let workspace_dir = create_temp_workspace("planning-editor-promote-invalid-app");
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    bootstrap_active_planning_workspace(&startup_workspace_dir);
+    let startup_draft_count = count_staged_planning_drafts(&startup_workspace_dir);
+    app.startup_state =
+        StartupState::Ready(sample_startup_diagnostics(&startup_workspace_dir, true));
+    app.conversation_state = ConversationState::Ready(ready_conversation());
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("app should stay in ready state");
     };
     conversation.cwd = workspace_dir.clone();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "planning context",
+        "queue ready",
+    ));
 
     open_planning_manual_editor(&mut app);
+    assert_eq!(
+        count_staged_planning_drafts(&startup_workspace_dir),
+        startup_draft_count
+    );
+    assert_eq!(count_staged_planning_drafts(&workspace_dir), 1);
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
@@ -881,8 +923,16 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
             .join("directions.toml")
             .exists()
     );
+    assert!(
+        std::path::Path::new(&startup_workspace_dir)
+            .join(".codex-exec-loop")
+            .join("planning")
+            .join("directions.toml")
+            .exists()
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    std::fs::remove_dir_all(startup_workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]

@@ -179,7 +179,7 @@ impl NativeTuiApp {
     }
 
     pub(super) fn open_planning_manual_editor(&mut self) {
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         self.open_guided_planning_editor_session(
             self.planning_services
                 .init_service
@@ -199,7 +199,7 @@ impl NativeTuiApp {
         };
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
         let status_text = match self.planning_services.init_service.save_draft_editor_files(
             &workspace_directory,
@@ -242,13 +242,16 @@ impl NativeTuiApp {
         };
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self
+        let promote_result = self
             .planning_services
             .init_service
-            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
-        {
+            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        let status_text = match promote_result {
             Ok(result) => {
                 let validation_ok = result.validation_report.is_valid();
                 self.planning_draft_editor_ui_state
@@ -265,7 +268,6 @@ impl NativeTuiApp {
                     )
                 } else {
                     self.close_shell_overlay();
-                    self.refresh_ready_conversation_planning_runtime_snapshot();
                     format!(
                         "planning draft promoted / draft: {} / files: {} / planning context refreshed",
                         result.draft_name, result.promoted_file_count
@@ -341,7 +343,7 @@ impl NativeTuiApp {
     }
 
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         let status_text = match self
             .planning_services
             .init_service
@@ -377,7 +379,7 @@ impl NativeTuiApp {
         else {
             return;
         };
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         self.open_guided_planning_editor_session(
             self.planning_services
                 .init_service
@@ -395,12 +397,15 @@ impl NativeTuiApp {
         else {
             return;
         };
-        let workspace_directory = self.current_workspace_directory();
-        let status_text = match self
+        let workspace_directory = self.planning_workspace_directory();
+        let promote_result = self
             .planning_services
             .init_service
-            .promote_staged_draft(&workspace_directory, &draft_name)
-        {
+            .promote_staged_draft(&workspace_directory, &draft_name);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        let status_text = match promote_result {
             Ok(result) => {
                 let validation_ok = result.validation_report.is_valid();
                 self.planning_init_overlay_ui_state
@@ -417,7 +422,6 @@ impl NativeTuiApp {
                     )
                 } else {
                     self.close_shell_overlay();
-                    self.refresh_ready_conversation_planning_runtime_snapshot();
                     format!(
                         "planning draft promoted / draft: {} / files: {} / planning context refreshed",
                         result.draft_name, result.promoted_file_count
@@ -657,6 +661,15 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn planning_workspace_directory(&self) -> String {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) if conversation.has_active_thread() => {
+                conversation.cwd.clone()
+            }
+            _ => self.current_workspace_directory(),
+        }
+    }
+
     pub(super) fn load_followup_template_catalog(
         &self,
         workspace_directory: &str,
@@ -675,12 +688,21 @@ impl NativeTuiApp {
     }
 
     pub(super) fn refresh_ready_conversation_planning_runtime_snapshot(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+    }
+
+    pub(super) fn refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        &mut self,
+        workspace_directory: &str,
+    ) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        let workspace_directory = conversation.cwd.clone();
         conversation.replace_planning_runtime_snapshot(
-            self.load_planning_runtime_snapshot(&workspace_directory),
+            self.load_planning_runtime_snapshot(workspace_directory),
         );
         self.conversation_state = ConversationState::Ready(conversation);
     }
