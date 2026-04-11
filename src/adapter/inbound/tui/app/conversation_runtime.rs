@@ -423,7 +423,7 @@ mod tests {
                 .state
                 .approval_review
                 .as_ref()
-                .map(|review| review.status),
+                .map(|review| review.status.clone()),
             Some(ConversationApprovalReviewStatus::InProgress)
         );
     }

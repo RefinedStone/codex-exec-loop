@@ -80,32 +80,62 @@ pub struct ConversationToolActivity {
     pub file_change_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversationApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
     Aborted,
+    Unknown(String),
 }
 
 impl ConversationApprovalReviewStatus {
-    fn summary_label(self) -> &'static str {
+    fn summary_label(&self) -> String {
         match self {
-            Self::InProgress => "reviewing",
-            Self::Approved => "approved",
-            Self::Denied => "denied",
-            Self::Aborted => "aborted",
+            Self::InProgress => "reviewing".to_string(),
+            Self::Approved => "approved".to_string(),
+            Self::Denied => "denied".to_string(),
+            Self::Aborted => "aborted".to_string(),
+            Self::Unknown(value) => humanize_protocol_status(value),
         }
     }
 
-    fn status_prefix(self) -> &'static str {
+    fn status_prefix(&self) -> String {
         match self {
-            Self::InProgress => "approval review in progress",
-            Self::Approved => "approval review approved",
-            Self::Denied => "approval review denied",
-            Self::Aborted => "approval review aborted",
+            Self::InProgress => "approval review in progress".to_string(),
+            Self::Approved => "approval review approved".to_string(),
+            Self::Denied => "approval review denied".to_string(),
+            Self::Aborted => "approval review aborted".to_string(),
+            Self::Unknown(value) => format!("approval review {}", humanize_protocol_status(value)),
         }
     }
+}
+
+fn humanize_protocol_status(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_separator = false;
+    let mut previous_was_lower_or_digit = false;
+
+    for ch in value.chars() {
+        if ch == '-' || ch == '_' || ch.is_whitespace() {
+            if !normalized.is_empty() && !previous_was_separator {
+                normalized.push(' ');
+            }
+            previous_was_separator = true;
+            previous_was_lower_or_digit = false;
+            continue;
+        }
+
+        if ch.is_uppercase() && previous_was_lower_or_digit && !normalized.ends_with(' ') {
+            normalized.push(' ');
+        }
+
+        normalized.extend(ch.to_lowercase());
+        previous_was_separator = false;
+        previous_was_lower_or_digit = ch.is_lowercase() || ch.is_ascii_digit();
+    }
+
+    normalized.trim().to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,12 +154,12 @@ impl ConversationApprovalReview {
             .filter(|risk| !risk.trim().is_empty())
         {
             Some(risk_level) => format!("{} {risk_level}", self.status.summary_label()),
-            None => self.status.summary_label().to_string(),
+            None => self.status.summary_label(),
         }
     }
 
     pub fn status_text(&self) -> String {
-        let mut segments = vec![self.status.status_prefix().to_string()];
+        let mut segments = vec![self.status.status_prefix()];
 
         if !self.target_item_id.trim().is_empty() {
             segments.push(format!("target: {}", self.target_item_id));
@@ -143,6 +173,27 @@ impl ConversationApprovalReview {
         }
 
         segments.join(" / ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConversationApprovalReview, ConversationApprovalReviewStatus};
+
+    #[test]
+    fn unknown_approval_statuses_are_preserved_as_readable_text() {
+        let review = ConversationApprovalReview {
+            target_item_id: "command-1".to_string(),
+            status: ConversationApprovalReviewStatus::Unknown("needsHumanReview".to_string()),
+            risk_level: Some("high".to_string()),
+            rationale: None,
+        };
+
+        assert_eq!(review.summary_text(), "needs human review high");
+        assert_eq!(
+            review.status_text(),
+            "approval review needs human review / target: command-1 / risk: high"
+        );
     }
 }
 
