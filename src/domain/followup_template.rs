@@ -1,3 +1,5 @@
+pub const BUILTIN_NEXT_TASK_TEMPLATE_ID: &str = "builtin-next-task";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FollowupTemplateDefinition {
     pub id: String,
@@ -7,6 +9,10 @@ pub struct FollowupTemplateDefinition {
 }
 
 impl FollowupTemplateDefinition {
+    pub fn is_builtin_next_task(&self) -> bool {
+        self.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
+    }
+
     pub fn source_label(&self) -> String {
         match &self.source {
             FollowupTemplateSource::Builtin => "builtin".to_string(),

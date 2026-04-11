@@ -1,18 +1,14 @@
 use anyhow::Result;
 
-use crate::application::service::planning_auto_follow_copy::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
-    PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
-};
 use crate::application::service::planning_prompt_service::{
-    PlanningPromptService, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningPromptService, PlanningRuntimeSnapshot,
 };
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
 use crate::application::service::planning_runtime_policy_service::{
-    PlanningAutoFollowBlockReason, PlanningRuntimePolicyService, PlanningRuntimeSummaryRequest,
-    PlanningRuntimeSummaryView,
+    PlanningAutoFollowBlockReason, PlanningAutoFollowPolicyDecision, PlanningAutoFollowPromptMode,
+    PlanningRuntimePolicyService,
 };
 use crate::application::service::turn_prompt_assembly_service::{
     AutoFollowPromptAssemblyRequest, AutoFollowPromptPreviewRequest, ManualPromptAssemblyRequest,
@@ -20,10 +16,12 @@ use crate::application::service::turn_prompt_assembly_service::{
     PlanningAutoFollowPromptPreviewRequest, TurnPromptAssemblyService,
 };
 use crate::domain::followup_template::FollowupTemplateDefinition;
-use crate::domain::planning::PlanningWorkspaceState;
-use crate::domain::text::compact_whitespace_detail;
 
-const BUILTIN_NEXT_TASK_TEMPLATE_ID: &str = "builtin-next-task";
+pub use crate::application::service::planning_runtime_policy_service::{
+    PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
+    PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
+    PlanningRuntimeSummaryRequest, PlanningRuntimeSummaryView,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeAutoFollowRequest<'a> {
@@ -36,12 +34,6 @@ pub struct PlanningRuntimeAutoFollowRequest<'a> {
     pub snapshot: &'a PlanningRuntimeSnapshot,
 }
 
-impl<'a> PlanningRuntimeAutoFollowRequest<'a> {
-    fn should_refresh_planning_queue(&self) -> bool {
-        should_refresh_planning_queue(self.template, self.snapshot)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimePreviewRequest<'a> {
     pub template: &'a FollowupTemplateDefinition,
@@ -51,12 +43,6 @@ pub struct PlanningRuntimePreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
     pub snapshot: &'a PlanningRuntimeSnapshot,
-}
-
-impl<'a> PlanningRuntimePreviewRequest<'a> {
-    fn should_refresh_planning_queue(&self) -> bool {
-        should_refresh_planning_queue(self.template, self.snapshot)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,43 +62,6 @@ pub struct PlanningRuntimeRenderedPreview {
     pub rendered_prompt: String,
     pub planning_status_line: String,
     pub planning_detail_line: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlanningRuntimeRepairAttempt {
-    pub attempts_used: usize,
-    pub max_attempts: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlanningRuntimeSummaryLineRequest<'a> {
-    pub snapshot: &'a PlanningRuntimeSnapshot,
-    pub has_running_turn: bool,
-    pub is_repairing: bool,
-    pub repair_failure_summary: Option<&'a str>,
-    pub repair_attempt: Option<PlanningRuntimeRepairAttempt>,
-    pub has_notice: bool,
-    pub max_detail_len: usize,
-    pub always_show: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlanningRuntimeStatusProjectionRequest<'a> {
-    pub snapshot: &'a PlanningRuntimeSnapshot,
-    pub has_running_turn: bool,
-    pub is_repairing: bool,
-    pub repair_failure_summary: Option<&'a str>,
-    pub repair_attempt: Option<PlanningRuntimeRepairAttempt>,
-    pub max_detail_len: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningRuntimeStatusProjection {
-    pub planning_status_line: String,
-    pub repair_attempt_line: Option<String>,
-    pub queue_head_line: Option<String>,
-    pub proposal_line: Option<String>,
-    pub failure_line: Option<String>,
 }
 
 #[derive(Clone)]
@@ -167,44 +116,52 @@ impl PlanningRuntimeFacadeService {
         &self,
         request: PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeAutoFollowDecision {
-        if request.should_refresh_planning_queue() {
-            return PlanningRuntimeAutoFollowDecision::QueuePrompt(
-                self.build_planning_queue_refresh_prompt(&request),
-            );
-        }
-
-        if let Some(block_reason) = self
+        match self
             .planning_runtime_policy_service
-            .auto_follow_block_reason(request.template, request.snapshot)
+            .decide_auto_follow(request.template, request.snapshot)
         {
-            return PlanningRuntimeAutoFollowDecision::Blocked(block_reason);
+            PlanningAutoFollowPolicyDecision::Blocked(block_reason) => {
+                PlanningRuntimeAutoFollowDecision::Blocked(block_reason)
+            }
+            PlanningAutoFollowPolicyDecision::QueuePrompt(prompt_mode) => {
+                PlanningRuntimeAutoFollowDecision::QueuePrompt(
+                    self.build_queued_auto_follow_prompt(prompt_mode, &request),
+                )
+            }
         }
-
-        PlanningRuntimeAutoFollowDecision::QueuePrompt(
-            self.build_template_auto_follow_prompt(&request),
-        )
     }
 
     pub fn build_auto_follow_preview(
         &self,
         request: PlanningRuntimePreviewRequest<'_>,
     ) -> PlanningRuntimeRenderedPreview {
+        let policy_decision = self
+            .planning_runtime_policy_service
+            .decide_auto_follow(request.template, request.snapshot);
         let planning_view = self
             .planning_runtime_policy_service
-            .build_preview_view(request.template, request.snapshot);
-        let rendered_prompt = if request.should_refresh_planning_queue() {
-            self.turn_prompt_assembly_service
-                .build_planning_auto_follow_prompt_preview(PlanningAutoFollowPromptPreviewRequest {
-                    operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
-                    auto_turn: request.auto_turn,
-                    max_auto_turns: request.max_auto_turns,
-                    session_id: request.session_id,
-                    stop_keyword: request.stop_keyword,
-                    last_message: request.last_message,
-                    planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                })
-        } else {
-            self.turn_prompt_assembly_service
+            .build_preview_view_for_decision(policy_decision, request.snapshot);
+        let rendered_prompt = match policy_decision {
+            PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::RefreshPlanningQueue,
+            ) => self
+                .turn_prompt_assembly_service
+                .build_planning_auto_follow_prompt_preview(
+                    PlanningAutoFollowPromptPreviewRequest {
+                        operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
+                        auto_turn: request.auto_turn,
+                        max_auto_turns: request.max_auto_turns,
+                        session_id: request.session_id,
+                        stop_keyword: request.stop_keyword,
+                        last_message: request.last_message,
+                        planning_prompt_fragment: request.snapshot.prompt_fragment(),
+                    },
+                ),
+            PlanningAutoFollowPolicyDecision::Blocked(_)
+            | PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::TemplatePrompt,
+            ) => self
+                .turn_prompt_assembly_service
                 .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
                     template: request.template,
                     auto_turn: request.auto_turn,
@@ -213,7 +170,7 @@ impl PlanningRuntimeFacadeService {
                     stop_keyword: request.stop_keyword,
                     last_message: request.last_message,
                     planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                })
+                }),
         };
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
@@ -236,129 +193,27 @@ impl PlanningRuntimeFacadeService {
         &self,
         request: PlanningRuntimeSummaryLineRequest<'_>,
     ) -> Option<String> {
-        let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
-            snapshot: request.snapshot,
-            has_running_turn: request.has_running_turn,
-            is_repairing: request.is_repairing,
-            repair_failure_summary: request.repair_failure_summary,
-        });
-        let planning_state = summary.workspace_state;
-        if !request.always_show
-            && planning_state == PlanningWorkspaceState::Uninitialized
-            && !request.has_notice
-        {
-            return None;
-        }
-
-        let mut segments = vec![format!("planning: {}", summary.status_label)];
-        if let Some(repair_attempt) = request.repair_attempt {
-            segments.push(format!(
-                "repair: {}/{}",
-                repair_attempt.attempts_used, repair_attempt.max_attempts
-            ));
-        }
-
-        match planning_state {
-            PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
-                if let Some(queue_summary) = summary.queue_summary.as_deref() {
-                    segments.push(format!(
-                        "queue: {}",
-                        compact_projection_detail(queue_summary, request.max_detail_len)
-                    ));
-                }
-                if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
-                    segments.push(format!(
-                        "proposals: {}",
-                        compact_projection_detail(proposal_summary, request.max_detail_len)
-                    ));
-                }
-            }
-            PlanningWorkspaceState::Repairing => {
-                if let Some(failure_summary) = summary.failure_summary.as_deref() {
-                    segments.push(format!(
-                        "failure: {}",
-                        compact_projection_detail(failure_summary, request.max_detail_len)
-                    ));
-                }
-                if let Some(queue_summary) = summary.queue_summary.as_deref() {
-                    segments.push(format!(
-                        "queue: {}",
-                        compact_projection_detail(queue_summary, request.max_detail_len)
-                    ));
-                }
-                if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
-                    segments.push(format!(
-                        "proposals: {}",
-                        compact_projection_detail(proposal_summary, request.max_detail_len)
-                    ));
-                }
-            }
-            PlanningWorkspaceState::BlockedInvalid => {
-                if let Some(failure_summary) = summary.failure_summary.as_deref() {
-                    segments.push(format!(
-                        "failure: {}",
-                        compact_projection_detail(failure_summary, request.max_detail_len)
-                    ));
-                }
-            }
-            PlanningWorkspaceState::Uninitialized | PlanningWorkspaceState::Authoring => {}
-        }
-
-        Some(segments.join("  |  "))
+        self.planning_runtime_policy_service
+            .build_summary_line(request)
     }
 
     pub fn build_followup_status_projection(
         &self,
         request: PlanningRuntimeStatusProjectionRequest<'_>,
     ) -> PlanningRuntimeStatusProjection {
-        let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
-            snapshot: request.snapshot,
-            has_running_turn: request.has_running_turn,
-            is_repairing: request.is_repairing,
-            repair_failure_summary: request.repair_failure_summary,
-        });
-
-        PlanningRuntimeStatusProjection {
-            planning_status_line: format!("planning status: {}", summary.status_label),
-            repair_attempt_line: request.repair_attempt.map(|repair_attempt| {
-                format!(
-                    "planning repair attempt: {}/{}",
-                    repair_attempt.attempts_used, repair_attempt.max_attempts
-                )
-            }),
-            queue_head_line: summary.queue_summary.as_deref().map(|queue_summary| {
-                let queue_label = if request.snapshot.queue_head().is_some() {
-                    "planning queue head"
-                } else {
-                    "planning queue"
-                };
-                format!(
-                    "{queue_label}: {}",
-                    compact_projection_detail(queue_summary, request.max_detail_len)
-                )
-            }),
-            proposal_line: summary.proposal_summary.as_deref().map(|proposal_summary| {
-                format!(
-                    "planning proposals: {}",
-                    compact_projection_detail(proposal_summary, request.max_detail_len)
-                )
-            }),
-            failure_line: summary.failure_summary.as_deref().map(|failure_summary| {
-                format!(
-                    "last planning failure: {}",
-                    compact_projection_detail(failure_summary, request.max_detail_len)
-                )
-            }),
-        }
+        self.planning_runtime_policy_service
+            .build_status_projection(request)
     }
 
-    fn build_template_auto_follow_prompt(
+    fn build_queued_auto_follow_prompt(
         &self,
+        prompt_mode: PlanningAutoFollowPromptMode,
         request: &PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeQueuedAutoFollowPrompt {
-        PlanningRuntimeQueuedAutoFollowPrompt {
-            prompt: self.turn_prompt_assembly_service.build_auto_follow_prompt(
-                AutoFollowPromptAssemblyRequest {
+        let prompt = match prompt_mode {
+            PlanningAutoFollowPromptMode::TemplatePrompt => self
+                .turn_prompt_assembly_service
+                .build_auto_follow_prompt(AutoFollowPromptAssemblyRequest {
                     template: request.template,
                     auto_turn: request.auto_turn,
                     max_auto_turns: request.max_auto_turns,
@@ -366,18 +221,8 @@ impl PlanningRuntimeFacadeService {
                     stop_keyword: request.stop_keyword,
                     last_message: request.last_message.trim(),
                     planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                },
-            ),
-            transcript_text: default_auto_follow_transcript_text(request.template),
-        }
-    }
-
-    fn build_planning_queue_refresh_prompt(
-        &self,
-        request: &PlanningRuntimeAutoFollowRequest<'_>,
-    ) -> PlanningRuntimeQueuedAutoFollowPrompt {
-        PlanningRuntimeQueuedAutoFollowPrompt {
-            prompt: self
+                }),
+            PlanningAutoFollowPromptMode::RefreshPlanningQueue => self
                 .turn_prompt_assembly_service
                 .build_planning_auto_follow_prompt(PlanningAutoFollowPromptAssemblyRequest {
                     operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
@@ -388,7 +233,13 @@ impl PlanningRuntimeFacadeService {
                     last_message: request.last_message.trim(),
                     planning_prompt_fragment: request.snapshot.prompt_fragment(),
                 }),
-            transcript_text: planning_queue_refresh_transcript_text(request.snapshot),
+        };
+
+        PlanningRuntimeQueuedAutoFollowPrompt {
+            prompt,
+            transcript_text: self
+                .planning_runtime_policy_service
+                .auto_follow_transcript_text(request.template, request.snapshot, prompt_mode),
         }
     }
 
@@ -413,41 +264,6 @@ impl PlanningRuntimeFacadeService {
             changed_planning_file_paths,
             execution_snapshot,
         )
-    }
-}
-
-fn compact_projection_detail(text: &str, max_len: usize) -> String {
-    compact_whitespace_detail(text, max_len)
-}
-
-fn is_builtin_next_task_template(template: &FollowupTemplateDefinition) -> bool {
-    template.id == BUILTIN_NEXT_TASK_TEMPLATE_ID
-}
-
-fn should_refresh_planning_queue(
-    template: &FollowupTemplateDefinition,
-    snapshot: &PlanningRuntimeSnapshot,
-) -> bool {
-    is_builtin_next_task_template(template)
-        && snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-}
-
-fn default_auto_follow_transcript_text(template: &FollowupTemplateDefinition) -> String {
-    if is_builtin_next_task_template(template) {
-        BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string()
-    } else {
-        format!(
-            "selected auto follow-up template `{}` 기준으로 다음 작업 1개를 진행합니다.",
-            template.label
-        )
-    }
-}
-
-fn planning_queue_refresh_transcript_text(snapshot: &PlanningRuntimeSnapshot) -> String {
-    if snapshot.has_proposal_candidates() {
-        PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT.to_string()
-    } else {
-        PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT.to_string()
     }
 }
 

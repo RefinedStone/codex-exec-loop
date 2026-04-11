@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::application::port::outbound::followup_template_port::FollowupTemplatePort;
 use crate::domain::followup_template::{
-    FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
-    FollowupTemplateSource,
+    BUILTIN_NEXT_TASK_TEMPLATE_ID, FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult,
+    FollowupTemplateDefinition, FollowupTemplateSource,
 };
 const BUILTIN_TEMPLATE_NEXT_TASK: &str = r#"대리인입니다.
 자동 후속 {auto_turn}/{max_auto_turns} 입니다.
@@ -111,7 +111,7 @@ impl FollowupTemplateService {
     fn builtin_templates() -> Vec<FollowupTemplateDefinition> {
         vec![
             Self::builtin_template(
-                "builtin-next-task",
+                BUILTIN_NEXT_TASK_TEMPLATE_ID,
                 "builtin next-task",
                 BUILTIN_TEMPLATE_NEXT_TASK,
             ),
