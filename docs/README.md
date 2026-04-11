@@ -1,36 +1,34 @@
 # Native Docs
 
-This folder is the compact current-state record for the Rust native client on `prerelease`.
+This folder keeps only current-state docs for the Rust native client.
+
+Do not keep completed rollout notes, stale backlogs, or future-state design prose here. Add a new feature note only while a live workstream actually needs one.
 
 ## Reading Order
-1. Read [design/01-current-product-state.md](design/01-current-product-state.md).
-2. Read [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md).
-3. Read [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md).
-4. Read [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md).
-5. Read [design/06-direction-task-ledger-and-priority-queue.md](design/06-direction-task-ledger-and-priority-queue.md) for the upcoming planning-aware orchestration design.
-6. Read [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md) for the current inline-shell contract.
-7. Read [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md) for durable constraints and maintenance risks.
-8. Read [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) before splitting work across multiple git worktrees.
-9. Read [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md) when a PR changes terminal restore, frontend mode, or platform-facing shell behavior.
-10. Use [validation/README.md](validation/README.md) when recording real macOS or Windows validation runs.
 
-## Compaction Rule
-- keep durable contracts, ownership boundaries, lifecycle notes, and operator-visible behavior
-- remove stale sprint sequencing, completion logs, future-state notes, and old branch-by-branch history
-- open a dedicated feature doc only when a new sprint or large workstream actually exists
+1. [design/01-current-product-state.md](design/01-current-product-state.md)
+2. [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md)
+3. [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md)
+4. [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md)
+5. [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md)
+6. [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md)
+7. [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md)
+8. [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md) and [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md) when parallel branches are involved
+9. [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md) when terminal behavior changes
+10. [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md) for packaging and handoff
+11. [validation/README.md](validation/README.md) when recording a real validation run
 
 ## Document Map
-- [design/01-current-product-state.md](design/01-current-product-state.md): current product posture and shipped baseline
-- [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): current shell shape and interaction model
-- [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md): core automation behavior
-- [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md): stable architectural boundaries and runtime lifecycle
-- [design/06-direction-task-ledger-and-priority-queue.md](design/06-direction-task-ledger-and-priority-queue.md): planning-aware orchestration design for protected directions, shared task ledgers, and derived runtime priority queues
-- [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md): durable constraints and maintenance risks worth preserving
-- [plan/01-roadmap.md](plan/01-roadmap.md): short current-direction marker
-- [plan/02-todo-backlog.md](plan/02-todo-backlog.md): empty until the next sprint backlog exists
-- [plan/03-execution-order.md](plan/03-execution-order.md): reset marker for future feature-specific sequencing
-- [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch and worktree rules for concurrent native delivery
-- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): current inline-shell contract
-- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): current concurrency reset marker and hotspot snapshot
-- [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): canonical manual validation matrix for macOS and Windows terminal behavior
-- [validation/README.md](validation/README.md): canonical location and naming rules for checked-in validation result rows
+
+- [design/01-current-product-state.md](design/01-current-product-state.md): shipped product baseline
+- [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): shell layout, commands, and interaction model
+- [design/03-auto-followup-and-templates.md](design/03-auto-followup-and-templates.md): auto-follow template catalog and runtime rules
+- [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md): stable layer ownership and runtime boundary
+- [design/05-known-gaps-and-risk-areas.md](design/05-known-gaps-and-risk-areas.md): durable constraints worth preserving
+- [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md): current planning files, queue behavior, and draft-editor contract
+- [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch naming, worktree, and linear merge rules
+- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): inline shell contract
+- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): lightweight live snapshot for concurrent work
+- [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): manual terminal validation matrix
+- [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md): release bundle and operator handoff
+- [validation/README.md](validation/README.md): validation record naming and helper usage

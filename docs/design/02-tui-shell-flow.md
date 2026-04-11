@@ -3,27 +3,38 @@
 This file describes the implemented shell shape on `prerelease`.
 
 ## Shell Shape
-- the app opens directly into a conversation draft on the main screen by default
-- when startup ASCII art is enabled, the logo persists in scrollback instead of behaving like a transient splash frame
-- blank-draft startup reads top-to-bottom as startup context, conversation placeholder, and prompt
+
+- the app opens into a draft conversation immediately
 - inline mode uses host terminal scrollback as the primary history surface
-- one live region carries the prompt, transient streaming text, and compact notices
-- diagnostics, recent sessions, and template previews render as in-shell inspection surfaces
-- alternate-screen remains an explicit fallback frontend, not the default path
+- one live tail region carries the active prompt, transient streaming text, and compact notices
+- blank startup reads as startup context, conversation placeholder, and prompt
+- diagnostics, sessions, templates, and planning render as in-shell inspection surfaces
+- alternate-screen remains a supported fallback frontend, not the default path
+
+## Commands And Keys
+
+- inline shell commands: `:diag`, `:sessions`, `:templates`, `:planning`, `:new`, `:help`
+- prompt editing: `Enter` send, `Ctrl+j` newline, `Ctrl+u` clear, `Ctrl+w` delete previous word
+- shell navigation: `Ctrl+t` new draft, `Ctrl+C` back, `Ctrl+q` quit
+- follow-up inspection and control stay in-shell instead of opening a separate modal app
 
 ## Operator Signals
+
 - the active prompt owns the visible cursor
 - streamed assistant text is visible before the turn completes
-- routine inline copy hides raw `thread_id` and `turn_id`
-- approval, tool, warning, and follow-up notices appear as compact shell activity instead of a heavy persistent footer
+- committed transcript history moves into normal scrollback once a turn finishes
+- routine status copy hides raw `thread_id` and `turn_id`
+- approval, tool, warning, and planning notices stay compact instead of living in a heavy footer
 
 ## Interaction Model
+
 1. Startup checks begin in the background.
-2. The shell is visible immediately with startup context and an editable prompt.
-3. Once startup diagnostics pass, recent-session loading, prompt submission, and session actions are enabled.
-4. During a turn, deltas stay in the live region until completion, then the final assistant text commits into normal history.
-5. After committed history exists, the inline tail begins at the first visible row of its viewport so status and prompt stay attached to the latest scrollback line.
+2. The shell becomes editable immediately.
+3. Startup-ready state unlocks recent sessions, normal prompt submission, and session switching.
+4. During a turn, the live tail shows streaming deltas and preserves buffered input.
+5. Planning and other inspections reuse the same shell surface instead of switching products.
 
 ## Boundaries
-- inline mode remains a Ratatui-driven shell, so prompt, streaming, and tail rendering changes still need real-terminal validation
-- shell commands and inspection surfaces can evolve, but the current baseline is scrollback-first history plus one live tail region
+
+- inline mode is still Ratatui-driven, so prompt, streaming, and restore changes need real-terminal validation
+- the current contract is scrollback-first history plus one live tail region; future UI changes should preserve that baseline unless the product direction changes explicitly

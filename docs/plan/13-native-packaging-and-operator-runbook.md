@@ -1,19 +1,17 @@
-# Native Packaging and Operator Runbook
+# Native Packaging And Operator Runbook
 
-This runbook defines the current handoff path for the Rust native client.
+This runbook describes the current bundle and operator handoff for the Rust client.
 
-The package target is the `codex-exec-loop-native` binary plus the minimum operator docs needed to run it on a machine that already has Codex CLI access.
+## Package Commands
 
-## Package Command
-
-Build and package the current host target:
+Build the current host target:
 
 ```bash
 cd /path/to/codex-exec-loop
 ./scripts/package_native_release.sh
 ```
 
-Build and package a specific Rust target triple:
+Build a specific target:
 
 ```bash
 cd /path/to/codex-exec-loop
@@ -22,14 +20,11 @@ cd /path/to/codex-exec-loop
 
 Notes:
 
-- the script builds the repository-root crate with `cargo build --release` by default
+- default build profile is `release`
 - `--profile debug` is available for local validation bundles
-- `--target` assumes the target toolchain and linker already work on the current machine
-- for Windows bundles, prefer running the script on a Windows Rust toolchain instead of relying on unvalidated cross-linking from Linux or macOS
+- prefer native Windows packaging for Windows bundles instead of unvalidated cross-linking
 
 ## Output Layout
-
-Default output path:
 
 ```text
 dist/native/
@@ -40,7 +35,7 @@ dist/native/
 
 Bundle contents:
 
-- `codex-exec-loop-native` or `codex-exec-loop-native.exe`
+- native binary
 - `README.md`
 - `OPERATOR.md`
 - `VERSION.txt`
@@ -48,38 +43,9 @@ Bundle contents:
 - `.codex-exec-loop/followups/`
 - `SHA256SUMS.txt`
 
-Archive sidecar:
-
-- `codex-exec-loop-native-<version>-<target>.tar.gz.sha256`
-
 ## Integrity Verification
 
-The packaging script emits two checksum artifacts:
-
-- `SHA256SUMS.txt` inside the bundle directory for the unpacked files
-- `<archive>.tar.gz.sha256` next to the release archive for the tarball itself
-
-`SHA256SUMS.txt` covers every packaged file in the bundle, including the checked-in sample prompts and follow-up templates.
-
-Examples:
-
-Linux:
-
-```bash
-cd dist/native
-sha256sum -c codex-exec-loop-native-<version>-<target>.tar.gz.sha256
-```
-
-macOS:
-
-```bash
-cd dist/native
-shasum -a 256 -c codex-exec-loop-native-<version>-<target>.tar.gz.sha256
-```
-
-If the packaging machine only has `openssl`, compare the emitted digest file with `openssl dgst -sha256 <archive>`.
-
-Repository helper:
+Verify both archive and unpacked bundle:
 
 ```bash
 cd /path/to/codex-exec-loop
@@ -88,20 +54,21 @@ cd /path/to/codex-exec-loop
   --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
 ```
 
-The helper validates the archive sidecar and each unpacked bundle artifact against the generated checksum files.
+The packaging flow emits:
+
+- `SHA256SUMS.txt` for files inside the unpacked bundle
+- `<archive>.tar.gz.sha256` for the tarball itself
 
 ## Operator Prerequisites
 
-The operator machine needs:
-
 - Codex CLI installed and on `PATH`
 - Codex login already completed
-- access to the workspace that Codex should operate on
+- access to the target workspace
 - normal access to `~/.codex/history.jsonl` and `~/.codex/sessions/`
 
-Rust is not required on the operator machine when the packaged binary is already built.
+Rust is not required on the operator machine after the bundle is built.
 
-## Launch Commands
+## Launch
 
 macOS or Linux:
 
@@ -117,7 +84,7 @@ Set-Location C:\path\to\workspace
 C:\path\to\codex-exec-loop-native.exe
 ```
 
-## Useful Runtime Environment Variables
+Useful env vars:
 
 - `CODEX_EXEC_LOOP_FRONTEND=inline`
 - `CODEX_EXEC_LOOP_FRONTEND=alternate`
@@ -125,60 +92,42 @@ C:\path\to\codex-exec-loop-native.exe
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
 
-`CODEX_EXEC_LOOP_FRONTEND` is the preferred frontend selector.
-
-`CODEX_EXEC_LOOP_ALT_SCREEN=1` exists as a legacy fallback for alternate-screen mode.
-
-## Operator Smoke Checklist
-
-Run this checklist after copying the bundle to a target machine:
+## Smoke Checklist
 
 1. Start the binary from a real workspace.
 2. Confirm startup diagnostics pass.
 3. Open recent sessions or start a new draft.
 4. Send one prompt and confirm streaming output appears.
-5. If the machine should use fullscreen mode, set `CODEX_EXEC_LOOP_FRONTEND=alternate` and repeat the launch.
-6. If GitHub polling is part of the workflow, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the footer shows an active GitHub state instead of a setup error.
+5. Open `:planning` once if planning is part of the workflow.
+6. If fullscreen mode is expected, repeat with `CODEX_EXEC_LOOP_FRONTEND=alternate`.
+7. If GitHub polling is expected, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the shell shows an active GitHub state.
 
-After a platform-facing validation pass, capture the result block with a helper instead of rewriting the matrix template by hand.
+## Validation Handoff
 
-macOS or Linux:
+After a platform-facing change, record the validation result instead of rewriting the matrix by hand:
 
 ```bash
-cd /path/to/codex-exec-loop
 ./scripts/capture_native_validation.sh \
   --frontend inline \
   --result pass \
   --output-dir docs/validation
 ```
 
-Windows PowerShell:
-
-```powershell
-Set-Location C:\path\to\codex-exec-loop
-.\scripts\capture_native_validation.ps1 `
-  -Frontend inline `
-  -Result pass `
-  -OutputDir docs\validation
-```
-
-Keep the recorded files under `docs/validation/` so later platform follow-ups can point to a checked-in row instead of a transient comment.
-
-Check current matrix coverage from the repository root:
+Coverage summary:
 
 ```bash
 ./scripts/summarize_native_validation.sh
 ```
 
-For a copy-pastable PR summary:
+Markdown summary:
 
 ```bash
 ./scripts/summarize_native_validation.sh --format markdown
 ```
 
-## Release Handoff Notes
+## Release Notes
 
-- keep package creation deterministic by running from a clean checkout
-- attach the generated archive together with the exact commit SHA used to build it
-- keep the generated `.sha256` file with the archive so the receiver can verify integrity before unpacking
-- when platform-specific validation finds terminal defects, fix those in a focused follow-up branch instead of widening the packaging script
+- package from a clean checkout when possible
+- attach the exact commit SHA used for the build
+- keep the emitted `.sha256` file with the archive
+- fix platform-specific terminal defects in focused follow-up branches instead of widening the packaging change

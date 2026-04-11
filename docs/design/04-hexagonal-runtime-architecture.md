@@ -1,41 +1,34 @@
 # Hexagonal Runtime Architecture
 
-This is one of the main documents that should retain stable context for phase 2.
+This document keeps the stable ownership boundaries for the native client.
 
-## Stable Layer Ownership
-- `adapter/inbound/tui`: input mapping, shell state mutation, render preparation, background message handling
-- `application/service`: startup, session, conversation, and follow-up orchestration
-- `application/port/outbound`: app-server and filesystem boundaries owned by the application layer
-- `adapter/outbound`: concrete transport, protocol mapping, retries, warnings, and filesystem access
-- `domain`: UI-neutral models for startup diagnostics, sessions, conversations, and follow-up templates
+## Layer Ownership
 
-Dependency flow still points inward: `adapter -> application -> domain`.
+- `adapter/inbound/tui`: terminal input, shell state mutation, presentation assembly, and render dispatch
+- `application/service`: startup, session, conversation, follow-up, and planning orchestration
+- `application/port/outbound`: outbound boundaries owned by the application layer
+- `adapter/outbound`: concrete app-server, filesystem, and GitHub-polling adapters
+- `domain`: UI-neutral models for diagnostics, sessions, conversations, templates, reviews, and planning
 
-## Current Runtime Lifecycle
-The outbound app-server adapter already behaves like a shared runtime boundary:
+Dependency flow stays inward: `adapter -> application -> domain`.
 
-- startup checks, session listing, snapshot loading, and turn execution all enter through the same adapter and can reuse one initialized app-server connection
-- reconnects and reset-after-failure behavior are surfaced back to the shell as warnings
-- the shared runtime is held for the duration of a streaming turn, and request-style actions fall back to an isolated connection only while that shared path is busy
-- streamed protocol items are translated into domain-level conversation events before the TUI sees them
-- thread and turn identifiers come from app-server protocol objects such as `Thread.id` and `Turn.id`; the UI should treat them as correlation data, not as default operator-facing copy
+## Runtime Boundary
 
-## Why This Boundary Matters
-- protocol parsing and item mapping are already in the right place
-- the application layer can evolve orchestration without pulling transport detail into the UI
-- the inbound adapter can change shell structure without forcing domain or outbound rewrites
+- startup checks, session loading, snapshot loading, and turn streaming all enter through the app-server adapter
+- the shared runtime connection is reused where possible and held for the lifetime of a streaming turn
+- request-style work can fall back to an isolated runtime only while the shared path is busy
+- protocol objects are mapped into domain-level conversation events before the TUI sees them
+- reconnect and reset warnings come back through application services and surface as shell notices
 
-## Phase-2 UI Direction
-- keep the product-level architecture hexagonal
-- make `adapter/inbound/tui` internally stricter about event-driven ownership as the shell refactor progresses
-- normalize terminal input, background runtime messages, and streaming updates into explicit UI events
-- keep reducer-style state transitions pure where practical, and push async work into explicit effect handling
-- let effect handlers call application services and feed results back into the UI core as new events
-- move renderers toward frontend-neutral presentation data instead of reading mutable shell state objects directly
-- do not push BLoC-style abstractions into `application`, `domain`, or outbound adapters just for symmetry
+## Planning Boundary
 
-## Preserve During Phase 2
-- keep protocol and filesystem concerns inside outbound adapters
-- keep use-case orchestration in application services
-- keep domain models free of Ratatui, Crossterm, JSON, and process details
-- treat runtime evolution as a lifecycle improvement inside the current architecture, not as a reason to collapse boundaries
+- planning bootstrap, validation, prompt-fragment assembly, queue projection, and reconciliation live in `application/service`
+- filesystem reads and writes for planning files stay behind `PlanningWorkspacePort`
+- the queue snapshot is derived state, not an operator-authored source of truth
+- repair prompts and protected-file restoration stay outside the TUI layer
+
+## Current TUI Posture
+
+- the product boundary is already hexagonal
+- several TUI flows use reducer/effect seams, but rendering still reads `NativeTuiApp` directly in places
+- that internal cleanup is a maintenance concern inside the inbound adapter, not a reason to collapse application or domain boundaries

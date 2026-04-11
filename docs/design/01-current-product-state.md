@@ -1,26 +1,24 @@
 # Current Product State
 
-The `prerelease` branch is a shell-first native client built around `codex app-server`.
+`prerelease` currently ships a shell-first native client built on `codex app-server`.
 
-## Current Baseline
-- shell-first startup into a draft conversation on the main terminal screen by default, with `CODEX_EXEC_LOOP_FRONTEND=alternate` as the explicit fullscreen override and legacy `CODEX_EXEC_LOOP_ALT_SCREEN` still accepted as fallback
-- optional startup ASCII art can persist in scrollback as the first shell surface, controlled by `CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART` and enabled by default
-- startup diagnostics, recent-session browsing, and follow-up template inspection rendered inside the inline shell, with alternate-screen still available as the framed fallback path
-- manual prompt submission can queue while startup checks are still running, then auto-send once startup becomes ready
-- new-thread start, existing-thread resume, snapshot loading, and streamed turn execution through the app-server flow
-- inline shell commands such as `:diag`, `:sessions`, `:templates`, `:new`, and `:help`
-- host terminal scrollback used as the primary history surface in inline mode, with one tail live region for prompt, transient streaming text, and compact notices
-- the startup-ready shell now reads as `logo -> startup context -> conversation placeholder -> prompt`, and after the first committed turn the prompt stays visually attached to the latest history line instead of hanging below a large gap
-- visible cursor ownership in the active inline prompt and visible streamed agent text before completion
-- compact routine status copy that hides raw protocol ids from normal inline flow
-- builtin auto follow-up templates, workspace template loading, inspection-backed stop-keyword editing, and a no-file-change stop rule
-- session query, paging, recent-project filtering, and GitHub review-change notices inside the shell
+## Baseline
+
+- inline main-buffer mode is the default frontend; alternate-screen remains explicit opt-in
+- startup diagnostics begin immediately and the shell becomes visible before all checks finish
+- manual input can buffer while startup is still pending, then auto-submit once the shell reaches a sendable state
+- the client can start a new draft, resume an existing thread, load snapshots, and stream new turns through the shared app-server boundary
+- inline inspection surfaces cover diagnostics, recent sessions, follow-up templates, and planning
+- recent-session browsing supports search, paging, and current-workspace filtering
+- auto follow-up ships with builtin templates plus workspace templates from `.codex-exec-loop/followups/`
+- the planning feature already exists: `:planning` can stage simple or detail/manual drafts, open the embedded draft editor, promote staged files, and surface queue/proposal status in the shell
+- invalid planning task-ledger writes are rolled back and can trigger a bounded repair retry
+- approval state, tool activity, runtime warnings, and optional GitHub review polling are visible in routine shell flow
 
 ## Current Constraints
-- terminal behavior still depends on host terminal capabilities and should be manually validated when shell rendering changes
-- recent-session loading, prompt execution, and some shell actions still depend on startup diagnostics passing
-- some non-stream requests can still fall back to isolated runtime access while a turn stream is active
-- long-session editing and navigation remain intentionally simpler than a mature dedicated CLI
 
-## Documentation Posture
-Describe the implemented baseline, not a future UX script. When a new sprint changes shell shape, runtime behavior, or automation behavior in a material way, open a dedicated feature doc instead of turning this file into a rolling history log.
+- shell rendering still needs real-terminal validation when prompt, streaming, overlay, or restore behavior changes
+- recent-session loading and some shell actions remain gated by startup diagnostics
+- some non-stream requests still fall back to isolated runtime access while a turn stream is active
+- long-session editing and navigation are intentionally lighter than a mature standalone CLI
+- planning detail mode only supports manual draft authoring today; the `llm-assisted` branch is visible but disabled

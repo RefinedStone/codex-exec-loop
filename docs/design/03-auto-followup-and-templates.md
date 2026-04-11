@@ -1,14 +1,16 @@
 # Auto Follow-Up And Templates
 
-Auto follow-up is now part of the native client's core product behavior and should keep more context than the UI-only docs.
+Auto follow-up is already part of the shipped client.
 
-## Template Sources
-- builtin strategies: `next-task`, `plan-queue`, `bugfix`, `docs`
+## Template Catalog
+
+- builtin templates: `builtin next-task`, `builtin plan-queue`, `builtin bugfix`, `builtin docs`
 - workspace templates: `.codex-exec-loop/followups/*.md` and `.codex-exec-loop/followups/*.txt`
-- workspace loading stays sorted, ignores unsupported extensions, and records warnings for empty templates
+- workspace loading stays sorted, ignores empty templates, and records load warnings instead of failing the whole catalog
 
-## Runtime Values
-Templates can render runtime placeholders such as:
+## Runtime Placeholders
+
+Templates can render:
 
 - `{auto_turn}`
 - `{max_auto_turns}`
@@ -16,27 +18,35 @@ Templates can render runtime placeholders such as:
 - `{stop_keyword}`
 - `{last_message}`
 
-## Stop Rules
-The current shell can stop auto follow-up when:
+## Current Runtime Rules
 
-- the agent emits the configured stop keyword, default `AUTO_STOP`
-- the no-file-change rule is enabled and the last completed turn produced no file changes
+- stop when the agent emits the configured stop keyword; default is `AUTO_STOP`
+- stop when the no-file-change rule is enabled and the completed turn produced no file changes
+- stop-keyword matching is case-insensitive and token-based
+- the latest skip or block reason stays operator-visible after the turn
 
-Stop-keyword matching is case-insensitive and token-based, so surrounding punctuation does not block a match.
+## Planning-Aware Behavior
 
-The latest skip reason should remain operator-visible after a turn finishes.
+- invalid planning files block auto follow-up for every template
+- non-planning templates can still run when planning is uninitialized
+- builtin `next-task` requires planning state:
+  - uninitialized: blocked because there is no actionable queue context
+  - ready with task: runs against the current queue head
+  - ready with no task: queues a planning-refresh prompt from the latest answer instead of hard-blocking
 
 ## Operator Controls
+
 - `Ctrl+a`: toggle auto follow-up
-- `Ctrl+f`: cycle templates forward
+- `Ctrl+f`: cycle templates
 - `Ctrl+p` or `:templates`: open template preview
-- `Ctrl+g`: enter stop-keyword edit mode, opening the template overlay if needed
+- `Ctrl+g`: edit stop keyword
 - `Ctrl+k`: toggle stop-keyword rule
 - `Ctrl+n`: toggle no-file-change rule
+- `Ctrl+l`: edit max auto turns
 
-## Durable Behavior To Preserve
-- template selection and stop settings belong to shell state, not to ad hoc render logic
-- follow-up decisions happen after completed turn reduction, not before the turn result is understood
-- stop-keyword values are constrained to non-empty identifier-like tokens using letters, numbers, or underscores
-- workspace templates extend builtin behavior; they should not replace builtin availability
-- future UX work can change how controls are presented, but should not hide why auto follow-up did not continue
+## Durable Contract
+
+- template selection and stop settings belong to shell state
+- follow-up decisions run after completed turn reduction, not before
+- stop keywords stay constrained to non-empty identifier-like tokens
+- workspace templates extend builtin availability; they do not replace it
