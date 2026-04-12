@@ -16,15 +16,16 @@ use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
     ConversationState, ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
     DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP,
-    GithubReviewPollingState, InlineShellCommand, MAX_COMPOSER_HEIGHT, NativeTuiApp,
-    PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
-    SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
-    TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
-    build_followup_template_overlay_view, build_followup_template_preview_lines,
-    build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
-    build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
-    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
-    build_transcript_panel_view, build_transcript_title, format_conversation_lines, shell_layout,
+    GithubReviewPollingState, InlineShellCommand, InlineShellCommandInput, MAX_COMPOSER_HEIGHT,
+    NativeTuiApp, PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity,
+    SessionOverlayUiState, SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay,
+    StartupState, TurnActivityState, build_conversation_shell_frame_view,
+    build_conversation_shell_view, build_followup_template_overlay_view,
+    build_followup_template_preview_lines, build_followup_template_status_lines,
+    build_inline_tail_lines, build_input_title, build_planning_init_overlay_view,
+    build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
+    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
+    build_transcript_title, format_conversation_lines, shell_layout,
     startup_ascii_art_enabled_from_value,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
@@ -496,7 +497,9 @@ fn empty_draft_prompts_for_first_message() {
 fn planning_init_command_opens_selector_overlay() {
     let (mut app, _) = make_test_app();
 
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
@@ -526,7 +529,9 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
         .join("planning")
         .join("drafts");
 
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 
@@ -574,7 +579,9 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
 
 fn open_planning_simple_review(app: &mut NativeTuiApp) {
     sync_draft_conversation_to_startup_workspace(app);
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
@@ -705,7 +712,9 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
     sync_draft_conversation_to_startup_workspace(&mut app);
 
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(
@@ -734,7 +743,9 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
 
 fn open_planning_manual_editor(app: &mut NativeTuiApp) {
     sync_draft_conversation_to_startup_workspace(app);
-    app.execute_inline_shell_command(InlineShellCommand::PlanningInit);
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
@@ -1783,6 +1794,22 @@ fn inline_shell_command_buffer_shows_command_hint() {
 }
 
 #[test]
+fn max_auto_turns_command_buffer_shows_argument_aware_hint() {
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = ":turns 8".to_string();
+
+    let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("> :turns 8"));
+    assert!(rendered.contains("Press Enter to set max auto turns to 8."));
+    assert!(rendered.contains(":turns set max auto turns"));
+}
+
+#[test]
 fn colon_only_buffer_shows_available_shell_commands() {
     let mut conversation = ready_conversation();
     conversation.input_buffer = ":".to_string();
@@ -1797,6 +1824,7 @@ fn colon_only_buffer_shows_available_shell_commands() {
     assert!(rendered.contains("Shell commands: type a name, then press Enter."));
     assert!(rendered.contains(":diag diagnostics"));
     assert!(rendered.contains(":planning planning mode"));
+    assert!(rendered.contains(":turns set max auto turns"));
     assert!(rendered.contains(":help command help"));
 }
 
@@ -2477,6 +2505,94 @@ fn inline_help_command_updates_status_and_clears_input() {
         conversation
             .status_text
             .contains(InlineShellCommand::command_list_line())
+    );
+}
+
+#[test]
+fn inline_turns_command_updates_max_auto_turns_and_clears_input() {
+    let (mut app, codex_port) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_buffer = ":turns 8".to_string();
+
+    app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(conversation.auto_follow_state.max_auto_turns_value(), 8);
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
+fn inline_turns_command_without_argument_shows_usage_and_clears_input() {
+    let (mut app, codex_port) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_buffer = ":turns".to_string();
+
+    app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(
+        conversation.auto_follow_state.max_auto_turns_value(),
+        DEFAULT_AUTO_FOLLOW_MAX_TURNS
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("usage: :turns <1-50>  |  alias: :auto-turns <1-50>")
+    );
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
+fn inline_turns_command_with_invalid_argument_keeps_validation_message() {
+    let (mut app, codex_port) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_buffer = ":turns 70".to_string();
+
+    app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(
+        conversation.auto_follow_state.max_auto_turns_value(),
+        DEFAULT_AUTO_FOLLOW_MAX_TURNS
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("whole number between 1 and 50")
+    );
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
     );
 }
 

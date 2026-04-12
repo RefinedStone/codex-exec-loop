@@ -4,10 +4,17 @@ pub(super) enum InlineShellCommand {
     Sessions,
     Templates,
     PlanningInit,
+    MaxAutoTurns,
     NewDraft,
     TranscriptTopLegacy,
     TranscriptTailLegacy,
     Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InlineShellCommandInput {
+    command: InlineShellCommand,
+    argument: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +28,8 @@ struct InlineShellCommandSpec {
 }
 
 const COMMAND_LIST_LINE: &str =
-    "Shell commands: :diag  :sessions  :templates  :planning  :new  :help";
+    "Shell commands: :diag  :sessions  :templates  :planning  :turns <n>  :new  :help";
+const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -55,6 +63,14 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning mode",
         buffered_hint: "Press Enter to open the planning mode selector.",
         execution_status: Some("opened planning initialization selector"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::MaxAutoTurns,
+        primary_name: ":turns",
+        aliases: &[":turn", ":turns", ":auto-turns"],
+        suggestion_detail: "set max auto turns",
+        buffered_hint: MAX_AUTO_TURNS_USAGE,
+        execution_status: None,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::NewDraft,
@@ -94,6 +110,40 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     },
 ];
 
+impl InlineShellCommandInput {
+    pub(super) fn parse(input: &str) -> Option<Self> {
+        let (command_token, argument) = tokenize_inline_command_input(input)?;
+        InlineShellCommand::from_alias(&command_token).map(|command| Self { command, argument })
+    }
+
+    pub(super) fn command(&self) -> InlineShellCommand {
+        self.command
+    }
+
+    pub(super) fn argument(&self) -> Option<&str> {
+        self.argument.as_deref()
+    }
+
+    pub(super) fn buffered_hint(&self) -> String {
+        match self.command {
+            InlineShellCommand::MaxAutoTurns => match self.argument() {
+                Some(value) if is_valid_max_auto_turn_argument(value) => {
+                    format!("Press Enter to set max auto turns to {value}.")
+                }
+                Some(value) => {
+                    format!("Press Enter to apply `:turns {value}`. Max auto turns must be 1-50.")
+                }
+                None => MAX_AUTO_TURNS_USAGE.to_string(),
+            },
+            _ => self.command.spec().buffered_hint.to_string(),
+        }
+    }
+
+    pub(super) fn execution_status(&self) -> Option<String> {
+        self.command.spec().execution_status.map(str::to_string)
+    }
+}
+
 impl InlineShellCommand {
     fn spec(self) -> &'static InlineShellCommandSpec {
         INLINE_SHELL_COMMAND_SPECS
@@ -102,27 +152,15 @@ impl InlineShellCommand {
             .expect("inline shell command spec should exist")
     }
 
-    fn normalized_candidate(input: &str) -> Option<String> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() || !trimmed.starts_with(':') {
-            return None;
-        }
-        if trimmed.chars().any(|character| character.is_whitespace()) {
-            return None;
-        }
-        Some(trimmed.to_ascii_lowercase())
-    }
-
-    pub(super) fn parse(input: &str) -> Option<Self> {
-        let normalized = Self::normalized_candidate(input)?;
+    fn from_alias(alias: &str) -> Option<Self> {
         INLINE_SHELL_COMMAND_SPECS
             .iter()
-            .find(|spec| spec.aliases.iter().any(|alias| *alias == normalized))
+            .find(|spec| spec.aliases.contains(&alias))
             .map(|spec| spec.command)
     }
 
     pub(super) fn suggestions(input: &str) -> Vec<Self> {
-        let Some(prefix) = Self::normalized_candidate(input) else {
+        let Some(prefix) = suggestion_prefix_token(input) else {
             return Vec::new();
         };
 
@@ -140,7 +178,7 @@ impl InlineShellCommand {
     }
 
     pub(super) fn suggestion_prefix(input: &str) -> Option<String> {
-        Self::normalized_candidate(input)
+        suggestion_prefix_token(input)
     }
 
     pub(super) fn command_name(self) -> &'static str {
@@ -154,44 +192,103 @@ impl InlineShellCommand {
     pub(super) fn command_list_line() -> &'static str {
         COMMAND_LIST_LINE
     }
+}
 
-    pub(super) fn buffered_hint(self) -> &'static str {
-        self.spec().buffered_hint
+fn tokenize_inline_command_input(input: &str) -> Option<(String, Option<String>)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || !trimmed.starts_with(':') {
+        return None;
     }
 
-    pub(super) fn execution_status(self) -> Option<&'static str> {
-        self.spec().execution_status
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let command_token = parts.next()?.to_ascii_lowercase();
+    let argument = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Some((command_token, argument))
+}
+
+fn suggestion_prefix_token(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || !trimmed.starts_with(':') {
+        return None;
     }
+    let command_token = trimmed
+        .split_whitespace()
+        .next()
+        .expect("trimmed shell command input should have a first token");
+    Some(command_token.to_ascii_lowercase())
+}
+
+fn is_valid_max_auto_turn_argument(value: &str) -> bool {
+    value
+        .trim()
+        .parse::<usize>()
+        .map(|candidate| (1..=50).contains(&candidate))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::InlineShellCommand;
+    use super::{InlineShellCommand, InlineShellCommandInput, MAX_AUTO_TURNS_USAGE};
 
     #[test]
     fn parse_recognizes_supported_aliases() {
         let cases = [
-            (":diag", Some(InlineShellCommand::Diagnostics)),
-            (":diagnostics", Some(InlineShellCommand::Diagnostics)),
-            (":DIAG", Some(InlineShellCommand::Diagnostics)),
-            (":session", Some(InlineShellCommand::Sessions)),
-            (":sessions", Some(InlineShellCommand::Sessions)),
-            (":template", Some(InlineShellCommand::Templates)),
-            (":templates", Some(InlineShellCommand::Templates)),
-            (":planning", Some(InlineShellCommand::PlanningInit)),
-            (":planning-init", Some(InlineShellCommand::PlanningInit)),
-            (":new", Some(InlineShellCommand::NewDraft)),
-            (":top", Some(InlineShellCommand::TranscriptTopLegacy)),
-            (":home", Some(InlineShellCommand::TranscriptTopLegacy)),
-            (":tail", Some(InlineShellCommand::TranscriptTailLegacy)),
-            (":end", Some(InlineShellCommand::TranscriptTailLegacy)),
-            (":help", Some(InlineShellCommand::Help)),
-            ("  :help  ", Some(InlineShellCommand::Help)),
+            (":diag", Some((InlineShellCommand::Diagnostics, None))),
+            (
+                ":diagnostics",
+                Some((InlineShellCommand::Diagnostics, None)),
+            ),
+            (":DIAG", Some((InlineShellCommand::Diagnostics, None))),
+            (":session", Some((InlineShellCommand::Sessions, None))),
+            (":sessions", Some((InlineShellCommand::Sessions, None))),
+            (":template", Some((InlineShellCommand::Templates, None))),
+            (":templates", Some((InlineShellCommand::Templates, None))),
+            (":planning", Some((InlineShellCommand::PlanningInit, None))),
+            (
+                ":planning-init",
+                Some((InlineShellCommand::PlanningInit, None)),
+            ),
+            (
+                ":turns 5",
+                Some((InlineShellCommand::MaxAutoTurns, Some("5"))),
+            ),
+            (
+                ":auto-turns 12",
+                Some((InlineShellCommand::MaxAutoTurns, Some("12"))),
+            ),
+            (":turns", Some((InlineShellCommand::MaxAutoTurns, None))),
+            (":new", Some((InlineShellCommand::NewDraft, None))),
+            (
+                ":top",
+                Some((InlineShellCommand::TranscriptTopLegacy, None)),
+            ),
+            (
+                ":home",
+                Some((InlineShellCommand::TranscriptTopLegacy, None)),
+            ),
+            (
+                ":tail",
+                Some((InlineShellCommand::TranscriptTailLegacy, None)),
+            ),
+            (
+                ":end",
+                Some((InlineShellCommand::TranscriptTailLegacy, None)),
+            ),
+            (":help", Some((InlineShellCommand::Help, None))),
+            ("  :help  ", Some((InlineShellCommand::Help, None))),
             (":unknown", None),
         ];
 
         for (input, expected) in cases {
-            assert_eq!(InlineShellCommand::parse(input), expected, "{input}");
+            let parsed = InlineShellCommandInput::parse(input)
+                .map(|command| (command.command(), command.argument().map(str::to_string)));
+            let expected =
+                expected.map(|(command, argument)| (command, argument.map(str::to_string)));
+            assert_eq!(parsed, expected, "{input}");
         }
     }
 
@@ -206,6 +303,7 @@ mod tests {
                 InlineShellCommand::Sessions,
                 InlineShellCommand::Templates,
                 InlineShellCommand::PlanningInit,
+                InlineShellCommand::MaxAutoTurns,
                 InlineShellCommand::NewDraft,
                 InlineShellCommand::TranscriptTopLegacy,
                 InlineShellCommand::TranscriptTailLegacy,
@@ -224,6 +322,7 @@ mod tests {
             InlineShellCommand::suggestions(":t"),
             vec![
                 InlineShellCommand::Templates,
+                InlineShellCommand::MaxAutoTurns,
                 InlineShellCommand::TranscriptTopLegacy,
                 InlineShellCommand::TranscriptTailLegacy,
             ]
@@ -231,9 +330,29 @@ mod tests {
     }
 
     #[test]
-    fn help_status_reuses_command_list_line() {
+    fn max_auto_turn_command_hint_is_argument_aware() {
+        let no_arg = InlineShellCommandInput::parse(":turns").expect("command should parse");
+        let valid_arg = InlineShellCommandInput::parse(":turns 7").expect("command should parse");
+        let invalid_arg =
+            InlineShellCommandInput::parse(":turns 70").expect("command should parse");
+
+        assert_eq!(no_arg.buffered_hint(), MAX_AUTO_TURNS_USAGE);
         assert_eq!(
-            InlineShellCommand::Help.execution_status(),
+            valid_arg.buffered_hint(),
+            "Press Enter to set max auto turns to 7."
+        );
+        assert_eq!(
+            invalid_arg.buffered_hint(),
+            "Press Enter to apply `:turns 70`. Max auto turns must be 1-50."
+        );
+    }
+
+    #[test]
+    fn help_status_reuses_command_list_line() {
+        let help = InlineShellCommandInput::parse(":help").expect("help command should parse");
+
+        assert_eq!(
+            help.execution_status().as_deref(),
             Some(InlineShellCommand::command_list_line())
         );
     }
@@ -241,38 +360,29 @@ mod tests {
     #[test]
     fn execution_status_stays_alias_neutral() {
         let cases = [
+            (":diag", Some("opened diagnostics inspection")),
+            (":sessions", Some("opened recent sessions inspection")),
+            (":templates", Some("opened template inspection")),
+            (":planning", Some("opened planning initialization selector")),
+            (":turns 5", None),
             (
-                InlineShellCommand::Diagnostics,
-                Some("opened diagnostics inspection"),
-            ),
-            (
-                InlineShellCommand::Sessions,
-                Some("opened recent sessions inspection"),
-            ),
-            (
-                InlineShellCommand::Templates,
-                Some("opened template inspection"),
-            ),
-            (
-                InlineShellCommand::PlanningInit,
-                Some("opened planning initialization selector"),
-            ),
-            (
-                InlineShellCommand::TranscriptTopLegacy,
+                ":top",
                 Some(
                     "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
                 ),
             ),
             (
-                InlineShellCommand::TranscriptTailLegacy,
+                ":tail",
                 Some(
                     "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
                 ),
             ),
         ];
 
-        for (command, expected) in cases {
-            assert_eq!(command.execution_status(), expected);
+        for (input, expected) in cases {
+            let command =
+                InlineShellCommandInput::parse(input).expect("inline shell command should parse");
+            assert_eq!(command.execution_status().as_deref(), expected);
         }
     }
 }

@@ -12,12 +12,12 @@ impl NativeTuiApp {
     pub(super) fn start_turn_submission(&mut self) {
         let inline_command = match &self.conversation_state {
             ConversationState::Ready(conversation) => {
-                InlineShellCommand::parse(&conversation.input_buffer)
+                InlineShellCommandInput::parse(&conversation.input_buffer)
             }
             _ => None,
         };
         if let Some(command) = inline_command {
-            self.execute_inline_shell_command(command);
+            self.execute_inline_shell_command_input(command);
             return;
         }
 

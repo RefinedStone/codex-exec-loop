@@ -161,21 +161,37 @@ impl NativeTuiApp {
         self.dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
     }
 
-    pub(super) fn execute_inline_shell_command(&mut self, command: InlineShellCommand) {
-        match command {
+    pub(super) fn execute_inline_shell_command_input(
+        &mut self,
+        command_input: InlineShellCommandInput,
+    ) {
+        match command_input.command() {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
             InlineShellCommand::PlanningInit => self.show_planning_init_overlay(),
+            InlineShellCommand::MaxAutoTurns => {
+                let Some(value) = command_input.argument().map(str::to_string) else {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: "usage: :turns <1-50>  |  alias: :auto-turns <1-50>"
+                            .to_string(),
+                    });
+                    self.clear_input_buffer();
+                    return;
+                };
+                self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
+                    value,
+                });
+            }
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
             InlineShellCommand::TranscriptTopLegacy => {}
             InlineShellCommand::TranscriptTailLegacy => {}
             InlineShellCommand::Help => {}
         }
 
-        if let Some(status_text) = command.execution_status() {
+        if let Some(status_text) = command_input.execution_status() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: status_text.to_string(),
+                status_text,
             });
         }
         self.clear_input_buffer();

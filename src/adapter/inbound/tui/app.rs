@@ -125,7 +125,7 @@ use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
 use github_polling::GithubReviewPollingState;
-use inline_shell_commands::InlineShellCommand;
+use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,

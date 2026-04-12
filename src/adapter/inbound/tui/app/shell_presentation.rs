@@ -1398,7 +1398,7 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    if let Some(command) = InlineShellCommand::parse(&conversation.input_buffer) {
+    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
         lines.push(Line::from(command.buffered_hint()));
         lines.extend(build_inline_shell_command_suggestion_lines(
             &conversation.input_buffer,
@@ -1652,7 +1652,7 @@ pub(super) fn build_ready_input_lines(
         return lines;
     }
 
-    if let Some(command) = InlineShellCommand::parse(&conversation.input_buffer) {
+    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
         lines.push(Line::from(command.buffered_hint()));
         lines.extend(build_shell_command_suggestion_lines(
             &conversation.input_buffer,
