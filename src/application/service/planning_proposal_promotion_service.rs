@@ -83,9 +83,7 @@ impl PlanningProposalPromotionService {
         let execution_snapshot = self
             .planning_reconciliation_service
             .load_execution_snapshot(request.workspace_directory)?;
-        let top_proposal = self
-            .priority_queue_service
-            .build_snapshot(&directions, &task_ledger)?
+        let top_proposal = queue_snapshot
             .proposed_tasks
             .into_iter()
             .next()
@@ -149,7 +147,7 @@ impl PlanningProposalPromotionService {
     ) -> Result<(DirectionCatalogDocument, TaskLedgerDocument)> {
         let validation_result = self
             .planning_validation_service
-            .validate_workspace_files(workspace_record_to_files(workspace_record));
+            .validate_workspace_files(workspace_record_to_files(workspace_record)?);
         if !validation_result.is_valid() {
             let first_error = validation_result
                 .report
@@ -182,25 +180,25 @@ impl PlanningProposalPromotionService {
 
 fn workspace_record_to_files(
     workspace_record: &PlanningWorkspaceLoadRecord,
-) -> PlanningWorkspaceFiles<'_> {
-    PlanningWorkspaceFiles {
+) -> Result<PlanningWorkspaceFiles<'_>> {
+    Ok(PlanningWorkspaceFiles {
         directions_toml: workspace_record
             .directions_toml
             .as_deref()
-            .expect("complete planning workspace should include directions"),
+            .ok_or_else(|| anyhow!("planning workspace is missing directions.toml"))?,
         task_ledger_json: workspace_record
             .task_ledger_json
             .as_deref()
-            .expect("complete planning workspace should include task ledger"),
+            .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.json"))?,
         task_ledger_schema_json: workspace_record
             .task_ledger_schema_json
             .as_deref()
-            .expect("complete planning workspace should include task-ledger schema"),
+            .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.schema.json"))?,
         result_output_markdown: workspace_record
             .result_output_markdown
             .as_deref()
-            .expect("complete planning workspace should include result output"),
-    }
+            .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
+    })
 }
 
 #[cfg(test)]
@@ -356,6 +354,29 @@ mod tests {
             fs::read_to_string(Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH))
                 .expect("promoted task ledger should read");
         assert!(persisted_task_ledger.contains("\"status\": \"ready\""));
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn promote_top_proposal_returns_error_when_workspace_is_incomplete() {
+        let workspace_dir = create_temp_workspace("planning-proposal-promotion-missing");
+        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
+        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+        fs::write(
+            planning_dir.join("task-ledger.json"),
+            "{\"version\":1,\"tasks\":[]}",
+        )
+        .expect("task ledger should write");
+
+        let error = service()
+            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: &workspace_dir,
+                root_turn_id: "turn-missing",
+            })
+            .expect_err("incomplete workspace should return an error");
+
+        assert!(error.to_string().contains("missing directions.toml"));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

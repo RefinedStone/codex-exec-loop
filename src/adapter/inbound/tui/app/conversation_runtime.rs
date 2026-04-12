@@ -189,7 +189,7 @@ pub(super) fn reduce_conversation_runtime(
                 turn_id,
                 changed_planning_file_paths,
             } => {
-                let workspace_directory = state.finish_turn(&changed_planning_file_paths);
+                let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
                 effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
                     workspace_directory,
                     queued_from_turn_id: turn_id,
@@ -209,7 +209,29 @@ pub(super) fn reduce_conversation_runtime(
             state.planning_repair_state = evaluation.planning_repair_state;
             state.extend_runtime_notices(evaluation.runtime_notices);
 
-            match evaluation.action {
+            let action = match evaluation.action {
+                ConversationPostTurnAction::QueuePlanningRepair {
+                    prompt: _,
+                    queued_from_turn_id: _,
+                    attempt_number,
+                    max_attempts,
+                } if !state.input_buffer.trim().is_empty() => {
+                    ConversationPostTurnAction::PausePlanningRepair {
+                        attempt_number,
+                        max_attempts,
+                    }
+                }
+                ConversationPostTurnAction::QueueAutoPrompt { .. }
+                    if !state.input_buffer.trim().is_empty() =>
+                {
+                    ConversationPostTurnAction::SkipAutoFollowup {
+                        reason: AutoFollowupSkipReason::ManualInputBuffered,
+                    }
+                }
+                action => action,
+            };
+
+            match action {
                 ConversationPostTurnAction::QueuePlanningRepair {
                     prompt,
                     queued_from_turn_id,
@@ -940,7 +962,8 @@ mod tests {
 
     #[test]
     fn post_turn_evaluation_queues_auto_prompt_from_reducer_state_transition() {
-        let state = sample_conversation();
+        let mut state = sample_conversation();
+        state.input_buffer.clear();
 
         let reduced = reduce_conversation_runtime(
             state,
@@ -989,6 +1012,46 @@ mod tests {
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
             Some("queued auto turn 1/3")
+        );
+    }
+
+    #[test]
+    fn post_turn_evaluation_rechecks_manual_input_before_queueing_auto_prompt() {
+        let mut state = sample_conversation();
+        state.input_buffer = "user is typing".to_string();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::PostTurnEvaluated {
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(
+                        "planning queue needs confirmation".to_string(),
+                    ),
+                    planning_repair_state: None,
+                    runtime_notices: vec!["planning reconciliation completed".to_string()],
+                    action: ConversationPostTurnAction::QueueAutoPrompt {
+                        prompt: "continue".to_string(),
+                        queued_from_turn_id: "turn-1".to_string(),
+                        template_label: "builtin next-task".to_string(),
+                        transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다."
+                            .to_string(),
+                    },
+                }),
+            },
+        );
+
+        assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.state.status_text,
+            "turn completed / auto follow-up skipped: manual input buffered"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("skipped: manual input buffered")
         );
     }
 

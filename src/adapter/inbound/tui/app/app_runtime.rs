@@ -34,6 +34,8 @@ pub(super) enum BackgroundMessage {
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
     PostTurnEvaluated {
+        thread_id: String,
+        queued_from_turn_id: String,
         evaluation: Box<ConversationPostTurnEvaluation>,
         planner_worker_panel_state: super::PlannerWorkerPanelState,
     },
@@ -205,6 +207,19 @@ impl NativeTuiApp {
         }
         for effect in reduction.effects {
             self.execute_conversation_runtime_effect(effect);
+        }
+    }
+
+    pub(super) fn should_apply_post_turn_evaluation(
+        &self,
+        thread_id: &str,
+        queued_from_turn_id: &str,
+    ) -> bool {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                conversation.accepts_post_turn_evaluation(thread_id, queued_from_turn_id)
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => false,
         }
     }
 

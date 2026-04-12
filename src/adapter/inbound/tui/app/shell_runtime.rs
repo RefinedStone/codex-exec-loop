@@ -102,9 +102,17 @@ impl ShellRuntime {
                     );
                 }
                 BackgroundMessage::PostTurnEvaluated {
+                    thread_id,
+                    queued_from_turn_id,
                     evaluation,
                     planner_worker_panel_state,
                 } => {
+                    if !self
+                        .app
+                        .should_apply_post_turn_evaluation(&thread_id, &queued_from_turn_id)
+                    {
+                        continue;
+                    }
                     self.app.planner_worker_panel_state = planner_worker_panel_state;
                     self.app.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::PostTurnEvaluated { evaluation },
@@ -268,6 +276,7 @@ mod tests {
     use crate::application::service::planning_services::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
+    use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnEvaluation;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
     use crate::domain::github_review::{
         GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
@@ -452,6 +461,59 @@ mod tests {
         runtime.poll_background_messages();
 
         assert!(!runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn stale_post_turn_evaluation_background_message_is_ignored() {
+        let mut runtime = make_test_runtime(ShellFrontendMode::InlineMainBuffer);
+        runtime.take_redraw_request();
+        let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state
+        else {
+            panic!("expected ready conversation state");
+        };
+        conversation.thread_id = "thread-1".to_string();
+        conversation.status_text = "session ready".to_string();
+        conversation.turn_activity.last_completed_turn_id = Some("turn-2".to_string());
+
+        runtime
+            .app
+            .tx
+            .send(BackgroundMessage::PostTurnEvaluated {
+                thread_id: "thread-1".to_string(),
+                queued_from_turn_id: "turn-1".to_string(),
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    planning_runtime_snapshot: crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::invalid(
+                        "stale snapshot".to_string(),
+                    ),
+                    planning_repair_state: None,
+                    runtime_notices: vec!["stale notice".to_string()],
+                    action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollowup {
+                        reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::Disabled,
+                    },
+                }),
+                planner_worker_panel_state: crate::adapter::inbound::tui::app::PlannerWorkerPanelState {
+                    status: crate::adapter::inbound::tui::app::PlannerWorkerStatus::RefreshSucceeded,
+                    last_queue_summary: Some("next task: stale".to_string()),
+                    last_summary: Some("stale".to_string()),
+                    last_rejected_summary: None,
+                },
+            })
+            .expect("background message should enqueue");
+
+        runtime.poll_background_messages();
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.status_text, "session ready");
+        assert!(conversation.runtime_notices.is_empty());
+        assert!(
+            runtime
+                .app()
+                .planner_worker_panel_state
+                .last_summary
+                .is_none()
+        );
     }
 
     #[test]

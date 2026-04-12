@@ -196,6 +196,7 @@ pub(crate) struct TurnActivityState {
     pub(crate) current_turn_command_count: usize,
     pub(crate) current_turn_last_summary: Option<String>,
     pub(crate) current_turn_changed_planning_file_paths: Vec<String>,
+    pub(crate) last_completed_turn_id: Option<String>,
     pub(crate) last_completed_turn_file_change_count: usize,
     pub(crate) last_completed_turn_command_count: usize,
     pub(crate) last_completed_turn_last_summary: Option<String>,
@@ -468,7 +469,8 @@ impl TurnActivityState {
         }
     }
 
-    pub(crate) fn complete_turn(&mut self) {
+    pub(crate) fn complete_turn(&mut self, turn_id: &str) {
+        self.last_completed_turn_id = Some(turn_id.to_string());
         self.last_completed_turn_file_change_count =
             std::mem::replace(&mut self.current_turn_file_change_count, 0);
         self.last_completed_turn_command_count =
@@ -1080,7 +1082,11 @@ impl ConversationViewModel {
         self.input_state = self.ready_input_state();
     }
 
-    pub(crate) fn finish_turn(&mut self, changed_planning_file_paths: &[String]) -> String {
+    pub(crate) fn finish_turn(
+        &mut self,
+        turn_id: &str,
+        changed_planning_file_paths: &[String],
+    ) -> String {
         let workspace_directory = self
             .active_turn_workspace_directory
             .clone()
@@ -1090,7 +1096,7 @@ impl ConversationViewModel {
         self.flush_buffered_tool_messages();
         self.turn_activity
             .register_changed_planning_file_paths(changed_planning_file_paths);
-        self.turn_activity.complete_turn();
+        self.turn_activity.complete_turn(turn_id);
         self.mark_turn_finished();
 
         workspace_directory
@@ -1179,6 +1185,16 @@ impl ConversationViewModel {
                 "queued after the previous turn completed; waiting to submit with template {template_label}"
             ),
         });
+    }
+
+    pub(crate) fn accepts_post_turn_evaluation(
+        &self,
+        thread_id: &str,
+        queued_from_turn_id: &str,
+    ) -> bool {
+        self.thread_id == thread_id
+            && !self.has_running_turn()
+            && self.turn_activity.last_completed_turn_id.as_deref() == Some(queued_from_turn_id)
     }
 
     pub(crate) fn latest_agent_message_text(&self) -> Option<&str> {

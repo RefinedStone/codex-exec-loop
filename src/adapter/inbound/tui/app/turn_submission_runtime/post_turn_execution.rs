@@ -43,7 +43,10 @@ struct BuiltinNextTaskRefreshOutcome {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, allow(dead_code))]
 struct PostTurnEvaluationExecution {
+    thread_id: String,
+    queued_from_turn_id: String,
     evaluation: ConversationPostTurnEvaluation,
     planner_worker_panel_state: PlannerWorkerPanelState,
 }
@@ -112,6 +115,8 @@ impl PostTurnEvaluationExecutor {
         );
 
         PostTurnEvaluationExecution {
+            thread_id: conversation.thread_id.clone(),
+            queued_from_turn_id: request.queued_from_turn_id.clone(),
             evaluation: ConversationPostTurnEvaluation {
                 planning_runtime_snapshot,
                 planning_repair_state: None,
@@ -493,6 +498,8 @@ impl NativeTuiApp {
             std::thread::spawn(move || {
                 let execution = executor.run(&conversation, &request);
                 let _ = tx.send(BackgroundMessage::PostTurnEvaluated {
+                    thread_id: execution.thread_id,
+                    queued_from_turn_id: execution.queued_from_turn_id,
                     evaluation: Box::new(execution.evaluation),
                     planner_worker_panel_state: execution.planner_worker_panel_state,
                 });
