@@ -10,69 +10,157 @@ pub(super) enum InlineShellCommand {
     Help,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InlineShellCommandSpec {
+    command: InlineShellCommand,
+    primary_name: &'static str,
+    aliases: &'static [&'static str],
+    suggestion_detail: &'static str,
+    buffered_hint: &'static str,
+    execution_status: Option<&'static str>,
+}
+
+const COMMAND_LIST_LINE: &str =
+    "Shell commands: :diag  :sessions  :templates  :planning  :new  :help";
+
+const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Diagnostics,
+        primary_name: ":diag",
+        aliases: &[":diag", ":diagnostics"],
+        suggestion_detail: "diagnostics",
+        buffered_hint: "Press Enter to open the diagnostics inspection.",
+        execution_status: Some("opened diagnostics inspection"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Sessions,
+        primary_name: ":sessions",
+        aliases: &[":session", ":sessions"],
+        suggestion_detail: "recent sessions",
+        buffered_hint: "Press Enter to open the recent-sessions inspection.",
+        execution_status: Some("opened recent sessions inspection"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Templates,
+        primary_name: ":templates",
+        aliases: &[":template", ":templates"],
+        suggestion_detail: "template inspection",
+        buffered_hint: "Press Enter to open the template inspection.",
+        execution_status: Some("opened template inspection"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::PlanningInit,
+        primary_name: ":planning",
+        aliases: &[":planning", ":planning-init"],
+        suggestion_detail: "planning mode",
+        buffered_hint: "Press Enter to open the planning mode selector.",
+        execution_status: Some("opened planning initialization selector"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::NewDraft,
+        primary_name: ":new",
+        aliases: &[":new"],
+        suggestion_detail: "new draft",
+        buffered_hint: "Press Enter to open a new draft in the shell.",
+        execution_status: None,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::TranscriptTopLegacy,
+        primary_name: ":top",
+        aliases: &[":top", ":home"],
+        suggestion_detail: "legacy jump top",
+        buffered_hint: "Press Enter to see where transcript jump controls moved.",
+        execution_status: Some(
+            "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
+        ),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::TranscriptTailLegacy,
+        primary_name: ":tail",
+        aliases: &[":tail", ":end"],
+        suggestion_detail: "legacy jump tail",
+        buffered_hint: "Press Enter to see where transcript jump controls moved.",
+        execution_status: Some(
+            "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
+        ),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Help,
+        primary_name: ":help",
+        aliases: &[":help"],
+        suggestion_detail: "command help",
+        buffered_hint: "Press Enter to show the available shell commands.",
+        execution_status: Some(COMMAND_LIST_LINE),
+    },
+];
+
 impl InlineShellCommand {
-    const COMMAND_LIST_LINE: &str =
-        "Shell commands: :diag  :sessions  :templates  :planning  :new  :help";
+    fn spec(self) -> &'static InlineShellCommandSpec {
+        INLINE_SHELL_COMMAND_SPECS
+            .iter()
+            .find(|spec| spec.command == self)
+            .expect("inline shell command spec should exist")
+    }
+
+    fn normalized_candidate(input: &str) -> Option<String> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() || !trimmed.starts_with(':') {
+            return None;
+        }
+        if trimmed.chars().any(|character| character.is_whitespace()) {
+            return None;
+        }
+        Some(trimmed.to_ascii_lowercase())
+    }
 
     pub(super) fn parse(input: &str) -> Option<Self> {
-        let trimmed = input.trim();
-        if trimmed.eq_ignore_ascii_case(":diag") || trimmed.eq_ignore_ascii_case(":diagnostics") {
-            Some(Self::Diagnostics)
-        } else if trimmed.eq_ignore_ascii_case(":session")
-            || trimmed.eq_ignore_ascii_case(":sessions")
-        {
-            Some(Self::Sessions)
-        } else if trimmed.eq_ignore_ascii_case(":template")
-            || trimmed.eq_ignore_ascii_case(":templates")
-        {
-            Some(Self::Templates)
-        } else if trimmed.eq_ignore_ascii_case(":planning-init")
-            || trimmed.eq_ignore_ascii_case(":planning")
-        {
-            Some(Self::PlanningInit)
-        } else if trimmed.eq_ignore_ascii_case(":new") {
-            Some(Self::NewDraft)
-        } else if trimmed.eq_ignore_ascii_case(":top") || trimmed.eq_ignore_ascii_case(":home") {
-            Some(Self::TranscriptTopLegacy)
-        } else if trimmed.eq_ignore_ascii_case(":tail") || trimmed.eq_ignore_ascii_case(":end") {
-            Some(Self::TranscriptTailLegacy)
-        } else if trimmed.eq_ignore_ascii_case(":help") {
-            Some(Self::Help)
-        } else {
-            None
-        }
+        let normalized = Self::normalized_candidate(input)?;
+        INLINE_SHELL_COMMAND_SPECS
+            .iter()
+            .find(|spec| spec.aliases.iter().any(|alias| *alias == normalized))
+            .map(|spec| spec.command)
+    }
+
+    pub(super) fn suggestions(input: &str) -> Vec<Self> {
+        let Some(prefix) = Self::normalized_candidate(input) else {
+            return Vec::new();
+        };
+
+        INLINE_SHELL_COMMAND_SPECS
+            .iter()
+            .filter(|spec| {
+                prefix == ":"
+                    || spec
+                        .aliases
+                        .iter()
+                        .any(|alias| alias.starts_with(prefix.as_str()))
+            })
+            .map(|spec| spec.command)
+            .collect()
+    }
+
+    pub(super) fn suggestion_prefix(input: &str) -> Option<String> {
+        Self::normalized_candidate(input)
+    }
+
+    pub(super) fn command_name(self) -> &'static str {
+        self.spec().primary_name
+    }
+
+    pub(super) fn suggestion_detail(self) -> &'static str {
+        self.spec().suggestion_detail
     }
 
     pub(super) fn command_list_line() -> &'static str {
-        Self::COMMAND_LIST_LINE
+        COMMAND_LIST_LINE
     }
 
     pub(super) fn buffered_hint(self) -> &'static str {
-        match self {
-            Self::Diagnostics => "Press Enter to open the diagnostics inspection.",
-            Self::Sessions => "Press Enter to open the recent-sessions inspection.",
-            Self::Templates => "Press Enter to open the template inspection.",
-            Self::PlanningInit => "Press Enter to open the planning mode selector.",
-            Self::NewDraft => "Press Enter to open a new draft in the shell.",
-            Self::TranscriptTopLegacy | Self::TranscriptTailLegacy => {
-                "Press Enter to see where transcript jump controls moved."
-            }
-            Self::Help => "Press Enter to show the available shell commands.",
-        }
+        self.spec().buffered_hint
     }
 
     pub(super) fn execution_status(self) -> Option<&'static str> {
-        match self {
-            Self::Diagnostics => Some("opened diagnostics inspection"),
-            Self::Sessions => Some("opened recent sessions inspection"),
-            Self::Templates => Some("opened template inspection"),
-            Self::PlanningInit => Some("opened planning initialization selector"),
-            Self::NewDraft => None,
-            Self::TranscriptTopLegacy | Self::TranscriptTailLegacy => Some(
-                "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-            ),
-            Self::Help => Some(Self::command_list_line()),
-        }
+        self.spec().execution_status
     }
 }
 
@@ -105,6 +193,41 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(InlineShellCommand::parse(input), expected, "{input}");
         }
+    }
+
+    #[test]
+    fn suggestions_show_all_commands_for_colon_only() {
+        let suggestions = InlineShellCommand::suggestions(":");
+
+        assert_eq!(
+            suggestions,
+            vec![
+                InlineShellCommand::Diagnostics,
+                InlineShellCommand::Sessions,
+                InlineShellCommand::Templates,
+                InlineShellCommand::PlanningInit,
+                InlineShellCommand::NewDraft,
+                InlineShellCommand::TranscriptTopLegacy,
+                InlineShellCommand::TranscriptTailLegacy,
+                InlineShellCommand::Help,
+            ]
+        );
+    }
+
+    #[test]
+    fn suggestions_filter_by_prefix() {
+        assert_eq!(
+            InlineShellCommand::suggestions(":p"),
+            vec![InlineShellCommand::PlanningInit]
+        );
+        assert_eq!(
+            InlineShellCommand::suggestions(":t"),
+            vec![
+                InlineShellCommand::Templates,
+                InlineShellCommand::TranscriptTopLegacy,
+                InlineShellCommand::TranscriptTailLegacy,
+            ]
+        );
     }
 
     #[test]

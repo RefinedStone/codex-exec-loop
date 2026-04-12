@@ -1779,6 +1779,61 @@ fn inline_shell_command_buffer_shows_command_hint() {
 
     assert!(rendered.contains("> :templates"));
     assert!(rendered.contains("Press Enter to open the template inspection."));
+    assert!(rendered.contains(":templates template inspection"));
+}
+
+#[test]
+fn colon_only_buffer_shows_available_shell_commands() {
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = ":".to_string();
+
+    let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("> :"));
+    assert!(rendered.contains("Shell commands: type a name, then press Enter."));
+    assert!(rendered.contains(":diag diagnostics"));
+    assert!(rendered.contains(":planning planning mode"));
+    assert!(rendered.contains(":help command help"));
+}
+
+#[test]
+fn command_prefix_buffer_filters_matching_shell_commands() {
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = ":p".to_string();
+
+    let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("> :p"));
+    assert!(rendered.contains("Matching shell commands for `:p`:"));
+    assert!(rendered.contains(":planning planning mode"));
+    assert!(!rendered.contains(":diag diagnostics"));
+}
+
+#[test]
+fn inline_tail_command_prefix_shows_filtered_matches_while_typing() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = ":p".to_string();
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("> :p"));
+    assert!(rendered.contains("matches :p: :planning"));
+    assert!(!rendered.contains(":diag"));
 }
 
 #[test]
