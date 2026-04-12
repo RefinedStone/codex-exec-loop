@@ -344,6 +344,36 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
 }
 
 #[test]
+fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning_init_overlay_ui_state
+        .open_simple_review(PlanningInitStageResult {
+            mode: PlanningBootstrapMode::Simple,
+            draft_name: "bootstrap-1".to_string(),
+            draft_directory: "/tmp/bootstrap-1".to_string(),
+            staged_files: Vec::new(),
+            staged_file_count: 4,
+            validation_report: PlanningValidationReport::default(),
+        });
+    app.start_max_auto_turns_edit();
+    app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "12".to_string();
+
+    let view = build_planning_init_overlay_view(&app);
+    let keys = view
+        .key_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(keys.contains("Type the new max-turn value directly."));
+    assert!(keys.contains("Enter: save max turns"));
+    assert!(keys.contains("Use a whole number between 1 and 50."));
+    assert!(!keys.contains("promote staged scaffold"));
+}
+
+#[test]
 fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
     let mut app = make_test_app();
     app.shell_overlay = ShellOverlay::PlanningInit;

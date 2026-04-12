@@ -641,11 +641,19 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     }
                     lines
                 },
-                key_lines: vec![
-                    Line::from("Enter/Ctrl+P: promote staged scaffold"),
-                    Line::from("Ctrl+L: edit max auto turns    Ctrl+E: inspect/edit draft"),
-                    Line::from("Esc/Ctrl+C: close review"),
-                ],
+                key_lines: if app.is_max_auto_turns_editing() {
+                    vec![
+                        Line::from("Type the new max-turn value directly. Backspace deletes."),
+                        Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
+                        Line::from("Use a whole number between 1 and 50."),
+                    ]
+                } else {
+                    vec![
+                        Line::from("Enter/Ctrl+P: promote staged scaffold"),
+                        Line::from("Ctrl+L: edit max auto turns    Ctrl+E: inspect/edit draft"),
+                        Line::from("Esc/Ctrl+C: close review"),
+                    ]
+                },
             }
         }
         PlanningInitOverlayStep::ManualEditor => PlanningInitOverlayView {
