@@ -67,6 +67,7 @@ The host keeps orchestration and validation responsibilities:
 - reconcile protected planning files after worker execution
 - accept or reject `task-ledger.json`
 - rebuild `queue.snapshot.json` from accepted planning state
+- deterministically promote the top accepted follow-up proposal into the executable queue when `builtin next-task` would otherwise stall on proposal-only output
 - render planner status in the TUI
 - hand the main session a natural-language next-task prompt
 
@@ -99,9 +100,10 @@ The planner worker is instructed not to edit:
 5. Planner worker refreshes `task-ledger.json` from the latest main-session reply.
 6. Host reconciles and validates the worker output.
 7. If needed, host runs hidden repair attempts for the planner worker candidate.
-8. Host rebuilds `queue.snapshot.json` from the accepted ledger.
-9. Host converts the queue head into a natural-language handoff prompt.
-10. Main session receives that handoff as the auto-follow submission.
+8. If the accepted planner result still has no queue head but does have promotable proposals, host promotes the top proposal into `ready`.
+9. Host rebuilds `queue.snapshot.json` from the accepted ledger.
+10. Host converts the queue head into a natural-language handoff prompt.
+11. Main session receives that handoff as the auto-follow submission.
 
 ## Failure Handling
 
@@ -148,4 +150,3 @@ Key behavior changes:
 - manual main-session prompts no longer append planning context
 - `builtin next-task` no longer queues a planning-refresh prompt into the main session
 - planning repair is hidden from the main transcript
-

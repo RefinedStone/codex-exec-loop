@@ -7,6 +7,7 @@ use crate::application::port::outbound::planning_workspace_port::PlanningWorkspa
 use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
 use crate::application::service::planning_init_service::PlanningInitService;
 use crate::application::service::planning_prompt_service::PlanningPromptService;
+use crate::application::service::planning_proposal_promotion_service::PlanningProposalPromotionService;
 use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
 use crate::application::service::planning_runtime_facade_service::PlanningRuntimeFacadeService;
 use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
@@ -18,6 +19,7 @@ use crate::application::service::turn_prompt_assembly_service::TurnPromptAssembl
 #[derive(Clone)]
 pub struct PlanningServices {
     pub init_service: PlanningInitService,
+    pub proposal_promotion: PlanningProposalPromotionService,
     pub runtime_facade: PlanningRuntimeFacadeService,
     pub worker_orchestration: PlanningWorkerOrchestrationService,
 }
@@ -40,19 +42,27 @@ impl PlanningServices {
             priority_queue_service.clone(),
         );
         let planning_reconciliation_service = PlanningReconciliationService::new(
-            planning_workspace_port,
-            validation_service,
-            priority_queue_service,
+            planning_workspace_port.clone(),
+            validation_service.clone(),
+            priority_queue_service.clone(),
         );
         let runtime_facade = PlanningRuntimeFacadeService::new(
-            planning_prompt_service,
-            planning_reconciliation_service,
+            planning_prompt_service.clone(),
+            planning_reconciliation_service.clone(),
             PlanningRuntimePolicyService::new(),
             TurnPromptAssemblyService::new(),
+        );
+        let proposal_promotion = PlanningProposalPromotionService::new(
+            planning_workspace_port.clone(),
+            planning_prompt_service,
+            planning_reconciliation_service,
+            validation_service,
+            priority_queue_service,
         );
 
         Self {
             init_service,
+            proposal_promotion,
             worker_orchestration: PlanningWorkerOrchestrationService::new(
                 planning_worker_port,
                 runtime_facade.clone(),

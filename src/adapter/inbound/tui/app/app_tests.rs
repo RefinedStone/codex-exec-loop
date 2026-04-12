@@ -1118,7 +1118,7 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
+    conversation.auto_follow_state.template_state.selected_index = 0;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-invalid".to_string());
@@ -1199,6 +1199,156 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
             .any(|notice| notice.contains("archived rejected task-ledger"))
     );
     assert!(conversation.planning_repair_state.is_none());
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-proposal-followup-app");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::write(
+        planning_dir.join("task-ledger.json"),
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-proposal-1",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Follow-up option offered in the latest answer.",
+      "title": "Draft a Korea-specific Chinese-chef job entry guide",
+      "description": "Expand the answer into a Korea-specific hiring guide.",
+      "status": "proposed",
+      "base_priority": 70,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "First follow-up branch from the latest answer.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-13T00:00:00Z"
+    },
+    {
+      "id": "task-proposal-2",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Alternate follow-up option offered in the latest answer.",
+      "title": "Create a beginner 3-month Chinese-cooking training plan",
+      "description": "Turn the answer into a 3-month training plan.",
+      "status": "proposed",
+      "base_priority": 65,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Second follow-up branch from the latest answer.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-13T00:00:00Z"
+    }
+  ]
+}"#,
+    )
+    .expect("task ledger should write");
+
+    codex_port
+        .new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned")
+        .events = vec![
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id: "planner-thread-1".to_string(),
+            title: "Planner".to_string(),
+            cwd: workspace_dir.clone(),
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id: "planner-item-1".to_string(),
+            phase: None,
+            text: "planner refreshed the queue".to_string(),
+        },
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "planner-turn-1".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ];
+
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 0;
+    conversation.cwd = workspace_dir.clone();
+    conversation.draft_workspace_directory = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-main".to_string());
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.replace_planning_runtime_snapshot(
+        app.planning_services
+            .runtime_facade
+            .load_runtime_snapshot_or_invalid(&workspace_dir),
+    );
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-main".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ));
+
+    let mut turn_calls = Vec::new();
+    for _ in 0..20 {
+        turn_calls = codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .collect::<Vec<_>>();
+        if !turn_calls.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert_eq!(turn_calls.len(), 1);
+    assert!(
+        turn_calls[0].contains("Draft a Korea-specific Chinese-chef job entry guide"),
+        "auto follow-up prompt should target the promoted proposal: {}",
+        turn_calls[0]
+    );
+    assert_eq!(
+        conversation
+            .planning_runtime_snapshot
+            .queue_head()
+            .map(|task| task.task_id.as_str()),
+        Some("task-proposal-1"),
+        "status={}, notices={:?}",
+        conversation.status_text,
+        conversation.runtime_notices
+    );
+    assert!(conversation.runtime_notices.iter().any(|notice| {
+        notice.contains("host promoted top follow-up proposal into the executable queue")
+    }));
+    assert_eq!(
+        conversation.status_text,
+        "auto follow-up submitted / turn 1/3 / template: builtin next-task"
+    );
+    assert_eq!(
+        app.planner_worker_panel_state.last_queue_summary.as_deref(),
+        Some("next task: Draft a Korea-specific Chinese-chef job entry guide")
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

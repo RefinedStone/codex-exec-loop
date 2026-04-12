@@ -1,6 +1,7 @@
 use crate::application::service::planning_prompt_service::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
+use crate::application::service::planning_proposal_promotion_service::PlanningProposalPromotionRequest;
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
@@ -357,6 +358,41 @@ impl PostTurnEvaluationExecutor {
             } else {
                 PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON)
             };
+        }
+
+        if !runtime_snapshot.has_actionable_queue_head()
+            && runtime_snapshot.has_proposal_candidates()
+        {
+            let promotion_outcome = self
+                .planning_services
+                .proposal_promotion
+                .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                    workspace_directory: &request.workspace_directory,
+                    root_turn_id: &request.queued_from_turn_id,
+                });
+
+            match promotion_outcome {
+                Ok(promotion_outcome) => {
+                    notices.extend(promotion_outcome.notices);
+                    runtime_snapshot = promotion_outcome.runtime_snapshot;
+                    self.planner_worker_panel_state.last_queue_summary =
+                        planner_queue_summary(&runtime_snapshot);
+                }
+                Err(error) => {
+                    let detail = format!("host proposal promotion failed: {error}");
+                    let invalid_snapshot =
+                        PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
+                    self.record_planner_worker_failure(
+                        PlannerWorkerStatus::RefreshFailed,
+                        &detail,
+                        &invalid_snapshot,
+                    );
+                    return BuiltinNextTaskRefreshOutcome {
+                        runtime_snapshot: invalid_snapshot,
+                        notices: vec![detail],
+                    };
+                }
+            }
         }
 
         BuiltinNextTaskRefreshOutcome {

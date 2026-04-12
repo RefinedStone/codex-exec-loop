@@ -161,6 +161,7 @@ planning worker refresh 입니다.
 - 현재 workspace의 planning 파일을 읽고, 아래 main session의 최신 답변에서 실행 가능한 후속 작업을 정리해 ledger에 반영하세요.
 - 기존 task/proposal과 의미가 겹치면 새 항목을 남발하지 말고 기존 항목을 갱신하세요.
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
+- builtin next-task 자동 진행을 위해, `proposed`만 있고 바로 이어서 진행해야 할 후속 작업이 분명하면 최상위 proposal 1개를 `ready`로 승격하고 나머지 선택지는 `proposed`로 유지하세요.
 - 마지막에는 이번 refresh에서 queue에 반영한 핵심 변경을 짧게 요약하세요.
 
 main session latest reply:

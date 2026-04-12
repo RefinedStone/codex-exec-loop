@@ -5,6 +5,7 @@ pub mod planning_auto_follow_copy;
 pub mod planning_bootstrap_service;
 pub mod planning_init_service;
 pub mod planning_prompt_service;
+pub mod planning_proposal_promotion_service;
 pub mod planning_reconciliation_service;
 pub mod planning_runtime_facade_service;
 pub mod planning_runtime_policy_service;
