@@ -52,6 +52,7 @@ pub(super) struct ConversationPostTurnEvaluation {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(super) enum ConversationPostTurnAction {
     QueuePlanningRepair {
         prompt: String,

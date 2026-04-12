@@ -3,11 +3,13 @@ use std::time::Instant;
 
 use anyhow::Result;
 
+use crate::adapter::outbound::app_server_planning_worker_adapter::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::codex_app_server_adapter::CodexAppServerAdapter;
 use crate::adapter::outbound::filesystem_followup_template_adapter::FilesystemFollowupTemplateAdapter;
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
 use crate::application::port::outbound::followup_template_port::FollowupTemplatePort;
+use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning_services::PlanningServices;
@@ -32,12 +34,17 @@ fn build_default_app() -> NativeTuiApp {
     ));
     let followup_template_port: Arc<dyn FollowupTemplatePort> =
         Arc::new(FilesystemFollowupTemplateAdapter::new());
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
+        AppServerPlanningWorkerAdapter::new(codex_app_server_port.clone()),
+    );
     let startup_service = StartupService::new(codex_app_server_port.clone());
     let session_service = SessionService::new(codex_app_server_port.clone());
     let conversation_service = ConversationService::new(codex_app_server_port);
     let followup_template_service = FollowupTemplateService::new(followup_template_port);
-    let planning_services =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let planning_services = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        planning_worker_port,
+    );
     let mut app = NativeTuiApp::new(
         startup_service,
         session_service,

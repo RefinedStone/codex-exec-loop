@@ -200,6 +200,49 @@ enum ActiveTurnPlanningSnapshot {
     CaptureFailed(String),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PlannerWorkerStatus {
+    #[default]
+    Idle,
+    RefreshRunning,
+    RefreshSucceeded,
+    RefreshFailed,
+    RepairRunning,
+    RepairSucceeded,
+    RepairFailed,
+}
+
+impl PlannerWorkerStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::RefreshRunning => "refresh running",
+            Self::RefreshSucceeded => "refresh ok",
+            Self::RefreshFailed => "refresh failed",
+            Self::RepairRunning => "repair running",
+            Self::RepairSucceeded => "repair ok",
+            Self::RepairFailed => "repair failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PlannerWorkerPanelState {
+    status: PlannerWorkerStatus,
+    last_summary: Option<String>,
+    last_rejected_summary: Option<String>,
+    last_queue_summary: Option<String>,
+}
+
+impl PlannerWorkerPanelState {
+    fn has_content(&self) -> bool {
+        !matches!(self.status, PlannerWorkerStatus::Idle)
+            || self.last_summary.is_some()
+            || self.last_rejected_summary.is_some()
+            || self.last_queue_summary.is_some()
+    }
+}
+
 struct NativeTuiApp {
     shell_overlay: ShellOverlay,
     exit_confirmation_state: ExitConfirmationState,
@@ -219,6 +262,7 @@ struct NativeTuiApp {
     followup_template_service: FollowupTemplateService,
     planning_services: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
+    planner_worker_panel_state: PlannerWorkerPanelState,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     show_startup_ascii_art: bool,

@@ -29,6 +29,7 @@ use super::{
     startup_ascii_art_enabled_from_value,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
+use crate::adapter::outbound::app_server_planning_worker_adapter::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -188,7 +189,10 @@ fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port.clone()),
         FollowupTemplateService::new(followup_port),
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
+        PlanningServices::from_ports(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            Arc::new(AppServerPlanningWorkerAdapter::new(codex_port.clone())),
+        ),
     );
     app.show_startup_ascii_art = false;
 
@@ -1080,7 +1084,7 @@ fn planning_mode_selection_uses_vertical_navigation_keys() {
 }
 
 #[test]
-fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
+fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-reconcile-app");
@@ -1114,6 +1118,7 @@ fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-invalid".to_string());
@@ -1150,11 +1155,12 @@ fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
     let mut repair_prompt = None;
     for _ in 0..20 {
         repair_prompt = codex_port
-            .turn_calls
+            .new_thread_calls
             .lock()
-            .expect("turn call mutex poisoned")
-            .last()
-            .map(|(_, prompt)| prompt.clone());
+            .expect("new-thread call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .find(|prompt| prompt.contains("planning repair 1/2"));
         if repair_prompt.is_some() {
             break;
         }
@@ -1192,27 +1198,17 @@ fn invalid_task_ledger_change_restores_snapshot_and_queues_planning_repair() {
             .iter()
             .any(|notice| notice.contains("archived rejected task-ledger"))
     );
-    assert!(
-        conversation
-            .runtime_notices
-            .iter()
-            .any(|notice| notice.contains("planning repair queued retry 1/2"))
-    );
-    assert!(conversation.planning_repair_state.is_some());
-    assert!(
-        conversation
-            .status_text
-            .contains("planning repair submitted / retry 1/2")
-    );
+    assert!(conversation.planning_repair_state.is_none());
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn repair_attempt_without_task_ledger_change_queues_next_retry() {
+fn stale_planning_repair_state_does_not_queue_visible_retry() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-1".to_string());
     conversation.planning_repair_state = Some(PlanningRepairState {
@@ -1247,15 +1243,16 @@ fn repair_attempt_without_task_ledger_change_queues_next_retry() {
         },
     ));
 
-    let mut repair_prompt = None;
+    let mut turn_prompts = Vec::new();
     for _ in 0..20 {
-        repair_prompt = codex_port
+        turn_prompts = codex_port
             .turn_calls
             .lock()
             .expect("turn call mutex poisoned")
-            .last()
-            .map(|(_, prompt)| prompt.clone());
-        if repair_prompt.is_some() {
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .collect::<Vec<_>>();
+        if !turn_prompts.is_empty() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
@@ -1266,24 +1263,22 @@ fn repair_attempt_without_task_ledger_change_queues_next_retry() {
     };
 
     assert!(
-        repair_prompt
-            .as_deref()
-            .is_some_and(|prompt| prompt.contains("planning repair 2/2"))
+        turn_prompts
+            .iter()
+            .all(|prompt| !prompt.contains("planning repair"))
     );
-    assert!(repair_prompt.as_deref().is_some_and(|prompt| {
-        prompt.contains("직전 repair 시도에서 `task-ledger.json` 이 바뀌지 않았습니다")
-    }));
-    assert_eq!(
-        conversation
-            .planning_repair_state
-            .as_ref()
-            .map(|state| state.attempts_used),
-        Some(2)
+    assert!(
+        codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .is_empty()
     );
+    assert!(conversation.planning_repair_state.is_none());
 }
 
 #[test]
-fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
+fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repair-still-invalid");
@@ -1313,6 +1308,7 @@ fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-2".to_string());
@@ -1358,19 +1354,21 @@ fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
     let mut repair_prompt = None;
     for _ in 0..20 {
         repair_prompt = codex_port
-            .turn_calls
+            .new_thread_calls
             .lock()
-            .expect("turn call mutex poisoned")
-            .last()
-            .map(|(_, prompt)| prompt.clone());
+            .expect("new-thread call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .find(|prompt| prompt.contains("planning repair 1/2"));
         if repair_prompt.is_some() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
 
+    assert!(repair_prompt.is_some());
     assert!(repair_prompt.as_deref().is_some_and(|prompt| {
-        prompt.contains(
+        !prompt.contains(
             "직전 repair 시도에서 `task-ledger.json` 을 수정했지만 여전히 유효하지 않습니다",
         )
     }));
@@ -1379,7 +1377,7 @@ fn invalid_repair_attempt_queues_retry_with_still_invalid_note() {
 }
 
 #[test]
-fn buffered_manual_input_pauses_planning_repair_submission() {
+fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repair-manual-buffer");
@@ -1409,6 +1407,7 @@ fn buffered_manual_input_pauses_planning_repair_submission() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_buffer = "operator override draft".to_string();
     conversation.input_state = ConversationInputState::StreamingTurn;
@@ -1438,31 +1437,33 @@ fn buffered_manual_input_pauses_planning_repair_submission() {
         },
     ));
 
+    let hidden_prompts = codex_port
+        .new_thread_calls
+        .lock()
+        .expect("new-thread call mutex poisoned")
+        .iter()
+        .map(|(_, prompt)| prompt.clone())
+        .collect::<Vec<_>>();
     assert!(
-        codex_port
-            .turn_calls
-            .lock()
-            .expect("turn call mutex poisoned")
-            .is_empty()
+        hidden_prompts
+            .iter()
+            .any(|prompt| prompt.contains("planning repair 1/2"))
     );
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
     assert_eq!(conversation.input_buffer, "operator override draft");
-    assert!(conversation.planning_repair_state.is_some());
+    assert!(conversation.planning_repair_state.is_none());
     assert_eq!(
         conversation.status_text,
-        "turn completed / planning repair paused: manual input buffered (1/2)"
+        "turn completed / auto follow-up skipped: manual input buffered"
     );
-    assert!(conversation.runtime_notices.iter().any(|notice| {
-        notice.contains("planning repair retry 1/2 is waiting because manual input is buffered")
-    }));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
+fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repair-exhausted");
@@ -1492,6 +1493,7 @@ fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-2".to_string());
@@ -1536,10 +1538,11 @@ fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
 
     assert!(
         codex_port
-            .turn_calls
+            .new_thread_calls
             .lock()
-            .expect("turn call mutex poisoned")
-            .is_empty()
+            .expect("new-thread call mutex poisoned")
+            .iter()
+            .any(|(_, prompt)| prompt.contains("planning repair 1/2"))
     );
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
@@ -1549,19 +1552,7 @@ fn exhausted_repair_budget_blocks_followup_and_stops_retry_queueing() {
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "blocked"
-    );
-    assert!(
-        conversation
-            .planning_runtime_snapshot
-            .preview_detail()
-            .is_some_and(|detail| detail.contains("planning repair exhausted after 2 attempts"))
-    );
-    assert!(
-        conversation
-            .runtime_notices
-            .iter()
-            .any(|notice| notice.contains("planning repair exhausted after 2 attempts"))
+        "ready"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -2384,8 +2375,8 @@ fn manual_submit_appends_planning_context_when_ready() {
     let submitted_prompt =
         submitted_prompt.expect("manual submit should reach the codex app-server port");
     assert!(submitted_prompt.starts_with("ship it"));
-    assert!(submitted_prompt.contains("Planning Context"));
-    assert!(submitted_prompt.contains("Queue Summary"));
+    assert!(!submitted_prompt.contains("Planning Context"));
+    assert!(!submitted_prompt.contains("Queue Summary"));
 }
 
 #[test]
@@ -3332,6 +3323,7 @@ fn followup_template_overlay_view_collects_preview_status_and_keys() {
 fn followup_template_preview_renders_selected_template_and_runtime_values() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -3346,7 +3338,7 @@ fn followup_template_preview_renders_selected_template_and_runtime_values() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("selected: builtin next-task"));
+    assert!(rendered.contains("selected: builtin plan-queue"));
     assert!(rendered.contains("preview thread id: thread-1"));
     assert!(rendered.contains("latest answer"));
     assert!(rendered.contains("AUTO_STOP"));
@@ -3356,7 +3348,9 @@ fn followup_template_preview_renders_selected_template_and_runtime_values() {
 #[test]
 fn followup_template_preview_uses_placeholder_without_agent_reply() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
+    app.conversation_state = ConversationState::Ready(conversation);
 
     let rendered = build_followup_template_preview_lines(&app)
         .iter()
@@ -3387,7 +3381,9 @@ fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
 
     assert!(rendered.contains("planning: ready"));
     assert!(rendered.contains("planning detail: next_task: none"));
-    assert!(rendered.contains("planning priority queue"));
+    assert!(
+        rendered.contains("Planner worker refreshes the queue after the current turn completes.")
+    );
 }
 
 #[test]
@@ -3821,13 +3817,13 @@ fn max_auto_turns_edit_commit_updates_saved_value_and_preview() {
     assert_eq!(conversation.auto_follow_state.max_auto_turns_value(), 5);
     assert!(!app.is_max_auto_turns_editing());
 
-    let rendered = build_followup_template_preview_lines(&app)
+    let rendered = build_followup_template_status_lines(&app)
         .iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("1/5"));
+    assert!(rendered.contains("max auto turns: 5"));
 }
 
 #[test]
@@ -3873,6 +3869,7 @@ fn max_auto_turns_edit_ignores_non_digit_input() {
 fn stop_keyword_edit_commit_updates_saved_value_and_preview() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -4221,6 +4218,7 @@ fn auto_followup_skip_reason_is_visible_in_status_footer() {
 fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
         "next task: task-1",
@@ -4262,6 +4260,7 @@ fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
 fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
         "next task: task-1",

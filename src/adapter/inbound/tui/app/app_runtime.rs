@@ -74,6 +74,7 @@ impl NativeTuiApp {
             followup_template_service,
             planning_services,
             active_turn_planning_capture: None,
+            planner_worker_panel_state: super::PlannerWorkerPanelState::default(),
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),

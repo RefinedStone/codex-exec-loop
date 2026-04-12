@@ -10,6 +10,7 @@ pub mod planning_runtime_facade_service;
 pub mod planning_runtime_policy_service;
 pub mod planning_services;
 pub mod planning_validation_service;
+pub mod planning_worker_orchestration_service;
 pub mod priority_queue_service;
 pub mod session_service;
 pub mod startup_service;

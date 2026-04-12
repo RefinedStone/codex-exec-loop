@@ -189,13 +189,16 @@ fn auto_followup_prompt_renders_builtin_template() {
         panic!("auto follow-up prompt should render");
     };
 
-    assert!(prompt.prompt.contains("대리인입니다."));
-    assert!(prompt.prompt.contains("자동 후속 1/3 입니다."));
-    assert!(prompt.prompt.contains("latest answer"));
-    assert!(prompt.prompt.contains("AUTO_STOP"));
+    assert!(
+        prompt
+            .prompt
+            .contains("Continue the next highest-priority task.")
+    );
+    assert!(prompt.prompt.contains("Implement shell planning status"));
+    assert!(prompt.prompt.contains("General workstream"));
     assert_eq!(
         prompt.transcript_text,
-        "priority queue의 현재 next task 1개를 이어서 진행합니다."
+        "planner selected the next task: Implement shell planning status"
     );
 }
 
@@ -611,12 +614,17 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         panic!("auto follow-up should continue when file changes exist");
     };
 
-    assert!(prompt.prompt.contains("latest answer"));
+    assert!(
+        prompt
+            .prompt
+            .contains("Continue the next highest-priority task.")
+    );
 }
 
 #[test]
 fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
     let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context\nQueue Summary",
         "next task: task-1",
@@ -634,6 +642,7 @@ fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
         panic!("planning-aware auto follow-up prompt should render");
     };
 
+    assert!(prompt.prompt.contains("plan_priority_queue.md"));
     assert!(prompt.prompt.contains("latest answer"));
     assert!(prompt.prompt.contains("Planning Context"));
     assert!(prompt.prompt.contains("Queue Summary"));
@@ -659,7 +668,7 @@ fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
 }
 
 #[test]
-fn builtin_next_task_refreshes_queue_when_planning_queue_has_no_next_task() {
+fn builtin_next_task_blocks_when_planning_queue_has_no_next_task() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
@@ -673,23 +682,14 @@ fn builtin_next_task_refreshes_queue_when_planning_queue_has_no_next_task() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
-    else {
-        panic!("queue refresh prompt should render");
-    };
-
-    assert!(prompt.prompt.contains("planning priority queue"));
-    assert!(prompt.prompt.contains("latest answer"));
-    assert!(
-        prompt
-            .transcript_text
-            .contains("previous answer의 실행 가능한 작업 목록을 priority queue에 넣고")
+    assert_eq!(
+        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
 }
 
 #[test]
-fn builtin_next_task_continues_when_only_proposals_remain() {
+fn builtin_next_task_blocks_when_only_proposals_remain() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
         "Planning Context\nRuntime Follow-up Proposal Rules",
@@ -703,20 +703,9 @@ fn builtin_next_task_continues_when_only_proposals_remain() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
-    else {
-        panic!("proposal-only planning state should still continue");
-    };
-
-    assert!(prompt.prompt.contains("planning priority queue"));
-    assert!(prompt.prompt.contains("latest answer"));
-    assert!(prompt.prompt.contains("Planning Context"));
-    assert!(prompt.prompt.contains("Runtime Follow-up Proposal Rules"));
-    assert!(
-        prompt
-            .transcript_text
-            .contains("existing proposal 작업 목록을 priority queue에 넣고")
+    assert_eq!(
+        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
 }
 

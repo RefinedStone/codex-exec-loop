@@ -4,11 +4,13 @@ use crate::application::service::planning_runtime_facade_service::{
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
 };
 use crate::application::service::turn_prompt_assembly_service::PREVIEW_THREAD_ID_PLACEHOLDER;
+use crate::domain::text::compact_whitespace_detail;
 
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
 const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 const FOLLOWUP_PLANNING_DETAIL_LIMIT: usize = 48;
+const FOLLOWUP_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
 
 pub(super) fn build_planning_summary_line(
     app: &NativeTuiApp,
@@ -47,6 +49,36 @@ pub(super) fn build_planning_notice_line(
     conversation
         .planning_notice_summary(max_detail_len)
         .map(|summary| format!("planning notice: {summary}"))
+}
+
+pub(super) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
+    let planner = &app.planner_worker_panel_state;
+    if !planner.has_content() {
+        return Vec::new();
+    }
+
+    let mut first_line = format!("planner status: {}", planner.status.label());
+    if let Some(queue_summary) = planner.last_queue_summary.as_deref() {
+        first_line.push_str(&format!(
+            "  |  planner queue: {}",
+            compact_whitespace_detail(queue_summary, max_detail_len)
+        ));
+    }
+
+    let mut lines = vec![first_line];
+    if let Some(summary) = planner.last_summary.as_deref() {
+        lines.push(format!(
+            "planner detail: {}",
+            compact_whitespace_detail(summary, max_detail_len)
+        ));
+    }
+    if let Some(rejected_summary) = planner.last_rejected_summary.as_deref() {
+        lines.push(format!(
+            "planner rejected: {}",
+            compact_whitespace_detail(rejected_summary, max_detail_len)
+        ));
+    }
+    lines
 }
 
 pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -208,6 +240,11 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             {
                 lines.push(Line::from(planning_notice_summary));
             }
+            lines.extend(
+                build_planner_panel_lines(app, FOLLOWUP_PLANNER_PANEL_DETAIL_LIMIT)
+                    .into_iter()
+                    .map(Line::from),
+            );
 
             if app.is_max_auto_turns_editing() {
                 lines.push(Line::from(format!(

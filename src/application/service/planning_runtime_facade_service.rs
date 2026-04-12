@@ -16,6 +16,7 @@ use crate::application::service::turn_prompt_assembly_service::{
     PlanningAutoFollowPromptPreviewRequest, TurnPromptAssemblyService,
 };
 use crate::domain::followup_template::FollowupTemplateDefinition;
+use crate::domain::planning::PriorityQueueTask;
 
 pub use crate::application::service::planning_runtime_policy_service::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
@@ -64,6 +65,12 @@ pub struct PlanningRuntimeRenderedPreview {
     pub planning_detail_line: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningMainSessionHandoff {
+    pub prompt: String,
+    pub transcript_text: String,
+}
+
 #[derive(Clone)]
 pub struct PlanningRuntimeFacadeService {
     planning_prompt_service: PlanningPromptService,
@@ -103,12 +110,34 @@ impl PlanningRuntimeFacadeService {
     pub fn build_manual_prompt(
         &self,
         operator_prompt: &str,
-        snapshot: &PlanningRuntimeSnapshot,
+        _snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<String> {
         self.turn_prompt_assembly_service
             .build_manual_prompt(ManualPromptAssemblyRequest {
                 operator_prompt,
-                planning_prompt_fragment: snapshot.prompt_fragment(),
+                planning_prompt_fragment: None,
+            })
+    }
+
+    pub fn build_builtin_next_task_handoff(
+        &self,
+        snapshot: &PlanningRuntimeSnapshot,
+    ) -> Option<PlanningMainSessionHandoff> {
+        let queue_head = snapshot.queue_head()?;
+        Some(PlanningMainSessionHandoff {
+            prompt: render_builtin_next_task_handoff_prompt(queue_head),
+            transcript_text: format!(
+                "planner selected the next task: {}",
+                queue_head.task_title.trim()
+            ),
+        })
+    }
+
+    pub fn builtin_next_task_preview_prompt(&self, snapshot: &PlanningRuntimeSnapshot) -> String {
+        self.build_builtin_next_task_handoff(snapshot)
+            .map(|handoff| handoff.prompt)
+            .unwrap_or_else(|| {
+                "Planner worker refreshes the queue after the current turn completes. The main session will receive a natural-language next-task prompt once the accepted queue head exists.".to_string()
             })
     }
 
@@ -116,6 +145,10 @@ impl PlanningRuntimeFacadeService {
         &self,
         request: PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeAutoFollowDecision {
+        if request.template.is_builtin_next_task() {
+            return self.decide_builtin_next_task_auto_follow(request.snapshot);
+        }
+
         match self
             .planning_runtime_policy_service
             .decide_auto_follow(request.template, request.snapshot)
@@ -141,36 +174,40 @@ impl PlanningRuntimeFacadeService {
         let planning_view = self
             .planning_runtime_policy_service
             .build_preview_view_for_decision(policy_decision, request.snapshot);
-        let rendered_prompt = match policy_decision {
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue,
-            ) => self
-                .turn_prompt_assembly_service
-                .build_planning_auto_follow_prompt_preview(
-                    PlanningAutoFollowPromptPreviewRequest {
-                        operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
+        let rendered_prompt = if request.template.is_builtin_next_task() {
+            self.builtin_next_task_preview_prompt(request.snapshot)
+        } else {
+            match policy_decision {
+                PlanningAutoFollowPolicyDecision::QueuePrompt(
+                    PlanningAutoFollowPromptMode::RefreshPlanningQueue,
+                ) => self
+                    .turn_prompt_assembly_service
+                    .build_planning_auto_follow_prompt_preview(
+                        PlanningAutoFollowPromptPreviewRequest {
+                            operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
+                            auto_turn: request.auto_turn,
+                            max_auto_turns: request.max_auto_turns,
+                            session_id: request.session_id,
+                            stop_keyword: request.stop_keyword,
+                            last_message: request.last_message,
+                            planning_prompt_fragment: request.snapshot.prompt_fragment(),
+                        },
+                    ),
+                PlanningAutoFollowPolicyDecision::Blocked(_)
+                | PlanningAutoFollowPolicyDecision::QueuePrompt(
+                    PlanningAutoFollowPromptMode::TemplatePrompt,
+                ) => self
+                    .turn_prompt_assembly_service
+                    .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
+                        template: request.template,
                         auto_turn: request.auto_turn,
                         max_auto_turns: request.max_auto_turns,
                         session_id: request.session_id,
                         stop_keyword: request.stop_keyword,
                         last_message: request.last_message,
                         planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                    },
-                ),
-            PlanningAutoFollowPolicyDecision::Blocked(_)
-            | PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::TemplatePrompt,
-            ) => self
-                .turn_prompt_assembly_service
-                .build_auto_follow_prompt_preview(AutoFollowPromptPreviewRequest {
-                    template: request.template,
-                    auto_turn: request.auto_turn,
-                    max_auto_turns: request.max_auto_turns,
-                    session_id: request.session_id,
-                    stop_keyword: request.stop_keyword,
-                    last_message: request.last_message,
-                    planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                }),
+                    }),
+            }
         };
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
@@ -203,6 +240,29 @@ impl PlanningRuntimeFacadeService {
     ) -> PlanningRuntimeStatusProjection {
         self.planning_runtime_policy_service
             .build_status_projection(request)
+    }
+
+    fn decide_builtin_next_task_auto_follow(
+        &self,
+        snapshot: &PlanningRuntimeSnapshot,
+    ) -> PlanningRuntimeAutoFollowDecision {
+        if snapshot.blocks_auto_followup() {
+            return PlanningRuntimeAutoFollowDecision::Blocked(
+                PlanningAutoFollowBlockReason::InvalidWorkspace,
+            );
+        }
+
+        match self.build_builtin_next_task_handoff(snapshot) {
+            Some(handoff) => PlanningRuntimeAutoFollowDecision::QueuePrompt(
+                PlanningRuntimeQueuedAutoFollowPrompt {
+                    prompt: handoff.prompt,
+                    transcript_text: handoff.transcript_text,
+                },
+            ),
+            None => PlanningRuntimeAutoFollowDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired,
+            ),
+        }
     }
 
     fn build_queued_auto_follow_prompt(
@@ -267,6 +327,23 @@ impl PlanningRuntimeFacadeService {
     }
 }
 
+fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
+    let rank_reason = queue_head
+        .rank_reasons
+        .iter()
+        .find(|reason| !reason.trim().is_empty())
+        .map(String::as_str)
+        .unwrap_or("this is the highest-priority actionable task");
+    format!(
+        "Continue the next highest-priority task.\n\nTask: {}\nDirection: {}\nPriority: rank {} / combined priority {}\nWhy now: {}\n\nWork from the current repository state and focus on this task only. Do not refresh planning queues or rewrite planning control files unless the task itself strictly requires it. When you finish, summarize what you completed and what remains.",
+        queue_head.task_title.trim(),
+        queue_head.direction_title.trim(),
+        queue_head.rank,
+        queue_head.combined_priority,
+        rank_reason.trim(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -284,7 +361,9 @@ mod tests {
     };
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
+    use crate::application::service::planning_runtime_policy_service::{
+        PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
+    };
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
@@ -447,17 +526,21 @@ mod tests {
         let PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) = decision else {
             panic!("expected queued prompt");
         };
-        assert!(prompt.prompt.contains("session=thread-1"));
-        assert!(prompt.prompt.contains("last=latest answer"));
-        assert!(prompt.prompt.contains("Planning Context"));
+        assert!(
+            prompt
+                .prompt
+                .contains("Continue the next highest-priority task.")
+        );
+        assert!(prompt.prompt.contains("Implement planning runtime facade"));
+        assert!(prompt.prompt.contains("General workstream"));
         assert_eq!(
             prompt.transcript_text,
-            "priority queue의 현재 next task 1개를 이어서 진행합니다."
+            "planner selected the next task: Implement planning runtime facade"
         );
     }
 
     #[test]
-    fn decide_auto_followup_queues_planning_refresh_when_queue_head_is_missing() {
+    fn decide_auto_followup_blocks_when_queue_head_is_missing() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
@@ -476,21 +559,16 @@ mod tests {
             snapshot: &snapshot,
         });
 
-        let PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) = decision else {
-            panic!("expected planning refresh prompt");
-        };
-        assert!(prompt.prompt.contains("planning priority queue"));
-        assert!(prompt.prompt.contains("latest answer"));
-        assert!(prompt.prompt.contains("Planning Context"));
-        assert!(
-            prompt
-                .transcript_text
-                .contains("previous answer의 실행 가능한 작업 목록을 priority queue에 넣고")
-        );
+        assert!(matches!(
+            decision,
+            PlanningRuntimeAutoFollowDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
+            )
+        ));
     }
 
     #[test]
-    fn decide_auto_followup_queues_prompt_when_proposals_exist_without_queue_head() {
+    fn decide_auto_followup_blocks_when_only_proposals_exist_without_queue_head() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
@@ -513,18 +591,12 @@ mod tests {
             snapshot: &snapshot,
         });
 
-        let PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) = decision else {
-            panic!("expected queued prompt when proposals can be promoted");
-        };
-        assert!(prompt.prompt.contains("planning priority queue"));
-        assert!(prompt.prompt.contains("latest answer"));
-        assert!(prompt.prompt.contains("Planning Context"));
-        assert!(prompt.prompt.contains("Runtime Follow-up Proposal Rules"));
-        assert!(
-            prompt
-                .transcript_text
-                .contains("existing proposal 작업 목록을 priority queue에 넣고")
-        );
+        assert!(matches!(
+            decision,
+            PlanningRuntimeAutoFollowDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
+            )
+        ));
     }
 
     #[test]
@@ -541,7 +613,16 @@ mod tests {
             snapshot: &ready_snapshot(),
         });
 
-        assert!(preview.rendered_prompt.contains("session=draft-thread"));
+        assert!(
+            preview
+                .rendered_prompt
+                .contains("Continue the next highest-priority task.")
+        );
+        assert!(
+            preview
+                .rendered_prompt
+                .contains("Implement planning runtime facade")
+        );
         assert_eq!(preview.planning_status_line, "planning: ready");
         assert_eq!(
             preview.planning_detail_line.as_deref(),
@@ -569,11 +650,10 @@ mod tests {
             snapshot: &snapshot,
         });
 
-        assert!(preview.rendered_prompt.contains("planning priority queue"));
         assert!(
             preview
                 .rendered_prompt
-                .contains("(waiting for next agent reply)")
+                .contains("Planner worker refreshes the queue after the current turn completes.")
         );
         assert_eq!(preview.planning_status_line, "planning: ready");
         assert_eq!(

@@ -1,7 +1,9 @@
 pub(super) use super::planning_presentation::{
     build_followup_template_preview_lines, build_followup_template_status_lines,
 };
-use super::planning_presentation::{build_planning_notice_line, build_planning_summary_line};
+use super::planning_presentation::{
+    build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
+};
 use super::*;
 use crate::application::service::session_service::{
     SessionBrowserView, SessionProjectFilter, build_session_browser_view,
@@ -236,6 +238,7 @@ pub(super) fn build_conversation_shell_view(
     let planning_notice_line = context.ready_conversation().and_then(|conversation| {
         build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
     });
+    let planner_panel_lines = build_planner_panel_lines(app, FOOTER_NOTICE_DETAIL_LIMIT);
     let mut header_lines = build_shell_header_lines_with_context(&context);
     header_lines.push(build_frontend_summary_line(mode));
     let mut footer_lines = build_shell_footer_lines_with_context(
@@ -243,6 +246,7 @@ pub(super) fn build_conversation_shell_view(
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
+        planner_panel_lines,
     );
     if mode == ShellFrontendMode::InlineMainBuffer
         && let Some(live_agent_lines) = context
@@ -1046,12 +1050,14 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
     let planning_notice_line = context.ready_conversation().and_then(|conversation| {
         build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
     });
+    let planner_panel_lines = build_planner_panel_lines(app, FOOTER_NOTICE_DETAIL_LIMIT);
 
     build_shell_footer_lines_with_context(
         &context,
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
+        planner_panel_lines,
     )
 }
 
@@ -1060,6 +1066,7 @@ fn build_shell_footer_lines_with_context(
     github_review_recent_changes_summary: Option<String>,
     planning_summary_line: Option<String>,
     planning_notice_line: Option<String>,
+    planner_panel_lines: Vec<String>,
 ) -> Vec<Line<'static>> {
     match context.conversation_state {
         ShellConversationState::Loading => vec![
@@ -1132,6 +1139,7 @@ fn build_shell_footer_lines_with_context(
             if let Some(planning_notice_line) = planning_notice_line {
                 lines.push(Line::from(planning_notice_line));
             }
+            lines.extend(planner_panel_lines.into_iter().map(Line::from));
 
             if let Some(notice_line) = build_operator_notice_line(
                 github_review_recent_changes_summary.as_deref(),
@@ -1154,12 +1162,14 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
     let planning_notice_line = context.ready_conversation().and_then(|conversation| {
         build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
     });
+    let planner_panel_lines = build_planner_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
 
     build_inline_tail_lines_with_context(
         &context,
         app.github_review_recent_changes_summary(INLINE_TAIL_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
+        planner_panel_lines,
     )
 }
 
@@ -1168,6 +1178,7 @@ fn build_inline_tail_lines_with_context(
     github_review_recent_changes_summary: Option<String>,
     planning_summary_line: Option<String>,
     planning_notice_line: Option<String>,
+    planner_panel_lines: Vec<String>,
 ) -> Vec<Line<'static>> {
     if startup_screen_is_active_in_context(context) {
         let mut lines = build_inline_startup_screen_lines_with_context(context);
@@ -1246,6 +1257,7 @@ fn build_inline_tail_lines_with_context(
             if let Some(planning_notice_line) = planning_notice_line {
                 lines.push(Line::from(planning_notice_line));
             }
+            lines.extend(planner_panel_lines.into_iter().map(Line::from));
 
             if let Some(live_agent_lines) = current_live_agent_lines(conversation) {
                 lines.extend(live_agent_lines);
