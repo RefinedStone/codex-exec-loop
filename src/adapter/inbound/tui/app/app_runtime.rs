@@ -10,6 +10,7 @@ use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
+use super::conversation_runtime::ConversationPostTurnEvaluation;
 use super::{
     ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
     ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
@@ -25,12 +26,17 @@ use super::{
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(super) enum BackgroundMessage {
     StartupLoaded(Result<StartupDiagnostics, String>),
     SessionsLoaded(Result<RecentSessions, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
+    PostTurnEvaluated {
+        evaluation: Box<ConversationPostTurnEvaluation>,
+        planner_worker_panel_state: super::PlannerWorkerPanelState,
+    },
     GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
 

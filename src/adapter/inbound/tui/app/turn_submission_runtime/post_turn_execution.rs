@@ -5,10 +5,13 @@ use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
 };
+use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::planning_worker_orchestration_service::{
     PlanningLedgerRepairRequest, PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
 };
 
+#[cfg(not(test))]
+use super::super::app_runtime::BackgroundMessage;
 use super::super::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation,
 };
@@ -38,24 +41,37 @@ struct BuiltinNextTaskRefreshOutcome {
     notices: Vec<String>,
 }
 
-impl NativeTuiApp {
-    pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
-        let Some(conversation) = self.take_ready_conversation_state() else {
-            return;
-        };
+#[derive(Debug, Clone)]
+struct PostTurnEvaluationExecution {
+    evaluation: ConversationPostTurnEvaluation,
+    planner_worker_panel_state: PlannerWorkerPanelState,
+}
 
-        let evaluation = self.build_post_turn_evaluation(&conversation, &request);
-        self.conversation_state = ConversationState::Ready(conversation);
-        self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
-            evaluation: Box::new(evaluation),
-        });
+#[derive(Clone)]
+struct PostTurnEvaluationExecutor {
+    planning_services: PlanningServices,
+    active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
+    planner_worker_panel_state: PlannerWorkerPanelState,
+}
+
+impl PostTurnEvaluationExecutor {
+    fn new(
+        planning_services: PlanningServices,
+        active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
+        planner_worker_panel_state: PlannerWorkerPanelState,
+    ) -> Self {
+        Self {
+            planning_services,
+            active_turn_planning_capture,
+            planner_worker_panel_state,
+        }
     }
 
-    fn build_post_turn_evaluation(
-        &mut self,
+    fn run(
+        mut self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
-    ) -> ConversationPostTurnEvaluation {
+    ) -> PostTurnEvaluationExecution {
         let reconciliation_result = self.reconcile_planning_after_turn(request);
         let mut runtime_notices = reconciliation_result.notices.clone();
         let mut planning_runtime_snapshot = self.planning_runtime_snapshot_after_reconciliation(
@@ -94,16 +110,19 @@ impl NativeTuiApp {
             &planning_runtime_snapshot,
         );
 
-        ConversationPostTurnEvaluation {
-            planning_runtime_snapshot,
-            planning_repair_state: None,
-            runtime_notices,
-            action,
+        PostTurnEvaluationExecution {
+            evaluation: ConversationPostTurnEvaluation {
+                planning_runtime_snapshot,
+                planning_repair_state: None,
+                runtime_notices,
+                action,
+            },
+            planner_worker_panel_state: self.planner_worker_panel_state,
         }
     }
 
     fn planning_runtime_snapshot_after_reconciliation(
-        &mut self,
+        &self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
         reconciliation_result: &PlanningReconciliationResult,
@@ -113,7 +132,9 @@ impl NativeTuiApp {
         } else if request.changed_planning_file_paths.is_empty() {
             conversation.planning_runtime_snapshot.clone()
         } else {
-            self.load_planning_runtime_snapshot(&request.workspace_directory)
+            self.planning_services
+                .runtime_facade
+                .load_runtime_snapshot_or_invalid(&request.workspace_directory)
         }
     }
 
@@ -177,7 +198,10 @@ impl NativeTuiApp {
         repair_request: &PlanningRepairRequest,
     ) -> HiddenPlanningRepairOutcome {
         let mut notices = Vec::new();
-        let mut runtime_snapshot = self.load_planning_runtime_snapshot(workspace_directory);
+        let mut runtime_snapshot = self
+            .planning_services
+            .runtime_facade
+            .load_runtime_snapshot_or_invalid(workspace_directory);
         let mut next_request = repair_request.clone();
         let mut next_retry_reason = None;
 
@@ -402,6 +426,69 @@ impl NativeTuiApp {
         self.planner_worker_panel_state.last_rejected_summary = None;
         self.planner_worker_panel_state.last_queue_summary =
             planner_queue_summary(runtime_snapshot);
+    }
+}
+
+impl NativeTuiApp {
+    pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
+        let Some(conversation) = self.ready_conversation_snapshot() else {
+            return;
+        };
+
+        self.mark_post_turn_evaluation_running(&conversation, &request);
+        let executor = PostTurnEvaluationExecutor::new(
+            self.planning_services.clone(),
+            self.active_turn_planning_capture.take(),
+            self.planner_worker_panel_state.clone(),
+        );
+
+        #[cfg(test)]
+        {
+            let execution = executor.run(&conversation, &request);
+            self.planner_worker_panel_state = execution.planner_worker_panel_state;
+            self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
+                evaluation: Box::new(execution.evaluation),
+            });
+        }
+
+        #[cfg(not(test))]
+        {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let execution = executor.run(&conversation, &request);
+                let _ = tx.send(BackgroundMessage::PostTurnEvaluated {
+                    evaluation: Box::new(execution.evaluation),
+                    planner_worker_panel_state: execution.planner_worker_panel_state,
+                });
+            });
+        }
+    }
+
+    fn ready_conversation_snapshot(&self) -> Option<ConversationViewModel> {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => Some(conversation.clone()),
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        }
+    }
+
+    fn mark_post_turn_evaluation_running(
+        &mut self,
+        conversation: &ConversationViewModel,
+        request: &PostTurnEvaluationRequest,
+    ) {
+        if conversation
+            .auto_follow_state
+            .selected_template()
+            .is_builtin_next_task()
+        {
+            self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshRunning;
+        } else if request
+            .changed_planning_file_paths
+            .iter()
+            .any(|path| PlanningExecutionSnapshot::captures_path(path))
+        {
+            self.planner_worker_panel_state.status = PlannerWorkerStatus::RepairRunning;
+        }
     }
 }
 

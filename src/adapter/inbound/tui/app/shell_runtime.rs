@@ -101,6 +101,15 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::StreamExecutionObserved { notice },
                     );
                 }
+                BackgroundMessage::PostTurnEvaluated {
+                    evaluation,
+                    planner_worker_panel_state,
+                } => {
+                    self.app.planner_worker_panel_state = planner_worker_panel_state;
+                    self.app.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::PostTurnEvaluated { evaluation },
+                    );
+                }
                 BackgroundMessage::GithubReviewPollLoaded(result) => self
                     .app
                     .record_github_review_poll_result(Instant::now(), result),
