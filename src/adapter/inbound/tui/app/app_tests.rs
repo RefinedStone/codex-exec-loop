@@ -660,6 +660,41 @@ fn planning_simple_mode_review_can_open_embedded_editor() {
 }
 
 #[test]
+fn planning_simple_mode_review_can_edit_max_auto_turns_without_leaving_overlay() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-simple-max-auto-turns-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+
+    open_planning_simple_review(&mut app);
+
+    assert!(
+        app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL,))
+    );
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::SimpleReview
+    );
+    assert!(app.is_max_auto_turns_editing());
+    app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "7".to_string();
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(conversation.auto_follow_state.max_auto_turns_value(), 7);
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::SimpleReview
+    );
+    assert!(!app.is_max_auto_turns_editing());
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn planning_detail_manual_selection_opens_embedded_editor() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-init-detail-app");

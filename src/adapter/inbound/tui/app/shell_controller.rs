@@ -502,7 +502,9 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.shell_overlay != ShellOverlay::FollowupTemplates {
+        if self.shell_overlay != ShellOverlay::FollowupTemplates
+            && self.shell_overlay != ShellOverlay::PlanningInit
+        {
             self.show_followup_template_overlay();
         }
 
@@ -762,9 +764,15 @@ impl NativeTuiApp {
     }
 
     pub(super) fn handle_max_auto_turns_editor_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::FollowupTemplates
-            || !self.is_max_auto_turns_editing()
-        {
+        if !self.is_max_auto_turns_editing() {
+            return false;
+        }
+
+        let editor_supported = self.shell_overlay == ShellOverlay::FollowupTemplates
+            || (self.shell_overlay == ShellOverlay::PlanningInit
+                && self.planning_init_overlay_ui_state.step()
+                    == PlanningInitOverlayStep::SimpleReview);
+        if !editor_supported {
             return false;
         }
 
@@ -954,6 +962,9 @@ impl NativeTuiApp {
                 PlanningInitOverlayStep::SimpleReview => match key.code {
                     KeyCode::Enter if key.modifiers.is_empty() => {
                         self.promote_simple_mode_planning_draft()
+                    }
+                    KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.start_max_auto_turns_edit()
                     }
                     KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
                         self.open_simple_mode_planning_editor()

@@ -322,6 +322,12 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
+    let status = view
+        .status_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     let keys = view
         .key_lines
         .iter()
@@ -331,7 +337,9 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
 
     assert!(header.contains("simple mode"));
     assert!(options.contains("bootstrap-1"));
+    assert!(status.contains("max auto turns: 3"));
     assert!(keys.contains("Enter/Ctrl+P: promote staged scaffold"));
+    assert!(keys.contains("Ctrl+L: edit max auto turns"));
     assert!(keys.contains("Ctrl+E: inspect/edit draft"));
 }
 

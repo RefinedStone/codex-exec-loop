@@ -618,11 +618,24 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                                 "needs attention"
                             }
                         )),
-                        Line::from("next: Enter or Ctrl+P promotes the staged simple scaffold."),
-                        Line::from(
-                            "next: Esc closes this review and leaves the staged draft on disk.",
-                        ),
+                        Line::from(format!(
+                            "max auto turns: {}",
+                            app.current_max_auto_turns_value()
+                        )),
                     ];
+                    if app.is_max_auto_turns_editing() {
+                        lines.push(Line::from(format!(
+                            "editing max auto turns: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                            app.followup_overlay_ui_state.max_auto_turns_editor.buffer
+                        )));
+                    } else {
+                        lines.push(Line::from(
+                            "next: Enter or Ctrl+P promotes the staged simple scaffold.",
+                        ));
+                        lines.push(Line::from(
+                            "next: Esc closes this review and leaves the staged draft on disk.",
+                        ));
+                    }
                     if let Some(first_error) = first_error {
                         lines.push(Line::from(format!("first validation error: {first_error}")));
                     }
@@ -630,7 +643,8 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 },
                 key_lines: vec![
                     Line::from("Enter/Ctrl+P: promote staged scaffold"),
-                    Line::from("Ctrl+E: inspect/edit draft    Esc/Ctrl+C: close review"),
+                    Line::from("Ctrl+L: edit max auto turns    Ctrl+E: inspect/edit draft"),
+                    Line::from("Esc/Ctrl+C: close review"),
                 ],
             }
         }
