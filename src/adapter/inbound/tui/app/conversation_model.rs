@@ -659,7 +659,6 @@ impl TurnActivityState {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn last_completed_changed_planning_file_paths(&self) -> &[String] {
         &self.last_completed_turn_changed_planning_file_paths
     }
@@ -737,6 +736,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
+    pub(crate) pending_post_turn_evaluation: bool,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
     pub(crate) status_text: String,
 }
@@ -775,6 +775,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
+            pending_post_turn_evaluation: false,
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
@@ -822,6 +823,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
+            pending_post_turn_evaluation: false,
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
@@ -1064,6 +1066,7 @@ impl ConversationViewModel {
     ) {
         self.push_message(transcript_message);
         self.input_buffer.clear();
+        self.pending_post_turn_evaluation = false;
         self.mark_turn_submitting(workspace_directory);
     }
 
@@ -1319,6 +1322,14 @@ impl ConversationViewModel {
 
     pub(crate) fn clear_auto_followup_skip(&mut self) {
         self.last_auto_followup_activity = None;
+    }
+
+    pub(crate) fn defer_post_turn_evaluation(&mut self) {
+        self.pending_post_turn_evaluation = true;
+    }
+
+    pub(crate) fn clear_pending_post_turn_evaluation(&mut self) {
+        self.pending_post_turn_evaluation = false;
     }
 
     pub(crate) fn clear_last_planning_task_handoff(&mut self) {

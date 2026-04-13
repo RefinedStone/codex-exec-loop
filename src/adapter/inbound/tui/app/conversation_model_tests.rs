@@ -84,6 +84,7 @@ fn ready_conversation() -> ConversationViewModel {
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
+        pending_post_turn_evaluation: false,
         last_planning_task_handoff: None,
         status_text: "thread loaded".to_string(),
     }

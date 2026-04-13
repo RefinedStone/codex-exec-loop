@@ -259,6 +259,7 @@ pub(super) fn reduce_conversation_runtime(
                     max_attempts,
                 } => {
                     state.auto_follow_state.clear_runtime_phase();
+                    state.clear_pending_post_turn_evaluation();
                     state.record_planning_repair_queue(attempt_number, max_attempts);
                     state.status_text = format!(
                         "turn completed / queued planning repair {attempt_number}/{max_attempts}"
@@ -276,6 +277,7 @@ pub(super) fn reduce_conversation_runtime(
                     max_attempts,
                 } => {
                     state.auto_follow_state.clear_runtime_phase();
+                    state.defer_post_turn_evaluation();
                     state.status_text = format!(
                         "turn completed / planning repair paused: manual input buffered ({attempt_number}/{max_attempts})"
                     );
@@ -288,6 +290,7 @@ pub(super) fn reduce_conversation_runtime(
                     transcript_text,
                     handoff_task,
                 } => {
+                    state.clear_pending_post_turn_evaluation();
                     state.clear_auto_followup_skip();
                     state.record_auto_followup_queue(&queued_from_turn_id, &template_label);
                     state.status_text = format!(
@@ -303,6 +306,11 @@ pub(super) fn reduce_conversation_runtime(
                     });
                 }
                 ConversationPostTurnAction::SkipAutoFollowup { reason } => {
+                    if reason == AutoFollowupSkipReason::ManualInputBuffered {
+                        state.defer_post_turn_evaluation();
+                    } else {
+                        state.clear_pending_post_turn_evaluation();
+                    }
                     state.record_auto_followup_skip(reason);
                     state.status_text = reason.runtime_status(&state.auto_follow_state);
                     state.append_status_message(state.status_text.clone());
@@ -1209,6 +1217,48 @@ mod tests {
                 .map(|activity| activity.summary.as_str()),
             Some("skipped: manual input buffered")
         );
+        assert!(reduced.state.pending_post_turn_evaluation);
+    }
+
+    #[test]
+    fn post_turn_evaluation_defers_retry_when_shell_command_is_buffered() {
+        let mut state = sample_conversation();
+        state.input_buffer = ":q".to_string();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::PostTurnEvaluated {
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(
+                        "planning queue needs confirmation".to_string(),
+                    ),
+                    planning_repair_state: None,
+                    runtime_notices: vec!["planning reconciliation completed".to_string()],
+                    action: ConversationPostTurnAction::QueueAutoPrompt {
+                        prompt: "continue".to_string(),
+                        queued_from_turn_id: "turn-1".to_string(),
+                        template_label: "builtin next-task".to_string(),
+                        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                        handoff_task: None,
+                    },
+                }),
+            },
+        );
+
+        assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.state.status_text,
+            "turn completed / auto follow-up skipped: manual input buffered"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("skipped: manual input buffered")
+        );
+        assert!(reduced.state.pending_post_turn_evaluation);
     }
 
     #[test]
@@ -1376,6 +1426,7 @@ mod tests {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
+            pending_post_turn_evaluation: false,
             last_planning_task_handoff: None,
             status_text: "thread loaded".to_string(),
         }
