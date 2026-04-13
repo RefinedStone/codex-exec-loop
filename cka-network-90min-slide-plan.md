@@ -5,6 +5,7 @@
 - 대상 강의: [cka-network-90min-lecture-plan.md](/Users/newin_mac/Documents/dev/akra/codex-exec-loop-worktrees/docs-native-platform-presentation-cka-network-90min/cka-network-90min-lecture-plan.md)
 - 목표: 90분 강의안을 실제 슬라이드 제작 단위로 분해해, 발표 자료 제작과 강사 리허설에 바로 사용할 수 있게 한다.
 - 원칙: 슬라이드는 이론 설명보다 "시험에서 어디부터 확인할지"를 남기는 순서로 배치한다.
+- HTML 드래프트: [slides/cka-network-90min-draft/index.html](/Users/newin_mac/Documents/dev/akra/codex-exec-loop-worktrees/docs-native-platform-presentation-cka-network-90min/slides/cka-network-90min-draft/index.html)
 
 ## 전체 슬라이드 원칙
 

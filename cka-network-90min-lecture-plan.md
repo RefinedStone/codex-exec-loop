@@ -8,6 +8,7 @@
 - 강의 목표: 수강생이 시험에서 네트워크 문제를 만나면 `Pod -> Service -> DNS -> Ingress/NetworkPolicy` 순서로 줄여 가며 판단할 수 있게 한다.
 - 전달 원칙: 구현 심화보다 시험 문제 해결 순서와 명령어 사용 기준을 남긴다.
 - 슬라이드 설계안: [cka-network-90min-slide-plan.md](/Users/newin_mac/Documents/dev/akra/codex-exec-loop-worktrees/docs-native-platform-presentation-cka-network-90min/cka-network-90min-slide-plan.md)
+- HTML 드래프트: [slides/cka-network-90min-draft/index.html](/Users/newin_mac/Documents/dev/akra/codex-exec-loop-worktrees/docs-native-platform-presentation-cka-network-90min/slides/cka-network-90min-draft/index.html)
 
 ## 이번 강의에서 가져가야 할 것
 

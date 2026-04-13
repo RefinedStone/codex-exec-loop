@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CKA 네트워크 90분 강의 슬라이드 초안</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true">
+      <div class="backdrop__glow backdrop__glow--left"></div>
+      <div class="backdrop__glow backdrop__glow--right"></div>
+      <div class="backdrop__grid"></div>
+    </div>
+
+    <header class="hud">
+      <div class="hud__brand">
+        <span class="eyebrow">CKA Network Deck Draft</span>
+        <strong>CKA 합격을 위한 쿠버네티스 네트워크 최소 핵심</strong>
+      </div>
+      <div class="hud__status">
+        <span id="slide-label">01. Cover</span>
+        <span id="slide-count">1 / 26</span>
+      </div>
+    </header>
+
+    <main class="deck" aria-live="polite">
+      <section class="slide slide--hero active" id="slide-1" data-title="Cover">
+        <div class="frame">
+          <div class="frame__noise"></div>
+          <div class="hero">
+            <div class="hero__copy stagger">
+              <p class="eyebrow" style="--i: 0">90-Minute Intensive</p>
+              <h1 style="--i: 1">쿠버네티스 네트워크를<br />시험 풀이 순서로 압축한다</h1>
+              <p class="hero__lead" style="--i: 2">
+                IP, Service, DNS, Ingress, NetworkPolicy를 구현 심화가 아니라
+                "어디부터 확인할지" 중심으로 정리하는 CKA 합격용 네트워크 강의
+              </p>
+              <div class="hero__chips" style="--i: 3">
+                <span class="chip">대상: CKA 시험 직전 수강생</span>
+                <span class="chip">길이: 90분</span>
+                <span class="chip">결과: Pod → Service → DNS 순서 고정</span>
+              </div>
+            </div>
+
+            <div class="hero__panel stagger">
+              <div class="signal-card" style="--i: 4">
+                <div class="signal-card__label">Class Promise</div>
+                <ul class="signal-list">
+                  <li>Service가 왜 끊겼는지 빠르게 줄인다</li>
+                  <li>DNS 문제와 연결 문제를 분리한다</li>
+                  <li>Ingress와 NetworkPolicy를 헷갈리지 않는다</li>
+                  <li>첫 명령 두 개를 바로 떠올린다</li>
+                </ul>
+              </div>
+
+              <div class="network-map network-map--hero" style="--i: 5">
+                <div class="network-map__edge">client</div>
+                <div class="network-map__route">DNS</div>
+                <div class="network-map__service">service</div>
+                <div class="network-map__pods">
+                  <span>pod-a</span>
+                  <span>pod-b</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-2" data-title="Outcome">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Outcome</p>
+            <h2 style="--i: 1">오늘 끝나고 바로 할 수 있어야 하는 것</h2>
+          </div>
+          <div class="flow-strip stagger">
+            <div class="flow-strip__step" style="--i: 2">Pod 상태 확인</div>
+            <div class="flow-strip__step" style="--i: 3">Service 검사</div>
+            <div class="flow-strip__step" style="--i: 4">DNS 분리</div>
+            <div class="flow-strip__step" style="--i: 5">Ingress / Policy 해석</div>
+          </div>
+          <div class="card-grid card-grid--two stagger">
+            <article class="card" style="--i: 6">
+              <h3>시험용 이해</h3>
+              <p>`ClusterIP`, `NodePort`, `LoadBalancer`, `Headless`를 구분한다.</p>
+            </article>
+            <article class="card" style="--i: 7">
+              <h3>이름 해석</h3>
+              <p>같은 namespace와 다른 namespace에서 FQDN이 왜 달라지는지 안다.</p>
+            </article>
+            <article class="card" style="--i: 8">
+              <h3>리소스 역할</h3>
+              <p>Ingress는 길을 정하고, Service는 진입점을 만들고, Pod가 실제 앱이다.</p>
+            </article>
+            <article class="card card--accent" style="--i: 9">
+              <h3>트러블슈팅</h3>
+              <p>`kubectl get`, `describe`, `exec`, `nslookup`, `curl`의 순서를 고정한다.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-3" data-title="Scope">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Scope</p>
+            <h2 style="--i: 1">오늘은 이해보다 선별이 중요하다</h2>
+          </div>
+          <div class="split split--compare">
+            <article class="compare-card stagger">
+              <div class="compare-card__header" style="--i: 2">
+                <span class="badge badge--good">다루는 것</span>
+                <h3>시험에 직접 쓰는 최소 핵심</h3>
+              </div>
+              <ul class="compare-list" style="--i: 3">
+                <li>IP, Port, DNS, CIDR 최소 용어</li>
+                <li>Pod 네트워크 3원칙</li>
+                <li>Service, DNS, Ingress, NetworkPolicy</li>
+                <li>통신 실패를 줄이는 순서</li>
+              </ul>
+            </article>
+
+            <article class="compare-card compare-card--warn stagger">
+              <div class="compare-card__header" style="--i: 4">
+                <span class="badge badge--bad">생략하는 것</span>
+                <h3>이번 강의 범위 밖</h3>
+              </div>
+              <ul class="compare-list" style="--i: 5">
+                <li>OSI 7계층 상세</li>
+                <li>BGP, VXLAN, 라우팅 프로토콜 심화</li>
+                <li>kube-proxy / CNI 내부 구현 세부</li>
+                <li>Ingress Controller 설치 심화</li>
+              </ul>
+            </article>
+          </div>
+          <div class="metric-band stagger">
+            <div class="metric" style="--i: 6">
+              <span class="metric__value">20%</span>
+              <span class="metric__label">Services &amp; Networking</span>
+            </div>
+            <div class="metric" style="--i: 7">
+              <span class="metric__value">30%</span>
+              <span class="metric__label">Troubleshooting</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-4" data-title="IP Port DNS">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Network Basics</p>
+            <h2 style="--i: 1">IP, Port, DNS만 먼저 맞춘다</h2>
+          </div>
+          <div class="split split--feature">
+            <div class="callout-card stagger">
+              <div class="callout-card__eyebrow" style="--i: 2">Example</div>
+              <h3 style="--i: 3">`https://example.com:443`</h3>
+              <p style="--i: 4">
+                이름은 `example.com`, 주소는 DNS가 찾고, 포트 `443`은 TLS 서비스 출입구다.
+              </p>
+            </div>
+            <div class="concept-grid stagger">
+              <article class="concept-card" style="--i: 5">
+                <strong>IP</strong>
+                <p>통신 대상 주소</p>
+              </article>
+              <article class="concept-card" style="--i: 6">
+                <strong>Port</strong>
+                <p>한 IP 안의 서비스 출입구</p>
+              </article>
+              <article class="concept-card" style="--i: 7">
+                <strong>DNS</strong>
+                <p>이름을 IP로 바꾸는 시스템</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-5" data-title="CIDR">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">CIDR</p>
+            <h2 style="--i: 1">대역 표기를 읽을 줄 알면 충분하다</h2>
+          </div>
+          <div class="card-grid card-grid--three stagger">
+            <article class="card" style="--i: 2">
+              <h3>`10.96.0.0/12`</h3>
+              <p>Service CIDR 예시로 자주 만난다.</p>
+            </article>
+            <article class="card" style="--i: 3">
+              <h3>`192.168.0.0/24`</h3>
+              <p>노드나 로컬 네트워크 예시로 자주 본다.</p>
+            </article>
+            <article class="card card--accent" style="--i: 4">
+              <h3>시험 기준</h3>
+              <p>복잡한 계산보다 "같은 대역인가, 다른 대역인가" 정도만 읽으면 된다.</p>
+            </article>
+          </div>
+          <div class="quote-panel stagger" style="--i: 5">
+            <p>CKA 네트워크에서는 subnetting 수학보다 리소스 관계와 통신 경로가 훨씬 중요하다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-6" data-title="TCP UDP">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Transport</p>
+            <h2 style="--i: 1">시험에서는 대부분 TCP 기준으로 이해해도 된다</h2>
+          </div>
+          <div class="compare-table stagger">
+            <div class="compare-table__row compare-table__row--head" style="--i: 2">
+              <span>항목</span>
+              <span>TCP</span>
+              <span>UDP</span>
+            </div>
+            <div class="compare-table__row" style="--i: 3">
+              <span>주로 보는 장면</span>
+              <span>HTTP, Service 연결, `curl`</span>
+              <span>이번 강의에서는 비중 낮음</span>
+            </div>
+            <div class="compare-table__row" style="--i: 4">
+              <span>이번 수업 기준</span>
+              <span>핵심 기준</span>
+              <span>용어 수준만</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-7" data-title="Three Principles">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Three Rules</p>
+            <h2 style="--i: 1">쿠버네티스 네트워크는 세 문장으로 시작한다</h2>
+          </div>
+          <div class="rule-stack stagger">
+            <article class="rule-card" style="--i: 2">
+              <span>01</span>
+              <strong>모든 Pod는 자기 IP를 가진다</strong>
+            </article>
+            <article class="rule-card" style="--i: 3">
+              <span>02</span>
+              <strong>Pod 간 통신은 노드가 달라도 가능해야 한다</strong>
+            </article>
+            <article class="rule-card rule-card--accent" style="--i: 4">
+              <span>03</span>
+              <strong>고정 진입점은 Pod가 아니라 Service가 맡는다</strong>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-8" data-title="Pod IP">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Pod View</p>
+            <h2 style="--i: 1">Pod는 IP를 가지지만 오래 믿을 주소는 아니다</h2>
+          </div>
+          <div class="split split--code">
+            <div class="code-window stagger" style="--i: 2">
+              <div class="code-window__bar">
+                <span></span><span></span><span></span>
+              </div>
+              <pre><code>$ kubectl get pods -o wide
+NAME         READY   STATUS    IP            NODE
+web-7k2m     1/1     Running   10.244.1.12   worker-a
+web-9l8z     1/1     Running   10.244.2.07   worker-b
+</code></pre>
+            </div>
+            <div class="annotation-stack stagger">
+              <article class="annotation-card" style="--i: 3">
+                <h3>관찰 포인트</h3>
+                <p>Pod IP와 Node를 같이 보면 "같은 노드냐, 다른 노드냐"를 즉시 읽을 수 있다.</p>
+              </article>
+              <article class="annotation-card" style="--i: 4">
+                <h3>시험 포인트</h3>
+                <p>직접 IP 접속과 Service 경유 접속을 구분해야 장애 위치를 줄일 수 있다.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-9" data-title="Whole Map">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Whole Map</p>
+            <h2 style="--i: 1">Pod, Service, DNS를 한 장으로 묶어 본다</h2>
+          </div>
+          <div class="network-board stagger">
+            <div class="network-board__dns" style="--i: 2">CoreDNS</div>
+            <div class="network-board__service" style="--i: 3">ClusterIP Service</div>
+            <div class="network-board__node" style="--i: 4">
+              <strong>node-a</strong>
+              <span>pod-a</span>
+              <span>pod-b</span>
+            </div>
+            <div class="network-board__node" style="--i: 5">
+              <strong>node-b</strong>
+              <span>pod-c</span>
+            </div>
+            <div class="network-board__client" style="--i: 6">client pod</div>
+          </div>
+          <div class="footer-note stagger" style="--i: 7">
+            <p>사용자는 Service 이름으로 붙고, DNS가 이름을 풀고, Service가 실제 Pod 집합으로 연결한다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-10" data-title="Why Service">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Service</p>
+            <h2 style="--i: 1">왜 Pod IP 대신 Service를 쓰는가</h2>
+          </div>
+          <div class="split split--compare">
+            <article class="compare-card stagger">
+              <div class="compare-card__header" style="--i: 2">
+                <span class="badge badge--bad">Without Service</span>
+                <h3>직접 Pod IP 접근</h3>
+              </div>
+              <ul class="compare-list" style="--i: 3">
+                <li>Pod 재시작 시 주소가 바뀔 수 있다</li>
+                <li>복수 Pod 앞단 로드밸런싱이 없다</li>
+                <li>사용자가 대상 Pod를 직접 알아야 한다</li>
+              </ul>
+            </article>
+            <article class="compare-card compare-card--good stagger">
+              <div class="compare-card__header" style="--i: 4">
+                <span class="badge badge--good">With Service</span>
+                <h3>고정 진입점 + 선택기</h3>
+              </div>
+              <ul class="compare-list" style="--i: 5">
+                <li>Service IP와 DNS 이름이 고정 진입점이 된다</li>
+                <li>selector로 Pod 집합을 고른다</li>
+                <li>대상 Pod가 바뀌어도 사용자는 이름만 쓴다</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-11" data-title="Service Types">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Service Types</p>
+            <h2 style="--i: 1">네 가지는 이 차이만 기억하면 된다</h2>
+          </div>
+          <div class="card-grid card-grid--four stagger">
+            <article class="card" style="--i: 2">
+              <h3>ClusterIP</h3>
+              <p>클러스터 내부 기본 타입</p>
+            </article>
+            <article class="card" style="--i: 3">
+              <h3>NodePort</h3>
+              <p>노드 포트를 통해 외부 진입</p>
+            </article>
+            <article class="card" style="--i: 4">
+              <h3>LoadBalancer</h3>
+              <p>클라우드 외부 LB 연결</p>
+            </article>
+            <article class="card card--accent" style="--i: 5">
+              <h3>Headless</h3>
+              <p>가상 IP 없이 Pod 레코드를 직접 노출</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-12" data-title="Selector Endpoints">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Selector &amp; Endpoints</p>
+            <h2 style="--i: 1">Service는 selector로 고르고 endpoints로 드러난다</h2>
+          </div>
+          <div class="trace-card stagger">
+            <div class="trace-card__row" style="--i: 2">
+              <span>Service</span>
+              <div></div>
+              <strong>selector: app=web</strong>
+            </div>
+            <div class="trace-card__row" style="--i: 3">
+              <span>Pod</span>
+              <div></div>
+              <strong>label이 맞으면 선택</strong>
+            </div>
+            <div class="trace-card__row trace-card__row--accent" style="--i: 4">
+              <span>Endpoints</span>
+              <div></div>
+              <strong>선택 결과가 여기 보인다</strong>
+            </div>
+          </div>
+          <div class="quote-panel stagger" style="--i: 5">
+            <p>Service가 안 되면 제일 먼저 `endpoints`를 본다. 비어 있으면 대개 selector 또는 Pod 상태 문제다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-13" data-title="Service Demo">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Demo</p>
+            <h2 style="--i: 1">selector가 틀리면 무엇이 보이는가</h2>
+          </div>
+          <div class="split split--code">
+            <div class="code-window stagger" style="--i: 2">
+              <div class="code-window__bar">
+                <span></span><span></span><span></span>
+              </div>
+              <pre><code>$ kubectl get svc web
+$ kubectl get endpoints web
+$ kubectl describe svc web
+$ kubectl get pods -l app=web --show-labels
+</code></pre>
+            </div>
+            <div class="annotation-stack stagger">
+              <article class="annotation-card" style="--i: 3">
+                <h3>학생이 봐야 할 것</h3>
+                <p>Service는 있는데 endpoints가 비어 있을 수 있다.</p>
+              </article>
+              <article class="annotation-card" style="--i: 4">
+                <h3>결론</h3>
+                <p>이 장면이면 가장 먼저 selector와 label을 맞춘다.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-14" data-title="Service Order">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Diagnostic Order</p>
+            <h2 style="--i: 1">Pod to Service 실패 시 보는 순서</h2>
+          </div>
+          <div class="order-list stagger">
+            <div class="order-item" style="--i: 2"><span>1</span><strong>Service 존재 확인</strong></div>
+            <div class="order-item" style="--i: 3"><span>2</span><strong>selector 확인</strong></div>
+            <div class="order-item" style="--i: 4"><span>3</span><strong>endpoints 확인</strong></div>
+            <div class="order-item" style="--i: 5"><span>4</span><strong>targetPort / app 포트 확인</strong></div>
+            <div class="order-item order-item--accent" style="--i: 6"><span>5</span><strong>뒤 Pod 상태 확인</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-15" data-title="CoreDNS">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">DNS</p>
+            <h2 style="--i: 1">DNS는 이름이 IP로 바뀌는가만 먼저 본다</h2>
+          </div>
+          <div class="split split--feature">
+            <div class="network-map stagger">
+              <div class="network-map__edge" style="--i: 2">client</div>
+              <div class="network-map__route" style="--i: 3">service name</div>
+              <div class="network-map__service" style="--i: 4">CoreDNS</div>
+              <div class="network-map__pods" style="--i: 5">
+                <span>10.96.14.23</span>
+              </div>
+            </div>
+            <div class="side-stack stagger">
+              <article class="rule-card" style="--i: 6">
+                <h3>통과 기준</h3>
+                <p>이름이 IP로 바뀌면 DNS는 통과다. 그다음은 Service나 앱 문제다.</p>
+              </article>
+              <article class="rule-card rule-card--accent" style="--i: 7">
+                <h3>실전 명령</h3>
+                <p>`kubectl exec -it &lt;pod&gt; -- nslookup &lt;service&gt;`</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-16" data-title="FQDN">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Namespace</p>
+            <h2 style="--i: 1">왜 어떤 서비스는 짧은 이름으로 되고 어떤 것은 안 되는가</h2>
+          </div>
+          <div class="card-grid card-grid--two stagger">
+            <article class="card" style="--i: 2">
+              <h3>같은 namespace</h3>
+              <p>`curl http://web` 처럼 짧은 이름으로 되는 경우가 많다.</p>
+            </article>
+            <article class="card card--accent" style="--i: 3">
+              <h3>다른 namespace</h3>
+              <p>`web.app.svc.cluster.local`처럼 FQDN이 필요할 수 있다.</p>
+            </article>
+          </div>
+          <div class="code-window stagger" style="--i: 4">
+            <div class="code-window__bar">
+              <span></span><span></span><span></span>
+            </div>
+            <pre><code># default namespace pod
+nslookup web
+nslookup web.app.svc.cluster.local
+</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-17" data-title="DNS Demo">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Demo</p>
+            <h2 style="--i: 1">일반 Service와 headless Service의 DNS 차이</h2>
+          </div>
+          <div class="split split--code">
+            <div class="code-window stagger" style="--i: 2">
+              <div class="code-window__bar">
+                <span></span><span></span><span></span>
+              </div>
+              <pre><code>$ nslookup web
+Name:   web.default.svc.cluster.local
+Address: 10.96.14.23
+
+$ nslookup web-headless
+Name:   web-headless.default.svc.cluster.local
+Address: 10.244.1.12
+Address: 10.244.2.07
+</code></pre>
+            </div>
+            <div class="annotation-stack stagger">
+              <article class="annotation-card" style="--i: 3">
+                <h3>일반 Service</h3>
+                <p>Service IP 하나가 응답된다.</p>
+              </article>
+              <article class="annotation-card" style="--i: 4">
+                <h3>Headless Service</h3>
+                <p>Pod IP 여러 개가 직접 보일 수 있다.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-18" data-title="Ingress Flow">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Ingress</p>
+            <h2 style="--i: 1">Ingress는 밖에서 들어오는 규칙이다</h2>
+          </div>
+          <div class="ingress-board stagger">
+            <div class="ingress-board__node" style="--i: 2">external user</div>
+            <div class="ingress-board__arrow" style="--i: 3"></div>
+            <div class="ingress-board__node ingress-board__node--accent" style="--i: 4">
+              host + path rule
+            </div>
+            <div class="ingress-board__arrow" style="--i: 5"></div>
+            <div class="ingress-board__node" style="--i: 6">service</div>
+            <div class="ingress-board__arrow" style="--i: 7"></div>
+            <div class="ingress-board__node" style="--i: 8">pod</div>
+          </div>
+          <div class="footer-note stagger" style="--i: 9">
+            <p>Ingress가 직접 Pod를 보지 않는다는 점만 확실히 남기면 시험 문제 해석이 쉬워진다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-19" data-title="Ingress YAML">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Ingress YAML</p>
+            <h2 style="--i: 1">YAML은 네 줄만 먼저 보면 된다</h2>
+          </div>
+          <div class="split split--code">
+            <div class="code-window stagger" style="--i: 2">
+              <div class="code-window__bar">
+                <span></span><span></span><span></span>
+              </div>
+              <pre><code>spec:
+  rules:
+  - host: shop.example.com
+    http:
+      paths:
+      - path: /api
+        backend:
+          service:
+            name: shop-api
+            port:
+              number: 80
+</code></pre>
+            </div>
+            <div class="annotation-stack stagger">
+              <article class="annotation-card" style="--i: 3">
+                <h3>1. host</h3>
+                <p>어떤 도메인 요청인가</p>
+              </article>
+              <article class="annotation-card" style="--i: 4">
+                <h3>2. path</h3>
+                <p>어느 경로를 매칭하는가</p>
+              </article>
+              <article class="annotation-card" style="--i: 5">
+                <h3>3. service name</h3>
+                <p>뒤에 어느 Service로 보낼 것인가</p>
+              </article>
+              <article class="annotation-card" style="--i: 6">
+                <h3>4. service port</h3>
+                <p>Service의 어느 포트를 쓸 것인가</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-20" data-title="Policy Mindset">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">NetworkPolicy</p>
+            <h2 style="--i: 1">정책은 누구를 막느냐보다 누구에게 붙느냐부터 본다</h2>
+          </div>
+          <div class="card-grid card-grid--three stagger">
+            <article class="card" style="--i: 2">
+              <h3>`podSelector`</h3>
+              <p>정책이 적용되는 대상 Pod</p>
+            </article>
+            <article class="card" style="--i: 3">
+              <h3>`policyTypes`</h3>
+              <p>ingress 인지 egress 인지</p>
+            </article>
+            <article class="card card--accent" style="--i: 4">
+              <h3>`from` / `to`</h3>
+              <p>허용하는 출발지와 목적지</p>
+            </article>
+          </div>
+          <div class="quote-panel stagger" style="--i: 5">
+            <p>NetworkPolicy는 클러스터 전체 방화벽이 아니다. 선택된 Pod에 허용 규칙을 붙이는 리소스다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-21" data-title="Policy YAML">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Policy YAML</p>
+            <h2 style="--i: 1">이 블록만 읽어도 절반은 푼다</h2>
+          </div>
+          <div class="split split--code">
+            <div class="code-window stagger" style="--i: 2">
+              <div class="code-window__bar">
+                <span></span><span></span><span></span>
+              </div>
+              <pre><code>spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+</code></pre>
+            </div>
+            <div class="annotation-stack stagger">
+              <article class="annotation-card" style="--i: 3">
+                <h3>대상</h3>
+                <p>`app=backend`인 Pod가 정책 대상이다.</p>
+              </article>
+              <article class="annotation-card" style="--i: 4">
+                <h3>방향</h3>
+                <p>Ingress 규칙만 읽으면 된다.</p>
+              </article>
+              <article class="annotation-card" style="--i: 5">
+                <h3>허용</h3>
+                <p>`app=frontend`에서 들어오는 요청만 허용한다.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-22" data-title="Policy Demo">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Demo</p>
+            <h2 style="--i: 1">backend는 왜 되고 client는 왜 안 되는가</h2>
+          </div>
+          <div class="policy-board stagger">
+            <div class="policy-board__lane" style="--i: 2">
+              <span class="pill">frontend</span>
+              <div class="policy-board__arrow policy-board__arrow--good"></div>
+              <span class="pill pill--accent">backend</span>
+            </div>
+            <div class="policy-board__lane" style="--i: 3">
+              <span class="pill">client</span>
+              <div class="policy-board__arrow policy-board__arrow--blocked"></div>
+              <span class="pill pill--accent">backend</span>
+            </div>
+          </div>
+          <div class="card-grid card-grid--two stagger">
+            <article class="card" style="--i: 4">
+              <h3>정책 전</h3>
+              <p>대개 양쪽 다 통신 가능</p>
+            </article>
+            <article class="card card--accent" style="--i: 5">
+              <h3>정책 후</h3>
+              <p>정책이 붙은 backend 입장에서 허용된 출발지만 통과</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-23" data-title="Drill Pod to Pod">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Drill 1</p>
+            <h2 style="--i: 1">Pod to Pod가 안 되면 어디부터 볼 것인가</h2>
+          </div>
+          <div class="drill-card stagger">
+            <div class="drill-card__prompt" style="--i: 2">
+              `curl 10.244.2.07:8080`이 실패한다. 첫 확인 순서를 말해 보라.
+            </div>
+            <div class="order-list order-list--tight">
+              <div class="order-item" style="--i: 3"><span>1</span><strong>Pod Running 여부</strong></div>
+              <div class="order-item" style="--i: 4"><span>2</span><strong>Pod IP와 Node 확인</strong></div>
+              <div class="order-item" style="--i: 5"><span>3</span><strong>다른 Pod에서 직접 IP 접속</strong></div>
+              <div class="order-item" style="--i: 6"><span>4</span><strong>앱 포트와 readiness 확인</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-24" data-title="Drill Service DNS">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Drill 2</p>
+            <h2 style="--i: 1">Service 문제와 DNS 문제를 분리한다</h2>
+          </div>
+          <div class="card-grid card-grid--two stagger">
+            <article class="drill-panel" style="--i: 2">
+              <h3>상황 A. `curl http://web` 실패</h3>
+              <p>첫 명령 두 개</p>
+              <ul class="signal-list">
+                <li>`kubectl get svc web`</li>
+                <li>`kubectl get endpoints web`</li>
+              </ul>
+            </article>
+            <article class="drill-panel" style="--i: 3">
+              <h3>상황 B. 이름 자체가 안 풀리는 것 같다</h3>
+              <p>첫 명령 두 개</p>
+              <ul class="signal-list">
+                <li>`kubectl exec -it client -- nslookup web`</li>
+                <li>`kubectl get pods -n kube-system`</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-25" data-title="Drill Policy">
+        <div class="frame">
+          <div class="section-heading stagger">
+            <p class="eyebrow" style="--i: 0">Drill 3</p>
+            <h2 style="--i: 1">Policy 문제는 이 네 단계로 줄인다</h2>
+          </div>
+          <div class="diagnostic-ladder stagger">
+            <div class="diagnostic-ladder__step" style="--i: 2">
+              <strong>1. 정책 대상 Pod</strong>
+              <p>정책이 누구에게 붙었는가</p>
+            </div>
+            <div class="diagnostic-ladder__step" style="--i: 3">
+              <strong>2. 방향</strong>
+              <p>Ingress 인가, Egress 인가</p>
+            </div>
+            <div class="diagnostic-ladder__step" style="--i: 4">
+              <strong>3. label 매칭</strong>
+              <p>`podSelector`가 실제 label과 맞는가</p>
+            </div>
+            <div class="diagnostic-ladder__step diagnostic-ladder__step--accent" style="--i: 5">
+              <strong>4. namespace 매칭</strong>
+              <p>`namespaceSelector` 또는 namespace 차이를 봤는가</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="slide-26" data-title="Final Checklist">
+        <div class="frame">
+          <div class="closing">
+            <div class="closing__copy stagger">
+              <p class="eyebrow" style="--i: 0">Final Checklist</p>
+              <h2 style="--i: 1">시험 직전 이 다섯 문장만 남기면 된다</h2>
+              <div class="closing__list" style="--i: 2">
+                <div>
+                  <strong>1. Pod는 변한다</strong>
+                  <p>고정 진입점은 Service가 맡는다.</p>
+                </div>
+                <div>
+                  <strong>2. Service 문제는 endpoints부터</strong>
+                  <p>selector, endpoints, targetPort 순으로 줄인다.</p>
+                </div>
+                <div>
+                  <strong>3. DNS 문제는 이름이 IP로 바뀌는가부터</strong>
+                  <p>조회가 되면 DNS는 일단 통과다.</p>
+                </div>
+                <div>
+                  <strong>4. Ingress도 결국 뒤의 Service와 Pod를 본다</strong>
+                  <p>앞단만 보고 끝내지 않는다.</p>
+                </div>
+                <div>
+                  <strong>5. NetworkPolicy는 선택된 Pod에 허용 규칙을 붙이는 방식으로 읽는다</strong>
+                  <p>누구에게 붙었는지, 어느 방향인지 먼저 본다.</p>
+                </div>
+              </div>
+            </div>
+            <div class="closing__panel stagger">
+              <div class="signal-card" style="--i: 3">
+                <div class="signal-card__label">Command Pack</div>
+                <ul class="signal-list">
+                  <li>`kubectl get pods -o wide`</li>
+                  <li>`kubectl get svc` / `get endpoints`</li>
+                  <li>`kubectl describe svc` / `describe networkpolicy`</li>
+                  <li>`kubectl exec -- nslookup` / `curl`</li>
+                </ul>
+              </div>
+              <div class="signal-card signal-card--dark" style="--i: 4">
+                <div class="signal-card__label">Next Assets</div>
+                <p>이 HTML 초안 다음 단계는 실제 발표용 도식 정리, 데모 YAML, 발표자 노트 추가다.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="controls">
+      <button class="control-button" id="prev-button" type="button" aria-label="이전 슬라이드">
+        Previous
+      </button>
+      <div class="progress">
+        <div class="progress__bar" id="progress-bar"></div>
+      </div>
+      <button class="control-button" id="next-button" type="button" aria-label="다음 슬라이드">
+        Next
+      </button>
+    </footer>
+
+    <script src="./slides.js"></script>
+  </body>
+</html>
