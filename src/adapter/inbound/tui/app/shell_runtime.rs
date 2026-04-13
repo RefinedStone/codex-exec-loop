@@ -493,10 +493,13 @@ mod tests {
                 }),
                 planner_worker_panel_state: crate::adapter::inbound::tui::app::PlannerWorkerPanelState {
                     status: crate::adapter::inbound::tui::app::PlannerWorkerStatus::RefreshSucceeded,
+                    last_operation_label: None,
                     last_queue_summary: Some("next task: stale".to_string()),
                     last_summary: Some("stale".to_string()),
                     last_rejected_summary: None,
                     last_notice_detail: None,
+                    last_prompt: None,
+                    last_response: None,
                     last_host_detail: None,
                 },
             })

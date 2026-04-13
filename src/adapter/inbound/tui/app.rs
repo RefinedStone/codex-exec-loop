@@ -277,20 +277,26 @@ impl PlannerVisibility {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PlannerWorkerPanelState {
     status: PlannerWorkerStatus,
+    last_operation_label: Option<String>,
     last_summary: Option<String>,
     last_rejected_summary: Option<String>,
     last_queue_summary: Option<String>,
     last_notice_detail: Option<String>,
+    last_prompt: Option<String>,
+    last_response: Option<String>,
     last_host_detail: Option<String>,
 }
 
 impl PlannerWorkerPanelState {
     fn has_content(&self) -> bool {
         !matches!(self.status, PlannerWorkerStatus::Idle)
+            || self.last_operation_label.is_some()
             || self.last_summary.is_some()
             || self.last_rejected_summary.is_some()
             || self.last_queue_summary.is_some()
             || self.last_notice_detail.is_some()
+            || self.last_prompt.is_some()
+            || self.last_response.is_some()
             || self.last_host_detail.is_some()
     }
 }
