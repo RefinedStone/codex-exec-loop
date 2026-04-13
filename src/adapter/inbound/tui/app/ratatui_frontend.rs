@@ -203,13 +203,7 @@ impl InlineHistoryState {
     }
 
     fn shifted_window_overlap_len(&self, current_lines: &[Line<'static>]) -> Option<usize> {
-        if current_lines.len() < self.rendered_lines.len() {
-            return None;
-        }
-
-        if current_lines.len() == self.rendered_lines.len()
-            && current_lines.len() != MAX_CONVERSATION_HISTORY_LINES
-        {
+        if current_lines.len() != MAX_CONVERSATION_HISTORY_LINES {
             return None;
         }
 
