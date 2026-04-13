@@ -62,11 +62,11 @@ impl FilesystemPlanningWorkspaceAdapter {
         let relative_path = normalized
             .strip_prefix(".codex-exec-loop/planning/")
             .unwrap_or(normalized);
-        validate_workspace_relative_path(
+        let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("planning draft file has invalid relative path: {active_path}"),
         )?;
-        let relative_path = Path::new(relative_path);
+        let relative_path = Path::new(&relative_path);
         Ok(Self::draft_directory(workspace_dir, draft_name).join(relative_path))
     }
 
@@ -120,7 +120,7 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 }
 
-fn validate_workspace_relative_path(path: &str, context: &str) -> Result<()> {
+fn normalize_workspace_relative_path(path: &str, context: &str) -> Result<String> {
     let normalized = path.trim().replace('\\', "/");
     if normalized.is_empty()
         || normalized.starts_with('/')
@@ -131,14 +131,21 @@ fn validate_workspace_relative_path(path: &str, context: &str) -> Result<()> {
 
     for component in Path::new(&normalized).components() {
         match component {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(segment) => {
+                let segment = segment.to_string_lossy();
+                let trimmed_segment = segment.trim();
+                if trimmed_segment == "." || trimmed_segment == ".." {
+                    anyhow::bail!("{context}");
+                }
+            }
+            Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 anyhow::bail!("{context}");
             }
         }
     }
 
-    Ok(())
+    Ok(normalized)
 }
 
 fn looks_like_windows_absolute_path(path: &str) -> bool {
@@ -247,11 +254,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        validate_workspace_relative_path(
+        let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        Self::read_optional_workspace_file(workspace_dir, relative_path)
+        Self::read_optional_workspace_file(workspace_dir, &relative_path)
     }
 
     fn replace_planning_workspace_file(
@@ -260,11 +267,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         relative_path: &str,
         body: Option<&str>,
     ) -> Result<()> {
-        validate_workspace_relative_path(
+        let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        let path = Self::workspace_path(workspace_dir, relative_path);
+        let path = Self::workspace_path(workspace_dir, &relative_path);
         match body {
             Some(body) => {
                 Self::ensure_parent_directory(&path)?;
@@ -528,6 +535,42 @@ mod tests {
         let error = adapter
             .load_optional_planning_file(&workspace_dir, "../secret.md")
             .expect_err("parent traversal should be rejected");
+
+        assert!(error.to_string().contains("invalid planning relative path"));
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn trims_relative_paths_before_loading_optional_planning_files() {
+        let workspace_dir = create_temp_workspace("planning-load-trimmed");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
+        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+        fs::write(planning_dir.join("directions.toml"), "version = 1")
+            .expect("directions should write");
+
+        let body = adapter
+            .load_optional_planning_file(
+                &workspace_dir,
+                "  .codex-exec-loop/planning/directions.toml  ",
+            )
+            .expect("trimmed relative path should load")
+            .expect("directions.toml should exist");
+
+        assert_eq!(body, "version = 1");
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn rejects_parent_traversal_components_with_trailing_whitespace() {
+        let workspace_dir = create_temp_workspace("planning-load-invalid-parent-whitespace");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let error = adapter
+            .load_optional_planning_file(&workspace_dir, ".codex-exec-loop/planning/.. /secret.md")
+            .expect_err("trimmed parent traversal component should be rejected");
 
         assert!(error.to_string().contains("invalid planning relative path"));
 
