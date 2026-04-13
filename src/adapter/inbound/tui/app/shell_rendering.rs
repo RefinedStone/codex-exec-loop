@@ -21,7 +21,8 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
 
     let editor_content_height = match mode {
         ShellFrontendMode::InlineMainBuffer => {
-            let inspection_area = build_inline_terminal_flow_layout(app, area)[0];
+            let tail_lines = build_inline_tail_lines(app);
+            let inspection_area = build_inline_terminal_flow_layout(area, &tail_lines)[0];
             inspection_area
                 .height
                 .saturating_sub(14)
@@ -41,15 +42,29 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
-    draw_conversation_shell(frame, app, mode);
+    match mode {
+        ShellFrontendMode::InlineMainBuffer => {
+            let frame_area = frame.area();
+            let tail_lines = build_inline_tail_lines(app);
+            let layout = build_inline_terminal_flow_layout(frame_area, &tail_lines);
 
-    match (mode, app.shell_overlay) {
-        (_, ShellOverlay::Hidden) => {}
-        (ShellFrontendMode::InlineMainBuffer, _) => draw_inline_shell_inspection(frame, app, mode),
-        (_, ShellOverlay::Startup) => draw_startup_overlay(frame, app),
-        (_, ShellOverlay::Sessions) => draw_session_overlay(frame, app),
-        (_, ShellOverlay::FollowupTemplates) => draw_followup_template_overlay(frame, app),
-        (_, ShellOverlay::PlanningInit) => draw_planning_init_overlay(frame, app),
+            draw_inline_conversation_shell(frame, app, tail_lines, &layout);
+
+            if app.shell_overlay != ShellOverlay::Hidden {
+                draw_inline_shell_inspection(frame, app, layout[0]);
+            }
+        }
+        ShellFrontendMode::AlternateScreen => {
+            draw_framed_conversation_shell(frame, app, mode);
+
+            match app.shell_overlay {
+                ShellOverlay::Hidden => {}
+                ShellOverlay::Startup => draw_startup_overlay(frame, app),
+                ShellOverlay::Sessions => draw_session_overlay(frame, app),
+                ShellOverlay::FollowupTemplates => draw_followup_template_overlay(frame, app),
+                ShellOverlay::PlanningInit => draw_planning_init_overlay(frame, app),
+            }
+        }
     }
 
     if app.is_exit_confirmation_visible() {
@@ -102,23 +117,14 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<
     frame.render_widget(detail, area);
 }
 
-fn draw_conversation_shell(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => draw_inline_conversation_shell(frame, app, mode),
-        ShellFrontendMode::AlternateScreen => {
-            draw_framed_conversation_shell(frame, app, mode);
-        }
-    }
-}
-
 fn draw_inline_conversation_shell(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
-    _mode: ShellFrontendMode,
+    tail_lines: Vec<Line<'static>>,
+    layout: &Rc<[Rect]>,
 ) {
     let frame_area = frame.area();
     frame.render_widget(Clear, frame_area);
-    let tail_lines = build_inline_tail_lines(app);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
         let tail_area = if startup_screen_is_active(app) {
             frame_area
@@ -134,7 +140,6 @@ fn draw_inline_conversation_shell(
         return;
     }
 
-    let layout = build_inline_terminal_flow_layout(app, frame_area);
     render_inline_body(
         frame,
         inline_body_render_area(layout[1], &tail_lines),
@@ -143,8 +148,7 @@ fn draw_inline_conversation_shell(
     );
 }
 
-fn build_inline_terminal_flow_layout(app: &NativeTuiApp, area: Rect) -> Rc<[Rect]> {
-    let tail_lines = build_inline_tail_lines(app);
+fn build_inline_terminal_flow_layout(area: Rect, tail_lines: &[Line<'_>]) -> Rc<[Rect]> {
     let tail_height = inline_body_height(&tail_lines, area.width, MAX_INLINE_TAIL_HEIGHT);
 
     Layout::default()
@@ -319,11 +323,8 @@ fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec<Line<'stat
 fn draw_inline_shell_inspection(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
-    _mode: ShellFrontendMode,
+    inspection_area: Rect,
 ) {
-    let inspection_area = build_inline_terminal_flow_layout(app, frame.area())[0];
-    frame.render_widget(Clear, inspection_area);
-
     match app.shell_overlay {
         ShellOverlay::Hidden => {}
         ShellOverlay::Startup => draw_inline_startup_inspection(frame, inspection_area, app),
