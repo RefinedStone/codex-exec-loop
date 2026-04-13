@@ -76,6 +76,7 @@ impl ShellRuntime {
                         }
                         Err(_) => None,
                     };
+                    self.app.reset_planner_worker_panel_state();
                     self.app.dispatch_conversation_lifecycle(
                         ConversationLifecycleEvent::ConversationLoaded {
                             result,

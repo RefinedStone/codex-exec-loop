@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
 
 use super::conversation_model::PlanningRepairState;
@@ -2466,6 +2467,17 @@ fn background_conversation_loaded_resets_followup_overlay_state() {
         .followup_overlay_ui_state
         .max_auto_turns_editor
         .buffer = "99".to_string();
+    runtime.app_mut().planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("stale planner state".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some("stale prompt".to_string()),
+        last_response: Some("stale response".to_string()),
+        last_host_detail: None,
+    };
 
     runtime
         .app()
@@ -2499,6 +2511,10 @@ fn background_conversation_loaded_resets_followup_overlay_state() {
     assert_eq!(
         app.followup_overlay_ui_state.stop_keyword_editor.buffer,
         DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
+    );
+    assert_eq!(
+        app.planner_worker_panel_state,
+        PlannerWorkerPanelState::default()
     );
 }
 
@@ -3732,6 +3748,81 @@ fn followup_template_preview_shows_planner_session_debug_in_debug_mode() {
     assert!(rendered.contains("last planner session: refresh / refresh ok"));
     assert!(rendered.contains("planning worker prompt body"));
     assert!(rendered.contains("planner worker response body"));
+}
+
+#[test]
+fn followup_template_preview_styles_planner_debug_headers_in_debug_mode() {
+    let (mut app, _) = make_test_app();
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.planner_visibility = PlannerVisibility::Debug;
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some("planning worker prompt body".to_string()),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let lines = build_followup_template_preview_lines(&app);
+    let header_line = lines
+        .iter()
+        .find(|line| line.to_string() == "Planner Session Debug")
+        .expect("debug header should be present");
+    assert_eq!(header_line.spans[0].style.fg, Some(Color::Cyan));
+    assert!(
+        header_line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+
+    let prompt_line = lines
+        .iter()
+        .find(|line| line.to_string() == "Prompt")
+        .expect("prompt section header should be present");
+    assert_eq!(prompt_line.spans[0].style.fg, Some(Color::Gray));
+    assert!(
+        prompt_line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+}
+
+#[test]
+fn followup_template_preview_truncates_large_planner_debug_blocks() {
+    let (mut app, _) = make_test_app();
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.planner_visibility = PlannerVisibility::Debug;
+    let long_prompt = (0..300)
+        .map(|index| format!("prompt line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some(long_prompt),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let rendered = build_followup_template_preview_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("prompt line 255"));
+    assert!(!rendered.contains("prompt line 299"));
+    assert!(rendered.contains("... truncated after 256 lines"));
 }
 
 #[test]
