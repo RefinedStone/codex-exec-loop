@@ -122,13 +122,19 @@ pub(super) fn reduce_conversation_runtime(
             }
             let auto_follow_progress = state.auto_follow_state.progress_label();
             let transcript_message = match &origin {
-                PromptOrigin::AutoFollow(context) => ConversationMessage::new(
-                    ConversationMessageKind::User,
-                    context.transcript_text.clone(),
-                    None,
-                    None,
-                )
-                .with_display_label("Auto Follow-up"),
+                PromptOrigin::AutoFollow(context) => {
+                    let mut message = ConversationMessage::new(
+                        ConversationMessageKind::User,
+                        context.transcript_text.clone(),
+                        None,
+                        None,
+                    )
+                    .with_display_label("Auto Follow-up");
+                    if let Some(detail) = context.debug_detail.as_deref() {
+                        message = message.with_debug_detail(detail);
+                    }
+                    message
+                }
                 _ => ConversationMessage::new(
                     ConversationMessageKind::User,
                     prompt.clone(),
@@ -352,6 +358,7 @@ mod tests {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
                     transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                    debug_detail: None,
                     handoff_task: None,
                 }),
             },
@@ -383,7 +390,38 @@ mod tests {
             reduced.state.messages[0].text,
             "다음 queued task 1개를 이어서 진행합니다."
         );
+        assert!(reduced.state.messages[0].debug_detail.is_none());
         assert_eq!(reduced.state.messages[0].label(), "Auto Follow-up");
+    }
+
+    #[test]
+    fn auto_follow_submit_records_debug_detail_for_transcript_rendering() {
+        let mut state = sample_conversation();
+        state.input_buffer = "continue from the last result".to_string();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue from the last result".to_string(),
+                origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                    queued_from_turn_id: "turn-1".to_string(),
+                    template_label: "builtin next-task".to_string(),
+                    transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                    debug_detail: Some(
+                        "planner temp session: refresh / refresh ok\nplanner response:\n  queued next task"
+                            .to_string(),
+                    ),
+                    handoff_task: None,
+                }),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.messages[0].debug_detail.as_deref(),
+            Some(
+                "planner temp session: refresh / refresh ok\nplanner response:\n  queued next task"
+            )
+        );
     }
 
     #[test]

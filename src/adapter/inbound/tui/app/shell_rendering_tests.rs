@@ -6,8 +6,10 @@ use ratatui::TerminalOptions;
 use ratatui::Viewport;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
+use ratatui::style::Color;
 
 use super::*;
+use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -35,6 +37,37 @@ fn centered_rect_clamps_percentages_above_hundred() {
     let area = Rect::new(4, 2, 80, 24);
 
     assert_eq!(centered_rect(140, 120, area), area);
+}
+
+#[test]
+fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
+    let message = ConversationMessage::new(
+        ConversationMessageKind::User,
+        "다음 queued task 1개를 이어서 진행합니다.",
+        None,
+        None,
+    )
+    .with_display_label("Auto Follow-up")
+    .with_debug_detail("planner temp session: refresh / refresh ok");
+
+    let without_debug = format_conversation_lines(&[message.clone()]);
+    assert!(
+        !without_debug
+            .iter()
+            .any(|line| line.to_string().contains("planner temp session"))
+    );
+
+    let with_debug = format_conversation_lines_with_debug(&[message], true);
+    let detail_line = with_debug
+        .iter()
+        .find(|line: &&Line<'static>| line.to_string().contains("planner temp session"))
+        .expect("debug transcript should include the planner detail line");
+
+    assert_eq!(
+        detail_line.to_string(),
+        "  planner temp session: refresh / refresh ok"
+    );
+    assert_eq!(detail_line.spans[0].style.fg, Some(Color::Gray));
 }
 
 #[test]

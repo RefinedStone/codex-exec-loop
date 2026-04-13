@@ -14,14 +14,15 @@ use super::shell_presentation::{
 };
 use super::{
     ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage,
-    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
-    ConversationState, ConversationViewModel, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
-    DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP,
-    GithubReviewPollingState, InlineShellCommand, InlineShellCommandInput, MAX_COMPOSER_HEIGHT,
-    NativeTuiApp, PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus,
-    PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
-    SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
-    TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
+    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
+    FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, GithubReviewPollingState, InlineShellCommand,
+    InlineShellCommandInput, MAX_COMPOSER_HEIGHT, NativeTuiApp, PlannerVisibility,
+    PlannerWorkerPanelState, PlannerWorkerStatus, PlanningInitOverlayStep, PromptOrigin,
+    RecordedAutoFollowupActivity, SessionOverlayUiState, SessionState, ShellActionAvailability,
+    ShellFrontendMode, ShellOverlay, StartupState, TurnActivityState,
+    build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
     build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
     build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
@@ -2560,6 +2561,7 @@ fn auto_follow_submission_respects_startup_gate() {
             queued_from_turn_id: "turn-0".to_string(),
             template_label: "builtin next-task".to_string(),
             transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+            debug_detail: None,
             handoff_task: None,
         }),
     );
@@ -2575,6 +2577,140 @@ fn auto_follow_submission_respects_startup_gate() {
             .is_empty()
     );
     assert!(conversation.status_text.contains("auto follow-up paused"));
+}
+
+#[test]
+fn queue_auto_prompt_records_planner_debug_detail_when_debug_is_enabled() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.planner_visibility = PlannerVisibility::Debug;
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some("planning worker prompt body".to_string()),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.thread_id = "thread-123".to_string();
+    conversation.input_state = ConversationInputState::ReadyToContinue;
+
+    app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+        prompt: "continue working".to_string(),
+        queued_from_turn_id: "turn-0".to_string(),
+        template_label: "builtin next-task".to_string(),
+        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+        handoff_task: Some(PlanningTaskHandoff {
+            task_id: "task-1".to_string(),
+            task_title: "Implement transcript debug".to_string(),
+        }),
+    });
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    let message = conversation
+        .messages
+        .first()
+        .expect("auto follow-up message should be recorded");
+    let debug_detail = message
+        .debug_detail
+        .as_deref()
+        .expect("debug mode should attach transcript detail");
+    assert!(debug_detail.contains("planner temp session: refresh / refresh ok"));
+    assert!(debug_detail.contains("planner prompt:"));
+    assert!(debug_detail.contains("planning worker prompt body"));
+    assert!(debug_detail.contains("planner response:"));
+    assert!(debug_detail.contains("planner worker response body"));
+}
+
+#[test]
+fn queue_auto_prompt_omits_planner_debug_detail_outside_debug_mode() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some("planning worker prompt body".to_string()),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.thread_id = "thread-123".to_string();
+    conversation.input_state = ConversationInputState::ReadyToContinue;
+
+    app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+        prompt: "continue working".to_string(),
+        queued_from_turn_id: "turn-0".to_string(),
+        template_label: "builtin next-task".to_string(),
+        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+        handoff_task: Some(PlanningTaskHandoff {
+            task_id: "task-1".to_string(),
+            task_title: "Implement transcript debug".to_string(),
+        }),
+    });
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(
+        conversation
+            .messages
+            .first()
+            .expect("auto follow-up message should be recorded")
+            .debug_detail
+            .is_none()
+    );
+}
+
+#[test]
+fn shell_view_toggles_auto_follow_debug_detail_with_planner_visibility() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.messages.push(
+        ConversationMessage::new(
+            ConversationMessageKind::User,
+            "다음 queued task 1개를 이어서 진행합니다.",
+            None,
+            None,
+        )
+        .with_display_label("Auto Follow-up")
+        .with_debug_detail("planner temp session: refresh / refresh ok"),
+    );
+    conversation.refresh_conversation_lines();
+
+    let normal_rendered = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer)
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!normal_rendered.contains("planner temp session"));
+
+    app.planner_visibility = PlannerVisibility::Debug;
+    let debug_rendered = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer)
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(debug_rendered.contains("planner temp session: refresh / refresh ok"));
 }
 
 #[test]
