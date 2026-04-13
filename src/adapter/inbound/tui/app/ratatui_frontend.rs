@@ -18,7 +18,9 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::shell_frontend::ShellFrontend;
-use super::shell_presentation::{build_inline_tail_lines, build_startup_banner_lines};
+use super::shell_presentation::{
+    build_inline_tail_lines, build_startup_banner_lines, format_conversation_lines_with_debug,
+};
 use super::shell_rendering::{draw, prepare_render_state};
 use super::shell_runtime::ShellRuntime;
 use super::{
@@ -108,7 +110,13 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 
     match &app.conversation_state {
-        ConversationState::Ready(conversation) => conversation.cached_conversation_lines.clone(),
+        ConversationState::Ready(conversation) => {
+            if app.planner_shows_debug_details() {
+                format_conversation_lines_with_debug(&conversation.messages, true)
+            } else {
+                conversation.cached_conversation_lines.clone()
+            }
+        }
         ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),
     }
 }
@@ -298,7 +306,10 @@ mod tests {
     use ratatui::text::Line;
 
     use super::{InlineHistoryState, InlineViewportState, current_inline_history_lines};
-    use crate::adapter::inbound::tui::app::{MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp};
+    use crate::adapter::inbound::tui::app::{
+        ConversationMessage, ConversationMessageKind, ConversationState,
+        MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp, PlannerVisibility,
+    };
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
@@ -495,6 +506,40 @@ mod tests {
         assert!(rendered.contains(".::::::.::::::.::::::.::::::"));
         assert!(rendered.contains(".::       .::.::  .::   .::"));
         assert!(!rendered.contains("No messages in this thread yet."));
+    }
+
+    #[test]
+    fn inline_history_shows_planner_debug_detail_when_visibility_is_debug() {
+        let mut app = make_test_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.messages.push(
+            ConversationMessage::new(
+                ConversationMessageKind::User,
+                "다음 queued task 1개를 이어서 진행합니다.",
+                None,
+                None,
+            )
+            .with_display_label("Auto Follow-up")
+            .with_debug_detail("planner temp session: refresh / refresh ok"),
+        );
+        conversation.refresh_conversation_lines();
+
+        let normal_lines = current_inline_history_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!normal_lines.contains("planner temp session"));
+
+        app.planner_visibility = PlannerVisibility::Debug;
+        let debug_lines = current_inline_history_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
     }
 
     struct FakeCodexAppServerPort;

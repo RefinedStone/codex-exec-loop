@@ -2607,10 +2607,7 @@ fn queue_auto_prompt_records_planner_debug_detail_when_debug_is_enabled() {
         queued_from_turn_id: "turn-0".to_string(),
         template_label: "builtin next-task".to_string(),
         transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
-        handoff_task: Some(PlanningTaskHandoff {
-            task_id: "task-1".to_string(),
-            task_title: "Implement transcript debug".to_string(),
-        }),
+        handoff_task: None,
     });
 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
@@ -2629,6 +2626,50 @@ fn queue_auto_prompt_records_planner_debug_detail_when_debug_is_enabled() {
     assert!(debug_detail.contains("planning worker prompt body"));
     assert!(debug_detail.contains("planner response:"));
     assert!(debug_detail.contains("planner worker response body"));
+}
+
+#[test]
+fn queue_auto_prompt_omits_planner_debug_detail_for_non_builtin_transcript() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.planner_visibility = PlannerVisibility::Debug;
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some("planning worker prompt body".to_string()),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.thread_id = "thread-123".to_string();
+    conversation.input_state = ConversationInputState::ReadyToContinue;
+
+    app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+        prompt: "continue working".to_string(),
+        queued_from_turn_id: "turn-0".to_string(),
+        template_label: "workspace custom-review".to_string(),
+        transcript_text: "workspace custom review를 이어서 진행합니다.".to_string(),
+        handoff_task: None,
+    });
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(
+        conversation
+            .messages
+            .first()
+            .expect("auto follow-up message should be recorded")
+            .debug_detail
+            .is_none()
+    );
 }
 
 #[test]
@@ -2658,10 +2699,7 @@ fn queue_auto_prompt_omits_planner_debug_detail_outside_debug_mode() {
         queued_from_turn_id: "turn-0".to_string(),
         template_label: "builtin next-task".to_string(),
         transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
-        handoff_task: Some(PlanningTaskHandoff {
-            task_id: "task-1".to_string(),
-            task_title: "Implement transcript debug".to_string(),
-        }),
+        handoff_task: None,
     });
 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
@@ -2675,6 +2713,62 @@ fn queue_auto_prompt_omits_planner_debug_detail_outside_debug_mode() {
             .debug_detail
             .is_none()
     );
+}
+
+#[test]
+fn queue_auto_prompt_truncates_large_planner_debug_detail_blocks() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.planner_visibility = PlannerVisibility::Debug;
+    let long_prompt = (0..40)
+        .map(|index| format!("prompt line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let long_response = (0..40)
+        .map(|index| format!("response line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: None,
+        last_notice_detail: None,
+        last_prompt: Some(long_prompt),
+        last_response: Some(long_response),
+        last_host_detail: None,
+    };
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.thread_id = "thread-123".to_string();
+    conversation.input_state = ConversationInputState::ReadyToContinue;
+
+    app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+        prompt: "continue working".to_string(),
+        queued_from_turn_id: "turn-0".to_string(),
+        template_label: "builtin next-task".to_string(),
+        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+        handoff_task: None,
+    });
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    let debug_detail = conversation
+        .messages
+        .first()
+        .expect("auto follow-up message should be recorded")
+        .debug_detail
+        .as_deref()
+        .expect("debug mode should attach transcript detail");
+    assert!(debug_detail.contains("prompt line 31"));
+    assert!(!debug_detail.contains("prompt line 39"));
+    assert!(debug_detail.contains("response line 31"));
+    assert!(!debug_detail.contains("response line 39"));
+    assert!(debug_detail.contains("... truncated after 32 lines"));
 }
 
 #[test]
