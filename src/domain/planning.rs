@@ -6,6 +6,10 @@ pub const TASK_LEDGER_FILE_PATH: &str = ".codex-exec-loop/planning/task-ledger.j
 pub const TASK_LEDGER_SCHEMA_FILE_PATH: &str = ".codex-exec-loop/planning/task-ledger.schema.json";
 pub const QUEUE_SNAPSHOT_FILE_PATH: &str = ".codex-exec-loop/planning/queue.snapshot.json";
 pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+pub const PLANNING_DIRECTION_DOCS_DIRECTORY: &str = ".codex-exec-loop/planning/directions";
+pub const PLANNING_PROMPTS_DIRECTORY: &str = ".codex-exec-loop/planning/prompts";
+pub const DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH: &str =
+    ".codex-exec-loop/planning/prompts/queue-idle-review.md";
 pub const PLANNING_DRAFTS_DIRECTORY: &str = ".codex-exec-loop/planning/drafts";
 pub const PLANNING_REJECTED_DIRECTORY: &str = ".codex-exec-loop/planning/rejected";
 pub const ACTIVE_PLANNING_FILE_PATHS: [&str; 5] = [
@@ -119,6 +123,8 @@ impl PlanningValidationReport {
 #[serde(deny_unknown_fields)]
 pub struct DirectionCatalogDocument {
     pub version: u32,
+    #[serde(default)]
+    pub queue_idle: QueueIdleConfig,
     pub directions: Vec<DirectionDefinition>,
 }
 
@@ -131,7 +137,35 @@ pub struct DirectionDefinition {
     pub success_criteria: Vec<String>,
     #[serde(default)]
     pub scope_hints: Vec<String>,
+    #[serde(default)]
+    pub detail_doc_path: String,
     pub state: DirectionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueueIdleConfig {
+    #[serde(default)]
+    pub policy: QueueIdlePolicy,
+    #[serde(default)]
+    pub prompt_path: String,
+}
+
+impl Default for QueueIdleConfig {
+    fn default() -> Self {
+        Self {
+            policy: QueueIdlePolicy::Stop,
+            prompt_path: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueIdlePolicy {
+    #[default]
+    Stop,
+    ReviewAndEnqueue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +266,15 @@ impl DirectionState {
     }
 }
 
+impl QueueIdlePolicy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::ReviewAndEnqueue => "review_and_enqueue",
+        }
+    }
+}
+
 impl TaskStatus {
     pub fn queue_readiness_rank(self) -> Option<u8> {
         match self {
@@ -317,6 +360,13 @@ pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
                 .strip_suffix(candidate)
                 .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('/'))
         })
+}
+
+pub fn default_direction_detail_doc_path(direction_id: &str) -> String {
+    format!(
+        "{PLANNING_DIRECTION_DOCS_DIRECTORY}/{}.md",
+        direction_id.trim()
+    )
 }
 
 #[cfg(test)]

@@ -32,7 +32,8 @@ Templates can render:
 - builtin `next-task` requires planning state:
   - uninitialized: blocked because there is no actionable queue context
   - ready with task: runs against the current queue head
-  - ready with no task: queues a planning-refresh prompt from the latest answer instead of hard-blocking
+  - ready with no task + `queue_idle.policy = stop`: stops automation explicitly
+  - ready with no task + `queue_idle.policy = review_and_enqueue`: runs a hidden queue-manager review before deciding whether another turn should be queued
 
 ## Operator Controls
 

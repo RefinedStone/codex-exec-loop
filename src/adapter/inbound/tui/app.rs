@@ -65,6 +65,8 @@ mod conversation_lifecycle;
 mod conversation_model;
 #[path = "app/conversation_runtime.rs"]
 mod conversation_runtime;
+#[path = "app/directions_maintenance_ui.rs"]
+mod directions_maintenance_ui;
 #[path = "app/followup_controls.rs"]
 mod followup_controls;
 #[path = "app/followup_overlay_ui.rs"]
@@ -126,6 +128,9 @@ pub(super) use conversation_model::{
 pub(super) use conversation_model::{RecordedAutoFollowupActivity, TurnActivityState};
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
+};
+use directions_maintenance_ui::{
+    DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
 };
 use followup_controls::{FollowupControlEffect, FollowupControlEvent, reduce_followup_controls};
 use followup_overlay_ui::{
@@ -306,6 +311,7 @@ struct NativeTuiApp {
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
     followup_overlay_ui_state: FollowupOverlayUiState,
+    directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
     active_session: Option<SessionSummary>,

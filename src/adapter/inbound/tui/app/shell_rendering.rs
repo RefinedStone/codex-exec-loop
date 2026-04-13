@@ -8,8 +8,9 @@ use super::shell_presentation::{
     build_input_prompt_cursor_offset,
 };
 use super::shell_presentation::{
-    FollowupTemplateOverlayView, OverlayListView, PlanningDraftEditorOverlayView,
-    PlanningInitOverlayView, QueueOverlayView, SessionOverlayView, StartupOverlayView,
+    DirectionsMaintenanceOverlayView, FollowupTemplateOverlayView, OverlayListView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, build_directions_maintenance_overlay_view,
     build_followup_template_overlay_view, build_inline_prompt_cursor_offset,
     build_inline_tail_lines, build_planning_draft_editor_overlay_view,
     build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
@@ -21,9 +22,12 @@ const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
 
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
     let _ = mode;
-    if app.shell_overlay != ShellOverlay::PlanningInit
-        || app.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::ManualEditor
-    {
+    let directions_editor_open = app.shell_overlay == ShellOverlay::DirectionsMaintenance
+        && app.directions_maintenance_overlay_ui_state.step()
+            == DirectionsMaintenanceOverlayStep::ManualEditor;
+    let planning_editor_open = app.shell_overlay == ShellOverlay::PlanningInit
+        && app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor;
+    if !directions_editor_open && !planning_editor_open {
         return;
     }
 
@@ -330,6 +334,9 @@ fn draw_inline_shell_inspection(
         ShellOverlay::Startup => draw_inline_startup_inspection(frame, inspection_area, app),
         ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
+        ShellOverlay::DirectionsMaintenance => {
+            draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
+        }
         ShellOverlay::FollowupTemplates => {
             draw_inline_followup_template_inspection(frame, inspection_area, app)
         }
@@ -337,6 +344,51 @@ fn draw_inline_shell_inspection(
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
     }
+}
+
+fn draw_inline_directions_maintenance_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+) {
+    if app.directions_maintenance_overlay_ui_state.step()
+        == DirectionsMaintenanceOverlayStep::ManualEditor
+    {
+        draw_inline_directions_draft_editor_inspection(frame, area, app);
+        return;
+    }
+
+    let overlay_view = build_directions_maintenance_overlay_view(app);
+    let DirectionsMaintenanceOverlayView {
+        header_lines,
+        summary_lines,
+        option_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 5)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&status_lines, 5)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Directions / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
@@ -614,6 +666,60 @@ fn draw_inline_planning_draft_editor_inspection(
         frame,
         layout[0],
         Line::from("Planning Draft / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
+    render_inline_scrolled_section(
+        frame,
+        layout[2],
+        Line::from(editor_title),
+        editor_lines,
+        editor_scroll,
+    );
+    let editor_content_area = split_inline_section(layout[2])[1];
+    set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
+    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_directions_draft_editor_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+) {
+    let editor_height = area.height.saturating_sub(14).max(6);
+    let editor_content_height = editor_height.saturating_sub(1).max(1);
+    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_content_height)
+    else {
+        return;
+    };
+    let PlanningDraftEditorOverlayView {
+        header_lines,
+        file_lines,
+        editor_title,
+        editor_lines,
+        editor_scroll,
+        editor_cursor_offset,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&file_lines, 5)),
+            Constraint::Min(editor_height),
+            Constraint::Length(inline_section_height(&status_lines, 6)),
+            Constraint::Length(inline_section_height(&key_lines, 5)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Directions Draft / inline inspection"),
         body_lines,
         true,
     );

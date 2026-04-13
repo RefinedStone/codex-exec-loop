@@ -295,7 +295,11 @@ impl PlanningRuntimePolicyService {
                 if let Some(queue_summary) = summary.queue_summary.as_deref() {
                     segments.push(format!(
                         "queue: {}",
-                        compact_projection_detail(queue_summary, request.max_detail_len)
+                        compact_queue_summary(
+                            request.snapshot,
+                            queue_summary,
+                            request.max_detail_len
+                        )
                     ));
                 }
                 if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
@@ -315,7 +319,11 @@ impl PlanningRuntimePolicyService {
                 if let Some(queue_summary) = summary.queue_summary.as_deref() {
                     segments.push(format!(
                         "queue: {}",
-                        compact_projection_detail(queue_summary, request.max_detail_len)
+                        compact_queue_summary(
+                            request.snapshot,
+                            queue_summary,
+                            request.max_detail_len
+                        )
                     ));
                 }
                 if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
@@ -366,7 +374,7 @@ impl PlanningRuntimePolicyService {
                 };
                 format!(
                     "{queue_label}: {}",
-                    compact_projection_detail(queue_summary, request.max_detail_len)
+                    compact_queue_summary(request.snapshot, queue_summary, request.max_detail_len)
                 )
             }),
             proposal_line: summary.proposal_summary.as_deref().map(|proposal_summary| {
@@ -383,6 +391,21 @@ impl PlanningRuntimePolicyService {
             }),
         }
     }
+}
+
+fn compact_queue_summary(
+    snapshot: &PlanningRuntimeSnapshot,
+    queue_summary: &str,
+    max_detail_len: usize,
+) -> String {
+    let mut detail = compact_projection_detail(queue_summary, max_detail_len);
+    if snapshot.queue_head().is_none() {
+        detail.push_str(&format!(
+            " / policy {}",
+            snapshot.queue_idle_policy().label()
+        ));
+    }
+    detail
 }
 
 fn workspace_status_label(state: PlanningWorkspaceState) -> &'static str {

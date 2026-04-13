@@ -5,8 +5,10 @@ use jsonschema::Validator;
 use serde_json::Value;
 
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningFileKind, PlanningValidationReport,
-    PlanningValidationResult, PlanningWorkspaceFiles, TaskActor, TaskLedgerDocument, TaskStatus,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DirectionCatalogDocument,
+    PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_FORMAT_VERSION, PLANNING_PROMPTS_DIRECTORY,
+    PlanningFileKind, PlanningValidationReport, PlanningValidationResult, PlanningWorkspaceFiles,
+    QueueIdlePolicy, TaskActor, TaskLedgerDocument, TaskStatus,
 };
 
 #[derive(Default, Clone)]
@@ -186,6 +188,82 @@ impl PlanningValidationService {
                     ),
                 );
             }
+        }
+    }
+
+    pub fn validate_direction_supporting_files<F>(
+        &self,
+        direction_catalog: &DirectionCatalogDocument,
+        mut has_file: F,
+        report: &mut PlanningValidationReport,
+    ) where
+        F: FnMut(&str) -> bool,
+    {
+        for direction in &direction_catalog.directions {
+            let direction_id = direction.id.trim();
+            let detail_doc_path = direction.detail_doc_path.trim();
+            if detail_doc_path.is_empty() {
+                continue;
+            }
+
+            if !is_valid_planning_markdown_path(detail_doc_path, PLANNING_DIRECTION_DOCS_DIRECTORY)
+            {
+                report.push_error(
+                    PlanningFileKind::Directions,
+                    "invalid_detail_doc_path",
+                    format!(
+                        "direction {direction_id} detail_doc_path must point to a markdown file under {PLANNING_DIRECTION_DOCS_DIRECTORY}"
+                    ),
+                );
+                continue;
+            }
+
+            if !has_file(detail_doc_path) {
+                report.push_error(
+                    PlanningFileKind::Directions,
+                    "missing_detail_doc_file",
+                    format!(
+                        "direction {direction_id} detail_doc_path does not exist: {detail_doc_path}"
+                    ),
+                );
+            }
+        }
+
+        let prompt_path = direction_catalog.queue_idle.prompt_path.trim();
+        if direction_catalog.queue_idle.policy == QueueIdlePolicy::ReviewAndEnqueue
+            && prompt_path.is_empty()
+        {
+            report.push_error(
+                PlanningFileKind::Directions,
+                "missing_queue_idle_prompt_path",
+                format!(
+                    "queue_idle.policy=review_and_enqueue requires queue_idle.prompt_path; default path: {DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}"
+                ),
+            );
+            return;
+        }
+
+        if prompt_path.is_empty() {
+            return;
+        }
+
+        if !is_valid_planning_markdown_path(prompt_path, PLANNING_PROMPTS_DIRECTORY) {
+            report.push_error(
+                PlanningFileKind::Directions,
+                "invalid_queue_idle_prompt_path",
+                format!(
+                    "queue_idle.prompt_path must point to a markdown file under {PLANNING_PROMPTS_DIRECTORY}"
+                ),
+            );
+            return;
+        }
+
+        if !has_file(prompt_path) {
+            report.push_error(
+                PlanningFileKind::Directions,
+                "missing_queue_idle_prompt_file",
+                format!("queue_idle.prompt_path does not exist: {prompt_path}"),
+            );
         }
     }
 
@@ -706,6 +784,19 @@ impl PlanningValidationService {
             }
         }
     }
+}
+
+fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
+    let normalized = path.trim().replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains("../")
+        || normalized.contains("/..")
+    {
+        return false;
+    }
+
+    normalized.starts_with(required_prefix) && normalized.ends_with(".md")
 }
 
 fn display_json_location(path: String) -> String {

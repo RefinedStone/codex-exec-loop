@@ -9,9 +9,9 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspacePort,
 };
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY, PlanningFileKind,
-    QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
+    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY,
+    PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 #[derive(Default)]
@@ -57,26 +57,50 @@ impl FilesystemPlanningWorkspaceAdapter {
         draft_name: &str,
         active_path: &str,
     ) -> Result<PathBuf> {
-        let active_relative_path = Path::new(active_path);
-        let file_name = active_relative_path
-            .file_name()
-            .with_context(|| format!("planning draft file has no file name: {active_path}"))?;
-        Ok(Self::draft_directory(workspace_dir, draft_name).join(file_name))
+        let normalized = active_path.replace('\\', "/");
+        let normalized = normalized.trim_start_matches("./");
+        let relative_path = normalized
+            .strip_prefix(".codex-exec-loop/planning/")
+            .unwrap_or(normalized);
+        let relative_path = Path::new(relative_path);
+        if relative_path.as_os_str().is_empty() {
+            anyhow::bail!("planning draft file has no relative path: {active_path}");
+        }
+        Ok(Self::draft_directory(workspace_dir, draft_name).join(relative_path))
     }
 
-    fn read_draft_file(
-        workspace_dir: &str,
-        draft_name: &str,
-        active_path: &str,
-    ) -> Result<PlanningDraftLoadFileRecord> {
-        let staged_path = Self::staged_draft_file_path(workspace_dir, draft_name, active_path)?;
-        let body = fs::read_to_string(&staged_path)
-            .with_context(|| format!("failed to read {}", staged_path.display()))?;
-        Ok(PlanningDraftLoadFileRecord {
-            active_path: active_path.to_string(),
-            staged_path: staged_path.display().to_string(),
-            body,
-        })
+    fn read_all_draft_files(
+        directory: &Path,
+        root_directory: &Path,
+        records: &mut Vec<PlanningDraftLoadFileRecord>,
+    ) -> Result<()> {
+        for entry in fs::read_dir(directory)
+            .with_context(|| format!("failed to read {}", directory.display()))?
+        {
+            let entry =
+                entry.with_context(|| format!("failed to inspect {}", directory.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                Self::read_all_draft_files(&path, root_directory, records)?;
+                continue;
+            }
+
+            let relative_path = path
+                .strip_prefix(root_directory)
+                .with_context(|| format!("failed to strip {}", root_directory.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let active_path = format!(".codex-exec-loop/planning/{relative_path}");
+            let body = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            records.push(PlanningDraftLoadFileRecord {
+                active_path,
+                staged_path: path.display().to_string(),
+                body,
+            });
+        }
+
+        Ok(())
     }
 
     fn ensure_parent_directory(path: &Path) -> Result<()> {
@@ -84,6 +108,14 @@ impl FilesystemPlanningWorkspaceAdapter {
             return Ok(());
         };
         fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))
+    }
+
+    fn draft_sort_order(active_path: &str) -> (usize, &str) {
+        let order = ACTIVE_PLANNING_FILE_PATHS
+            .iter()
+            .position(|candidate| *candidate == active_path)
+            .unwrap_or(ACTIVE_PLANNING_FILE_PATHS.len());
+        (order, active_path)
     }
 }
 
@@ -101,14 +133,9 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         let staged_files = files
             .iter()
             .map(|file| {
-                let active_relative_path = Path::new(file.active_path.as_str());
-                let file_name = active_relative_path
-                    .file_name()
-                    .with_context(|| {
-                        format!("planning draft file has no file name: {}", file.active_path)
-                    })?
-                    .to_owned();
-                let staged_path = draft_directory.join(file_name);
+                let staged_path =
+                    Self::staged_draft_file_path(workspace_dir, draft_name, &file.active_path)?;
+                Self::ensure_parent_directory(&staged_path)?;
                 fs::write(&staged_path, &file.body)
                     .with_context(|| format!("failed to write {}", staged_path.display()))?;
 
@@ -132,15 +159,12 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         draft_name: &str,
     ) -> Result<PlanningDraftLoadRecord> {
         let draft_directory = Self::draft_directory(workspace_dir, draft_name);
-        let staged_files = [
-            PlanningFileKind::Directions.path(),
-            PlanningFileKind::TaskLedger.path(),
-            PlanningFileKind::TaskLedgerSchema.path(),
-            PlanningFileKind::ResultOutput.path(),
-        ]
-        .into_iter()
-        .map(|active_path| Self::read_draft_file(workspace_dir, draft_name, active_path))
-        .collect::<Result<Vec<_>>>()?;
+        let mut staged_files = Vec::new();
+        Self::read_all_draft_files(&draft_directory, &draft_directory, &mut staged_files)?;
+        staged_files.sort_by(|left, right| {
+            Self::draft_sort_order(&left.active_path)
+                .cmp(&Self::draft_sort_order(&right.active_path))
+        });
 
         Ok(PlanningDraftLoadRecord {
             draft_name: draft_name.to_string(),
@@ -189,6 +213,14 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
                 RESULT_OUTPUT_FILE_PATH,
             )?,
         })
+    }
+
+    fn load_optional_planning_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>> {
+        Self::read_optional_workspace_file(workspace_dir, relative_path)
     }
 
     fn replace_planning_workspace_file(

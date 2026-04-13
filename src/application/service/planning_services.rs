@@ -5,6 +5,7 @@ use crate::application::port::outbound::planning_worker_port::{
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+use crate::application::service::planning_directions_service::PlanningDirectionsService;
 use crate::application::service::planning_init_service::PlanningInitService;
 use crate::application::service::planning_prompt_service::PlanningPromptService;
 use crate::application::service::planning_proposal_promotion_service::PlanningProposalPromotionService;
@@ -18,6 +19,7 @@ use crate::application::service::turn_prompt_assembly_service::TurnPromptAssembl
 
 #[derive(Clone)]
 pub struct PlanningServices {
+    pub directions_service: PlanningDirectionsService,
     pub init_service: PlanningInitService,
     pub proposal_promotion: PlanningProposalPromotionService,
     pub runtime_facade: PlanningRuntimeFacadeService,
@@ -34,6 +36,10 @@ impl PlanningServices {
         let init_service = PlanningInitService::new(
             planning_workspace_port.clone(),
             PlanningBootstrapService::new(),
+            validation_service.clone(),
+        );
+        let directions_service = PlanningDirectionsService::new(
+            planning_workspace_port.clone(),
             validation_service.clone(),
         );
         let planning_prompt_service = PlanningPromptService::new(
@@ -61,6 +67,7 @@ impl PlanningServices {
         );
 
         Self {
+            directions_service,
             init_service,
             proposal_promotion,
             worker_orchestration: PlanningWorkerOrchestrationService::new(

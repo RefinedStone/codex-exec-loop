@@ -439,13 +439,14 @@ mod tests {
 
     use super::{PriorityQueueBuildError, PriorityQueueService};
     use crate::domain::planning::{
-        DirectionCatalogDocument, DirectionDefinition, DirectionState, TaskActor, TaskDefinition,
-        TaskLedgerDocument, TaskStatus,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig, TaskActor,
+        TaskDefinition, TaskLedgerDocument, TaskStatus,
     };
 
     fn directions(states: &[(&str, DirectionState)]) -> DirectionCatalogDocument {
         DirectionCatalogDocument {
             version: 1,
+            queue_idle: QueueIdleConfig::default(),
             directions: states
                 .iter()
                 .map(|(id, state)| DirectionDefinition {
@@ -454,6 +455,7 @@ mod tests {
                     summary: format!("{id} summary"),
                     success_criteria: vec![format!("{id} done")],
                     scope_hints: vec![format!("{id} hint")],
+                    detail_doc_path: String::new(),
                     state: *state,
                 })
                 .collect(),

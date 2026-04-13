@@ -8,8 +8,10 @@ use crate::application::service::planning_reconciliation_service::{
 };
 use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::planning_worker_orchestration_service::{
-    PlanningLedgerRepairRequest, PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
+    PlanningLedgerRepairRequest, PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
+    PlanningWorkerRunOutcome,
 };
+use crate::domain::planning::QueueIdlePolicy;
 
 #[cfg(not(test))]
 use super::super::app_runtime::BackgroundMessage;
@@ -318,11 +320,68 @@ impl PostTurnEvaluationExecutor {
             };
         };
 
+        let review_prompt_markdown = match current_snapshot.workspace_status() {
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask => None,
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
+                let review_context = match self
+                    .planning_services
+                    .directions_service
+                    .load_queue_idle_review_context(&request.workspace_directory)
+                {
+                    Ok(context) => context,
+                    Err(_) => {
+                        return BuiltinNextTaskRefreshOutcome {
+                            runtime_snapshot: current_snapshot,
+                        };
+                    }
+                };
+                match review_context.policy {
+                    QueueIdlePolicy::Stop => {
+                        return BuiltinNextTaskRefreshOutcome {
+                            runtime_snapshot: current_snapshot,
+                        };
+                    }
+                    QueueIdlePolicy::ReviewAndEnqueue => {
+                        let Some(prompt_markdown) = review_context.prompt_markdown else {
+                            return BuiltinNextTaskRefreshOutcome {
+                                runtime_snapshot: current_snapshot,
+                            };
+                        };
+                        Some(prompt_markdown)
+                    }
+                }
+            }
+            PlanningRuntimeWorkspaceStatus::Uninitialized
+            | PlanningRuntimeWorkspaceStatus::Invalid => {
+                return BuiltinNextTaskRefreshOutcome {
+                    runtime_snapshot: current_snapshot,
+                };
+            }
+        };
+        let mode = match current_snapshot.workspace_status() {
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
+                PlanningQueueRefreshMode::FromLatestReply
+            }
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
+                let prompt_markdown = review_prompt_markdown
+                    .as_deref()
+                    .expect("queue-idle review prompt should exist for review_and_enqueue");
+                PlanningQueueRefreshMode::ReviewDirectionsGoals {
+                    queue_idle_prompt_markdown: prompt_markdown,
+                }
+            }
+            PlanningRuntimeWorkspaceStatus::Uninitialized
+            | PlanningRuntimeWorkspaceStatus::Invalid => {
+                unreachable!("non-ready planning states return before queue refresh mode is built")
+            }
+        };
+
         let worker_request = PlanningQueueRefreshRequest {
             workspace_directory: &request.workspace_directory,
             root_turn_id: &request.queued_from_turn_id,
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
+            mode: mode.clone(),
         };
         let worker_prompt = self
             .planning_services
@@ -330,7 +389,10 @@ impl PostTurnEvaluationExecutor {
             .render_refresh_queue_prompt(&worker_request);
         self.record_planner_worker_running(
             PlannerWorkerStatus::RefreshRunning,
-            "refresh",
+            match mode {
+                PlanningQueueRefreshMode::FromLatestReply => "refresh",
+                PlanningQueueRefreshMode::ReviewDirectionsGoals { .. } => "review",
+            },
             worker_prompt,
         );
         let worker_outcome = self
@@ -341,7 +403,14 @@ impl PostTurnEvaluationExecutor {
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
             Err(error) => {
-                let detail = format!("planner refresh failed: {error}");
+                let detail = match mode {
+                    PlanningQueueRefreshMode::FromLatestReply => {
+                        format!("planner refresh failed: {error}")
+                    }
+                    PlanningQueueRefreshMode::ReviewDirectionsGoals { .. } => {
+                        format!("planner queue review failed: {error}")
+                    }
+                };
                 let invalid_snapshot =
                     PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
                 self.record_planner_worker_failure(
@@ -427,6 +496,19 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> ConversationPostTurnAction {
+        if conversation
+            .auto_follow_state
+            .selected_template()
+            .is_builtin_next_task()
+            && planning_runtime_snapshot.workspace_status()
+                == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
+        {
+            return ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::PlanningQueueIdlePolicyStop,
+            };
+        }
+
         match conversation.decide_auto_followup_with_snapshot(
             &self.planning_services.runtime_facade,
             planning_runtime_snapshot,
@@ -563,6 +645,13 @@ impl NativeTuiApp {
             .selected_template()
             .is_builtin_next_task()
         {
+            if conversation.planning_runtime_snapshot.workspace_status()
+                == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+                && conversation.planning_runtime_snapshot.queue_idle_policy()
+                    == QueueIdlePolicy::Stop
+            {
+                return;
+            }
             self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshRunning;
         } else if request
             .changed_planning_file_paths

@@ -3,6 +3,7 @@ pub(super) enum InlineShellCommand {
     Diagnostics,
     Sessions,
     Queue,
+    Directions,
     Stop,
     Templates,
     PlanningInit,
@@ -27,7 +28,7 @@ struct InlineShellCommandSpec {
     execution_status: Option<&'static str>,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :stop  :templates  :planning  :turns <n>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
@@ -54,6 +55,14 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to open the planning queue inspection.",
         execution_status: Some("opened planning queue inspection"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Directions,
+        primary_name: ":directions",
+        aliases: &[":directions"],
+        suggestion_detail: "directions maintenance",
+        buffered_hint: "Press Enter to review or edit planning directions.",
+        execution_status: None,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Stop,
@@ -286,6 +295,7 @@ mod tests {
                 InlineShellCommand::Diagnostics,
                 InlineShellCommand::Sessions,
                 InlineShellCommand::Queue,
+                InlineShellCommand::Directions,
                 InlineShellCommand::Stop,
                 InlineShellCommand::Templates,
                 InlineShellCommand::PlanningInit,

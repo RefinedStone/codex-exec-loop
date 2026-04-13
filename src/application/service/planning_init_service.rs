@@ -295,9 +295,8 @@ impl PlanningInitService {
             .iter()
             .map(|file| (file.active_path.as_str(), file.body.as_str()))
             .collect::<HashMap<_, _>>();
-
-        self.planning_validation_service
-            .validate_workspace_files(crate::domain::planning::PlanningWorkspaceFiles {
+        let mut result = self.planning_validation_service.validate_workspace_files(
+            crate::domain::planning::PlanningWorkspaceFiles {
                 directions_toml: staged_file_map
                     .get(DIRECTIONS_FILE_PATH)
                     .copied()
@@ -314,8 +313,18 @@ impl PlanningInitService {
                     .get(RESULT_OUTPUT_FILE_PATH)
                     .copied()
                     .unwrap_or_default(),
-            })
-            .report
+            },
+        );
+        if let Some(directions) = result.directions.as_ref() {
+            self.planning_validation_service
+                .validate_direction_supporting_files(
+                    directions,
+                    |path| staged_file_map.contains_key(path),
+                    &mut result.report,
+                );
+        }
+
+        result.report
     }
 }
 
@@ -446,6 +455,19 @@ mod tests {
             _workspace_dir: &str,
         ) -> Result<PlanningWorkspaceLoadRecord> {
             Ok(PlanningWorkspaceLoadRecord::default())
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            Ok(self
+                .active_file_bodies
+                .lock()
+                .expect("active_file_bodies mutex should not be poisoned")
+                .get(relative_path)
+                .cloned())
         }
 
         fn replace_planning_workspace_file(

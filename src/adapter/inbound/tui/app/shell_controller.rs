@@ -118,6 +118,30 @@ impl NativeTuiApp {
         self.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
     }
 
+    pub(super) fn show_directions_maintenance_overlay(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning_services
+            .directions_service
+            .load_summary(&workspace_directory)
+        {
+            Ok(summary) => {
+                self.directions_maintenance_overlay_ui_state
+                    .open_summary(summary);
+                self.planning_draft_editor_ui_state.reset();
+                self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: "opened directions maintenance".to_string(),
+                });
+            }
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("directions maintenance unavailable: {error}"),
+                });
+            }
+        }
+    }
+
     pub(super) fn show_followup_template_overlay(&mut self) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown {
             stop_keyword: self.current_stop_keyword_value(),
@@ -151,9 +175,16 @@ impl NativeTuiApp {
     }
 
     pub(super) fn close_shell_overlay(&mut self) {
-        if self.shell_overlay == ShellOverlay::PlanningInit {
-            self.planning_init_overlay_ui_state.reset();
-            self.planning_draft_editor_ui_state.reset();
+        match self.shell_overlay {
+            ShellOverlay::DirectionsMaintenance => {
+                self.directions_maintenance_overlay_ui_state.reset();
+                self.planning_draft_editor_ui_state.reset();
+            }
+            ShellOverlay::PlanningInit => {
+                self.planning_init_overlay_ui_state.reset();
+                self.planning_draft_editor_ui_state.reset();
+            }
+            _ => {}
         }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
     }
@@ -170,6 +201,7 @@ impl NativeTuiApp {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Queue => self.show_queue_overlay(),
+            InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
             InlineShellCommand::PlanningInit => self.show_planning_init_overlay(),
@@ -206,6 +238,36 @@ impl NativeTuiApp {
                 .stage_manual_editor_session(&workspace_directory),
             "planning draft editor ready",
             PlanningInitModeSelection::Detail,
+        );
+    }
+
+    pub(super) fn open_directions_manual_editor(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        self.open_directions_editor_session(
+            self.planning_services
+                .directions_service
+                .stage_editor_session(&workspace_directory),
+            "directions editor ready",
+        );
+    }
+
+    pub(super) fn open_directions_detail_doc_editor(&mut self, direction_id: &str) {
+        let workspace_directory = self.planning_workspace_directory();
+        self.open_directions_editor_session(
+            self.planning_services
+                .directions_service
+                .stage_detail_doc_editor_session(&workspace_directory, direction_id),
+            "directions detail doc editor ready",
+        );
+    }
+
+    pub(super) fn open_queue_idle_prompt_editor(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        self.open_directions_editor_session(
+            self.planning_services
+                .directions_service
+                .stage_queue_idle_prompt_editor_session(&workspace_directory),
+            "queue-idle prompt editor ready",
         );
     }
 
@@ -246,6 +308,49 @@ impl NativeTuiApp {
                 )
             }
             Err(error) => format!("planning draft save failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    pub(super) fn save_directions_manual_editor(&mut self) {
+        let Some(draft_name) = self
+            .planning_draft_editor_ui_state
+            .draft_name()
+            .map(str::to_string)
+        else {
+            return;
+        };
+        self.planning_draft_editor_ui_state
+            .clear_close_confirmation();
+        let workspace_directory = self.planning_workspace_directory();
+        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
+        let status_text = match self.planning_services.init_service.save_draft_editor_files(
+            &workspace_directory,
+            &draft_name,
+            &editable_files,
+        ) {
+            Ok(result) => {
+                let validation_ok = result.validation_report.is_valid();
+                self.planning_draft_editor_ui_state
+                    .apply_save_result(result.validation_report.clone());
+                format!(
+                    "directions draft saved / draft: {} / validation: {} / next: {}",
+                    result.draft_name,
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    },
+                    if validation_ok {
+                        "press Ctrl+P to promote into active planning files"
+                    } else {
+                        "fix validation issues before promoting"
+                    },
+                )
+            }
+            Err(error) => format!("directions draft save failed: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -301,6 +406,55 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn promote_directions_manual_editor(&mut self) {
+        let Some(draft_name) = self
+            .planning_draft_editor_ui_state
+            .draft_name()
+            .map(str::to_string)
+        else {
+            return;
+        };
+        self.planning_draft_editor_ui_state
+            .clear_close_confirmation();
+        let workspace_directory = self.planning_workspace_directory();
+        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
+        let promote_result = self
+            .planning_services
+            .init_service
+            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        let status_text = match promote_result {
+            Ok(result) => {
+                let validation_ok = result.validation_report.is_valid();
+                self.planning_draft_editor_ui_state
+                    .apply_save_result(result.validation_report.clone());
+                if result.promoted_file_count == 0 {
+                    format!(
+                        "directions draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
+                        result.draft_name,
+                        if validation_ok {
+                            "ok"
+                        } else {
+                            "needs attention"
+                        }
+                    )
+                } else {
+                    self.close_shell_overlay();
+                    format!(
+                        "directions draft promoted / draft: {} / files: {} / planning context refreshed",
+                        result.draft_name, result.promoted_file_count
+                    )
+                }
+            }
+            Err(error) => format!("directions draft promote failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
     fn request_close_planning_manual_editor(&mut self) {
         match self.planning_draft_editor_ui_state.request_close() {
             PlanningDraftEditorCloseRequest::CloseImmediately => self.close_shell_overlay(),
@@ -315,6 +469,20 @@ impl NativeTuiApp {
         }
     }
 
+    fn request_close_directions_manual_editor(&mut self) {
+        match self.planning_draft_editor_ui_state.request_close() {
+            PlanningDraftEditorCloseRequest::CloseImmediately => self.close_shell_overlay(),
+            PlanningDraftEditorCloseRequest::ConfirmationRequired(risk) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: directions_manual_editor_close_warning_status(risk),
+                });
+            }
+            PlanningDraftEditorCloseRequest::Confirmed(risk) => {
+                self.close_directions_manual_editor_after_confirmation(risk);
+            }
+        }
+    }
+
     fn close_planning_manual_editor_after_confirmation(
         &mut self,
         risk: PlanningDraftEditorCloseRisk,
@@ -322,6 +490,16 @@ impl NativeTuiApp {
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: planning_manual_editor_closed_status(risk),
+        });
+    }
+
+    fn close_directions_manual_editor_after_confirmation(
+        &mut self,
+        risk: PlanningDraftEditorCloseRisk,
+    ) {
+        self.close_shell_overlay();
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: directions_manual_editor_closed_status(risk),
         });
     }
 
@@ -351,6 +529,43 @@ impl NativeTuiApp {
                     .clear_close_confirmation();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: "planning draft editor close canceled; keep editing".to_string(),
+                });
+                true
+            }
+            _ => {
+                self.planning_draft_editor_ui_state
+                    .clear_close_confirmation();
+                false
+            }
+        }
+    }
+
+    fn handle_directions_manual_editor_close_confirmation_key(
+        &mut self,
+        key: event::KeyEvent,
+    ) -> bool {
+        if !self
+            .planning_draft_editor_ui_state
+            .is_close_confirmation_pending()
+        {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => {
+                let Some(risk) = self.planning_draft_editor_ui_state.pending_close_risk() else {
+                    return false;
+                };
+                self.close_directions_manual_editor_after_confirmation(risk);
+                true
+            }
+            KeyCode::Char('n') | KeyCode::Char('N')
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.planning_draft_editor_ui_state
+                    .clear_close_confirmation();
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: "directions editor close canceled; keep editing".to_string(),
                 });
                 true
             }
@@ -829,10 +1044,16 @@ impl NativeTuiApp {
         if key.code == KeyCode::Esc
             || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'))
         {
+            let closing_directions_manual_editor = self.shell_overlay
+                == ShellOverlay::DirectionsMaintenance
+                && self.directions_maintenance_overlay_ui_state.step()
+                    == DirectionsMaintenanceOverlayStep::ManualEditor;
             let closing_planning_manual_editor = self.shell_overlay == ShellOverlay::PlanningInit
                 && self.planning_init_overlay_ui_state.step()
                     == PlanningInitOverlayStep::ManualEditor;
-            if closing_planning_manual_editor {
+            if closing_directions_manual_editor {
+                self.request_close_directions_manual_editor();
+            } else if closing_planning_manual_editor {
                 self.request_close_planning_manual_editor();
             } else {
                 self.close_shell_overlay();
@@ -897,6 +1118,177 @@ impl NativeTuiApp {
                     .scroll_followup_template_preview(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32),
                 KeyCode::Enter if key.modifiers.is_empty() => self.close_shell_overlay(),
                 _ => {}
+            }
+            return true;
+        }
+
+        if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
+            match self.directions_maintenance_overlay_ui_state.step() {
+                DirectionsMaintenanceOverlayStep::Overview => match key.code {
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        self.open_directions_manual_editor()
+                    }
+                    KeyCode::Char('d') if key.modifiers.is_empty() => {
+                        if self
+                            .directions_maintenance_overlay_ui_state
+                            .summary()
+                            .and_then(|summary| summary.parse_error.as_deref())
+                            .is_some()
+                        {
+                            self.dispatch_conversation_input(
+                                ConversationInputEvent::StatusMessageShown {
+                                    status_text:
+                                        "fix directions.toml parse errors before generating detail docs"
+                                            .to_string(),
+                                },
+                            );
+                        } else if self
+                            .directions_maintenance_overlay_ui_state
+                            .missing_detail_doc_directions()
+                            .is_empty()
+                        {
+                            self.dispatch_conversation_input(
+                                ConversationInputEvent::StatusMessageShown {
+                                    status_text: "every direction already has a detail doc path"
+                                        .to_string(),
+                                },
+                            );
+                        } else {
+                            self.directions_maintenance_overlay_ui_state
+                                .open_detail_doc_selection();
+                        }
+                    }
+                    KeyCode::Char('p') if key.modifiers.is_empty() => {
+                        if self
+                            .directions_maintenance_overlay_ui_state
+                            .summary()
+                            .and_then(|summary| summary.parse_error.as_deref())
+                            .is_some()
+                        {
+                            self.dispatch_conversation_input(
+                                ConversationInputEvent::StatusMessageShown {
+                                    status_text:
+                                        "fix directions.toml parse errors before editing queue-idle prompt"
+                                            .to_string(),
+                                },
+                            );
+                        } else {
+                            self.open_queue_idle_prompt_editor();
+                        }
+                    }
+                    KeyCode::Char('r') if key.modifiers.is_empty() => {
+                        self.show_directions_maintenance_overlay()
+                    }
+                    _ => {}
+                },
+                DirectionsMaintenanceOverlayStep::DetailDocSelection => match key.code {
+                    KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .return_to_overview(),
+                    KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .move_missing_detail_doc_selection(-1),
+                    KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .move_missing_detail_doc_selection(1),
+                    KeyCode::Enter if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .open_detail_doc_confirm(),
+                    _ => {}
+                },
+                DirectionsMaintenanceOverlayStep::DetailDocConfirm => match key.code {
+                    KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .open_detail_doc_selection(),
+                    KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .move_detail_doc_confirm_choice(-1),
+                    KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .move_detail_doc_confirm_choice(1),
+                    KeyCode::Char('1') if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .move_detail_doc_confirm_choice(-1),
+                    KeyCode::Char('2') if key.modifiers.is_empty() => self
+                        .directions_maintenance_overlay_ui_state
+                        .move_detail_doc_confirm_choice(1),
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        match self
+                            .directions_maintenance_overlay_ui_state
+                            .detail_doc_confirm_choice()
+                        {
+                            DetailDocConfirmChoice::Yes => {
+                                let direction_id = self
+                                    .directions_maintenance_overlay_ui_state
+                                    .pending_detail_doc_creation()
+                                    .map(|pending| pending.direction_id().to_string());
+                                if let Some(direction_id) = direction_id {
+                                    self.open_directions_detail_doc_editor(&direction_id);
+                                }
+                            }
+                            DetailDocConfirmChoice::No => {
+                                self.directions_maintenance_overlay_ui_state
+                                    .return_to_overview();
+                                self.dispatch_conversation_input(
+                                    ConversationInputEvent::StatusMessageShown {
+                                        status_text:
+                                            "detail doc creation skipped; directions remain unchanged"
+                                                .to_string(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                DirectionsMaintenanceOverlayStep::ManualEditor => {
+                    if self.handle_directions_manual_editor_close_confirmation_key(key) {
+                        return true;
+                    }
+
+                    match key.code {
+                        KeyCode::Tab if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.move_file_selection(1)
+                        }
+                        KeyCode::BackTab => {
+                            self.planning_draft_editor_ui_state.move_file_selection(-1)
+                        }
+                        KeyCode::Left if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.move_cursor_left()
+                        }
+                        KeyCode::Right if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.move_cursor_right()
+                        }
+                        KeyCode::Up if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.move_cursor_up()
+                        }
+                        KeyCode::Down if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.move_cursor_down()
+                        }
+                        KeyCode::Enter if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.insert_newline()
+                        }
+                        KeyCode::Backspace if key.modifiers.is_empty() => {
+                            self.planning_draft_editor_ui_state.backspace()
+                        }
+                        KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.planning_draft_editor_ui_state.delete_previous_word()
+                        }
+                        KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.save_directions_manual_editor()
+                        }
+                        KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.promote_directions_manual_editor()
+                        }
+                        KeyCode::Char(character)
+                            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                        {
+                            self.planning_draft_editor_ui_state
+                                .insert_character(character)
+                        }
+                        _ => {}
+                    }
+                }
             }
             return true;
         }
@@ -1091,6 +1483,35 @@ impl NativeTuiApp {
             status_text,
         });
     }
+
+    fn open_directions_editor_session(
+        &mut self,
+        session_result: PlanningEditorSessionResult,
+        ready_status_prefix: &str,
+    ) {
+        let status_text = match session_result {
+            Ok(session) => {
+                let validation_ok = session.validation_report.is_valid();
+                let status_text = format!(
+                    "{ready_status_prefix} / draft: {} / validation: {}",
+                    session.draft_name,
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                );
+                self.planning_draft_editor_ui_state.open_session(session);
+                self.directions_maintenance_overlay_ui_state
+                    .open_manual_editor();
+                status_text
+            }
+            Err(error) => format!("directions editor failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
 }
 
 fn planning_manual_editor_close_warning_status(risk: PlanningDraftEditorCloseRisk) -> String {
@@ -1116,5 +1537,31 @@ fn planning_manual_editor_closed_status(risk: PlanningDraftEditorCloseRisk) -> S
         }
         (false, true) => "planning draft editor closed; invalid staged draft remains in drafts for review".to_string(),
         (false, false) => "planning draft editor closed".to_string(),
+    }
+}
+
+fn directions_manual_editor_close_warning_status(risk: PlanningDraftEditorCloseRisk) -> String {
+    match (
+        risk.has_dirty_buffers(),
+        risk.has_invalid_staged_draft(),
+    ) {
+        (true, true) => "directions editor close pending; press Esc again or Enter to discard unsaved edits and leave the invalid staged draft for later review, or press n to keep editing".to_string(),
+        (true, false) => "directions editor close pending; press Esc again or Enter to discard unsaved edits, or press n to keep editing".to_string(),
+        (false, true) => "directions editor close pending; press Esc again or Enter to close and leave the invalid staged draft for later review, or press n to keep editing".to_string(),
+        (false, false) => "directions editor close pending".to_string(),
+    }
+}
+
+fn directions_manual_editor_closed_status(risk: PlanningDraftEditorCloseRisk) -> String {
+    match (
+        risk.has_dirty_buffers(),
+        risk.has_invalid_staged_draft(),
+    ) {
+        (true, true) => "directions editor closed; unsaved in-memory edits were discarded and the staged draft still needs validation".to_string(),
+        (true, false) => {
+            "directions editor closed; unsaved in-memory edits were discarded".to_string()
+        }
+        (false, true) => "directions editor closed; invalid staged draft remains in drafts for review".to_string(),
+        (false, false) => "directions editor closed".to_string(),
     }
 }

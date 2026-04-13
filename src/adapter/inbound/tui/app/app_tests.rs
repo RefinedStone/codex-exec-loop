@@ -64,7 +64,7 @@ use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
 };
-use crate::domain::planning::TASK_LEDGER_FILE_PATH;
+use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, TASK_LEDGER_FILE_PATH};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -319,6 +319,35 @@ fn bootstrap_active_planning_workspace(workspace_dir: &str) {
         promote_result.promoted_file_count > 0,
         "bootstrap planning workspace should become ready"
     );
+}
+
+fn enable_queue_idle_review_and_enqueue(workspace_dir: &str) {
+    let planning_dir = std::path::Path::new(workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    let directions_path = planning_dir.join("directions.toml");
+    let directions = std::fs::read_to_string(&directions_path)
+        .expect("directions.toml should exist before enabling queue-idle review");
+    let directions = directions
+        .replace(r#"policy = "stop""#, r#"policy = "review_and_enqueue""#)
+        .replace(
+            r#"prompt_path = """#,
+            &format!(r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#),
+        );
+    std::fs::write(&directions_path, directions).expect("updated directions.toml should write");
+
+    let prompt_path = std::path::Path::new(workspace_dir).join(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH);
+    std::fs::create_dir_all(
+        prompt_path
+            .parent()
+            .expect("queue-idle prompt path should have a parent"),
+    )
+    .expect("queue-idle prompt directory should be created");
+    std::fs::write(
+        prompt_path,
+        "# Queue Idle Review\n\n- Re-open the directions and enqueue only justified follow-up work.\n",
+    )
+    .expect("queue-idle prompt should write");
 }
 
 fn count_staged_planning_drafts(workspace_dir: &str) -> usize {
@@ -1229,6 +1258,7 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-proposal-followup-app");
     bootstrap_active_planning_workspace(&workspace_dir);
+    enable_queue_idle_review_and_enqueue(&workspace_dir);
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning");
@@ -1518,6 +1548,7 @@ fn builtin_next_task_refresh_passes_full_latest_agent_reply_to_hidden_planner_pr
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-refresh-full-latest-reply");
     bootstrap_active_planning_workspace(&workspace_dir);
+    enable_queue_idle_review_and_enqueue(&workspace_dir);
 
     codex_port
         .new_thread_stream_behavior
@@ -4345,11 +4376,17 @@ fn followup_template_preview_uses_placeholder_without_agent_reply() {
 fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready(
-        "Planning Context".to_string(),
-        "next_task: none".to_string(),
-        None,
-    ));
+    conversation.replace_planning_runtime_snapshot(
+        PlanningRuntimeSnapshot::ready(
+            "Planning Context".to_string(),
+            "next_task: none".to_string(),
+            None,
+        )
+        .with_queue_idle_policy(
+            crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue,
+            Some(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()),
+        ),
+    );
     app.conversation_state = ConversationState::Ready(conversation);
 
     let rendered = build_followup_template_preview_lines(&app)
@@ -4360,9 +4397,9 @@ fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
 
     assert!(rendered.contains("planning: ready"));
     assert!(rendered.contains("planning detail: next_task: none"));
-    assert!(
-        rendered.contains("Planner worker refreshes the queue after the current turn completes.")
-    );
+    assert!(rendered.contains(
+        "A queue-manager planning worker reviews the direction goals after the current turn"
+    ));
 }
 
 #[test]

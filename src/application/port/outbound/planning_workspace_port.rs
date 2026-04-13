@@ -79,6 +79,12 @@ pub trait PlanningWorkspacePort: Send + Sync {
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord>;
 
+    fn load_optional_planning_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>>;
+
     fn replace_planning_workspace_file(
         &self,
         workspace_dir: &str,

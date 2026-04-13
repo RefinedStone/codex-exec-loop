@@ -7,6 +7,7 @@ pub enum ShellOverlay {
     Startup,
     Sessions,
     Queue,
+    DirectionsMaintenance,
     FollowupTemplates,
     PlanningInit,
 }
@@ -77,6 +78,7 @@ pub enum ShellChromeEvent {
         limit: usize,
     },
     QueueOverlayShown,
+    DirectionsMaintenanceOverlayShown,
     FollowupTemplatesOverlayShown,
     PlanningInitOverlayShown,
     StartupOverlayToggled,
@@ -160,6 +162,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::QueueOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Queue;
+        }
+        ShellChromeEvent::DirectionsMaintenanceOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::DirectionsMaintenance;
         }
         ShellChromeEvent::FollowupTemplatesOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;

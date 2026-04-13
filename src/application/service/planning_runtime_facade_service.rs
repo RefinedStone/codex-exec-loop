@@ -147,7 +147,14 @@ impl PlanningRuntimeFacadeService {
         self.build_builtin_next_task_handoff(snapshot)
             .map(|handoff| handoff.prompt)
             .unwrap_or_else(|| {
-                "Planner worker refreshes the queue after the current turn completes. The main session will receive a natural-language next-task prompt once the accepted queue head exists.".to_string()
+                match snapshot.queue_idle_policy() {
+                    crate::domain::planning::QueueIdlePolicy::Stop => {
+                        "The current planning queue has no actionable head and queue-idle policy is stop, so post-turn automation will end after the current turn.".to_string()
+                    }
+                    crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue => {
+                        "A queue-manager planning worker reviews the direction goals after the current turn and re-enqueues follow-up work only when a justified actionable task exists.".to_string()
+                    }
+                }
             })
     }
 
@@ -436,6 +443,31 @@ mod tests {
             }
         }
 
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            let Some(record) = self.load_record.as_ref() else {
+                return Ok(None);
+            };
+            let body = match relative_path {
+                crate::domain::planning::DIRECTIONS_FILE_PATH => record.directions_toml.clone(),
+                crate::domain::planning::TASK_LEDGER_FILE_PATH => record.task_ledger_json.clone(),
+                crate::domain::planning::TASK_LEDGER_SCHEMA_FILE_PATH => {
+                    record.task_ledger_schema_json.clone()
+                }
+                crate::domain::planning::QUEUE_SNAPSHOT_FILE_PATH => {
+                    record.queue_snapshot_json.clone()
+                }
+                crate::domain::planning::RESULT_OUTPUT_FILE_PATH => {
+                    record.result_output_markdown.clone()
+                }
+                _ => None,
+            };
+            Ok(body)
+        }
+
         fn replace_planning_workspace_file(
             &self,
             _workspace_dir: &str,
@@ -660,6 +692,10 @@ mod tests {
                 "Planning Context".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 None,
+            )
+            .with_queue_idle_policy(
+                crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue,
+                Some(crate::domain::planning::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()),
             );
 
         let preview = service.build_auto_follow_preview(PlanningRuntimePreviewRequest {
@@ -672,11 +708,9 @@ mod tests {
             snapshot: &snapshot,
         });
 
-        assert!(
-            preview
-                .rendered_prompt
-                .contains("Planner worker refreshes the queue after the current turn completes.")
-        );
+        assert!(preview.rendered_prompt.contains(
+            "A queue-manager planning worker reviews the direction goals after the current turn"
+        ));
         assert_eq!(preview.planning_status_line, "planning: ready");
         assert_eq!(
             preview.planning_detail_line.as_deref(),

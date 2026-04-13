@@ -7,8 +7,8 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::domain::planning::{
     DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles,
-    PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH, QueueIdlePolicy,
+    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -40,6 +40,8 @@ pub struct PlanningRuntimeSnapshot {
     prompt_fragment: Option<String>,
     queue_summary: Option<String>,
     proposal_summary: Option<String>,
+    queue_idle_policy: QueueIdlePolicy,
+    queue_idle_prompt_path: Option<String>,
     queue_head: Option<PriorityQueueTask>,
     queue_snapshot: Option<PriorityQueueSnapshot>,
     failure_reason: Option<String>,
@@ -53,6 +55,8 @@ impl PlanningRuntimeSnapshot {
             prompt_fragment: None,
             queue_summary: None,
             proposal_summary: None,
+            queue_idle_policy: QueueIdlePolicy::Stop,
+            queue_idle_prompt_path: None,
             queue_head: None,
             queue_snapshot: None,
             failure_reason: None,
@@ -66,6 +70,8 @@ impl PlanningRuntimeSnapshot {
             prompt_fragment: None,
             queue_summary: None,
             proposal_summary: None,
+            queue_idle_policy: QueueIdlePolicy::Stop,
+            queue_idle_prompt_path: None,
             queue_head: None,
             queue_snapshot: None,
             failure_reason: Some(reason.into()),
@@ -96,6 +102,8 @@ impl PlanningRuntimeSnapshot {
             prompt_fragment: Some(prompt_fragment),
             queue_summary: Some(queue_summary),
             proposal_summary,
+            queue_idle_policy: QueueIdlePolicy::Stop,
+            queue_idle_prompt_path: None,
             queue_head,
             queue_snapshot: None,
             failure_reason: None,
@@ -119,11 +127,23 @@ impl PlanningRuntimeSnapshot {
             prompt_fragment: Some(prompt_fragment),
             queue_summary: Some(queue_summary),
             proposal_summary,
+            queue_idle_policy: QueueIdlePolicy::Stop,
+            queue_idle_prompt_path: None,
             queue_head,
             queue_snapshot: Some(queue_snapshot),
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
+    }
+
+    pub fn with_queue_idle_policy(
+        mut self,
+        policy: QueueIdlePolicy,
+        prompt_path: Option<String>,
+    ) -> Self {
+        self.queue_idle_policy = policy;
+        self.queue_idle_prompt_path = prompt_path;
+        self
     }
 
     pub fn workspace_status(&self) -> PlanningRuntimeWorkspaceStatus {
@@ -144,6 +164,14 @@ impl PlanningRuntimeSnapshot {
 
     pub fn queue_head(&self) -> Option<&PriorityQueueTask> {
         self.queue_head.as_ref()
+    }
+
+    pub fn queue_idle_policy(&self) -> QueueIdlePolicy {
+        self.queue_idle_policy
+    }
+
+    pub fn queue_idle_prompt_path(&self) -> Option<&str> {
+        self.queue_idle_prompt_path.as_deref()
     }
 
     pub fn queue_snapshot(&self) -> Option<&PriorityQueueSnapshot> {
@@ -226,9 +254,23 @@ impl PlanningPromptService {
         }
 
         let workspace_files = workspace_record_to_files(&workspace_record);
-        let validation_result = self
+        let mut validation_result = self
             .planning_validation_service
             .validate_workspace_files(workspace_files);
+        if let Some(directions) = validation_result.directions.as_ref() {
+            self.planning_validation_service
+                .validate_direction_supporting_files(
+                    directions,
+                    |path| {
+                        self.planning_workspace_port
+                            .load_optional_planning_file(workspace_dir, path)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    },
+                    &mut validation_result.report,
+                );
+        }
         if !validation_result.is_valid() {
             let first_error = validation_result
                 .report
@@ -266,14 +308,25 @@ impl PlanningPromptService {
         let proposal_summary = build_proposal_summary(&queue_snapshot);
         let prompt_fragment =
             build_prompt_fragment(&directions, &queue_snapshot, result_output_markdown);
+        let queue_idle_prompt_path =
+            trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
 
-        Ok(PlanningRuntimeSnapshot::ready_with_queue_snapshot(
-            prompt_fragment,
-            queue_summary,
+        Ok(PlanningRuntimeSnapshot {
+            workspace_status: if queue_snapshot.next_task.is_some() {
+                PlanningRuntimeWorkspaceStatus::ReadyWithTask
+            } else {
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            },
+            prompt_fragment: Some(prompt_fragment),
+            queue_summary: Some(queue_summary),
             proposal_summary,
-            queue_snapshot.next_task.clone(),
-            queue_snapshot,
-        ))
+            queue_idle_policy: directions.queue_idle.policy,
+            queue_idle_prompt_path,
+            queue_head: queue_snapshot.next_task.clone(),
+            queue_snapshot: Some(queue_snapshot),
+            failure_reason: None,
+            auto_followup_pause_reason: None,
+        })
     }
 }
 
@@ -346,6 +399,19 @@ fn build_prompt_fragment(
                 direction.scope_hints.join(" | ")
             ));
         }
+        if let Some(detail_doc_path) = trimmed_non_empty(direction.detail_doc_path.as_str()) {
+            lines.push(format!("  detail_doc_path: {detail_doc_path}"));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Queue Idle Policy".to_string());
+    lines.push(format!(
+        "- policy: {}",
+        directions.queue_idle.policy.label()
+    ));
+    if let Some(prompt_path) = trimmed_non_empty(directions.queue_idle.prompt_path.as_str()) {
+        lines.push(format!("- prompt_path: {prompt_path}"));
     }
 
     lines.push(String::new());
@@ -539,6 +605,11 @@ fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<Stri
     ))
 }
 
+fn trimmed_non_empty(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
+
 fn direction_state_label(state: DirectionState) -> &'static str {
     match state {
         DirectionState::Active => "active",
@@ -583,6 +654,32 @@ mod tests {
             _workspace_dir: &str,
         ) -> Result<PlanningWorkspaceLoadRecord> {
             Ok(self.load_record.clone())
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            let body = match relative_path {
+                crate::domain::planning::DIRECTIONS_FILE_PATH => {
+                    self.load_record.directions_toml.clone()
+                }
+                crate::domain::planning::TASK_LEDGER_FILE_PATH => {
+                    self.load_record.task_ledger_json.clone()
+                }
+                crate::domain::planning::TASK_LEDGER_SCHEMA_FILE_PATH => {
+                    self.load_record.task_ledger_schema_json.clone()
+                }
+                crate::domain::planning::QUEUE_SNAPSHOT_FILE_PATH => {
+                    self.load_record.queue_snapshot_json.clone()
+                }
+                crate::domain::planning::RESULT_OUTPUT_FILE_PATH => {
+                    self.load_record.result_output_markdown.clone()
+                }
+                _ => None,
+            };
+            Ok(body)
         }
 
         fn load_planning_draft_files(

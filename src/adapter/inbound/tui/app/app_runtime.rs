@@ -72,6 +72,8 @@ impl NativeTuiApp {
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
+            directions_maintenance_overlay_ui_state:
+                super::DirectionsMaintenanceOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
             active_session: None,

@@ -211,6 +211,14 @@ pub(super) struct PlanningInitOverlayView {
     pub(super) key_lines: Vec<Line<'static>>,
 }
 
+pub(super) struct DirectionsMaintenanceOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) summary_lines: Vec<Line<'static>>,
+    pub(super) option_lines: Vec<Line<'static>>,
+    pub(super) status_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
 pub(super) struct PlanningDraftEditorOverlayView {
     pub(super) header_lines: Vec<Line<'static>>,
     pub(super) file_lines: Vec<Line<'static>>,
@@ -555,6 +563,10 @@ pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     "queue: {}",
                     compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 ));
+                if snapshot.queue_head().is_none() {
+                    summary_segments
+                        .push(format!("policy: {}", snapshot.queue_idle_policy().label()));
+                }
             }
             if let Some(proposal_summary) = snapshot.proposal_summary() {
                 summary_segments.push(format!(
@@ -693,6 +705,267 @@ fn build_skipped_queue_note_line(
             QUEUE_INSPECTION_NOTE_DETAIL_LIMIT
         )
     )))
+}
+
+pub(super) fn build_directions_maintenance_overlay_view(
+    app: &NativeTuiApp,
+) -> DirectionsMaintenanceOverlayView {
+    match app.directions_maintenance_overlay_ui_state.step() {
+        DirectionsMaintenanceOverlayStep::Overview => {
+            let summary = app.directions_maintenance_overlay_ui_state.summary();
+            let parse_error = summary.and_then(|summary| summary.parse_error.as_deref());
+            let missing_doc_count = summary
+                .map(|summary| {
+                    summary
+                        .directions
+                        .iter()
+                        .filter(|direction| direction.detail_doc_path.is_none())
+                        .count()
+                })
+                .unwrap_or_default();
+            let total_direction_count =
+                summary.map(|summary| summary.directions.len()).unwrap_or(0);
+            let queue_idle_policy = summary
+                .map(|summary| summary.queue_idle_policy.label().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let queue_idle_prompt = summary
+                .and_then(|summary| summary.queue_idle_prompt_path.as_deref())
+                .map(|path| compact_whitespace_detail(path, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT))
+                .unwrap_or_else(|| "<none>".to_string());
+            let queue_idle_prompt_status = summary
+                .map(|summary| {
+                    if summary.queue_idle_prompt_exists {
+                        "ready"
+                    } else {
+                        "missing"
+                    }
+                })
+                .unwrap_or("unknown");
+
+            DirectionsMaintenanceOverlayView {
+                header_lines: vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Directions Maintenance",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" / shell inspection"),
+                    ]),
+                    Line::from(
+                        "Review operator-owned planning directions and queue-idle policy without editing raw files first.",
+                    ),
+                ],
+                summary_lines: vec![
+                    Line::from(
+                        "Use Enter to open the staged editor, `d` to create a detail-doc mapping, or `p` to create/edit the queue-idle prompt.",
+                    ),
+                    Line::from(
+                        "The active planning files do not change until you promote the staged draft.",
+                    ),
+                ],
+                option_lines: vec![
+                    planning_init_option_line(
+                        "Enter",
+                        "edit directions",
+                        "open directions.toml and any existing queue-idle prompt in the staged editor",
+                        false,
+                        false,
+                    ),
+                    planning_init_option_line(
+                        "D",
+                        "create detail doc",
+                        "choose one direction without a doc path and stage a new markdown file",
+                        false,
+                        parse_error.is_some() || missing_doc_count == 0,
+                    ),
+                    planning_init_option_line(
+                        "P",
+                        "edit queue-idle prompt",
+                        "stage the queue-idle review prompt markdown and wire prompt_path if needed",
+                        false,
+                        parse_error.is_some(),
+                    ),
+                ],
+                status_lines: vec![
+                    Line::from(format!(
+                        "directions: {total_direction_count} total / {missing_doc_count} missing detail docs"
+                    )),
+                    Line::from(format!(
+                        "queue idle: policy {queue_idle_policy} / prompt {queue_idle_prompt_status} / {queue_idle_prompt}"
+                    )),
+                    Line::from(match parse_error {
+                        Some(error) => format!(
+                            "directions parse error: {}",
+                            compact_whitespace_detail(error, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                        ),
+                        None => "directions parsing: ok".to_string(),
+                    }),
+                ],
+                key_lines: vec![
+                    Line::from(
+                        "Enter: edit directions    d: create detail doc    p: edit queue-idle prompt",
+                    ),
+                    Line::from("r: reload summary    Esc/Ctrl+C: close"),
+                ],
+            }
+        }
+        DirectionsMaintenanceOverlayStep::DetailDocSelection => {
+            let missing_directions = app
+                .directions_maintenance_overlay_ui_state
+                .missing_detail_doc_directions();
+            let selected_direction = app
+                .directions_maintenance_overlay_ui_state
+                .selected_missing_detail_doc_direction();
+            let option_lines = if missing_directions.is_empty() {
+                vec![Line::from("Every direction already has a detail-doc path.")]
+            } else {
+                missing_directions
+                    .iter()
+                    .map(|direction| {
+                        let selected = selected_direction.is_some_and(|selected_direction| {
+                            selected_direction.id == direction.id
+                        });
+                        let style = if selected {
+                            Style::default().fg(Color::Black).bg(Color::Cyan)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        let marker = if selected { ">>" } else { "  " };
+                        Line::from(vec![
+                            Span::styled(format!("{marker} "), style),
+                            Span::styled(
+                                direction.title.clone(),
+                                style.add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("  id={} / new path={}.md", direction.id, direction.id),
+                                style,
+                            ),
+                        ])
+                    })
+                    .collect()
+            };
+
+            DirectionsMaintenanceOverlayView {
+                header_lines: vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Directions Maintenance",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" / detail docs"),
+                    ]),
+                    Line::from(
+                        "Choose a direction that should receive a generated markdown detail document.",
+                    ),
+                ],
+                summary_lines: vec![
+                    Line::from(
+                        "Generated docs follow `.codex-exec-loop/planning/directions/<direction-id>.md`.",
+                    ),
+                    Line::from(
+                        "The file and `detail_doc_path` mapping are staged first and only become active after promote.",
+                    ),
+                ],
+                option_lines,
+                status_lines: vec![Line::from(format!(
+                    "selected: {}",
+                    selected_direction
+                        .map(|direction| direction.title.as_str())
+                        .unwrap_or("none")
+                ))],
+                key_lines: vec![
+                    Line::from("Up/Down or j/k: move selection"),
+                    Line::from("Enter: continue    Backspace/Left: back    Esc/Ctrl+C: close"),
+                ],
+            }
+        }
+        DirectionsMaintenanceOverlayStep::DetailDocConfirm => {
+            let pending = app
+                .directions_maintenance_overlay_ui_state
+                .pending_detail_doc_creation();
+            let direction_id = pending
+                .map(|pending| pending.direction_id())
+                .unwrap_or("unknown");
+            let direction_title = pending
+                .map(|pending| pending.direction_title())
+                .unwrap_or("unknown");
+
+            DirectionsMaintenanceOverlayView {
+                header_lines: vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Directions Maintenance",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" / confirm detail doc"),
+                    ]),
+                    Line::from(
+                        "Create and map a new markdown detail document for the selected direction?",
+                    ),
+                ],
+                summary_lines: vec![
+                    Line::from(format!("direction: {direction_title}")),
+                    Line::from(format!(
+                        "new path: .codex-exec-loop/planning/directions/{direction_id}.md"
+                    )),
+                ],
+                option_lines: vec![
+                    planning_init_option_line(
+                        "1",
+                        "yes",
+                        "stage the new markdown file and open it with directions.toml",
+                        app.directions_maintenance_overlay_ui_state
+                            .detail_doc_confirm_choice()
+                            == DetailDocConfirmChoice::Yes,
+                        false,
+                    ),
+                    planning_init_option_line(
+                        "2",
+                        "no",
+                        "return without changing the active or staged planning files",
+                        app.directions_maintenance_overlay_ui_state
+                            .detail_doc_confirm_choice()
+                            == DetailDocConfirmChoice::No,
+                        false,
+                    ),
+                ],
+                status_lines: vec![Line::from("confirmation: generate a staged doc file now")],
+                key_lines: vec![
+                    Line::from("Up/Down or j/k: change selection"),
+                    Line::from("Enter: act    Backspace/Left: back    Esc/Ctrl+C: close"),
+                ],
+            }
+        }
+        DirectionsMaintenanceOverlayStep::ManualEditor => DirectionsMaintenanceOverlayView {
+            header_lines: vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Directions Maintenance",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" / staged editor"),
+                ]),
+                Line::from("Edit the staged directions draft and save to re-run validation."),
+            ],
+            summary_lines: vec![Line::from(
+                "This state renders through the dedicated draft editor view.",
+            )],
+            option_lines: vec![Line::from(
+                "Use Tab to switch files and Ctrl+S to save + validate.",
+            )],
+            status_lines: vec![Line::from("editor ready")],
+            key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+        },
+    }
 }
 
 pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {

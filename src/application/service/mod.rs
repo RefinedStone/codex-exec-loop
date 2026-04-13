@@ -3,6 +3,7 @@ pub mod followup_template_service;
 pub mod github_review_poller_service;
 pub mod planning_auto_follow_copy;
 pub mod planning_bootstrap_service;
+pub mod planning_directions_service;
 pub mod planning_init_service;
 pub mod planning_prompt_service;
 pub mod planning_proposal_promotion_service;

@@ -133,6 +133,14 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
         Ok(PlanningWorkspaceLoadRecord::default())
     }
 
+    fn load_optional_planning_file(
+        &self,
+        _workspace_dir: &str,
+        _relative_path: &str,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn replace_planning_workspace_file(
         &self,
         _workspace_dir: &str,

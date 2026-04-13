@@ -19,6 +19,13 @@ pub struct PlanningQueueRefreshRequest<'a> {
     pub root_turn_id: &'a str,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub mode: PlanningQueueRefreshMode<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningQueueRefreshMode<'a> {
+    FromLatestReply,
+    ReviewDirectionsGoals { queue_idle_prompt_markdown: &'a str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,10 +96,19 @@ impl PlanningWorkerOrchestrationService {
     }
 
     pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
-        build_planning_queue_refresh_prompt(
-            request.latest_main_reply,
-            request.previous_handoff_task,
-        )
+        match &request.mode {
+            PlanningQueueRefreshMode::FromLatestReply => build_planning_queue_refresh_prompt(
+                request.latest_main_reply,
+                request.previous_handoff_task,
+            ),
+            PlanningQueueRefreshMode::ReviewDirectionsGoals {
+                queue_idle_prompt_markdown,
+            } => build_planning_queue_idle_review_prompt(
+                request.latest_main_reply,
+                request.previous_handoff_task,
+                queue_idle_prompt_markdown,
+            ),
+        }
     }
 
     pub fn render_repair_task_ledger_prompt(
@@ -201,6 +217,40 @@ main session latest reply:
     )
 }
 
+fn build_planning_queue_idle_review_prompt(
+    latest_main_reply: &str,
+    previous_handoff_task: Option<&PlanningTaskHandoff>,
+    queue_idle_prompt_markdown: &str,
+) -> String {
+    let previous_handoff_section = previous_handoff_task.map_or_else(String::new, |task| {
+        format!(
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이면 `in_progress`, 막혔으면 `blocked`, 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            task.task_id, task.task_title
+        )
+    });
+
+    format!(
+        r#"대리인입니다.
+planning worker queue-idle review 입니다.
+
+이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 재평가하세요.
+- planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
+- `directions.toml`, direction detail docs, queue-idle review prompt, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
+- 현재 queue는 비어 있습니다. direction 목표와 success criteria, detail doc, 지금까지의 work list를 다시 비추어보고 부족한 점이 실제로 남아 있는지 판단하세요.
+- 이미 done / in_progress / blocked / proposed 로 같은 의미가 관리되고 있으면 중복 생성 대신 기존 항목을 갱신하세요.
+- 지금 바로 이어서 실행해야 할 항목만 `ready` 또는 `in_progress`로 두고, 나머지는 `proposed`로 남기세요.
+- 정말 이어갈 작업이 없다면 queue를 비운 채 유지하고, 그 이유를 짧게 요약하세요.
+- 마지막에는 이번 review에서 queue에 반영한 핵심 변경 또는 queue를 비운 판단 근거를 짧게 요약하세요.
+{previous_handoff_section}
+
+queue-idle review prompt:
+{queue_idle_prompt_markdown}
+
+main session latest reply:
+{latest_main_reply}"#
+    )
+}
+
 fn first_non_empty_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
 }
@@ -222,7 +272,9 @@ mod tests {
 
     use anyhow::{Result, anyhow};
 
-    use super::{PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService};
+    use super::{
+        PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
+    };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
@@ -384,6 +436,7 @@ mod tests {
                 root_turn_id: "turn-1",
                 latest_main_reply: "Implemented the previous queue head and found one more task.",
                 previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestReply,
             })
             .expect("refresh should succeed");
 
@@ -424,6 +477,7 @@ mod tests {
                 root_turn_id: "turn-2",
                 latest_main_reply: "Need to continue after the broken planning update.",
                 previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestReply,
             })
             .expect("refresh should reconcile invalid worker candidate");
 

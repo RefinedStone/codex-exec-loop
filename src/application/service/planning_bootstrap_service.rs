@@ -7,6 +7,10 @@ use crate::domain::planning::{
 
 const DEFAULT_DIRECTIONS_TOML: &str = r#"version = 1
 
+[queue_idle]
+policy = "stop"
+prompt_path = ""
+
 [[directions]]
 id = "example-direction"
 title = "Example direction"
@@ -17,10 +21,15 @@ success_criteria = [
 scope_hints = [
     "Add loose hints that help relate future tasks to this direction.",
 ]
+detail_doc_path = ""
 state = "active"
 "#;
 
 const SIMPLE_MODE_DIRECTIONS_TOML: &str = r#"version = 1
+
+[queue_idle]
+policy = "stop"
+prompt_path = ""
 
 [[directions]]
 id = "general-workstream"
@@ -34,6 +43,7 @@ scope_hints = [
     "Use this generic direction until the operator replaces it with a richer direction catalog.",
     "Treat task-ledger.json as the source of truth for concrete next actions and proposals.",
 ]
+detail_doc_path = ""
 state = "active"
 "#;
 

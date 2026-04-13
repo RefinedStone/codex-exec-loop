@@ -66,6 +66,7 @@ pub(crate) enum AutoFollowupSkipReason {
     StopKeywordMatched,
     NoFileChanges,
     PlanningBlocked,
+    PlanningQueueIdlePolicyStop,
     PlanningQueueHeadRequired,
     PlanningRepeatedQueueHead,
 }
@@ -114,6 +115,9 @@ impl AutoFollowupSkipReason {
                 "planning files are invalid or incomplete; auto follow-up stays paused until they validate"
                     .to_string()
             }
+            Self::PlanningQueueIdlePolicyStop => {
+                "the planning queue is idle and queue_idle.policy is stop".to_string()
+            }
             Self::PlanningQueueHeadRequired => {
                 "the selected auto follow-up template requires an actionable planning queue head"
                     .to_string()
@@ -133,6 +137,7 @@ impl AutoFollowupSkipReason {
             Self::StopKeywordMatched => "stopped: stop keyword matched",
             Self::NoFileChanges => "stopped: no file changes",
             Self::PlanningBlocked => "paused: planning files invalid",
+            Self::PlanningQueueIdlePolicyStop => "stopped: queue idle policy stop",
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
             Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
         }
@@ -157,6 +162,10 @@ impl AutoFollowupSkipReason {
             }
             Self::PlanningBlocked => {
                 "turn completed / auto follow-up paused: planning files invalid".to_string()
+            }
+            Self::PlanningQueueIdlePolicyStop => {
+                "turn completed / auto follow-up stopped: planning queue idle policy is stop"
+                    .to_string()
             }
             Self::PlanningQueueHeadRequired => {
                 "turn completed / auto follow-up paused: planning queue has no next task"
