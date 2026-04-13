@@ -1474,6 +1474,22 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
             .as_deref()
             .is_some_and(|detail| detail.contains("previously handed-off task"))
     );
+    assert!(
+        app.planner_worker_panel_state
+            .last_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("planning worker refresh 입니다."))
+    );
+    assert_eq!(
+        app.planner_worker_panel_state
+            .last_operation_label
+            .as_deref(),
+        Some("refresh")
+    );
+    assert_eq!(
+        app.planner_worker_panel_state.last_response.as_deref(),
+        Some("planner refreshed the queue")
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -3663,6 +3679,62 @@ fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
 }
 
 #[test]
+fn followup_template_preview_hides_planner_session_debug_outside_debug_mode() {
+    let (mut app, _) = make_test_app();
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: Some("next task: Implement shell planning status".to_string()),
+        last_notice_detail: None,
+        last_prompt: Some("planning worker prompt body".to_string()),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let rendered = build_followup_template_preview_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains("Planner Session Debug"));
+    assert!(!rendered.contains("planning worker prompt body"));
+    assert!(!rendered.contains("planner worker response body"));
+}
+
+#[test]
+fn followup_template_preview_shows_planner_session_debug_in_debug_mode() {
+    let (mut app, _) = make_test_app();
+    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.planner_visibility = PlannerVisibility::Debug;
+    app.planner_worker_panel_state = PlannerWorkerPanelState {
+        status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
+        last_summary: Some("planner refreshed the queue".to_string()),
+        last_rejected_summary: None,
+        last_queue_summary: Some("next task: Implement shell planning status".to_string()),
+        last_notice_detail: None,
+        last_prompt: Some("planning worker prompt body".to_string()),
+        last_response: Some("planner worker response body".to_string()),
+        last_host_detail: None,
+    };
+
+    let rendered = build_followup_template_preview_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Planner Session Debug"));
+    assert!(rendered.contains("last planner session: refresh / refresh ok"));
+    assert!(rendered.contains("planning worker prompt body"));
+    assert!(rendered.contains("planner worker response body"));
+}
+
+#[test]
 fn followup_template_overlay_navigation_updates_selection() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::Ready(ready_conversation());
@@ -4307,12 +4379,15 @@ fn followup_template_status_lines_hide_planner_panel_outside_debug_mode() {
     app.conversation_state = ConversationState::Ready(conversation);
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
         last_summary: Some("planner refreshed the queue".to_string()),
         last_rejected_summary: None,
         last_queue_summary: Some("next task: Implement shell planning status".to_string()),
         last_notice_detail: Some(
             "planning reconciliation restored protected queue.snapshot.json".to_string(),
         ),
+        last_prompt: Some("refresh prompt body".to_string()),
+        last_response: Some("refresh response body".to_string()),
         last_host_detail: Some("host promoted top follow-up proposal".to_string()),
     };
 
@@ -4340,12 +4415,15 @@ fn followup_template_status_lines_show_planner_panel_in_debug_mode() {
     app.planner_visibility = PlannerVisibility::Debug;
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
+        last_operation_label: Some("refresh".to_string()),
         last_summary: Some("planner refreshed the queue".to_string()),
         last_rejected_summary: None,
         last_queue_summary: Some("next task: Implement shell planning status".to_string()),
         last_notice_detail: Some(
             "planning reconciliation restored protected queue.snapshot.json".to_string(),
         ),
+        last_prompt: Some("refresh prompt body".to_string()),
+        last_response: Some("refresh response body".to_string()),
         last_host_detail: Some("host promoted top follow-up proposal".to_string()),
     };
 

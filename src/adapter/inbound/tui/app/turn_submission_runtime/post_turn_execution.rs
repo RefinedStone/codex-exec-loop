@@ -207,18 +207,27 @@ impl PostTurnEvaluationExecutor {
         let mut next_retry_reason = None;
 
         for attempt_number in 1..=MAX_PLANNING_REPAIR_ATTEMPTS {
-            self.record_planner_worker_running(PlannerWorkerStatus::RepairRunning);
+            let worker_request = PlanningLedgerRepairRequest {
+                workspace_directory,
+                root_turn_id,
+                repair_request: &next_request,
+                attempt_number,
+                max_attempts: MAX_PLANNING_REPAIR_ATTEMPTS,
+                retry_reason: next_retry_reason,
+            };
+            let worker_prompt = self
+                .planning_services
+                .worker_orchestration
+                .render_repair_task_ledger_prompt(&worker_request);
+            self.record_planner_worker_running(
+                PlannerWorkerStatus::RepairRunning,
+                "repair",
+                worker_prompt,
+            );
             let worker_outcome = self
                 .planning_services
                 .worker_orchestration
-                .repair_task_ledger(PlanningLedgerRepairRequest {
-                    workspace_directory,
-                    root_turn_id,
-                    repair_request: &next_request,
-                    attempt_number,
-                    max_attempts: MAX_PLANNING_REPAIR_ATTEMPTS,
-                    retry_reason: next_retry_reason,
-                });
+                .repair_task_ledger(worker_request);
 
             let outcome = match worker_outcome {
                 Ok(outcome) => outcome,
@@ -305,16 +314,25 @@ impl PostTurnEvaluationExecutor {
             };
         };
 
-        self.record_planner_worker_running(PlannerWorkerStatus::RefreshRunning);
+        let worker_request = PlanningQueueRefreshRequest {
+            workspace_directory: &request.workspace_directory,
+            root_turn_id: &request.queued_from_turn_id,
+            latest_main_reply,
+            previous_handoff_task: conversation.last_planning_task_handoff(),
+        };
+        let worker_prompt = self
+            .planning_services
+            .worker_orchestration
+            .render_refresh_queue_prompt(&worker_request);
+        self.record_planner_worker_running(
+            PlannerWorkerStatus::RefreshRunning,
+            "refresh",
+            worker_prompt,
+        );
         let worker_outcome = self
             .planning_services
             .worker_orchestration
-            .refresh_queue_from_reply(PlanningQueueRefreshRequest {
-                workspace_directory: &request.workspace_directory,
-                root_turn_id: &request.queued_from_turn_id,
-                latest_main_reply,
-                previous_handoff_task: conversation.last_planning_task_handoff(),
-            });
+            .refresh_queue_from_reply(worker_request);
 
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
@@ -424,9 +442,19 @@ impl PostTurnEvaluationExecutor {
         }
     }
 
-    fn record_planner_worker_running(&mut self, status: PlannerWorkerStatus) {
+    fn record_planner_worker_running(
+        &mut self,
+        status: PlannerWorkerStatus,
+        operation_label: &str,
+        prompt: String,
+    ) {
         self.planner_worker_panel_state.status = status;
+        self.planner_worker_panel_state.last_operation_label = Some(operation_label.to_string());
+        self.planner_worker_panel_state.last_summary = None;
+        self.planner_worker_panel_state.last_rejected_summary = None;
         self.planner_worker_panel_state.last_notice_detail = None;
+        self.planner_worker_panel_state.last_prompt = Some(prompt);
+        self.planner_worker_panel_state.last_response = None;
         self.planner_worker_panel_state.last_host_detail = None;
     }
 
@@ -452,6 +480,7 @@ impl PostTurnEvaluationExecutor {
             planner_queue_summary(&outcome.runtime_snapshot);
         self.planner_worker_panel_state.last_notice_detail =
             planner_notice_detail(&outcome.notices);
+        self.planner_worker_panel_state.last_response = outcome.worker_response.clone();
         self.planner_worker_panel_state.last_host_detail = None;
     }
 
@@ -467,6 +496,7 @@ impl PostTurnEvaluationExecutor {
         self.planner_worker_panel_state.last_queue_summary =
             planner_queue_summary(runtime_snapshot);
         self.planner_worker_panel_state.last_notice_detail = None;
+        self.planner_worker_panel_state.last_response = None;
         self.planner_worker_panel_state.last_host_detail = None;
     }
 }

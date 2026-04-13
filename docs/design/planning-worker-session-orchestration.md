@@ -133,6 +133,7 @@ The UI exposes planner state through planner status lines in the follow-up/statu
 - last queue summary
 - last planner detail summary
 - last rejected planning summary
+- last hidden planner prompt and final response in debug mode
 - host-side planner detail such as proposal promotion or duplicate-next-task pause reasons
 
 This keeps planner activity visible without polluting the main transcript.
@@ -140,7 +141,7 @@ This keeps planner activity visible without polluting the main transcript.
 Visibility is mode-dependent:
 
 - normal mode keeps planner transcript hidden and shows only compact planning status
-- debug mode expands planner panel detail without merging planner reasoning into the main conversation transcript
+- debug mode expands planner panel detail, including the last hidden planner prompt/response pair, without merging planner reasoning into the main conversation transcript
 
 ## Implementation Notes
 

@@ -153,7 +153,54 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
                 lines.push(Line::from(preview_line.to_string()));
             }
 
+            append_planner_debug_preview_lines(&mut lines, app);
             lines
+        }
+    }
+}
+
+fn append_planner_debug_preview_lines(lines: &mut Vec<Line<'static>>, app: &NativeTuiApp) {
+    if !app.planner_shows_debug_details() {
+        return;
+    }
+
+    let planner = &app.planner_worker_panel_state;
+    if planner.last_prompt.is_none() && planner.last_response.is_none() {
+        return;
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Planner Session Debug"));
+    lines.push(Line::from(format!(
+        "last planner session: {} / {}",
+        planner.last_operation_label.as_deref().unwrap_or("unknown"),
+        planner.status.label()
+    )));
+
+    lines.push(Line::from("Prompt"));
+    append_multiline_debug_block(lines, planner.last_prompt.as_deref());
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Response"));
+    append_multiline_debug_block(lines, planner.last_response.as_deref());
+}
+
+fn append_multiline_debug_block(lines: &mut Vec<Line<'static>>, block: Option<&str>) {
+    let Some(block) = block else {
+        lines.push(Line::from("  (not available)"));
+        return;
+    };
+
+    if block.trim().is_empty() {
+        lines.push(Line::from("  (empty)"));
+        return;
+    }
+
+    for line in block.lines() {
+        if line.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            lines.push(Line::from(format!("  {line}")));
         }
     }
 }

@@ -37,6 +37,7 @@ pub struct PlanningWorkerRunOutcome {
     pub notices: Vec<String>,
     pub repair_request: Option<PlanningRepairRequest>,
     pub worker_summary: Option<String>,
+    pub worker_response: Option<String>,
     pub rejected_summary: Option<String>,
     pub task_ledger_changed: bool,
 }
@@ -62,14 +63,12 @@ impl PlanningWorkerOrchestrationService {
         &self,
         request: PlanningQueueRefreshRequest<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
+        let prompt = self.render_refresh_queue_prompt(&request);
         self.run_worker_and_reconcile(
             request.workspace_directory,
             &format!("planner-refresh-{}", request.root_turn_id),
             PlanningWorkerOperation::RefreshQueue,
-            build_planning_queue_refresh_prompt(
-                request.latest_main_reply,
-                request.previous_handoff_task,
-            ),
+            prompt,
         )
     }
 
@@ -77,6 +76,7 @@ impl PlanningWorkerOrchestrationService {
         &self,
         request: PlanningLedgerRepairRequest<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
+        let prompt = self.render_repair_task_ledger_prompt(&request);
         self.run_worker_and_reconcile(
             request.workspace_directory,
             &format!(
@@ -84,12 +84,26 @@ impl PlanningWorkerOrchestrationService {
                 request.root_turn_id, request.attempt_number
             ),
             PlanningWorkerOperation::RepairTaskLedger,
-            build_planning_repair_prompt(
-                request.repair_request,
-                request.attempt_number,
-                request.max_attempts,
-                request.retry_reason,
-            ),
+            prompt,
+        )
+    }
+
+    pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
+        build_planning_queue_refresh_prompt(
+            request.latest_main_reply,
+            request.previous_handoff_task,
+        )
+    }
+
+    pub fn render_repair_task_ledger_prompt(
+        &self,
+        request: &PlanningLedgerRepairRequest<'_>,
+    ) -> String {
+        build_planning_repair_prompt(
+            request.repair_request,
+            request.attempt_number,
+            request.max_attempts,
+            request.retry_reason,
         )
     }
 
@@ -150,6 +164,7 @@ impl PlanningWorkerOrchestrationService {
             notices,
             repair_request: reconciliation_result.repair_request,
             worker_summary,
+            worker_response: worker_response.final_agent_message,
             rejected_summary,
             task_ledger_changed,
         })
