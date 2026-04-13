@@ -192,30 +192,17 @@ impl CodexAppServerAdapter {
                 cwd: thread_response.thread.cwd.clone(),
             });
 
-            let turn_response = connection.start_turn(TurnStartParams {
-                thread_id: thread_id.clone(),
-                input: vec![TurnInputText::text(prompt)],
-                approval_policy: Some(self.execution_policy.approval_policy),
-                approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
-                model: model.map(str::to_string),
+            self.start_turn_and_wait_for_stream(
+                connection,
+                &thread_id,
+                prompt,
+                model,
                 effort,
-            })?;
-
-            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
-                turn_id: turn_response.turn.id.clone(),
-            });
-
-            connection.wait_for_turn_stream(&thread_id, &turn_response.turn.id, &event_sender)
+                &event_sender,
+            )
         });
 
-        if let Err(error) = &result {
-            let _ = event_sender.send(ConversationStreamEvent::Failed {
-                message: error.to_string(),
-            });
-        }
-
-        result
+        finish_stream_result(result, &event_sender)
     }
 
     fn run_hidden_planning_thread_stream(
@@ -224,13 +211,32 @@ impl CodexAppServerAdapter {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.run_new_thread_stream_request(
-            workspace_directory,
-            prompt,
-            Some(PLANNING_WORKER_MODEL),
-            Some(ReasoningEffortValue::Medium),
-            event_sender,
-        )
+        let result = self.with_isolated_streaming_runtime(|connection| {
+            let thread_response = connection.start_thread(ThreadStartParams {
+                cwd: Some(workspace_directory.to_string()),
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox: Some(self.execution_policy.sandbox_mode),
+                model: Some(PLANNING_WORKER_MODEL.to_string()),
+            })?;
+            let thread_id = thread_response.thread.id.clone();
+            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
+                thread_id: thread_id.clone(),
+                title: thread_title(&thread_response.thread),
+                cwd: thread_response.thread.cwd.clone(),
+            });
+
+            self.start_turn_and_wait_for_stream(
+                connection,
+                &thread_id,
+                prompt,
+                Some(PLANNING_WORKER_MODEL),
+                Some(ReasoningEffortValue::Medium),
+                &event_sender,
+            )
+        });
+
+        finish_stream_result(result, &event_sender)
     }
 
     fn with_shared_runtime<T, F>(
@@ -324,6 +330,17 @@ impl CodexAppServerAdapter {
         Ok(SharedRuntimeOutput { value, warnings })
     }
 
+    fn with_isolated_streaming_runtime<F>(&self, mut operation: F) -> Result<()>
+    where
+        F: FnMut(&mut AppServerConnection) -> Result<()>,
+    {
+        let mut connection = self.open_connection()?;
+        connection.initialize()?;
+        let result = operation(&mut connection);
+        let _ = connection.take_warnings();
+        result
+    }
+
     fn with_streaming_runtime<F>(&self, mut operation: F) -> Result<()>
     where
         F: FnMut(&mut AppServerConnection) -> Result<()>,
@@ -352,6 +369,32 @@ impl CodexAppServerAdapter {
                 Err(error)
             }
         }
+    }
+
+    fn start_turn_and_wait_for_stream(
+        &self,
+        connection: &mut AppServerConnection,
+        thread_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        effort: Option<ReasoningEffortValue>,
+        event_sender: &Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        let turn_response = connection.start_turn(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![TurnInputText::text(prompt)],
+            approval_policy: Some(self.execution_policy.approval_policy),
+            approvals_reviewer: self.execution_policy.approvals_reviewer,
+            sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
+            model: model.map(str::to_string),
+            effort,
+        })?;
+
+        let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
+            turn_id: turn_response.turn.id.clone(),
+        });
+
+        connection.wait_for_turn_stream(thread_id, &turn_response.turn.id, event_sender)
     }
 
     fn reset_shared_runtime(&self, notice: Option<String>) {
@@ -437,30 +480,17 @@ impl CodexAppServerPort for CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
             })?;
-            let turn_response = connection.start_turn(TurnStartParams {
-                thread_id: thread_id.to_string(),
-                input: vec![TurnInputText::text(prompt)],
-                approval_policy: Some(self.execution_policy.approval_policy),
-                approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
-                model: None,
-                effort: None,
-            })?;
-
-            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
-                turn_id: turn_response.turn.id.clone(),
-            });
-
-            connection.wait_for_turn_stream(thread_id, &turn_response.turn.id, &event_sender)
+            self.start_turn_and_wait_for_stream(
+                connection,
+                thread_id,
+                prompt,
+                None,
+                None,
+                &event_sender,
+            )
         });
 
-        if let Err(error) = &result {
-            let _ = event_sender.send(ConversationStreamEvent::Failed {
-                message: error.to_string(),
-            });
-        }
-
-        result
+        finish_stream_result(result, &event_sender)
     }
 }
 
@@ -473,6 +503,19 @@ impl PlanningThreadLauncher for CodexAppServerAdapter {
     ) -> Result<()> {
         self.run_hidden_planning_thread_stream(workspace_directory, prompt, event_sender)
     }
+}
+
+fn finish_stream_result(
+    result: Result<()>,
+    event_sender: &Sender<ConversationStreamEvent>,
+) -> Result<()> {
+    if let Err(error) = &result {
+        let _ = event_sender.send(ConversationStreamEvent::Failed {
+            message: error.to_string(),
+        });
+    }
+
+    result
 }
 
 #[cfg(test)]

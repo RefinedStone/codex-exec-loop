@@ -53,6 +53,7 @@ Characteristics:
 - planner threads are never resumed or reused
 - planner threads default to `gpt-5.4` with reasoning effort `medium`
 - the planner adapter uses a dedicated hidden-planning launcher seam instead of extending the main conversation streaming port
+- planner threads use isolated app-server connections so planner refresh work does not hold the main session streaming runtime lock
 - planner transcripts are not mixed into the main conversation transcript
 
 Operations:
