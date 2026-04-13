@@ -3,68 +3,50 @@ use std::rc::Rc;
 use ratatui::layout::Position;
 
 use super::shell_presentation::{
-    ConversationShellFrameView, FollowupTemplateOverlayView, OverlayListView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, SessionOverlayView,
-    StartupOverlayView, build_conversation_shell_frame_view, build_followup_template_overlay_view,
-    build_inline_prompt_cursor_offset, build_inline_tail_lines, build_input_prompt_cursor_offset,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_session_overlay_view, build_startup_overlay_view, startup_screen_is_active,
+    FollowupTemplateOverlayView, OverlayListView, PlanningDraftEditorOverlayView,
+    PlanningInitOverlayView, QueueOverlayView, SessionOverlayView, StartupOverlayView,
+    build_followup_template_overlay_view, build_inline_prompt_cursor_offset,
+    build_inline_tail_lines, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view, startup_screen_is_active,
+};
+#[cfg(test)]
+use super::shell_presentation::{
+    ConversationShellFrameView, build_conversation_shell_frame_view,
+    build_input_prompt_cursor_offset,
 };
 use super::*;
 
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
+    let _ = mode;
     if app.shell_overlay != ShellOverlay::PlanningInit
         || app.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::ManualEditor
     {
         return;
     }
 
-    let editor_content_height = match mode {
-        ShellFrontendMode::InlineMainBuffer => {
-            let tail_lines = build_inline_tail_lines(app);
-            let inspection_area = build_inline_terminal_flow_layout(area, &tail_lines)[0];
-            inspection_area
-                .height
-                .saturating_sub(14)
-                .max(6)
-                .saturating_sub(1)
-                .max(1)
-        }
-        ShellFrontendMode::AlternateScreen => centered_rect(92, 82, area)
-            .height
-            .saturating_sub(14)
-            .max(8)
-            .saturating_sub(2)
-            .max(1),
-    };
+    let tail_lines = build_inline_tail_lines(app);
+    let inspection_area = build_inline_terminal_flow_layout(area, &tail_lines)[0];
+    let editor_content_height = inspection_area
+        .height
+        .saturating_sub(14)
+        .max(6)
+        .saturating_sub(1)
+        .max(1);
     app.planning_draft_editor_ui_state
         .sync_editor_scroll(editor_content_height);
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => {
-            let frame_area = frame.area();
-            let tail_lines = build_inline_tail_lines(app);
-            let layout = build_inline_terminal_flow_layout(frame_area, &tail_lines);
+    let _ = mode;
+    let frame_area = frame.area();
+    let tail_lines = build_inline_tail_lines(app);
+    let layout = build_inline_terminal_flow_layout(frame_area, &tail_lines);
 
-            draw_inline_conversation_shell(frame, app, tail_lines, &layout);
+    draw_inline_conversation_shell(frame, app, tail_lines, &layout);
 
-            if app.shell_overlay != ShellOverlay::Hidden {
-                draw_inline_shell_inspection(frame, app, layout[0]);
-            }
-        }
-        ShellFrontendMode::AlternateScreen => {
-            draw_framed_conversation_shell(frame, app, mode);
-
-            match app.shell_overlay {
-                ShellOverlay::Hidden => {}
-                ShellOverlay::Startup => draw_startup_overlay(frame, app),
-                ShellOverlay::Sessions => draw_session_overlay(frame, app),
-                ShellOverlay::FollowupTemplates => draw_followup_template_overlay(frame, app),
-                ShellOverlay::PlanningInit => draw_planning_init_overlay(frame, app),
-            }
-        }
+    if app.shell_overlay != ShellOverlay::Hidden {
+        draw_inline_shell_inspection(frame, app, layout[0]);
     }
 
     if app.is_exit_confirmation_visible() {
@@ -72,6 +54,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_session_list_panel(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -106,6 +90,8 @@ fn draw_session_list_panel(
     frame.render_stateful_widget(list, area, &mut app.session_overlay_ui_state.list_state);
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<'static>>) {
     let detail = Paragraph::new(lines)
         .block(
@@ -160,6 +146,8 @@ fn build_inline_terminal_flow_layout(area: Rect, tail_lines: &[Line<'_>]) -> Rc<
         .split(area)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_framed_conversation_shell(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
@@ -329,6 +317,7 @@ fn draw_inline_shell_inspection(
         ShellOverlay::Hidden => {}
         ShellOverlay::Startup => draw_inline_startup_inspection(frame, inspection_area, app),
         ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
+        ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
         ShellOverlay::FollowupTemplates => {
             draw_inline_followup_template_inspection(frame, inspection_area, app)
         }
@@ -494,6 +483,60 @@ fn draw_inline_followup_template_inspection(
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
+fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_queue_overlay_view(app);
+    let QueueOverlayView {
+        header_lines,
+        summary_lines,
+        queue_lines,
+        proposal_lines,
+        note_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 7)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&note_lines, 6)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Planning Queue / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
+
+    let queue_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(layout[2]);
+    render_inline_section(
+        frame,
+        queue_layout[0],
+        Line::from("Ready Queue"),
+        queue_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        queue_layout[1],
+        Line::from("Proposals"),
+        proposal_lines,
+        false,
+    );
+
+    render_inline_section(frame, layout[3], Line::from("Notes"), note_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+}
+
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     if app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor {
         draw_inline_planning_draft_editor_inspection(frame, area, app);
@@ -587,6 +630,8 @@ fn draw_inline_planning_draft_editor_inspection(
     render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     let overlay_view = build_startup_overlay_view(app);
     let StartupOverlayView {
@@ -640,6 +685,8 @@ fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let overlay_view = build_session_overlay_view(app);
     let SessionOverlayView {
@@ -692,6 +739,8 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     );
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let overlay_view = build_followup_template_overlay_view(app);
     let FollowupTemplateOverlayView {
@@ -758,6 +807,8 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     );
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     if app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor {
         draw_planning_draft_editor_overlay(frame, app);
@@ -816,6 +867,8 @@ fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     );
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let popup_area = centered_rect(92, 82, frame.area());
     frame.render_widget(Clear, popup_area);
@@ -905,6 +958,8 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     frame.render_widget(popup, popup_area);
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_followup_template_list_panel(
     frame: &mut Frame<'_>,
     area: Rect,

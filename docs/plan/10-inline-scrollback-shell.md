@@ -4,7 +4,7 @@ This file is the current contract for inline mode on `prerelease`.
 
 ## Durable Facts
 
-- inline mode is the default frontend; alternate-screen is explicit opt-in
+- inline mode is the only frontend
 - host terminal scrollback is the primary history surface
 - committed transcript history is appended into scrollback separately from live-tail updates
 - the live tail is the only place that owns the active prompt, transient streaming text, and compact notices
@@ -21,5 +21,5 @@ This file is the current contract for inline mode on `prerelease`.
 
 - blank startup reads as startup context, conversation placeholder, and prompt
 - once committed history exists, the live tail starts at the first visible row of its viewport so prompt and notices stay attached to the latest line
-- diagnostics, sessions, templates, and planning inspections reuse the same inline shell surface
+- diagnostics, sessions, templates, planning, and queue inspections reuse the same inline shell surface
 - routine status stays compact and flow-oriented instead of acting like a permanent heavy footer

@@ -2,12 +2,11 @@
 pub(super) enum InlineShellCommand {
     Diagnostics,
     Sessions,
+    Queue,
     Templates,
     PlanningInit,
     MaxAutoTurns,
     NewDraft,
-    TranscriptTopLegacy,
-    TranscriptTailLegacy,
     Help,
 }
 
@@ -28,7 +27,7 @@ struct InlineShellCommandSpec {
 }
 
 const COMMAND_LIST_LINE: &str =
-    "Shell commands: :diag  :sessions  :templates  :planning  :turns <n>  :new  :help";
+    "Shell commands: :diag  :sessions  :queue  :templates  :planning  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
@@ -47,6 +46,14 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "recent sessions",
         buffered_hint: "Press Enter to open the recent-sessions inspection.",
         execution_status: Some("opened recent sessions inspection"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Queue,
+        primary_name: ":queue",
+        aliases: &[":q", ":queue"],
+        suggestion_detail: "planning queue",
+        buffered_hint: "Press Enter to open the planning queue inspection.",
+        execution_status: Some("opened planning queue inspection"),
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Templates,
@@ -79,26 +86,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "new draft",
         buffered_hint: "Press Enter to open a new draft in the shell.",
         execution_status: None,
-    },
-    InlineShellCommandSpec {
-        command: InlineShellCommand::TranscriptTopLegacy,
-        primary_name: ":top",
-        aliases: &[":top", ":home"],
-        suggestion_detail: "legacy jump top",
-        buffered_hint: "Press Enter to see where transcript jump controls moved.",
-        execution_status: Some(
-            "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-        ),
-    },
-    InlineShellCommandSpec {
-        command: InlineShellCommand::TranscriptTailLegacy,
-        primary_name: ":tail",
-        aliases: &[":tail", ":end"],
-        suggestion_detail: "legacy jump tail",
-        buffered_hint: "Press Enter to see where transcript jump controls moved.",
-        execution_status: Some(
-            "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-        ),
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Help,
@@ -185,10 +172,12 @@ impl InlineShellCommand {
         self.spec().primary_name
     }
 
+    #[cfg(test)]
     pub(super) fn suggestion_detail(self) -> &'static str {
         self.spec().suggestion_detail
     }
 
+    #[cfg(test)]
     pub(super) fn command_list_line() -> &'static str {
         COMMAND_LIST_LINE
     }
@@ -245,6 +234,8 @@ mod tests {
             (":DIAG", Some((InlineShellCommand::Diagnostics, None))),
             (":session", Some((InlineShellCommand::Sessions, None))),
             (":sessions", Some((InlineShellCommand::Sessions, None))),
+            (":q", Some((InlineShellCommand::Queue, None))),
+            (":queue", Some((InlineShellCommand::Queue, None))),
             (":template", Some((InlineShellCommand::Templates, None))),
             (":templates", Some((InlineShellCommand::Templates, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
@@ -262,22 +253,6 @@ mod tests {
             ),
             (":turns", Some((InlineShellCommand::MaxAutoTurns, None))),
             (":new", Some((InlineShellCommand::NewDraft, None))),
-            (
-                ":top",
-                Some((InlineShellCommand::TranscriptTopLegacy, None)),
-            ),
-            (
-                ":home",
-                Some((InlineShellCommand::TranscriptTopLegacy, None)),
-            ),
-            (
-                ":tail",
-                Some((InlineShellCommand::TranscriptTailLegacy, None)),
-            ),
-            (
-                ":end",
-                Some((InlineShellCommand::TranscriptTailLegacy, None)),
-            ),
             (":help", Some((InlineShellCommand::Help, None))),
             ("  :help  ", Some((InlineShellCommand::Help, None))),
             (":unknown", None),
@@ -301,12 +276,11 @@ mod tests {
             vec![
                 InlineShellCommand::Diagnostics,
                 InlineShellCommand::Sessions,
+                InlineShellCommand::Queue,
                 InlineShellCommand::Templates,
                 InlineShellCommand::PlanningInit,
                 InlineShellCommand::MaxAutoTurns,
                 InlineShellCommand::NewDraft,
-                InlineShellCommand::TranscriptTopLegacy,
-                InlineShellCommand::TranscriptTailLegacy,
                 InlineShellCommand::Help,
             ]
         );
@@ -319,12 +293,14 @@ mod tests {
             vec![InlineShellCommand::PlanningInit]
         );
         assert_eq!(
+            InlineShellCommand::suggestions(":q"),
+            vec![InlineShellCommand::Queue]
+        );
+        assert_eq!(
             InlineShellCommand::suggestions(":t"),
             vec![
                 InlineShellCommand::Templates,
                 InlineShellCommand::MaxAutoTurns,
-                InlineShellCommand::TranscriptTopLegacy,
-                InlineShellCommand::TranscriptTailLegacy,
             ]
         );
     }
@@ -362,21 +338,10 @@ mod tests {
         let cases = [
             (":diag", Some("opened diagnostics inspection")),
             (":sessions", Some("opened recent sessions inspection")),
+            (":queue", Some("opened planning queue inspection")),
             (":templates", Some("opened template inspection")),
             (":planning", Some("opened planning initialization selector")),
             (":turns 5", None),
-            (
-                ":top",
-                Some(
-                    "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-                ),
-            ),
-            (
-                ":tail",
-                Some(
-                    "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-                ),
-            ),
         ];
 
         for (input, expected) in cases {

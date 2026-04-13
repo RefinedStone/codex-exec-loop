@@ -11,18 +11,26 @@ use crate::application::service::session_service::{
     SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
 use crate::domain::followup_template::FollowupTemplateDefinition;
-use crate::domain::planning::PlanningValidationSeverity;
+use crate::domain::planning::{
+    PlanningValidationSeverity, PriorityQueueSkippedTask, PriorityQueueTask,
+};
 use crate::domain::text::compact_whitespace_detail;
 
+#[cfg(test)]
 const FOOTER_WARNING_DETAIL_LIMIT: usize = 48;
+#[cfg(test)]
 const FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 48;
+#[cfg(test)]
 const FOOTER_STATUS_DETAIL_LIMIT: usize = 72;
 const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
+#[cfg(test)]
 const FOOTER_PLANNING_DETAIL_LIMIT: usize = 56;
+#[cfg(test)]
 const FOOTER_AUTO_FOLLOW_DETAIL_LIMIT: usize = 28;
 const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
 const INLINE_LIVE_AGENT_MAX_CONTENT_LINES: usize = 2;
 const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
+#[cfg(test)]
 const INLINE_TAIL_TEMPLATE_LABEL_LIMIT: usize = 16;
 const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
 const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
@@ -30,6 +38,11 @@ const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
 const INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
+const QUEUE_INSPECTION_TASK_LIMIT: usize = 4;
+const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 3;
+const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 48;
+const QUEUE_INSPECTION_REASON_DETAIL_LIMIT: usize = 32;
+const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
 const PROMPT_PRIMARY_PREFIX: &str = "> ";
 const PROMPT_CONTINUATION_PREFIX: &str = "  ";
 const STARTUP_ASCII_ART_DEFAULT: &str = r#"
@@ -62,6 +75,7 @@ const STARTUP_ASCII_ART_DEFAULT: &str = r#"
 .::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
 "#;
 
+#[cfg(test)]
 pub(super) struct ConversationShellView {
     pub(super) shell_title: Line<'static>,
     pub(super) header_lines: Vec<Line<'static>>,
@@ -72,6 +86,8 @@ pub(super) struct ConversationShellView {
     pub(super) input_lines: Vec<Line<'static>>,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub(super) struct ConversationShellFrameView {
     pub(super) shell_title: Line<'static>,
     pub(super) header_lines: Vec<Line<'static>>,
@@ -86,6 +102,7 @@ pub(super) struct ConversationShellFrameView {
     pub(super) input_area: Rect,
 }
 
+#[cfg(test)]
 pub(super) struct TranscriptPanelView {
     pub(super) title: Line<'static>,
     pub(super) lines: Vec<Line<'static>>,
@@ -111,7 +128,7 @@ struct ShellCorePresentationContext<'a> {
     shell_action_availability: ShellActionAvailability,
     recent_session_status_label: String,
     github_review_polling_status_label: String,
-    transcript_viewport_status_label: String,
+    #[cfg(test)]
     planner_shows_debug_details: bool,
     conversation_state: ShellConversationState<'a>,
 }
@@ -124,7 +141,7 @@ impl<'a> ShellCorePresentationContext<'a> {
             shell_action_availability: app.shell_action_availability(),
             recent_session_status_label: recent_session_status_label(app),
             github_review_polling_status_label: app.github_review_polling_status_label(),
-            transcript_viewport_status_label: app.transcript_viewport_status_label(),
+            #[cfg(test)]
             planner_shows_debug_details: app.planner_shows_debug_details(),
             conversation_state: match &app.conversation_state {
                 ConversationState::Loading => ShellConversationState::Loading,
@@ -175,6 +192,15 @@ pub(super) struct FollowupTemplateOverlayView {
     pub(super) list_view: OverlayListView,
     pub(super) preview_lines: Vec<Line<'static>>,
     pub(super) status_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
+}
+
+pub(super) struct QueueOverlayView {
+    pub(super) header_lines: Vec<Line<'static>>,
+    pub(super) summary_lines: Vec<Line<'static>>,
+    pub(super) queue_lines: Vec<Line<'static>>,
+    pub(super) proposal_lines: Vec<Line<'static>>,
+    pub(super) note_lines: Vec<Line<'static>>,
     pub(super) key_lines: Vec<Line<'static>>,
 }
 
@@ -233,10 +259,12 @@ fn startup_banner_is_active_in_context(context: &ShellCorePresentationContext<'_
     context.show_startup_ascii_art && startup_screen_is_active_in_context(context)
 }
 
+#[cfg(test)]
 pub(super) fn build_conversation_shell_view(
     app: &NativeTuiApp,
     mode: ShellFrontendMode,
 ) -> ConversationShellView {
+    let _ = mode;
     let context = ShellCorePresentationContext::from_app(app);
     let planning_summary_line = context.ready_conversation().and_then(|conversation| {
         build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
@@ -246,7 +274,7 @@ pub(super) fn build_conversation_shell_view(
     });
     let planner_panel_lines = build_planner_panel_lines(app, FOOTER_NOTICE_DETAIL_LIMIT);
     let mut header_lines = build_shell_header_lines_with_context(&context);
-    header_lines.push(build_frontend_summary_line(mode));
+    header_lines.push(build_frontend_summary_line());
     let mut footer_lines = build_shell_footer_lines_with_context(
         &context,
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
@@ -263,12 +291,12 @@ pub(super) fn build_conversation_shell_view(
     }
 
     ConversationShellView {
-        shell_title: build_shell_title(mode),
+        shell_title: build_shell_title(),
         header_lines,
         conversation_lines: build_conversation_lines_with_context(&context),
-        status_title: build_status_title(mode),
+        status_title: build_status_title(),
         footer_lines,
-        input_title: build_input_title_with_context(&context, mode),
+        input_title: build_input_title_with_context(&context),
         input_lines: build_input_lines_with_context(&context),
     }
 }
@@ -334,11 +362,13 @@ pub(super) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_conversation_shell_frame_view(
     app: &mut NativeTuiApp,
     mode: ShellFrontendMode,
     area: Rect,
 ) -> ConversationShellFrameView {
+    let _ = mode;
     let shell_view = build_conversation_shell_view(app, mode);
     let ConversationShellView {
         shell_title,
@@ -371,7 +401,6 @@ pub(super) fn build_conversation_shell_frame_view(
 
     let transcript_view = build_transcript_panel_view(
         app,
-        mode,
         conversation_lines,
         transcript_inner.width,
         transcript_inner.height,
@@ -392,27 +421,20 @@ pub(super) fn build_conversation_shell_frame_view(
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_transcript_panel_view(
     app: &mut NativeTuiApp,
-    mode: ShellFrontendMode,
     lines: Vec<Line<'static>>,
     content_width: u16,
     visible_height: u16,
 ) -> TranscriptPanelView {
     let max_scroll_offset = build_conversation_scroll_offset(&lines, content_width, visible_height);
-    let scroll_offset = if mode == ShellFrontendMode::InlineMainBuffer {
-        max_scroll_offset
-    } else {
-        app.sync_transcript_viewport_metrics(max_scroll_offset, visible_height)
-    };
+    let _ = visible_height;
 
     TranscriptPanelView {
-        title: build_transcript_title_with_context(
-            &ShellCorePresentationContext::from_app(app),
-            mode,
-        ),
+        title: build_transcript_title_with_context(&ShellCorePresentationContext::from_app(app)),
         lines,
-        scroll_offset,
+        scroll_offset: max_scroll_offset,
     }
 }
 
@@ -439,6 +461,181 @@ pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
     }
 }
 
+pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
+    let workspace_directory = app.planning_workspace_directory();
+
+    let header_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "Planning Queue",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" / shell inspection"),
+        ]),
+        Line::from("Review the next actionable work without opening raw planning files."),
+    ];
+
+    match &app.conversation_state {
+        ConversationState::Loading => QueueOverlayView {
+            header_lines,
+            summary_lines: vec![
+                Line::from(format!("workspace: {workspace_directory}")),
+                Line::from("planning status: loading conversation"),
+            ],
+            queue_lines: vec![Line::from(
+                "Queue inspection becomes available after the thread loads.",
+            )],
+            proposal_lines: vec![Line::from(
+                "Proposal summary is unavailable while conversation state is loading.",
+            )],
+            note_lines: vec![Line::from("No planner notes yet.")],
+            key_lines: build_queue_overlay_key_lines(),
+        },
+        ConversationState::Failed(message) => QueueOverlayView {
+            header_lines,
+            summary_lines: vec![
+                Line::from(format!("workspace: {workspace_directory}")),
+                Line::from("planning status: conversation unavailable"),
+            ],
+            queue_lines: vec![Line::from(
+                "Queue inspection is unavailable while the conversation failed to load.",
+            )],
+            proposal_lines: vec![Line::from(
+                "Open a new draft or reload a session to restore planning state.",
+            )],
+            note_lines: vec![Line::from(format!(
+                "conversation error: {}",
+                compact_whitespace_detail(message, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+            ))],
+            key_lines: build_queue_overlay_key_lines(),
+        },
+        ConversationState::Ready(conversation) => {
+            let snapshot = &conversation.planning_runtime_snapshot;
+            let queue_snapshot = snapshot.queue_snapshot();
+            let queue_lines = queue_snapshot
+                .map(|queue_snapshot| {
+                    build_queue_task_lines(
+                        &queue_snapshot.active_tasks,
+                        "No executable tasks in the current planning queue.",
+                        QUEUE_INSPECTION_TASK_LIMIT,
+                    )
+                })
+                .unwrap_or_else(|| match snapshot.queue_head() {
+                    Some(queue_head) => build_queue_task_lines(
+                        std::slice::from_ref(queue_head),
+                        "No executable tasks in the current planning queue.",
+                        1,
+                    ),
+                    None => vec![Line::from(
+                        "No executable tasks in the current planning queue.",
+                    )],
+                });
+            let proposal_lines = queue_snapshot
+                .map(|queue_snapshot| {
+                    build_queue_task_lines(
+                        &queue_snapshot.proposed_tasks,
+                        "No promotable proposals are queued right now.",
+                        QUEUE_INSPECTION_PROPOSAL_LIMIT,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    if let Some(summary) = snapshot.proposal_summary() {
+                        vec![Line::from(format!(
+                            "proposals: {}",
+                            compact_whitespace_detail(summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                        ))]
+                    } else {
+                        vec![Line::from("No promotable proposals are queued right now.")]
+                    }
+                });
+
+            let mut summary_lines = vec![
+                Line::from(format!("workspace: {workspace_directory}")),
+                Line::from(format!(
+                    "planning status: {}",
+                    snapshot.preview_status_label()
+                )),
+                Line::from(format!(
+                    "planner worker: {}",
+                    app.planner_worker_panel_state.status.label()
+                )),
+            ];
+            if let Some(queue_summary) = snapshot.queue_summary() {
+                summary_lines.push(Line::from(format!(
+                    "queue summary: {}",
+                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(proposal_summary) = snapshot.proposal_summary() {
+                summary_lines.push(Line::from(format!(
+                    "proposal summary: {}",
+                    compact_whitespace_detail(proposal_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(queue_head) = snapshot.queue_head() {
+                summary_lines.push(Line::from(format!(
+                    "next up: {}",
+                    compact_whitespace_detail(
+                        queue_head.task_title.trim(),
+                        QUEUE_INSPECTION_TITLE_DETAIL_LIMIT
+                    )
+                )));
+            }
+
+            let mut note_lines = Vec::new();
+            if let Some(detail) = snapshot.auto_followup_pause_reason() {
+                note_lines.push(Line::from(format!(
+                    "pause: {}",
+                    compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
+            } else if let Some(detail) = snapshot.failure_reason() {
+                note_lines.push(Line::from(format!(
+                    "blocking issue: {}",
+                    compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(summary) =
+                conversation.planning_notice_summary(QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+            {
+                note_lines.push(Line::from(format!("planning notice: {summary}")));
+            }
+            if let Some(queue_summary) =
+                app.planner_worker_panel_state.last_queue_summary.as_deref()
+            {
+                note_lines.push(Line::from(format!(
+                    "planner queue: {}",
+                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(detail) = app.planner_worker_panel_state.last_host_detail.as_deref() {
+                note_lines.push(Line::from(format!(
+                    "planner host detail: {}",
+                    compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
+            }
+            if let Some(detail) = queue_snapshot.and_then(|queue_snapshot| {
+                build_skipped_queue_note_line(&queue_snapshot.skipped_tasks)
+            }) {
+                note_lines.push(detail);
+            }
+            if note_lines.is_empty() {
+                note_lines.push(Line::from("No planner notices or skipped queue items."));
+            }
+
+            QueueOverlayView {
+                header_lines,
+                summary_lines,
+                queue_lines,
+                proposal_lines,
+                note_lines,
+                key_lines: build_queue_overlay_key_lines(),
+            }
+        }
+    }
+}
+
 pub(super) fn build_followup_template_overlay_view(
     app: &NativeTuiApp,
 ) -> FollowupTemplateOverlayView {
@@ -460,6 +657,74 @@ pub(super) fn build_followup_template_overlay_view(
         status_lines: build_followup_template_status_lines(app),
         key_lines: build_followup_template_key_lines(app),
     }
+}
+
+fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("Esc/Ctrl+C: close"),
+        Line::from(":planning: update planning files    Ctrl+f / Ctrl+a: stay on follow-up flow"),
+    ]
+}
+
+fn build_queue_task_lines(
+    tasks: &[PriorityQueueTask],
+    empty_message: &str,
+    max_visible_tasks: usize,
+) -> Vec<Line<'static>> {
+    if tasks.is_empty() {
+        return vec![Line::from(empty_message.to_string())];
+    }
+
+    let mut lines = Vec::new();
+    for task in tasks.iter().take(max_visible_tasks) {
+        lines.push(Line::from(format!(
+            "#{} [{}] {}",
+            task.rank,
+            task.status.label(),
+            compact_whitespace_detail(task.task_title.trim(), QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
+        )));
+        let mut detail_segments = vec![
+            format!(
+                "direction: {}",
+                compact_whitespace_detail(
+                    task.direction_title.trim(),
+                    QUEUE_INSPECTION_REASON_DETAIL_LIMIT
+                )
+            ),
+            format!("priority: {}", task.combined_priority),
+        ];
+        if let Some(first_reason) = task.rank_reasons.first() {
+            detail_segments.push(format!(
+                "reason: {}",
+                compact_whitespace_detail(first_reason, QUEUE_INSPECTION_REASON_DETAIL_LIMIT)
+            ));
+        }
+        lines.push(Line::from(format!("  {}", detail_segments.join("  |  "))));
+    }
+
+    let hidden_count = tasks.len().saturating_sub(max_visible_tasks);
+    if hidden_count > 0 {
+        lines.push(Line::from(format!(
+            "+{hidden_count} more queue item{} hidden for readability",
+            if hidden_count == 1 { "" } else { "s" }
+        )));
+    }
+
+    lines
+}
+
+fn build_skipped_queue_note_line(
+    skipped_tasks: &[PriorityQueueSkippedTask],
+) -> Option<Line<'static>> {
+    let first_skipped = skipped_tasks.first()?;
+    Some(Line::from(format!(
+        "skipped tasks: {} / {}",
+        skipped_tasks.len(),
+        compact_whitespace_detail(
+            first_skipped.reason.as_str(),
+            QUEUE_INSPECTION_NOTE_DETAIL_LIMIT
+        )
+    )))
 }
 
 pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
@@ -962,6 +1227,7 @@ fn current_live_agent_lines(conversation: &ConversationViewModel) -> Option<Vec<
     Some(lines)
 }
 
+#[cfg(test)]
 fn build_conversation_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
@@ -982,6 +1248,7 @@ fn build_conversation_lines_with_context(
     }
 }
 
+#[cfg(test)]
 fn build_startup_banner_lines_from_context(
     context: &ShellCorePresentationContext<'_>,
     max_height: Option<u16>,
@@ -1086,6 +1353,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
     )
 }
 
+#[cfg(test)]
 fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     github_review_recent_changes_summary: Option<String>,
@@ -1537,6 +1805,7 @@ fn inline_thread_label(conversation: &ConversationViewModel) -> String {
     compact_inline_detail(&conversation.title, INLINE_TAIL_THREAD_LABEL_LIMIT)
 }
 
+#[cfg(test)]
 fn inline_template_label(conversation: &ConversationViewModel) -> String {
     let label = conversation.auto_follow_state.template_label();
     let compact_label = label
@@ -1650,6 +1919,7 @@ fn build_operator_notice_line(
     })
 }
 
+#[cfg(test)]
 fn build_input_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
@@ -1665,6 +1935,7 @@ fn build_input_lines_with_context(
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_ready_input_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
@@ -1781,6 +2052,7 @@ pub(super) fn build_ready_input_lines(
     lines
 }
 
+#[cfg(test)]
 fn build_shell_command_suggestion_lines(input: &str) -> Vec<Line<'static>> {
     let Some(prefix) = InlineShellCommand::suggestion_prefix(input) else {
         return Vec::new();
@@ -1809,6 +2081,7 @@ fn build_shell_command_suggestion_lines(input: &str) -> Vec<Line<'static>> {
     lines
 }
 
+#[cfg(test)]
 pub(super) fn build_input_prompt_cursor_offset(
     app: &NativeTuiApp,
     content_width: u16,
@@ -1925,6 +2198,7 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
     ]
 }
 
+#[cfg(test)]
 fn build_shell_header_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
@@ -1971,88 +2245,52 @@ fn build_shell_header_lines_with_context(
     }
 }
 
-fn build_shell_title(mode: ShellFrontendMode) -> Line<'static> {
-    let _ = mode;
+#[cfg(test)]
+fn build_shell_title() -> Line<'static> {
     Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
 }
 
 #[cfg(test)]
 pub(super) fn build_transcript_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    build_transcript_title_with_context(&ShellCorePresentationContext::from_app(app), mode)
+    let _ = mode;
+    build_transcript_title_with_context(&ShellCorePresentationContext::from_app(app))
 }
 
+#[cfg(test)]
 fn build_transcript_title_with_context(
-    context: &ShellCorePresentationContext<'_>,
-    mode: ShellFrontendMode,
+    _context: &ShellCorePresentationContext<'_>,
 ) -> Line<'static> {
-    let _ = mode;
-    Line::from(vec![
-        Span::raw("Transcript / "),
-        Span::raw(context.transcript_viewport_status_label.clone()),
-    ])
+    Line::from("Transcript / live scrollback")
 }
 
-pub(super) fn build_status_title(mode: ShellFrontendMode) -> Line<'static> {
-    let _ = mode;
+#[cfg(test)]
+pub(super) fn build_status_title() -> Line<'static> {
     Line::from("Controls / shell shortcuts and live status")
 }
 
 #[cfg(test)]
 pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    build_input_title_with_context(&ShellCorePresentationContext::from_app(app), mode)
+    let _ = mode;
+    build_input_title_with_context(&ShellCorePresentationContext::from_app(app))
 }
 
-fn build_input_title_with_context(
-    context: &ShellCorePresentationContext<'_>,
-    mode: ShellFrontendMode,
-) -> Line<'static> {
-    if mode == ShellFrontendMode::InlineMainBuffer {
-        return match context.conversation_state {
-            ShellConversationState::Loading => {
-                Line::from(vec![Span::raw("Prompt"), Span::raw(" / loading")])
-            }
-            ShellConversationState::Failed(_) => {
-                Line::from(vec![Span::raw("Prompt"), Span::raw(" / unavailable")])
-            }
-            ShellConversationState::Ready(conversation) => {
-                let submit_hint = build_primary_submit_hint_with_context(context);
-                Line::from(vec![
-                    Span::raw("Prompt"),
-                    Span::raw(" / "),
-                    Span::styled(
-                        conversation.input_state.label().to_string(),
-                        input_state_style(conversation.input_state),
-                    ),
-                    Span::raw(" / "),
-                    Span::raw(submit_hint),
-                    Span::raw(" / Ctrl+j newline"),
-                ])
-            }
-        };
-    }
-
-    let prompt_label = "Input";
-
+#[cfg(test)]
+fn build_input_title_with_context(context: &ShellCorePresentationContext<'_>) -> Line<'static> {
     match context.conversation_state {
         ShellConversationState::Loading => {
-            Line::from(vec![Span::raw(prompt_label), Span::raw(" / loading")])
+            Line::from(vec![Span::raw("Prompt"), Span::raw(" / loading")])
         }
         ShellConversationState::Failed(_) => {
-            Line::from(vec![Span::raw(prompt_label), Span::raw(" / unavailable")])
+            Line::from(vec![Span::raw("Prompt"), Span::raw(" / unavailable")])
         }
         ShellConversationState::Ready(conversation) => {
             let submit_hint = build_primary_submit_hint_with_context(context);
             Line::from(vec![
-                Span::raw(prompt_label),
+                Span::raw("Prompt"),
                 Span::raw(" / "),
                 Span::styled(
                     conversation.input_state.label().to_string(),
                     input_state_style(conversation.input_state),
-                ),
-                Span::raw(" / startup "),
-                Span::styled(
-                    context.shell_action_availability.status_text().to_string(),
-                    startup_state_style_for_availability(context.shell_action_availability),
                 ),
                 Span::raw(" / "),
                 Span::raw(submit_hint),
@@ -2062,17 +2300,14 @@ fn build_input_title_with_context(
     }
 }
 
-fn build_frontend_summary_line(mode: ShellFrontendMode) -> Line<'static> {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => Line::from(
-            "frontend: inline main buffer  |  history: host terminal scrollback  |  tail: prompt anchored",
-        ),
-        ShellFrontendMode::AlternateScreen => Line::from(
-            "frontend: alternate screen  |  transcript: framed viewport  |  keys: PageUp/PageDown/Home/End",
-        ),
-    }
+#[cfg(test)]
+fn build_frontend_summary_line() -> Line<'static> {
+    Line::from(
+        "frontend: inline main buffer  |  history: host terminal scrollback  |  tail: prompt anchored",
+    )
 }
 
+#[cfg(test)]
 fn build_primary_submit_hint_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> &'static str {
@@ -2091,6 +2326,7 @@ fn build_primary_submit_hint_with_context(
     }
 }
 
+#[cfg(test)]
 fn startup_state_style_for_availability(
     shell_action_availability: ShellActionAvailability,
 ) -> Style {
@@ -2739,6 +2975,7 @@ fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn auto_follow_status_summary(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
@@ -2868,6 +3105,7 @@ fn auto_follow_prompt_status_line(
     })
 }
 
+#[cfg(test)]
 fn auto_follow_prompt_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
     let detail = auto_follow_prompt_status_line(conversation, false)?;
     Some(vec![
@@ -2900,6 +3138,7 @@ fn inline_input_state_label(input_state: ConversationInputState) -> &'static str
     }
 }
 
+#[cfg(test)]
 pub(super) fn input_state_style(input_state: ConversationInputState) -> Style {
     match input_state {
         ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => {

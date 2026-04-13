@@ -86,9 +86,6 @@ C:\path\to\codex-exec-loop-native.exe
 
 Useful env vars:
 
-- `CODEX_EXEC_LOOP_FRONTEND=inline`
-- `CODEX_EXEC_LOOP_FRONTEND=alternate`
-- `CODEX_EXEC_LOOP_ALT_SCREEN=1`
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
 
@@ -99,7 +96,7 @@ Useful env vars:
 3. Open recent sessions or start a new draft.
 4. Send one prompt and confirm streaming output appears.
 5. Open `:planning` once if planning is part of the workflow.
-6. If fullscreen mode is expected, repeat with `CODEX_EXEC_LOOP_FRONTEND=alternate`.
+6. Open `:queue` once and confirm the compact queue summary appears.
 7. If GitHub polling is expected, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the shell shows an active GitHub state.
 
 ## Validation Handoff

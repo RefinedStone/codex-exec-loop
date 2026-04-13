@@ -1,5 +1,6 @@
 use ratatui::text::Line;
 
+#[cfg(test)]
 use super::{
     MAX_COMPOSER_HEIGHT, MAX_SHELL_STATUS_HEIGHT, MIN_COMPOSER_HEIGHT, MIN_SHELL_STATUS_HEIGHT,
 };
@@ -31,14 +32,17 @@ fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16
         .sum()
 }
 
+#[cfg(test)]
 pub(super) fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
     block_height_for_lines(lines, MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
 }
 
+#[cfg(test)]
 pub(super) fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
     block_height_for_lines(lines, MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
 }
 
+#[cfg(test)]
 pub(super) fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) -> u16 {
     lines
         .len()

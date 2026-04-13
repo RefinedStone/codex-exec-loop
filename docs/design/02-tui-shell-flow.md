@@ -8,12 +8,12 @@ This file describes the implemented shell shape on `prerelease`.
 - inline mode uses host terminal scrollback as the primary history surface
 - one live tail region carries the active prompt, transient streaming text, and compact notices
 - blank startup reads as startup context, conversation placeholder, and prompt
-- diagnostics, sessions, templates, and planning render as in-shell inspection surfaces
-- alternate-screen remains a supported fallback frontend, not the default path
+- diagnostics, sessions, templates, planning, and queue render as in-shell inspection surfaces
+- inline is the only shipped frontend path
 
 ## Commands And Keys
 
-- inline shell commands: `:diag`, `:sessions`, `:templates`, `:planning`, `:new`, `:help`
+- inline shell commands: `:diag`, `:sessions`, `:templates`, `:queue`, `:planning`, `:new`, `:help`
 - prompt editing: `Enter` send, `Ctrl+j` newline, `Ctrl+u` clear, `Ctrl+w` delete previous word
 - shell navigation: `Ctrl+t` new draft, `Ctrl+C` back, `Ctrl+q` quit
 - follow-up inspection and control stay in-shell instead of opening a separate modal app

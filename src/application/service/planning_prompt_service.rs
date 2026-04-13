@@ -41,6 +41,7 @@ pub struct PlanningRuntimeSnapshot {
     queue_summary: Option<String>,
     proposal_summary: Option<String>,
     queue_head: Option<PriorityQueueTask>,
+    queue_snapshot: Option<PriorityQueueSnapshot>,
     failure_reason: Option<String>,
     auto_followup_pause_reason: Option<String>,
 }
@@ -53,6 +54,7 @@ impl PlanningRuntimeSnapshot {
             queue_summary: None,
             proposal_summary: None,
             queue_head: None,
+            queue_snapshot: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -65,6 +67,7 @@ impl PlanningRuntimeSnapshot {
             queue_summary: None,
             proposal_summary: None,
             queue_head: None,
+            queue_snapshot: None,
             failure_reason: Some(reason.into()),
             auto_followup_pause_reason: None,
         }
@@ -94,6 +97,30 @@ impl PlanningRuntimeSnapshot {
             queue_summary: Some(queue_summary),
             proposal_summary,
             queue_head,
+            queue_snapshot: None,
+            failure_reason: None,
+            auto_followup_pause_reason: None,
+        }
+    }
+
+    pub fn ready_with_queue_snapshot(
+        prompt_fragment: String,
+        queue_summary: String,
+        proposal_summary: Option<String>,
+        queue_head: Option<PriorityQueueTask>,
+        queue_snapshot: PriorityQueueSnapshot,
+    ) -> Self {
+        Self {
+            workspace_status: if queue_head.is_some() {
+                PlanningRuntimeWorkspaceStatus::ReadyWithTask
+            } else {
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            },
+            prompt_fragment: Some(prompt_fragment),
+            queue_summary: Some(queue_summary),
+            proposal_summary,
+            queue_head,
+            queue_snapshot: Some(queue_snapshot),
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -117,6 +144,10 @@ impl PlanningRuntimeSnapshot {
 
     pub fn queue_head(&self) -> Option<&PriorityQueueTask> {
         self.queue_head.as_ref()
+    }
+
+    pub fn queue_snapshot(&self) -> Option<&PriorityQueueSnapshot> {
+        self.queue_snapshot.as_ref()
     }
 
     pub fn failure_reason(&self) -> Option<&str> {
@@ -236,11 +267,12 @@ impl PlanningPromptService {
         let prompt_fragment =
             build_prompt_fragment(&directions, &queue_snapshot, result_output_markdown);
 
-        Ok(PlanningRuntimeSnapshot::ready_with_details(
+        Ok(PlanningRuntimeSnapshot::ready_with_queue_snapshot(
             prompt_fragment,
             queue_summary,
             proposal_summary,
             queue_snapshot.next_task.clone(),
+            queue_snapshot,
         ))
     }
 }

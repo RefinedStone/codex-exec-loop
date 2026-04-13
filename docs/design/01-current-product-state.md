@@ -4,11 +4,11 @@
 
 ## Baseline
 
-- inline main-buffer mode is the default frontend; alternate-screen remains explicit opt-in
+- inline main-buffer mode is the only frontend
 - startup diagnostics begin immediately and the shell becomes visible before all checks finish
 - manual input can buffer while startup is still pending, then auto-submit once the shell reaches a sendable state
 - the client can start a new draft, resume an existing thread, load snapshots, and stream new turns through the shared app-server boundary
-- inline inspection surfaces cover diagnostics, recent sessions, follow-up templates, and planning
+- inline inspection surfaces cover diagnostics, recent sessions, follow-up templates, queue inspection, and planning
 - recent-session browsing supports search, paging, and current-workspace filtering
 - auto follow-up ships with builtin templates plus workspace templates from `.codex-exec-loop/followups/`
 - the planning feature already exists: `:planning` can stage simple or detail/manual drafts, open the embedded draft editor, promote staged files, and surface queue/proposal status in the shell

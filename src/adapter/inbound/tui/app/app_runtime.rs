@@ -19,9 +19,9 @@ use super::{
     FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState, NativeTuiApp,
     PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
     ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay, StartupState,
-    TranscriptViewportState, reduce_conversation_input, reduce_conversation_intents,
-    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
-    reduce_followup_overlay_ui, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
+    reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
+    reduce_conversation_runtime, reduce_followup_controls, reduce_followup_overlay_ui,
+    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 
@@ -74,7 +74,6 @@ impl NativeTuiApp {
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
-            transcript_viewport_state: TranscriptViewportState::default(),
             active_session: None,
             startup_service,
             session_service,
@@ -164,7 +163,6 @@ impl NativeTuiApp {
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
         self.apply_conversation_lifecycle_state(reduction.state);
-        self.reset_transcript_viewport();
         for effect in reduction.effects {
             self.execute_conversation_lifecycle_effect(effect);
         }

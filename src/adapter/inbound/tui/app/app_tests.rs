@@ -25,12 +25,14 @@ use super::{
     build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
     build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
-    build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
-    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
-    build_transcript_panel_view, build_transcript_title, format_conversation_lines, shell_layout,
-    startup_ascii_art_enabled_from_value,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
+    build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
+    build_status_title, build_transcript_panel_view, build_transcript_title,
+    format_conversation_lines, shell_layout, startup_ascii_art_enabled_from_value,
 };
-use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
+use crate::adapter::inbound::tui::app::test_helpers::{
+    sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
+};
 use crate::adapter::outbound::app_server_planning_worker_adapter::{
     AppServerPlanningWorkerAdapter, PlanningThreadLauncher,
 };
@@ -2103,8 +2105,7 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
 #[test]
 fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
     let (app, codex_port) = make_test_app();
-    let mut runtime =
-        super::shell_runtime::ShellRuntime::new(app, ShellFrontendMode::InlineMainBuffer);
+    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
     runtime.app_mut().startup_state =
         StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
@@ -2545,8 +2546,7 @@ fn draft_workspace_sync_preserves_buffered_input() {
 #[test]
 fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() {
     let (app, _) = make_test_app();
-    let mut runtime =
-        super::shell_runtime::ShellRuntime::new(app, ShellFrontendMode::InlineMainBuffer);
+    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("app should start with a draft conversation");
     };
@@ -2575,8 +2575,7 @@ fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() 
 #[test]
 fn background_conversation_loaded_resets_followup_overlay_state() {
     let (app, _) = make_test_app();
-    let mut runtime =
-        super::shell_runtime::ShellRuntime::new(app, ShellFrontendMode::InlineMainBuffer);
+    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
     runtime.app_mut().followup_overlay_ui_state.preview_scroll = 12;
     runtime
         .app_mut()
@@ -3252,55 +3251,27 @@ fn inline_turns_command_with_invalid_argument_keeps_validation_message() {
 }
 
 #[test]
-fn inline_jump_commands_show_terminal_scroll_guidance_and_clear_input() {
-    struct TestCase<'a> {
-        command: &'a str,
-        initial_scroll: fn(&mut NativeTuiApp),
-        expected_viewport_status: &'a str,
-        expected_status_text: &'a str,
-    }
-
-    let cases = [
-        TestCase {
-            command: ":top",
-            initial_scroll: NativeTuiApp::scroll_transcript_page_up,
-            expected_viewport_status: "manual 13/18",
-            expected_status_text: "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-        },
-        TestCase {
-            command: ":tail",
-            initial_scroll: NativeTuiApp::scroll_transcript_to_top,
-            expected_viewport_status: "manual 0/18",
-            expected_status_text: "use host terminal scroll in inline mode; alternate-screen keeps PageUp/PageDown/Home/End",
-        },
-    ];
-
-    for case in cases {
+fn queue_command_opens_queue_overlay_and_clears_input() {
+    for command in [":q", ":queue"] {
         let (mut app, codex_port) = make_test_app();
         app.conversation_state = ConversationState::Ready(ready_conversation());
-        app.sync_transcript_viewport_metrics(18, 6);
-        (case.initial_scroll)(&mut app);
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("app should stay ready");
         };
-        conversation.input_buffer = case.command.to_string();
+        conversation.input_buffer = command.to_string();
 
         app.start_turn_submission();
 
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("conversation should remain ready");
         };
-        assert_eq!(
-            app.transcript_viewport_status_label(),
-            case.expected_viewport_status,
-            "{}",
-            case.command
-        );
-        assert!(conversation.input_buffer.is_empty(), "{}", case.command);
+        assert_eq!(app.shell_overlay, ShellOverlay::Queue, "{command}");
+        assert!(conversation.input_buffer.is_empty(), "{command}");
         assert!(
-            conversation.status_text.contains(case.expected_status_text),
-            "{}",
-            case.command
+            conversation
+                .status_text
+                .contains("opened planning queue inspection"),
+            "{command}"
         );
         assert!(
             codex_port
@@ -3308,8 +3279,7 @@ fn inline_jump_commands_show_terminal_scroll_guidance_and_clear_input() {
                 .lock()
                 .expect("new-thread call mutex poisoned")
                 .is_empty(),
-            "{}",
-            case.command
+            "{command}"
         );
         assert!(
             codex_port
@@ -3317,45 +3287,98 @@ fn inline_jump_commands_show_terminal_scroll_guidance_and_clear_input() {
                 .lock()
                 .expect("turn call mutex poisoned")
                 .is_empty(),
-            "{}",
-            case.command
+            "{command}"
         );
     }
 }
 
 #[test]
-fn transcript_title_includes_transcript_viewport_status() {
+fn queue_overlay_view_summarizes_ready_queue_without_raw_dump() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "focus on queue",
+        "2 ready tasks",
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let view = build_queue_overlay_view(&app);
+    let summary = view
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let queue = view
+        .queue_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let notes = view
+        .note_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(summary.contains("planning status: ready"));
+    assert!(summary.contains("queue summary: 2 ready tasks"));
+    assert!(summary.contains("next up: Implement shell planning status"));
+    assert!(queue.contains("#1 [ready] Implement shell planning status"));
+    assert!(queue.contains("priority: 10"));
+    assert!(notes.contains("skipped tasks: 1"));
+    assert!(!queue.contains("\"task_id\""));
+    assert!(!queue.contains("task-1"));
+}
+
+#[test]
+fn queue_overlay_view_shows_proposals_in_compact_form() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
+        "focus on queue proposals",
+        "0 ready tasks",
+        "1 proposal available",
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let view = build_queue_overlay_view(&app);
+    let proposals = view
+        .proposal_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(proposals.contains("#1 [proposed] Draft a queue inspection overlay"));
+    assert!(proposals.contains("priority: 7"));
+    assert!(!proposals.contains("\"direction_id\""));
+}
+
+#[test]
+fn transcript_title_describes_live_scrollback() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::Ready(ready_conversation());
-    app.sync_transcript_viewport_metrics(18, 6);
-    app.scroll_transcript_page_up();
 
     assert_eq!(
-        build_transcript_title(&app, ShellFrontendMode::AlternateScreen).to_string(),
-        "Transcript / manual 13/18"
+        build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer).to_string(),
+        "Transcript / live scrollback"
     );
 }
 
 #[test]
-fn transcript_panel_view_collects_title_and_scroll_offset() {
+fn transcript_panel_view_collects_title_and_tail_scroll_offset() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::Ready(ready_conversation());
-    app.sync_transcript_viewport_metrics(18, 6);
-    app.scroll_transcript_page_up();
     let transcript_lines = (1..=24)
         .map(|index| Line::from(format!("line {index}")))
         .collect::<Vec<_>>();
 
-    let view = build_transcript_panel_view(
-        &mut app,
-        ShellFrontendMode::AlternateScreen,
-        transcript_lines,
-        20,
-        6,
-    );
+    let view = build_transcript_panel_view(&mut app, transcript_lines, 20, 6);
 
-    assert_eq!(view.scroll_offset, 13);
-    assert_eq!(view.title.to_string(), "Transcript / manual 13/18");
+    assert_eq!(view.scroll_offset, 18);
+    assert_eq!(view.title.to_string(), "Transcript / live scrollback");
     assert_eq!(view.lines.len(), 24);
 }
 
@@ -3364,22 +3387,11 @@ fn input_title_includes_submit_and_newline_hints() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::Ready(ready_conversation());
 
-    let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
-
-    assert!(rendered.contains("Input / ready"));
-    assert!(rendered.contains("Enter send"));
-    assert!(rendered.contains("Ctrl+j newline"));
-}
-
-#[test]
-fn input_title_stays_neutral_in_inline_mode() {
-    let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
-
     let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
     assert!(rendered.contains("Prompt / ready"));
     assert!(rendered.contains("Enter send"));
+    assert!(rendered.contains("Ctrl+j newline"));
 }
 
 #[test]
@@ -3388,7 +3400,7 @@ fn input_title_shows_readiness_gated_submit_hint() {
     app.startup_state = StartupState::Loading;
     app.conversation_state = ConversationState::Ready(ready_conversation());
 
-    let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
+    let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
     assert!(rendered.contains("Enter send when ready"));
 }
@@ -3401,21 +3413,14 @@ fn composer_title_shows_queued_submit_hint_when_startup_queue_is_armed() {
     conversation.startup_submit_armed = true;
     app.conversation_state = ConversationState::Ready(conversation);
 
-    let rendered = build_input_title(&app, ShellFrontendMode::AlternateScreen).to_string();
+    let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
     assert!(rendered.contains("queued until ready"));
 }
 
 #[test]
 fn status_title_surfaces_overlay_and_followup_controls() {
-    let rendered = build_status_title(ShellFrontendMode::AlternateScreen).to_string();
-
-    assert_eq!(rendered, "Controls / shell shortcuts and live status");
-}
-
-#[test]
-fn inline_status_title_matches_alternate_copy() {
-    let rendered = build_status_title(ShellFrontendMode::InlineMainBuffer).to_string();
+    let rendered = build_status_title().to_string();
 
     assert_eq!(rendered, "Controls / shell shortcuts and live status");
 }
@@ -3425,7 +3430,6 @@ fn conversation_shell_view_collects_inline_snapshot_content() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     app.conversation_state = ConversationState::Ready(ready_conversation());
-    app.sync_transcript_viewport_metrics(18, 6);
 
     let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
     let header = view
@@ -3437,7 +3441,7 @@ fn conversation_shell_view_collects_inline_snapshot_content() {
     let transcript_title = build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer);
 
     assert!(view.shell_title.to_string().contains("Shell /"));
-    assert!(transcript_title.to_string().contains("Transcript /"));
+    assert_eq!(transcript_title.to_string(), "Transcript / live scrollback");
     assert!(view.status_title.to_string().contains("Controls /"));
     assert!(view.input_title.to_string().contains("Prompt / ready"));
     assert!(header.contains("thread: thread-1"));
@@ -3525,19 +3529,11 @@ fn inline_transcript_panel_stays_pinned_to_tail_even_after_manual_viewport_state
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     app.conversation_state = ConversationState::Ready(ready_conversation());
-    app.sync_transcript_viewport_metrics(18, 6);
-    app.scroll_transcript_page_up();
     let transcript_lines = (1..=24)
         .map(|index| Line::from(format!("line {index}")))
         .collect::<Vec<_>>();
 
-    let view = build_transcript_panel_view(
-        &mut app,
-        ShellFrontendMode::InlineMainBuffer,
-        transcript_lines,
-        20,
-        6,
-    );
+    let view = build_transcript_panel_view(&mut app, transcript_lines, 20, 6);
 
     assert_eq!(view.scroll_offset, 18);
 }
@@ -3550,7 +3546,7 @@ fn conversation_shell_frame_view_collects_layout_and_transcript_panel() {
 
     let view = build_conversation_shell_frame_view(
         &mut app,
-        ShellFrontendMode::AlternateScreen,
+        ShellFrontendMode::InlineMainBuffer,
         Rect::new(0, 0, 100, 36),
     );
 
@@ -3568,7 +3564,7 @@ fn conversation_shell_frame_view_collects_layout_and_transcript_panel() {
     assert!(
         view.header_lines
             .iter()
-            .any(|line| line.to_string().contains("frontend: alternate screen"))
+            .any(|line| line.to_string().contains("frontend: inline main buffer"))
     );
     assert!(!view.transcript_view.lines.is_empty());
 }

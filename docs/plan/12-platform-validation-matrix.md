@@ -3,17 +3,15 @@
 Use this matrix when a change affects terminal behavior:
 
 - raw mode or restore handling
-- inline vs alternate-screen behavior
+- inline behavior
 - prompt editing, overlays, or shell chrome
 - resize, scrollback, or visible cursor behavior
 
 This matrix is about terminal behavior, not feature completeness.
 
-## Frontends
+## Frontend
 
-- inline main-buffer mode: `CODEX_EXEC_LOOP_FRONTEND=inline`
-- alternate-screen mode: `CODEX_EXEC_LOOP_FRONTEND=alternate`
-- legacy alternate fallback: `CODEX_EXEC_LOOP_ALT_SCREEN=1`
+- inline main-buffer only
 
 ## Common Commands
 
@@ -25,20 +23,12 @@ cd <path-to-repo>
 cargo build
 ```
 
-Run inline:
+Run:
 
 ```bash
 cd <path-to-repo>
 . "$HOME/.cargo/env"
-CODEX_EXEC_LOOP_FRONTEND=inline cargo run
-```
-
-Run alternate:
-
-```bash
-cd <path-to-repo>
-. "$HOME/.cargo/env"
-CODEX_EXEC_LOOP_FRONTEND=alternate cargo run
+cargo run
 ```
 
 Record a validation row:
@@ -62,16 +52,11 @@ Summarize recorded coverage:
 | OS | Terminal | Shell | Frontend | Priority |
 | --- | --- | --- | --- | --- |
 | macOS | Terminal.app | zsh | inline | required |
-| macOS | Terminal.app | zsh | alternate | required |
 | macOS | iTerm2 | zsh | inline | required |
-| macOS | iTerm2 | zsh | alternate | required |
 | Windows | Windows Terminal | PowerShell | inline | required |
-| Windows | Windows Terminal | PowerShell | alternate | required |
 | Windows | Windows Terminal | WSL bash | inline | required |
-| Windows | Windows Terminal | WSL bash | alternate | required |
 | Windows | Git Bash or equivalent | bash | inline | optional |
 | Windows | JetBrains IDE terminal | WSL bash | inline | optional |
-| Windows | JetBrains IDE terminal | WSL bash | alternate | optional |
 
 ## Checklist
 
@@ -82,11 +67,9 @@ Run these checks once per required row:
    - confirm the first frame renders cleanly
    - exit with `Ctrl+q`
    - confirm the shell prompt and cursor restore normally
-2. Frontend selection
-   - run with `CODEX_EXEC_LOOP_FRONTEND=inline`
-   - run with `CODEX_EXEC_LOOP_FRONTEND=alternate`
-   - run with `CODEX_EXEC_LOOP_ALT_SCREEN=1`
-   - confirm explicit `CODEX_EXEC_LOOP_FRONTEND` wins when both env vars are set
+2. Frontend baseline
+   - run the default inline startup path
+   - confirm the app always opens in inline main-buffer mode
 3. Input editing
    - verify `Ctrl+j`, `Ctrl+u`, `Ctrl+w`, and `Enter`
    - confirm the prompt owns a visible cursor
@@ -100,7 +83,6 @@ Run these checks once per required row:
 6. Resize and scrollback
    - resize narrower, wider, shorter, and taller
    - in inline mode, inspect scrollback after a completed turn
-   - in alternate mode, confirm redraw is clean
 7. Failure and recovery
    - terminate the app during a live session if the change touched restore behavior
    - confirm the terminal returns to a usable state

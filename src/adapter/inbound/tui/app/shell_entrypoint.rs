@@ -22,8 +22,8 @@ use super::shell_runtime::ShellRuntime;
 use super::{NativeTuiApp, ShellChromeEvent};
 
 pub fn run() -> Result<()> {
-    let frontend = ShellFrontend::from_environment();
-    let runtime = prepare_runtime(build_default_app(), frontend.mode());
+    let frontend = ShellFrontend::new();
+    let runtime = prepare_runtime(build_default_app());
     frontend.run(runtime)
 }
 
@@ -61,12 +61,9 @@ fn build_default_app() -> NativeTuiApp {
     app
 }
 
-fn prepare_runtime(
-    mut app: NativeTuiApp,
-    frontend_mode: super::shell_frontend::ShellFrontendMode,
-) -> ShellRuntime {
+fn prepare_runtime(mut app: NativeTuiApp) -> ShellRuntime {
     app.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested);
-    ShellRuntime::new(app, frontend_mode)
+    ShellRuntime::new(app)
 }
 
 #[cfg(test)]
@@ -163,20 +160,14 @@ mod tests {
 
     #[test]
     fn prepare_runtime_requests_startup_checks_before_frontend_run() {
-        let runtime = prepare_runtime(
-            make_test_app(),
-            super::super::shell_frontend::ShellFrontendMode::InlineMainBuffer,
-        );
+        let runtime = prepare_runtime(make_test_app());
 
         assert!(matches!(runtime.app().startup_state, StartupState::Loading));
     }
 
     #[test]
     fn prepare_runtime_keeps_runtime_ready_for_background_messages() {
-        let runtime = prepare_runtime(
-            make_test_app(),
-            super::super::shell_frontend::ShellFrontendMode::InlineMainBuffer,
-        );
+        let runtime = prepare_runtime(make_test_app());
 
         assert!(!runtime.should_quit());
         assert!(matches!(runtime.app().startup_state, StartupState::Loading));

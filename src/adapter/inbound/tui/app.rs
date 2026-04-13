@@ -33,18 +33,23 @@ const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
 const MAX_AUTO_FOLLOW_MAX_TURNS: usize = 50;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
+#[cfg(test)]
 const SHELL_FRAME_MARGIN: u16 = 1;
+#[cfg(test)]
 const MIN_SHELL_HEADER_HEIGHT: u16 = 4;
+#[cfg(test)]
 const MAX_SHELL_HEADER_HEIGHT: u16 = 6;
 const MIN_TRANSCRIPT_PANEL_HEIGHT: u16 = 12;
+#[cfg(test)]
 const MIN_SHELL_STATUS_HEIGHT: u16 = 5;
+#[cfg(test)]
 const MAX_SHELL_STATUS_HEIGHT: u16 = 8;
+#[cfg(test)]
 const MIN_COMPOSER_HEIGHT: u16 = 4;
+#[cfg(test)]
 const MAX_COMPOSER_HEIGHT: u16 = 8;
 const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
-const DEFAULT_TRANSCRIPT_PAGE_STEP: u16 = 6;
-const ALT_SCREEN_ENV_VAR: &str = "CODEX_EXEC_LOOP_ALT_SCREEN";
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
 const PLANNER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
@@ -99,8 +104,6 @@ mod shell_runtime;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;
-#[path = "app/transcript_viewport.rs"]
-mod transcript_viewport;
 #[path = "app/turn_submission_runtime.rs"]
 mod turn_submission_runtime;
 
@@ -139,21 +142,19 @@ use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
 use shell_frontend::ShellFrontendMode;
-use shell_layout::{
-    block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
-    build_shell_footer_height,
-};
+use shell_layout::build_conversation_scroll_offset;
+#[cfg(test)]
+use shell_layout::{block_height_for_lines, build_input_block_height, build_shell_footer_height};
 use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{
     build_conversation_shell_frame_view, build_conversation_shell_view,
     build_followup_template_overlay_view, build_followup_template_preview_lines,
     build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
-    build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
-    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
-    build_transcript_panel_view, build_transcript_title,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
+    build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
+    build_status_title, build_transcript_panel_view, build_transcript_title,
 };
-use transcript_viewport::TranscriptViewportState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AutoFollowupSubmitContext {
@@ -315,7 +316,6 @@ struct NativeTuiApp {
     followup_overlay_ui_state: FollowupOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
-    transcript_viewport_state: TranscriptViewportState,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,
     session_service: SessionService,

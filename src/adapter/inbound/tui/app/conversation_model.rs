@@ -37,6 +37,7 @@ pub(crate) enum ConversationInputState {
 }
 
 impl ConversationInputState {
+    #[cfg(test)]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::DraftReady => "draft ready",
@@ -285,6 +286,7 @@ impl AutoFollowState {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn compact_completed_progress_label(&self) -> String {
         format!("{}/{} done", self.completed_auto_turns, self.max_auto_turns)
     }

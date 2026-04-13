@@ -119,6 +119,11 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn show_queue_overlay(&mut self) {
+        self.refresh_ready_conversation_planning_runtime_snapshot();
+        self.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+    }
+
     pub(super) fn show_followup_template_overlay(&mut self) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown {
             stop_keyword: self.current_stop_keyword_value(),
@@ -170,6 +175,7 @@ impl NativeTuiApp {
         match command_input.command() {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Sessions => self.show_session_overlay(),
+            InlineShellCommand::Queue => self.show_queue_overlay(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
             InlineShellCommand::PlanningInit => self.show_planning_init_overlay(),
             InlineShellCommand::MaxAutoTurns => {
@@ -186,8 +192,6 @@ impl NativeTuiApp {
                 });
             }
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
-            InlineShellCommand::TranscriptTopLegacy => {}
-            InlineShellCommand::TranscriptTailLegacy => {}
             InlineShellCommand::Help => {}
         }
 
@@ -636,40 +640,6 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: format!("planner detail {}", self.planner_visibility.label()),
         });
-    }
-
-    pub(super) fn reset_transcript_viewport(&mut self) {
-        self.transcript_viewport_state = TranscriptViewportState::default();
-    }
-
-    pub(super) fn sync_transcript_viewport_metrics(
-        &mut self,
-        max_scroll_offset: u16,
-        visible_height: u16,
-    ) -> u16 {
-        self.transcript_viewport_state
-            .sync_metrics(max_scroll_offset, visible_height);
-        self.transcript_viewport_state.current_scroll_offset()
-    }
-
-    pub(super) fn transcript_viewport_status_label(&self) -> String {
-        self.transcript_viewport_state.status_label()
-    }
-
-    pub(super) fn scroll_transcript_page_up(&mut self) {
-        self.transcript_viewport_state.scroll_page_up();
-    }
-
-    pub(super) fn scroll_transcript_page_down(&mut self) {
-        self.transcript_viewport_state.scroll_page_down();
-    }
-
-    pub(super) fn scroll_transcript_to_top(&mut self) {
-        self.transcript_viewport_state.scroll_to_top();
-    }
-
-    pub(super) fn scroll_transcript_to_tail(&mut self) {
-        self.transcript_viewport_state.scroll_to_tail();
     }
 
     pub(super) fn cycle_auto_followup_template(&mut self) {

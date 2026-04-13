@@ -5,9 +5,7 @@ use anyhow::Result;
 use crossterm::cursor::{MoveToNextLine, Show};
 use crossterm::event;
 use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
 use ratatui::TerminalOptions;
 use ratatui::Viewport;
@@ -17,7 +15,6 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
-use super::shell_frontend::ShellFrontend;
 use super::shell_presentation::{
     build_inline_tail_lines, build_startup_banner_lines, format_conversation_lines_with_debug,
 };
@@ -28,48 +25,48 @@ use super::{
     ShellFrontendMode,
 };
 
-pub(super) fn run(mut runtime: ShellRuntime, frontend: ShellFrontend) -> Result<()> {
-    let _restore_guard = TerminalRestoreGuard::activate(frontend)?;
+pub(super) fn run(mut runtime: ShellRuntime) -> Result<()> {
+    let _restore_guard = TerminalRestoreGuard::activate()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut inline_viewport = InlineViewportState::default();
-    let mut terminal = build_terminal(backend, frontend.mode())?;
-    run_event_loop(&mut terminal, &mut runtime, frontend, &mut inline_viewport)
+    let mut terminal = build_terminal(backend)?;
+    run_event_loop(&mut terminal, &mut runtime, &mut inline_viewport)
 }
 
 fn build_terminal(
     backend: CrosstermBackend<io::Stdout>,
-    mode: ShellFrontendMode,
 ) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    match mode {
-        ShellFrontendMode::InlineMainBuffer => Terminal::with_options(
-            backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
-            },
-        ),
-        ShellFrontendMode::AlternateScreen => Terminal::new(backend),
-    }
+    Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+        },
+    )
 }
 
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
-    frontend: ShellFrontend,
     inline_viewport: &mut InlineViewportState,
 ) -> Result<()> {
     while !runtime.should_quit() {
         runtime.poll_background_messages();
         if runtime.take_redraw_request() {
-            let should_draw =
-                sync_inline_viewport(terminal, runtime, frontend.mode(), inline_viewport)?;
+            let should_draw = sync_inline_viewport(terminal, runtime, inline_viewport)?;
             if should_draw {
                 let terminal_size = terminal.size()?;
                 prepare_render_state(
                     runtime.app_mut(),
-                    frontend.mode(),
+                    ShellFrontendMode::InlineMainBuffer,
                     ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height),
                 );
-                terminal.draw(|frame| draw(frame, runtime.app_mut(), frontend.mode()))?;
+                terminal.draw(|frame| {
+                    draw(
+                        frame,
+                        runtime.app_mut(),
+                        ShellFrontendMode::InlineMainBuffer,
+                    )
+                })?;
             }
         }
 
@@ -86,13 +83,8 @@ fn run_event_loop(
 fn sync_inline_viewport(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
-    mode: ShellFrontendMode,
     inline_viewport: &mut InlineViewportState,
 ) -> io::Result<bool> {
-    if mode != ShellFrontendMode::InlineMainBuffer {
-        return Ok(true);
-    }
-
     let current_lines = current_inline_history_lines(runtime.app_mut());
     inline_viewport.history.sync(terminal, &current_lines)?;
 
@@ -264,22 +256,12 @@ fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -> usize {
         .sum()
 }
 
-struct TerminalRestoreGuard {
-    use_alternate_screen: bool,
-}
+struct TerminalRestoreGuard;
 
 impl TerminalRestoreGuard {
-    fn activate(frontend: ShellFrontend) -> Result<Self> {
-        let use_alternate_screen = frontend.mode().uses_alternate_screen();
+    fn activate() -> Result<Self> {
         enable_raw_mode()?;
-        let guard = Self {
-            use_alternate_screen,
-        };
-        let mut stdout = io::stdout();
-        if use_alternate_screen {
-            execute!(stdout, EnterAlternateScreen)?;
-        }
-        Ok(guard)
+        Ok(Self)
     }
 }
 
@@ -287,11 +269,7 @@ impl Drop for TerminalRestoreGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        if self.use_alternate_screen {
-            let _ = execute!(stdout, LeaveAlternateScreen);
-        } else {
-            let _ = execute!(stdout, MoveToNextLine(1));
-        }
+        let _ = execute!(stdout, MoveToNextLine(1));
         let _ = execute!(stdout, Show);
     }
 }

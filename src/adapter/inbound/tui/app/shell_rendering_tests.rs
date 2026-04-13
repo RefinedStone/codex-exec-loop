@@ -233,22 +233,20 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 }
 
 #[test]
-fn alternate_screen_rendering_keeps_bordered_frame() {
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+fn inline_queue_overlay_rendering_shows_compact_sections() {
+    let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
-    append_stable_history_message(&mut app, "stable history stays inside the framed renderer");
+    append_stable_history_message(&mut app, "stable history stays visible above the queue");
+    app.shell_overlay = ShellOverlay::Queue;
 
     terminal
-        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::AlternateScreen))
-        .expect("alternate render succeeds");
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("queue render succeeds");
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Shell / Ctrl+t new draft"));
-    assert!(rendered.contains("Transcript"));
-    assert!(rendered.contains("stable history stays inside the framed renderer"));
-    assert!(rendered.contains("┌"));
-    assert!(rendered.contains("│"));
+    assert!(rendered.contains("Ready Queue"));
+    assert!(rendered.contains("Proposals"));
 }
 
 fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
