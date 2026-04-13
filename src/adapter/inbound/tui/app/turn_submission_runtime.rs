@@ -3,10 +3,13 @@ mod post_turn_execution;
 #[path = "turn_submission_runtime/stream_execution.rs"]
 mod stream_execution;
 
+use crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
 
 use super::*;
+
+const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
 
 impl NativeTuiApp {
     pub(super) fn start_turn_submission(&mut self) {
@@ -64,8 +67,7 @@ impl NativeTuiApp {
                 transcript_text,
                 handoff_task,
             } => {
-                let debug_detail =
-                    self.build_auto_follow_transcript_debug_detail(handoff_task.as_ref());
+                let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
                 self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
@@ -163,11 +165,10 @@ impl NativeTuiApp {
         )
     }
 
-    fn build_auto_follow_transcript_debug_detail(
-        &self,
-        handoff_task: Option<&PlanningTaskHandoff>,
-    ) -> Option<String> {
-        if !self.planner_shows_debug_details() || handoff_task.is_none() {
+    fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {
+        if !self.planner_shows_debug_details()
+            || transcript_text != BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
+        {
             return None;
         }
 
@@ -188,15 +189,30 @@ impl NativeTuiApp {
         if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
             lines.push(format!("planner summary: {summary}"));
         }
-        if let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) {
-            lines.push("planner prompt:".to_string());
-            lines.extend(prompt.lines().map(|line| format!("  {line}")));
-        }
-        if let Some(response) = response.filter(|response| !response.trim().is_empty()) {
-            lines.push("planner response:".to_string());
-            lines.extend(response.lines().map(|line| format!("  {line}")));
-        }
+        append_truncated_debug_detail_block(&mut lines, "planner prompt:", prompt);
+        append_truncated_debug_detail_block(&mut lines, "planner response:", response);
 
         Some(lines.join("\n"))
+    }
+}
+
+fn append_truncated_debug_detail_block(lines: &mut Vec<String>, label: &str, block: Option<&str>) {
+    let Some(block) = block.filter(|block| !block.trim().is_empty()) else {
+        return;
+    };
+
+    lines.push(label.to_string());
+    let mut block_lines = block.lines();
+    for line in block_lines
+        .by_ref()
+        .take(AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES)
+    {
+        lines.push(format!("  {line}"));
+    }
+    if block_lines.next().is_some() {
+        lines.push(format!(
+            "  ... truncated after {} lines",
+            AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES
+        ));
     }
 }
