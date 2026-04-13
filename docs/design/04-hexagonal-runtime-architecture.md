@@ -24,6 +24,7 @@ Dependency flow stays inward: `adapter -> application -> domain`.
 
 - planning bootstrap, validation, prompt-fragment assembly, queue projection, and reconciliation live in `application/service`
 - filesystem reads and writes for planning files stay behind `PlanningWorkspacePort`
+- hidden planner session execution stays behind `PlanningWorkerPort`; main conversation streaming stays behind `CodexAppServerPort`
 - the queue snapshot is derived state, not an operator-authored source of truth
 - repair prompts and protected-file restoration stay outside the TUI layer
 

@@ -28,15 +28,15 @@ pub fn run() -> Result<()> {
 }
 
 fn build_default_app() -> NativeTuiApp {
-    let codex_app_server_port: Arc<dyn CodexAppServerPort> = Arc::new(CodexAppServerAdapter::new(
+    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
+    let codex_app_server_port: Arc<dyn CodexAppServerPort> = app_server_adapter.clone();
     let followup_template_port: Arc<dyn FollowupTemplatePort> =
         Arc::new(FilesystemFollowupTemplateAdapter::new());
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
-        AppServerPlanningWorkerAdapter::new(codex_app_server_port.clone()),
-    );
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> =
+        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter));
     let startup_service = StartupService::new(codex_app_server_port.clone());
     let session_service = SessionService::new(codex_app_server_port.clone());
     let conversation_service = ConversationService::new(codex_app_server_port);

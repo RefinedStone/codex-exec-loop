@@ -672,6 +672,7 @@ pub(super) enum SandboxPolicyValue {
     DangerFullAccess,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(super) enum ReasoningEffortValue {
     #[serde(rename = "none")]

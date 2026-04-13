@@ -1,28 +1,32 @@
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::mpsc::Sender;
 
 use anyhow::{Result, anyhow};
 
-use crate::application::port::outbound::codex_app_server_port::{
-    CodexAppServerPort, NewThreadReasoningEffort, NewThreadStreamRequest,
-};
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::domain::conversation::ConversationStreamEvent;
 
-#[derive(Clone)]
-pub struct AppServerPlanningWorkerAdapter {
-    codex_app_server_port: Arc<dyn CodexAppServerPort>,
+pub(crate) trait PlanningThreadLauncher: Send + Sync {
+    fn run_hidden_planning_thread(
+        &self,
+        workspace_directory: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()>;
 }
 
-const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
-const PLANNING_WORKER_REASONING_EFFORT: NewThreadReasoningEffort = NewThreadReasoningEffort::Medium;
+#[derive(Clone)]
+pub struct AppServerPlanningWorkerAdapter {
+    planning_thread_launcher: Arc<dyn PlanningThreadLauncher>,
+}
 
 impl AppServerPlanningWorkerAdapter {
-    pub fn new(codex_app_server_port: Arc<dyn CodexAppServerPort>) -> Self {
+    pub(crate) fn new(planning_thread_launcher: Arc<dyn PlanningThreadLauncher>) -> Self {
         Self {
-            codex_app_server_port,
+            planning_thread_launcher,
         }
     }
 }
@@ -33,17 +37,11 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse> {
         let (tx, rx) = mpsc::channel();
-        let stream_result = self
-            .codex_app_server_port
-            .run_new_thread_stream_with_overrides(
-                NewThreadStreamRequest {
-                    cwd: request.workspace_directory.clone(),
-                    prompt: request.prompt.clone(),
-                    model: Some(PLANNING_WORKER_MODEL.to_string()),
-                    reasoning_effort: Some(PLANNING_WORKER_REASONING_EFFORT),
-                },
-                tx,
-            );
+        let stream_result = self.planning_thread_launcher.run_hidden_planning_thread(
+            &request.workspace_directory,
+            &request.prompt,
+            tx,
+        );
 
         let mut final_agent_message = None;
         let mut changed_planning_file_paths = Vec::new();
@@ -92,76 +90,50 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
 mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::mpsc::Sender;
 
     use anyhow::Result;
 
-    use super::AppServerPlanningWorkerAdapter;
-    use crate::application::port::outbound::codex_app_server_port::{
-        AppServerStartupContext, CodexAppServerPort, NewThreadReasoningEffort,
-        NewThreadStreamRequest,
-    };
+    use super::{AppServerPlanningWorkerAdapter, PlanningThreadLauncher};
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
     };
-    use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::conversation::ConversationStreamEvent;
 
-    struct FakeCodexAppServerPort {
-        events: Vec<ConversationStreamEvent>,
-        requests: Mutex<Vec<NewThreadStreamRequest>>,
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct HiddenPlanningThreadCall {
+        workspace_directory: String,
+        prompt: String,
     }
 
-    impl CodexAppServerPort for FakeCodexAppServerPort {
-        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
-            unreachable!("not used in test")
-        }
+    struct FakePlanningThreadLauncher {
+        events: Vec<ConversationStreamEvent>,
+        calls: Mutex<Vec<HiddenPlanningThreadCall>>,
+    }
 
-        fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
-            unreachable!("not used in test")
-        }
-
-        fn load_conversation_snapshot(&self, _thread_id: &str) -> Result<ConversationSnapshot> {
-            unreachable!("not used in test")
-        }
-
-        fn run_new_thread_stream(
+    impl PlanningThreadLauncher for FakePlanningThreadLauncher {
+        fn run_hidden_planning_thread(
             &self,
-            _cwd: &str,
-            _prompt: &str,
-            event_sender: Sender<ConversationStreamEvent>,
+            workspace_directory: &str,
+            prompt: &str,
+            event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
         ) -> Result<()> {
+            self.calls
+                .lock()
+                .expect("calls lock should succeed")
+                .push(HiddenPlanningThreadCall {
+                    workspace_directory: workspace_directory.to_string(),
+                    prompt: prompt.to_string(),
+                });
             for event in self.events.clone() {
                 let _ = event_sender.send(event);
             }
             Ok(())
         }
-
-        fn run_new_thread_stream_with_overrides(
-            &self,
-            request: NewThreadStreamRequest,
-            event_sender: Sender<ConversationStreamEvent>,
-        ) -> Result<()> {
-            self.requests
-                .lock()
-                .expect("requests lock should succeed")
-                .push(request);
-            self.run_new_thread_stream("", "", event_sender)
-        }
-
-        fn run_turn_stream(
-            &self,
-            _thread_id: &str,
-            _prompt: &str,
-            _event_sender: Sender<ConversationStreamEvent>,
-        ) -> Result<()> {
-            unreachable!("not used in test")
-        }
     }
 
     #[test]
     fn run_planning_session_collects_completed_message_and_changed_paths() {
-        let fake_port = Arc::new(FakeCodexAppServerPort {
+        let fake_launcher = Arc::new(FakePlanningThreadLauncher {
             events: vec![
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: "thread-1".to_string(),
@@ -180,9 +152,9 @@ mod tests {
                     ],
                 },
             ],
-            requests: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
         });
-        let adapter = AppServerPlanningWorkerAdapter::new(fake_port.clone());
+        let adapter = AppServerPlanningWorkerAdapter::new(fake_launcher.clone());
 
         let result = adapter
             .run_planning_session(PlanningWorkerRequest {
@@ -201,27 +173,25 @@ mod tests {
             vec![".codex-exec-loop/planning/task-ledger.json".to_string()]
         );
         assert_eq!(
-            fake_port
-                .requests
+            fake_launcher
+                .calls
                 .lock()
-                .expect("requests lock should succeed")
+                .expect("calls lock should succeed")
                 .as_slice(),
-            &[NewThreadStreamRequest {
-                cwd: "/tmp/workspace".to_string(),
+            &[HiddenPlanningThreadCall {
+                workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
-                model: Some("gpt-5.4".to_string()),
-                reasoning_effort: Some(NewThreadReasoningEffort::Medium),
             }]
         );
     }
 
     #[test]
     fn run_planning_session_returns_error_when_stream_reports_failure() {
-        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakeCodexAppServerPort {
+        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
             events: vec![ConversationStreamEvent::Failed {
                 message: "planner crashed".to_string(),
             }],
-            requests: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
         }));
 
         let error = adapter
