@@ -37,14 +37,16 @@ prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 [[directions]]
 id = "general-workstream"
 title = "General workstream"
-summary = "No detailed direction taxonomy is defined yet. Put every actionable goal or accepted proposal into task-ledger.json and work from that queue."
+summary = "No detailed direction taxonomy is defined yet. Derive the next actionable work from the latest user request and the latest accepted answer, capture it in task-ledger.json, and work from that queue."
 success_criteria = [
     "Actionable goals are represented in task-ledger.json before execution.",
+    "When the latest answer clearly implies a next step, that follow-up is derived into task-ledger.json instead of leaving the queue idle.",
     "Work advances by updating the task ledger instead of inventing unmanaged side tasks.",
 ]
 scope_hints = [
     "Use this generic direction until the operator replaces it with a richer direction catalog.",
     "Treat task-ledger.json as the source of truth for concrete next actions and proposals.",
+    "If the user asked for a multi-step artifact, convert the next obvious step from the latest answer into a queued task.",
 ]
 detail_doc_path = ""
 state = "active"

@@ -78,6 +78,10 @@ pub struct PlanningMainSessionHandoff {
 pub struct PlanningTaskHandoff {
     pub task_id: String,
     pub task_title: String,
+    pub direction_id: String,
+    pub combined_priority: i32,
+    pub updated_at: String,
+    pub status_label: String,
 }
 
 #[derive(Clone)]
@@ -139,6 +143,10 @@ impl PlanningRuntimeFacadeService {
             task: PlanningTaskHandoff {
                 task_id: queue_head.task_id.trim().to_string(),
                 task_title: queue_head.task_title.trim().to_string(),
+                direction_id: queue_head.direction_id.trim().to_string(),
+                combined_priority: queue_head.combined_priority,
+                updated_at: queue_head.updated_at.trim().to_string(),
+                status_label: queue_head.status.label().to_string(),
             },
         })
     }

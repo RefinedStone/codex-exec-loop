@@ -15,24 +15,48 @@ use crate::application::service::planning_init_service::{
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::domain::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, DirectionCatalogDocument,
-    QueueIdlePolicy, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QueueIdlePolicy,
+    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     default_direction_detail_doc_path,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectionsSupportingFileStatus {
+    MissingMapping,
+    Ready,
+    BrokenMapping,
+}
+
+impl DirectionsSupportingFileStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MissingMapping => "unset",
+            Self::Ready => "ready",
+            Self::BrokenMapping => "broken",
+        }
+    }
+
+    pub fn needs_attention(self) -> bool {
+        self != Self::Ready
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectionsMaintenanceDirectionSummary {
     pub id: String,
     pub title: String,
     pub detail_doc_path: Option<String>,
-    pub detail_doc_exists: bool,
+    pub detail_doc_status: DirectionsSupportingFileStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectionsMaintenanceSummary {
     pub directions: Vec<DirectionsMaintenanceDirectionSummary>,
+    pub missing_detail_doc_count: usize,
+    pub broken_detail_doc_count: usize,
     pub queue_idle_policy: QueueIdlePolicy,
     pub queue_idle_prompt_path: Option<String>,
-    pub queue_idle_prompt_exists: bool,
+    pub queue_idle_prompt_status: DirectionsSupportingFileStatus,
     pub parse_error: Option<String>,
 }
 
@@ -72,9 +96,11 @@ impl PlanningDirectionsService {
             Err(error) => {
                 return Ok(DirectionsMaintenanceSummary {
                     directions: Vec::new(),
+                    missing_detail_doc_count: 0,
+                    broken_detail_doc_count: 0,
                     queue_idle_policy: QueueIdlePolicy::Stop,
                     queue_idle_prompt_path: None,
-                    queue_idle_prompt_exists: false,
+                    queue_idle_prompt_status: DirectionsSupportingFileStatus::MissingMapping,
                     parse_error: Some(format!("failed to parse directions.toml: {error}")),
                 });
             }
@@ -82,13 +108,11 @@ impl PlanningDirectionsService {
         let catalog = parsed.expect("parsed directions should exist");
         let queue_idle_prompt_path =
             trimmed_non_empty(catalog.queue_idle.prompt_path.as_str()).map(str::to_string);
-        let queue_idle_prompt_exists = queue_idle_prompt_path
-            .as_deref()
-            .map(|path| {
-                self.load_supporting_file_best_effort(workspace_dir, path)
-                    .is_some()
-            })
-            .unwrap_or(false);
+        let queue_idle_prompt_status = self.supporting_file_status(
+            workspace_dir,
+            queue_idle_prompt_path.as_deref(),
+            PLANNING_PROMPTS_DIRECTORY,
+        );
 
         let directions = catalog
             .directions
@@ -96,28 +120,40 @@ impl PlanningDirectionsService {
             .map(|direction| {
                 let detail_doc_path =
                     trimmed_non_empty(direction.detail_doc_path.as_str()).map(str::to_string);
-                let detail_doc_exists = detail_doc_path
-                    .as_deref()
-                    .map(|path| {
-                        self.load_supporting_file_best_effort(workspace_dir, path)
-                            .is_some()
-                    })
-                    .unwrap_or(false);
+                let detail_doc_status = self.supporting_file_status(
+                    workspace_dir,
+                    detail_doc_path.as_deref(),
+                    PLANNING_DIRECTION_DOCS_DIRECTORY,
+                );
 
                 Ok(DirectionsMaintenanceDirectionSummary {
                     id: direction.id.trim().to_string(),
                     title: direction.title.trim().to_string(),
                     detail_doc_path,
-                    detail_doc_exists,
+                    detail_doc_status,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let missing_detail_doc_count = directions
+            .iter()
+            .filter(|direction| {
+                direction.detail_doc_status == DirectionsSupportingFileStatus::MissingMapping
+            })
+            .count();
+        let broken_detail_doc_count = directions
+            .iter()
+            .filter(|direction| {
+                direction.detail_doc_status == DirectionsSupportingFileStatus::BrokenMapping
+            })
+            .count();
 
         Ok(DirectionsMaintenanceSummary {
             directions,
+            missing_detail_doc_count,
+            broken_detail_doc_count,
             queue_idle_policy: catalog.queue_idle.policy,
             queue_idle_prompt_path,
-            queue_idle_prompt_exists,
+            queue_idle_prompt_status,
             parse_error: None,
         })
     }
@@ -355,6 +391,28 @@ impl PlanningDirectionsService {
             .flatten()
     }
 
+    fn supporting_file_status(
+        &self,
+        workspace_dir: &str,
+        configured_path: Option<&str>,
+        required_prefix: &str,
+    ) -> DirectionsSupportingFileStatus {
+        let Some(path) = configured_path else {
+            return DirectionsSupportingFileStatus::MissingMapping;
+        };
+        if !is_valid_planning_markdown_path(path, required_prefix) {
+            return DirectionsSupportingFileStatus::BrokenMapping;
+        }
+        if self
+            .load_supporting_file_best_effort(workspace_dir, path)
+            .is_some()
+        {
+            DirectionsSupportingFileStatus::Ready
+        } else {
+            DirectionsSupportingFileStatus::BrokenMapping
+        }
+    }
+
     fn resolve_detail_doc_editor_target(
         &self,
         workspace_dir: &str,
@@ -428,6 +486,23 @@ fn build_maintenance_draft_name() -> String {
         now.format("%Y%m%dT%H%M%S"),
         now.timestamp_subsec_nanos()
     )
+}
+
+fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
+    let normalized = path.trim().replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains("../")
+        || normalized.contains("/..")
+    {
+        return false;
+    }
+
+    let Some(suffix) = normalized.strip_prefix(required_prefix) else {
+        return false;
+    };
+
+    suffix.starts_with('/') && suffix.len() > 1 && normalized.ends_with(".md")
 }
 
 fn validate_loaded_draft(
@@ -521,7 +596,7 @@ mod tests {
 
     use super::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN,
-        DIRECTIONS_FILE_PATH, PlanningDirectionsService,
+        DIRECTIONS_FILE_PATH, DirectionsSupportingFileStatus, PlanningDirectionsService,
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning_bootstrap_service::{
@@ -605,10 +680,18 @@ mod tests {
             summary.queue_idle_prompt_path,
             Some(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string())
         );
-        assert!(summary.queue_idle_prompt_exists);
+        assert_eq!(
+            summary.queue_idle_prompt_status,
+            DirectionsSupportingFileStatus::Ready
+        );
         assert_eq!(summary.directions.len(), 1);
         assert_eq!(summary.directions[0].detail_doc_path, None);
-        assert!(!summary.directions[0].detail_doc_exists);
+        assert_eq!(
+            summary.directions[0].detail_doc_status,
+            DirectionsSupportingFileStatus::MissingMapping
+        );
+        assert_eq!(summary.missing_detail_doc_count, 1);
+        assert_eq!(summary.broken_detail_doc_count, 0);
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
@@ -668,12 +751,20 @@ mod tests {
             summary.queue_idle_prompt_path,
             Some("../escape.md".to_string())
         );
-        assert!(!summary.queue_idle_prompt_exists);
+        assert_eq!(
+            summary.queue_idle_prompt_status,
+            DirectionsSupportingFileStatus::BrokenMapping
+        );
         assert_eq!(
             summary.directions[0].detail_doc_path,
             Some("../detail.md".to_string())
         );
-        assert!(!summary.directions[0].detail_doc_exists);
+        assert_eq!(
+            summary.directions[0].detail_doc_status,
+            DirectionsSupportingFileStatus::BrokenMapping
+        );
+        assert_eq!(summary.missing_detail_doc_count, 0);
+        assert_eq!(summary.broken_detail_doc_count, 1);
 
         let session = sample_service()
             .stage_editor_session(&workspace_dir)

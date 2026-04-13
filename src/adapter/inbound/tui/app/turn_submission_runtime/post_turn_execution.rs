@@ -85,15 +85,15 @@ impl PostTurnEvaluationExecutor {
         );
         let automation_enabled = conversation.auto_follow_state.enabled;
 
-        if automation_enabled {
-            if let Some(repair_request) = reconciliation_result.repair_request.as_ref() {
-                let repair_outcome = self.run_hidden_planning_repairs(
-                    &request.workspace_directory,
-                    &request.queued_from_turn_id,
-                    repair_request,
-                );
-                planning_runtime_snapshot = repair_outcome.runtime_snapshot;
-            }
+        if automation_enabled
+            && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
+        {
+            let repair_outcome = self.run_hidden_planning_repairs(
+                &request.workspace_directory,
+                &request.queued_from_turn_id,
+                repair_request,
+            );
+            planning_runtime_snapshot = repair_outcome.runtime_snapshot;
         }
 
         if automation_enabled
@@ -366,7 +366,7 @@ impl PostTurnEvaluationExecutor {
                 let prompt_markdown = review_prompt_markdown
                     .as_deref()
                     .expect("queue-idle review prompt should exist for review_and_enqueue");
-                PlanningQueueRefreshMode::ReviewDirectionsGoals {
+                PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle {
                     queue_idle_prompt_markdown: prompt_markdown,
                 }
             }
@@ -379,6 +379,7 @@ impl PostTurnEvaluationExecutor {
         let worker_request = PlanningQueueRefreshRequest {
             workspace_directory: &request.workspace_directory,
             root_turn_id: &request.queued_from_turn_id,
+            latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
             mode: mode.clone(),
@@ -391,7 +392,7 @@ impl PostTurnEvaluationExecutor {
             PlannerWorkerStatus::RefreshRunning,
             match mode {
                 PlanningQueueRefreshMode::FromLatestReply => "refresh",
-                PlanningQueueRefreshMode::ReviewDirectionsGoals { .. } => "review",
+                PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => "active-derive",
             },
             worker_prompt,
         );
@@ -407,8 +408,8 @@ impl PostTurnEvaluationExecutor {
                     PlanningQueueRefreshMode::FromLatestReply => {
                         format!("planner refresh failed: {error}")
                     }
-                    PlanningQueueRefreshMode::ReviewDirectionsGoals { .. } => {
-                        format!("planner queue review failed: {error}")
+                    PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => {
+                        format!("planner queue active-derivation failed: {error}")
                     }
                 };
                 let invalid_snapshot =
@@ -477,6 +478,19 @@ impl PostTurnEvaluationExecutor {
                     };
                 }
             }
+        }
+
+        if !runtime_snapshot.has_actionable_queue_head()
+            && !runtime_snapshot.has_proposal_candidates()
+            && matches!(
+                mode,
+                PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. }
+            )
+        {
+            self.planner_worker_panel_state.last_host_detail = Some(
+                "planner derived no justified follow-up task from the latest request and reply"
+                    .to_string(),
+            );
         }
 
         if let Some(detail) =
@@ -694,8 +708,17 @@ fn repeated_queue_head_detail(
         return None;
     }
 
+    let unchanged = queue_head.task_title.trim() == previous_handoff.task_title.trim()
+        && queue_head.direction_id.trim() == previous_handoff.direction_id.trim()
+        && queue_head.combined_priority == previous_handoff.combined_priority
+        && queue_head.updated_at.trim() == previous_handoff.updated_at.trim()
+        && queue_head.status.label() == previous_handoff.status_label;
+    if !unchanged {
+        return None;
+    }
+
     Some(format!(
-        "planner refresh kept the previously handed-off task as the queue head: {}",
+        "planner refresh kept the previously handed-off task unchanged as the queue head: {}",
         previous_handoff.task_title
     ))
 }

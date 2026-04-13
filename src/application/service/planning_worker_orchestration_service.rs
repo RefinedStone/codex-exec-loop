@@ -17,6 +17,7 @@ use crate::application::service::planning_runtime_facade_service::{
 pub struct PlanningQueueRefreshRequest<'a> {
     pub workspace_directory: &'a str,
     pub root_turn_id: &'a str,
+    pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
     pub mode: PlanningQueueRefreshMode<'a>,
@@ -25,7 +26,7 @@ pub struct PlanningQueueRefreshRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningQueueRefreshMode<'a> {
     FromLatestReply,
-    ReviewDirectionsGoals { queue_idle_prompt_markdown: &'a str },
+    DeriveNextTaskWhenQueueIdle { queue_idle_prompt_markdown: &'a str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,12 +99,14 @@ impl PlanningWorkerOrchestrationService {
     pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
         match &request.mode {
             PlanningQueueRefreshMode::FromLatestReply => build_planning_queue_refresh_prompt(
+                request.latest_user_message,
                 request.latest_main_reply,
                 request.previous_handoff_task,
             ),
-            PlanningQueueRefreshMode::ReviewDirectionsGoals {
+            PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle {
                 queue_idle_prompt_markdown,
-            } => build_planning_queue_idle_review_prompt(
+            } => build_planning_queue_idle_derive_prompt(
+                request.latest_user_message,
                 request.latest_main_reply,
                 request.previous_handoff_task,
                 queue_idle_prompt_markdown,
@@ -188,13 +191,22 @@ impl PlanningWorkerOrchestrationService {
 }
 
 fn build_planning_queue_refresh_prompt(
+    latest_user_message: Option<&str>,
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
 ) -> String {
+    let latest_user_request_section = latest_user_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(|message| format!("\nlatest operator request:\n{message}\n"))
+        .unwrap_or_default();
     let previous_handoff_section = previous_handoff_task.map_or_else(String::new, |task| {
         format!(
-            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이면 `in_progress`, 막혔으면 `blocked`, 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
-            task.task_id, task.task_title
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            task.task_id,
+            task.task_title,
+            task.updated_at,
+            task.status_label
         )
     });
 
@@ -205,11 +217,14 @@ planning worker refresh 입니다.
 이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 갱신하세요.
 - planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
 - `directions.toml`, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
-- 현재 workspace의 planning 파일을 읽고, 아래 main session의 최신 답변에서 실행 가능한 후속 작업을 정리해 ledger에 반영하세요.
+- 현재 workspace의 planning 파일을 읽고, 아래 최신 사용자 요청과 main session의 최신 답변을 함께 보고 실행 가능한 후속 작업을 정리해 ledger에 반영하세요.
+- 최신 답변이 다음 순서, 이어서 할 일, 보완 항목, numbered checklist를 직접 제시하면 그것을 우선적인 후속 작업 근거로 사용하세요.
 - 기존 task/proposal과 의미가 겹치면 새 항목을 남발하지 말고 기존 항목을 갱신하세요.
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
 - builtin next-task 자동 진행을 위해, `proposed`만 있고 바로 이어서 진행해야 할 후속 작업이 분명하면 최상위 proposal 1개를 `ready`로 승격하고 나머지 선택지는 `proposed`로 유지하세요.
+- queue head를 유지하더라도 title, status, priority, updated_at 중 하나도 바뀌지 않은 채 그대로 반복하지 마세요.
 - 마지막에는 이번 refresh에서 queue에 반영한 핵심 변경을 짧게 요약하세요.
+{latest_user_request_section}
 {previous_handoff_section}
 
 main session latest reply:
@@ -217,30 +232,43 @@ main session latest reply:
     )
 }
 
-fn build_planning_queue_idle_review_prompt(
+fn build_planning_queue_idle_derive_prompt(
+    latest_user_message: Option<&str>,
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
     queue_idle_prompt_markdown: &str,
 ) -> String {
+    let latest_user_request_section = latest_user_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(|message| format!("\nlatest operator request:\n{message}\n"))
+        .unwrap_or_default();
     let previous_handoff_section = previous_handoff_task.map_or_else(String::new, |task| {
         format!(
-            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이면 `in_progress`, 막혔으면 `blocked`, 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
-            task.task_id, task.task_title
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            task.task_id,
+            task.task_title,
+            task.updated_at,
+            task.status_label
         )
     });
 
     format!(
         r#"대리인입니다.
-planning worker queue-idle review 입니다.
+planning worker queue-idle active-derivation review 입니다.
 
-이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 재평가하세요.
+이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 재평가하고, 필요하면 다음 작업을 적극적으로 도출하세요.
 - planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
 - `directions.toml`, direction detail docs, queue-idle review prompt, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
-- 현재 queue는 비어 있습니다. direction 목표와 success criteria, detail doc, 지금까지의 work list를 다시 비추어보고 부족한 점이 실제로 남아 있는지 판단하세요.
+- 현재 queue는 비어 있습니다. direction 목표와 success criteria, detail doc, 최신 사용자 요청, 최신 답변, 지금까지의 work list를 다시 비추어보고 다음 실행 가능한 작업이 실제로 남아 있는지 판단하세요.
+- 최신 답변에 다음 순서, 이어서 만들 항목, 보완해야 할 목차, numbered checklist가 보이면 그것을 근거로 새 follow-up task를 만들어야 합니다.
+- simple mode처럼 directions가 generic 하더라도, 최신 사용자 요청과 최신 답변이 분명한 다음 단계를 암시하면 queue를 비워 두지 마세요.
 - 이미 done / in_progress / blocked / proposed 로 같은 의미가 관리되고 있으면 중복 생성 대신 기존 항목을 갱신하세요.
 - 지금 바로 이어서 실행해야 할 항목만 `ready` 또는 `in_progress`로 두고, 나머지는 `proposed`로 남기세요.
+- 최우선 follow-up이 명확하면 1개를 `ready`로 두고, 나머지 가능 작업은 `proposed`로 분리하세요.
 - 정말 이어갈 작업이 없다면 queue를 비운 채 유지하고, 그 이유를 짧게 요약하세요.
 - 마지막에는 이번 review에서 queue에 반영한 핵심 변경 또는 queue를 비운 판단 근거를 짧게 요약하세요.
+{latest_user_request_section}
 {previous_handoff_section}
 
 queue-idle review prompt:
@@ -434,6 +462,7 @@ mod tests {
             .refresh_queue_from_reply(PlanningQueueRefreshRequest {
                 workspace_directory: &workspace_dir,
                 root_turn_id: "turn-1",
+                latest_user_message: Some("Continue the next implementation slice."),
                 latest_main_reply: "Implemented the previous queue head and found one more task.",
                 previous_handoff_task: None,
                 mode: PlanningQueueRefreshMode::FromLatestReply,
@@ -447,6 +476,31 @@ mod tests {
             result.worker_summary.as_deref(),
             Some("updated planning queue")
         );
+    }
+
+    #[test]
+    fn render_refresh_queue_prompt_includes_latest_user_request_for_idle_derivation() {
+        let workspace_dir = create_temp_workspace("planning-worker-render-prompt");
+        write_bootstrap_workspace(&workspace_dir);
+        let workspace_port: Arc<dyn PlanningWorkspacePort> =
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
+        let service = service_with_worker(worker);
+
+        let prompt = service.render_refresh_queue_prompt(&PlanningQueueRefreshRequest {
+            workspace_directory: &workspace_dir,
+            root_turn_id: "turn-3",
+            latest_user_message: Some("강의 자료를 이어서 만들되 다음 단계도 계속 진행해줘."),
+            latest_main_reply: "1. 중식 분류 체계\n2. 대표 메뉴 20선\n3. 웍 사용법",
+            previous_handoff_task: None,
+            mode: PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle {
+                queue_idle_prompt_markdown: "# Queue Idle Review Prompt",
+            },
+        });
+
+        assert!(prompt.contains("latest operator request:"));
+        assert!(prompt.contains("강의 자료를 이어서 만들되 다음 단계도 계속 진행해줘."));
+        assert!(prompt.contains("최우선 follow-up이 명확하면 1개를 `ready`로"));
     }
 
     #[test]
@@ -475,6 +529,7 @@ mod tests {
             .refresh_queue_from_reply(PlanningQueueRefreshRequest {
                 workspace_directory: &workspace_dir,
                 root_turn_id: "turn-2",
+                latest_user_message: Some("Need to continue after the broken planning update."),
                 latest_main_reply: "Need to continue after the broken planning update.",
                 previous_handoff_task: None,
                 mode: PlanningQueueRefreshMode::FromLatestReply,

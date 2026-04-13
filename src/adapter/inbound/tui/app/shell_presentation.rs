@@ -715,13 +715,10 @@ pub(super) fn build_directions_maintenance_overlay_view(
             let summary = app.directions_maintenance_overlay_ui_state.summary();
             let parse_error = summary.and_then(|summary| summary.parse_error.as_deref());
             let missing_doc_count = summary
-                .map(|summary| {
-                    summary
-                        .directions
-                        .iter()
-                        .filter(|direction| direction.detail_doc_path.is_none())
-                        .count()
-                })
+                .map(|summary| summary.missing_detail_doc_count)
+                .unwrap_or_default();
+            let broken_doc_count = summary
+                .map(|summary| summary.broken_detail_doc_count)
                 .unwrap_or_default();
             let total_direction_count =
                 summary.map(|summary| summary.directions.len()).unwrap_or(0);
@@ -733,13 +730,7 @@ pub(super) fn build_directions_maintenance_overlay_view(
                 .map(|path| compact_whitespace_detail(path, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT))
                 .unwrap_or_else(|| "<none>".to_string());
             let queue_idle_prompt_status = summary
-                .map(|summary| {
-                    if summary.queue_idle_prompt_exists {
-                        "ready"
-                    } else {
-                        "missing"
-                    }
-                })
+                .map(|summary| summary.queue_idle_prompt_status.label())
                 .unwrap_or("unknown");
 
             DirectionsMaintenanceOverlayView {
@@ -775,22 +766,22 @@ pub(super) fn build_directions_maintenance_overlay_view(
                     ),
                     planning_init_option_line(
                         "D",
-                        "create detail doc",
-                        "choose one direction without a doc path and stage a new markdown file",
+                        "repair detail docs",
+                        "choose one direction with a missing or broken doc mapping and stage a markdown file",
                         false,
-                        parse_error.is_some() || missing_doc_count == 0,
+                        parse_error.is_some() || (missing_doc_count == 0 && broken_doc_count == 0),
                     ),
                     planning_init_option_line(
                         "P",
                         "edit queue-idle prompt",
-                        "stage the queue-idle review prompt markdown and wire prompt_path if needed",
+                        "stage the queue-idle review prompt markdown and create or repair prompt_path if needed",
                         false,
                         parse_error.is_some(),
                     ),
                 ],
                 status_lines: vec![
                     Line::from(format!(
-                        "directions: {total_direction_count} total / {missing_doc_count} missing detail docs"
+                        "directions: {total_direction_count} total / {missing_doc_count} missing docs / {broken_doc_count} broken docs"
                     )),
                     Line::from(format!(
                         "queue idle: policy {queue_idle_policy} / prompt {queue_idle_prompt_status} / {queue_idle_prompt}"
@@ -805,23 +796,25 @@ pub(super) fn build_directions_maintenance_overlay_view(
                 ],
                 key_lines: vec![
                     Line::from(
-                        "Enter: edit directions    d: create detail doc    p: edit queue-idle prompt",
+                        "Enter: edit directions    d: create or repair detail doc    p: edit queue-idle prompt",
                     ),
                     Line::from("r: reload summary    Esc/Ctrl+C: close"),
                 ],
             }
         }
         DirectionsMaintenanceOverlayStep::DetailDocSelection => {
-            let missing_directions = app
+            let actionable_directions = app
                 .directions_maintenance_overlay_ui_state
-                .missing_detail_doc_directions();
+                .actionable_detail_doc_directions();
             let selected_direction = app
                 .directions_maintenance_overlay_ui_state
-                .selected_missing_detail_doc_direction();
-            let option_lines = if missing_directions.is_empty() {
-                vec![Line::from("Every direction already has a detail-doc path.")]
+                .selected_actionable_detail_doc_direction();
+            let option_lines = if actionable_directions.is_empty() {
+                vec![Line::from(
+                    "Every direction already has a healthy detail-doc mapping.",
+                )]
             } else {
-                missing_directions
+                actionable_directions
                     .iter()
                     .map(|direction| {
                         let selected = selected_direction.is_some_and(|selected_direction| {
@@ -840,7 +833,12 @@ pub(super) fn build_directions_maintenance_overlay_view(
                                 style.add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
-                                format!("  id={} / new path={}.md", direction.id, direction.id),
+                                format!(
+                                    "  id={} / status={} / path={}",
+                                    direction.id,
+                                    direction.detail_doc_status.label(),
+                                    direction.detail_doc_path.as_deref().unwrap_or("<unset>")
+                                ),
                                 style,
                             ),
                         ])
@@ -860,7 +858,7 @@ pub(super) fn build_directions_maintenance_overlay_view(
                         Span::raw(" / detail docs"),
                     ]),
                     Line::from(
-                        "Choose a direction that should receive a generated markdown detail document.",
+                        "Choose a direction whose detail-doc mapping should be created or repaired.",
                     ),
                 ],
                 summary_lines: vec![
@@ -907,20 +905,20 @@ pub(super) fn build_directions_maintenance_overlay_view(
                         Span::raw(" / confirm detail doc"),
                     ]),
                     Line::from(
-                        "Create and map a new markdown detail document for the selected direction?",
+                        "Open a staged detail document for the selected direction and repair the mapping if needed?",
                     ),
                 ],
                 summary_lines: vec![
                     Line::from(format!("direction: {direction_title}")),
                     Line::from(format!(
-                        "new path: .codex-exec-loop/planning/directions/{direction_id}.md"
+                        "default repair path: .codex-exec-loop/planning/directions/{direction_id}.md"
                     )),
                 ],
                 option_lines: vec![
                     planning_init_option_line(
                         "1",
                         "yes",
-                        "stage the new markdown file and open it with directions.toml",
+                        "stage a markdown file and open it with directions.toml for creation or repair",
                         app.directions_maintenance_overlay_ui_state
                             .detail_doc_confirm_choice()
                             == DetailDocConfirmChoice::Yes,

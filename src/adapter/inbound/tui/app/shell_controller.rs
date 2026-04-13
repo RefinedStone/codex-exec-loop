@@ -119,6 +119,17 @@ impl NativeTuiApp {
     }
 
     pub(super) fn show_directions_maintenance_overlay(&mut self) {
+        self.present_directions_maintenance_overview(
+            "opened directions maintenance".to_string(),
+            true,
+        );
+    }
+
+    fn present_directions_maintenance_overview(
+        &mut self,
+        status_text: String,
+        ensure_overlay_visible: bool,
+    ) {
         let workspace_directory = self.planning_workspace_directory();
         match self
             .planning_services
@@ -129,9 +140,11 @@ impl NativeTuiApp {
                 self.directions_maintenance_overlay_ui_state
                     .open_summary(summary);
                 self.planning_draft_editor_ui_state.reset();
-                self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
+                if ensure_overlay_visible {
+                    self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
+                }
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: "opened directions maintenance".to_string(),
+                    status_text,
                 });
             }
             Err(error) => {
@@ -441,11 +454,14 @@ impl NativeTuiApp {
                         }
                     )
                 } else {
-                    self.close_shell_overlay();
-                    format!(
-                        "directions draft promoted / draft: {} / files: {} / planning context refreshed",
-                        result.draft_name, result.promoted_file_count
-                    )
+                    self.present_directions_maintenance_overview(
+                        format!(
+                            "directions draft promoted / draft: {} / files: {} / planning context refreshed",
+                            result.draft_name, result.promoted_file_count
+                        ),
+                        true,
+                    );
+                    return;
                 }
             }
             Err(error) => format!("directions draft promote failed: {error}"),
@@ -471,7 +487,10 @@ impl NativeTuiApp {
 
     fn request_close_directions_manual_editor(&mut self) {
         match self.planning_draft_editor_ui_state.request_close() {
-            PlanningDraftEditorCloseRequest::CloseImmediately => self.close_shell_overlay(),
+            PlanningDraftEditorCloseRequest::CloseImmediately => self
+                .close_directions_manual_editor_without_prompt(
+                    "directions editor closed".to_string(),
+                ),
             PlanningDraftEditorCloseRequest::ConfirmationRequired(risk) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: directions_manual_editor_close_warning_status(risk),
@@ -497,10 +516,13 @@ impl NativeTuiApp {
         &mut self,
         risk: PlanningDraftEditorCloseRisk,
     ) {
-        self.close_shell_overlay();
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: directions_manual_editor_closed_status(risk),
-        });
+        self.close_directions_manual_editor_without_prompt(directions_manual_editor_closed_status(
+            risk,
+        ));
+    }
+
+    fn close_directions_manual_editor_without_prompt(&mut self, status_text: String) {
+        self.present_directions_maintenance_overview(status_text, true);
     }
 
     fn handle_planning_manual_editor_close_confirmation_key(
@@ -1144,13 +1166,14 @@ impl NativeTuiApp {
                             );
                         } else if self
                             .directions_maintenance_overlay_ui_state
-                            .missing_detail_doc_directions()
+                            .actionable_detail_doc_directions()
                             .is_empty()
                         {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
-                                    status_text: "every direction already has a detail doc path"
-                                        .to_string(),
+                                    status_text:
+                                        "every direction already has a healthy detail doc mapping"
+                                            .to_string(),
                                 },
                             );
                         } else {
@@ -1176,9 +1199,11 @@ impl NativeTuiApp {
                             self.open_queue_idle_prompt_editor();
                         }
                     }
-                    KeyCode::Char('r') if key.modifiers.is_empty() => {
-                        self.show_directions_maintenance_overlay()
-                    }
+                    KeyCode::Char('r') if key.modifiers.is_empty() => self
+                        .present_directions_maintenance_overview(
+                            "reloaded directions maintenance".to_string(),
+                            true,
+                        ),
                     _ => {}
                 },
                 DirectionsMaintenanceOverlayStep::DetailDocSelection => match key.code {

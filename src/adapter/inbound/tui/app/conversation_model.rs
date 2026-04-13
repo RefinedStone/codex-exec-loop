@@ -211,7 +211,7 @@ pub(crate) enum AutoFollowRuntimePhase {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct AutoFollowStopRules {
     pub(crate) stop_keyword: StopKeywordRule,
     pub(crate) stop_on_no_file_changes: bool,
@@ -251,15 +251,6 @@ impl AutoFollowState {
             runtime_phase: AutoFollowRuntimePhase::Idle,
             template_state: AutoFollowTemplateState::new(template_catalog),
             stop_rules: AutoFollowStopRules::default(),
-        }
-    }
-}
-
-impl Default for AutoFollowStopRules {
-    fn default() -> Self {
-        Self {
-            stop_keyword: StopKeywordRule::default(),
-            stop_on_no_file_changes: false,
         }
     }
 }
@@ -1423,6 +1414,16 @@ impl ConversationViewModel {
             .rev()
             .find(|message| {
                 message.kind == ConversationMessageKind::Agent && !message.text.trim().is_empty()
+            })
+            .map(|message| message.text.as_str())
+    }
+
+    pub(crate) fn latest_user_message_text(&self) -> Option<&str> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.kind == ConversationMessageKind::User && !message.text.trim().is_empty()
             })
             .map(|message| message.text.as_str())
     }

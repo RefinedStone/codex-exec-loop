@@ -1,17 +1,20 @@
 use crate::application::service::planning_directions_service::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
+    DirectionsSupportingFileStatus,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum DirectionsMaintenanceOverlayStep {
+    #[default]
     Overview,
     DetailDocSelection,
     DetailDocConfirm,
     ManualEditor,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum DetailDocConfirmChoice {
+    #[default]
     Yes,
     No,
 }
@@ -41,18 +44,6 @@ pub(super) struct DirectionsMaintenanceOverlayUiState {
     detail_doc_confirm_choice: DetailDocConfirmChoice,
 }
 
-impl Default for DirectionsMaintenanceOverlayStep {
-    fn default() -> Self {
-        Self::Overview
-    }
-}
-
-impl Default for DetailDocConfirmChoice {
-    fn default() -> Self {
-        Self::Yes
-    }
-}
-
 impl DirectionsMaintenanceOverlayUiState {
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -74,23 +65,25 @@ impl DirectionsMaintenanceOverlayUiState {
         self.summary.as_ref()
     }
 
-    pub fn missing_detail_doc_directions(&self) -> Vec<&DirectionsMaintenanceDirectionSummary> {
+    pub fn actionable_detail_doc_directions(&self) -> Vec<&DirectionsMaintenanceDirectionSummary> {
         self.summary
             .as_ref()
             .map(|summary| {
                 summary
                     .directions
                     .iter()
-                    .filter(|direction| direction.detail_doc_path.is_none())
+                    .filter(|direction| {
+                        direction.detail_doc_status != DirectionsSupportingFileStatus::Ready
+                    })
                     .collect()
             })
             .unwrap_or_default()
     }
 
-    pub fn selected_missing_detail_doc_direction(
+    pub fn selected_actionable_detail_doc_direction(
         &self,
     ) -> Option<&DirectionsMaintenanceDirectionSummary> {
-        let directions = self.missing_detail_doc_directions();
+        let directions = self.actionable_detail_doc_directions();
         directions
             .get(
                 self.selected_missing_detail_doc_index
@@ -113,7 +106,7 @@ impl DirectionsMaintenanceOverlayUiState {
     }
 
     pub fn move_missing_detail_doc_selection(&mut self, delta: isize) {
-        let directions = self.missing_detail_doc_directions();
+        let directions = self.actionable_detail_doc_directions();
         if directions.is_empty() {
             self.selected_missing_detail_doc_index = 0;
             return;
@@ -125,7 +118,7 @@ impl DirectionsMaintenanceOverlayUiState {
     }
 
     pub fn open_detail_doc_confirm(&mut self) {
-        let Some(direction) = self.selected_missing_detail_doc_direction() else {
+        let Some(direction) = self.selected_actionable_detail_doc_direction() else {
             return;
         };
         self.pending_detail_doc_creation = Some(PendingDetailDocCreation {
