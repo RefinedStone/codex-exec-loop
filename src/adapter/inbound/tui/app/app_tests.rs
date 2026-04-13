@@ -20,14 +20,12 @@ use super::{
     NativeTuiApp, PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus,
     PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
     SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
-    TurnActivityState,
-    build_conversation_shell_frame_view,
-    build_conversation_shell_view, build_followup_template_overlay_view,
-    build_followup_template_preview_lines, build_followup_template_status_lines,
-    build_inline_tail_lines, build_input_title, build_planning_init_overlay_view,
-    build_ready_input_lines, build_session_overlay_view, build_shell_footer_lines,
-    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
-    build_transcript_title, format_conversation_lines, shell_layout,
+    TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
+    build_followup_template_overlay_view, build_followup_template_preview_lines,
+    build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
+    build_planning_init_overlay_view, build_ready_input_lines, build_session_overlay_view,
+    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
+    build_transcript_panel_view, build_transcript_title, format_conversation_lines, shell_layout,
     startup_ascii_art_enabled_from_value,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
@@ -40,12 +38,12 @@ use crate::application::port::outbound::followup_template_port::{
     FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
 };
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningRepairRequest,
 };
+use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
 use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -4312,6 +4310,9 @@ fn followup_template_status_lines_hide_planner_panel_outside_debug_mode() {
         last_summary: Some("planner refreshed the queue".to_string()),
         last_rejected_summary: None,
         last_queue_summary: Some("next task: Implement shell planning status".to_string()),
+        last_notice_detail: Some(
+            "planning reconciliation restored protected queue.snapshot.json".to_string(),
+        ),
         last_host_detail: Some("host promoted top follow-up proposal".to_string()),
     };
 
@@ -4323,6 +4324,7 @@ fn followup_template_status_lines_hide_planner_panel_outside_debug_mode() {
 
     assert!(rendered.contains("planner detail: normal"));
     assert!(!rendered.contains("planner status:"));
+    assert!(!rendered.contains("planner notice:"));
     assert!(!rendered.contains("planner host detail:"));
 }
 
@@ -4341,6 +4343,9 @@ fn followup_template_status_lines_show_planner_panel_in_debug_mode() {
         last_summary: Some("planner refreshed the queue".to_string()),
         last_rejected_summary: None,
         last_queue_summary: Some("next task: Implement shell planning status".to_string()),
+        last_notice_detail: Some(
+            "planning reconciliation restored protected queue.snapshot.json".to_string(),
+        ),
         last_host_detail: Some("host promoted top follow-up proposal".to_string()),
     };
 
@@ -4352,6 +4357,7 @@ fn followup_template_status_lines_show_planner_panel_in_debug_mode() {
 
     assert!(rendered.contains("planner detail: debug"));
     assert!(rendered.contains("planner status: refresh ok"));
+    assert!(rendered.contains("planner notice: planning reconciliation restored protected"));
     assert!(rendered.contains("planner host detail: host promoted top follow-up proposal"));
 }
 

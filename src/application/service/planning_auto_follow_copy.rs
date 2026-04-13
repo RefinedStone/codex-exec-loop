@@ -1,8 +1,7 @@
 // Centralize operator-facing planning auto-follow copy so future localization
 // can swap one seam instead of touching orchestration logic.
 
-pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str =
-    "다음 queued task 1개를 이어서 진행합니다.";
+pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str = "다음 queued task 1개를 이어서 진행합니다.";
 pub const PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT: &str = "previous answer와 existing proposal 작업 목록을 priority queue에 넣고, queue head 1개만 수행한 뒤 남은 queued work와 proposal을 정리합니다.";
 pub const PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT: &str = "previous answer의 실행 가능한 작업 목록을 priority queue에 넣고, queue head 1개만 수행한 뒤 남은 queued work와 proposal을 정리합니다.";
 pub const PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY: &str = r#"대리인입니다.

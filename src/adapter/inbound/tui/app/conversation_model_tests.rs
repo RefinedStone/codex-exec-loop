@@ -202,7 +202,10 @@ fn auto_followup_prompt_renders_builtin_template() {
         "다음 queued task 1개를 이어서 진행합니다."
     );
     assert_eq!(
-        prompt.handoff_task.as_ref().map(|task| task.task_id.as_str()),
+        prompt
+            .handoff_task
+            .as_ref()
+            .map(|task| task.task_id.as_str()),
         Some("task-1")
     );
 }

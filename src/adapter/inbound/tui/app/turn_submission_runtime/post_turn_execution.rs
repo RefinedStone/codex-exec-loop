@@ -426,6 +426,7 @@ impl PostTurnEvaluationExecutor {
 
     fn record_planner_worker_running(&mut self, status: PlannerWorkerStatus) {
         self.planner_worker_panel_state.status = status;
+        self.planner_worker_panel_state.last_notice_detail = None;
         self.planner_worker_panel_state.last_host_detail = None;
     }
 
@@ -449,6 +450,8 @@ impl PostTurnEvaluationExecutor {
         self.planner_worker_panel_state.last_rejected_summary = outcome.rejected_summary.clone();
         self.planner_worker_panel_state.last_queue_summary =
             planner_queue_summary(&outcome.runtime_snapshot);
+        self.planner_worker_panel_state.last_notice_detail =
+            planner_notice_detail(&outcome.notices);
         self.planner_worker_panel_state.last_host_detail = None;
     }
 
@@ -463,6 +466,7 @@ impl PostTurnEvaluationExecutor {
         self.planner_worker_panel_state.last_rejected_summary = None;
         self.planner_worker_panel_state.last_queue_summary =
             planner_queue_summary(runtime_snapshot);
+        self.planner_worker_panel_state.last_notice_detail = None;
         self.planner_worker_panel_state.last_host_detail = None;
     }
 }
@@ -537,6 +541,20 @@ fn planner_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
         .queue_head()
         .map(|queue_head| format!("next task: {}", queue_head.task_title.trim()))
         .or_else(|| snapshot.queue_summary().map(str::to_string))
+}
+
+fn planner_notice_detail(notices: &[String]) -> Option<String> {
+    let detail = notices
+        .iter()
+        .filter(|notice| {
+            !notice.starts_with("planner refresh summary:")
+                && !notice.starts_with("planner repair summary:")
+        })
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    (!detail.is_empty()).then_some(detail)
 }
 
 fn repeated_queue_head_detail(

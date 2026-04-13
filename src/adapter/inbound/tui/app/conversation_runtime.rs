@@ -351,8 +351,7 @@ mod tests {
                 origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
-                    transcript_text: "다음 queued task 1개를 이어서 진행합니다."
-                        .to_string(),
+                    transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                     handoff_task: None,
                 }),
             },
@@ -985,8 +984,7 @@ mod tests {
                         prompt: "continue".to_string(),
                         queued_from_turn_id: "turn-1".to_string(),
                         template_label: "builtin next-task".to_string(),
-                        transcript_text: "다음 queued task 1개를 이어서 진행합니다."
-                            .to_string(),
+                        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                         handoff_task: None,
                     },
                 }),
@@ -999,8 +997,7 @@ mod tests {
                 prompt: "continue".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
                 template_label: "builtin next-task".to_string(),
-                transcript_text: "다음 queued task 1개를 이어서 진행합니다."
-                    .to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 handoff_task: None,
             }]
         );
@@ -1042,8 +1039,7 @@ mod tests {
                         prompt: "continue".to_string(),
                         queued_from_turn_id: "turn-1".to_string(),
                         template_label: "builtin next-task".to_string(),
-                        transcript_text: "다음 queued task 1개를 이어서 진행합니다."
-                            .to_string(),
+                        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                         handoff_task: None,
                     },
                 }),

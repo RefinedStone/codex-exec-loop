@@ -251,9 +251,13 @@ impl GithubReviewPollerAdapter {
         users_root: &Path,
         current_user: &str,
     ) -> Result<Option<PathBuf>> {
+        let direct_match = users_root.join(current_user);
+        let direct_match_exists = direct_match.is_dir();
         let entries = match fs::read_dir(users_root) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                return Ok(direct_match_exists.then_some(direct_match));
+            }
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("failed to read {}", users_root.display()));
@@ -273,8 +277,7 @@ impl GithubReviewPollerAdapter {
             }
         }
 
-        let direct_match = users_root.join(current_user);
-        if direct_match.is_dir() {
+        if direct_match_exists {
             return Ok(Some(direct_match));
         }
 

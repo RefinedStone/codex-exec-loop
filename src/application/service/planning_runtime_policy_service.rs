@@ -107,13 +107,12 @@ impl PlanningRuntimePolicyService {
             );
         }
 
-        if snapshot.auto_followup_pause_reason().is_some() {
-            return PlanningAutoFollowPolicyDecision::Blocked(
-                PlanningAutoFollowBlockReason::RepeatedQueueHead,
-            );
-        }
-
         if template.is_builtin_next_task() {
+            if snapshot.auto_followup_pause_reason().is_some() {
+                return PlanningAutoFollowPolicyDecision::Blocked(
+                    PlanningAutoFollowBlockReason::RepeatedQueueHead,
+                );
+            }
             return match snapshot.workspace_status() {
                 PlanningRuntimeWorkspaceStatus::Uninitialized => {
                     PlanningAutoFollowPolicyDecision::Blocked(
@@ -557,6 +556,30 @@ mod tests {
         assert_eq!(
             service.auto_follow_block_reason(&workspace_template(), &snapshot),
             None
+        );
+    }
+
+    #[test]
+    fn workspace_template_stays_allowed_when_builtin_repeat_pause_is_present() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::ready(
+            "Planning Context".to_string(),
+            "next task: rank 1 / task-1".to_string(),
+            Some(queue_head()),
+        )
+        .with_auto_followup_pause_reason(
+            "planner refresh kept the previously handed-off task as the queue head",
+        );
+
+        assert_eq!(
+            service.auto_follow_block_reason(&workspace_template(), &snapshot),
+            None
+        );
+        assert_eq!(
+            service.decide_auto_follow(&workspace_template(), &snapshot),
+            PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::TemplatePrompt
+            )
         );
     }
 

@@ -76,6 +76,12 @@ pub(super) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
             compact_whitespace_detail(summary, max_detail_len)
         ));
     }
+    if let Some(notice_detail) = planner.last_notice_detail.as_deref() {
+        lines.push(format!(
+            "planner notice: {}",
+            compact_whitespace_detail(notice_detail, max_detail_len)
+        ));
+    }
     if let Some(host_detail) = planner.last_host_detail.as_deref() {
         lines.push(format!(
             "planner host detail: {}",

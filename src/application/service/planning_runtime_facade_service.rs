@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::planning_prompt_service::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
@@ -134,7 +135,7 @@ impl PlanningRuntimeFacadeService {
         let queue_head = snapshot.queue_head()?;
         Some(PlanningMainSessionHandoff {
             prompt: render_builtin_next_task_handoff_prompt(queue_head),
-            transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+            transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
             task: PlanningTaskHandoff {
                 task_id: queue_head.task_id.trim().to_string(),
                 task_title: queue_head.task_title.trim().to_string(),
@@ -552,7 +553,10 @@ mod tests {
             "다음 queued task 1개를 이어서 진행합니다."
         );
         assert_eq!(
-            prompt.handoff_task.as_ref().map(|task| task.task_id.as_str()),
+            prompt
+                .handoff_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
             Some("task-1")
         );
     }

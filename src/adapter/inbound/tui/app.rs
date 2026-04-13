@@ -17,6 +17,7 @@ use crate::application::service::followup_template_service::{
 };
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::planning_reconciliation_service::PlanningExecutionSnapshot;
+use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
 use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -25,7 +26,6 @@ use crate::domain::conversation::{
 };
 use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 use crate::domain::session_summary::SessionSummary;
-use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
 
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
@@ -280,6 +280,7 @@ struct PlannerWorkerPanelState {
     last_summary: Option<String>,
     last_rejected_summary: Option<String>,
     last_queue_summary: Option<String>,
+    last_notice_detail: Option<String>,
     last_host_detail: Option<String>,
 }
 
@@ -289,6 +290,7 @@ impl PlannerWorkerPanelState {
             || self.last_summary.is_some()
             || self.last_rejected_summary.is_some()
             || self.last_queue_summary.is_some()
+            || self.last_notice_detail.is_some()
             || self.last_host_detail.is_some()
     }
 }
@@ -363,8 +365,14 @@ mod startup_ascii_art_env_tests {
 
     #[test]
     fn planner_visibility_defaults_to_normal() {
-        assert_eq!(PlannerVisibility::from_env_value(None), PlannerVisibility::Normal);
-        assert_eq!(PlannerVisibility::from_env_value(Some("")), PlannerVisibility::Normal);
+        assert_eq!(
+            PlannerVisibility::from_env_value(None),
+            PlannerVisibility::Normal
+        );
+        assert_eq!(
+            PlannerVisibility::from_env_value(Some("")),
+            PlannerVisibility::Normal
+        );
         assert_eq!(
             PlannerVisibility::from_env_value(Some("normal")),
             PlannerVisibility::Normal

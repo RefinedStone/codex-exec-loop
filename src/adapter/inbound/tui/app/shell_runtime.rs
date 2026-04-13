@@ -262,6 +262,7 @@ mod tests {
     use crossterm::event::KeyEventState;
 
     use super::*;
+    use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnEvaluation;
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
@@ -276,7 +277,6 @@ mod tests {
     use crate::application::service::planning_services::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnEvaluation;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
     use crate::domain::github_review::{
         GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
@@ -496,6 +496,7 @@ mod tests {
                     last_queue_summary: Some("next task: stale".to_string()),
                     last_summary: Some("stale".to_string()),
                     last_rejected_summary: None,
+                    last_notice_detail: None,
                     last_host_detail: None,
                 },
             })
