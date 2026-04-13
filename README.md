@@ -42,6 +42,13 @@ Optional GitHub polling:
 - approval, tool activity, runtime warning, and GitHub review-change visibility
 - packaging, checksum, and platform-validation helper scripts
 
+## Approval Behavior
+
+- the app currently starts threads and turns with a permissive execution policy by default so auto follow-up does not stall behind approval prompts
+- operators can still override the app-server execution policy with `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY`, `CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER`, and `CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE`
+- `2026-04-13` verification against the latest upstream `openai/codex` showed that `codex app-server` now defines server-request approval methods such as `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, and `item/permissions/requestApproval`
+- this repo's checked-in schema snapshot and TUI integration have not adopted that newer approval response flow yet, so approval-state surfacing is current but interactive approve/deny actions are still pending integration
+
 ## Docs
 
 Start with:
