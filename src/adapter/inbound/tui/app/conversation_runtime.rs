@@ -645,6 +645,41 @@ mod tests {
     }
 
     #[test]
+    fn repeated_manual_review_updates_do_not_duplicate_runtime_notice() {
+        let review = ConversationApprovalReview {
+            target_item_id: "command-1".to_string(),
+            status: ConversationApprovalReviewStatus::Unknown("needsHumanReview".to_string()),
+            risk_level: Some("high".to_string()),
+            rationale: Some("escalated".to_string()),
+        };
+        let state = sample_conversation();
+
+        let first = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::ApprovalReviewUpdated {
+                review: review.clone(),
+            }),
+        );
+        let second = reduce_conversation_runtime(
+            first.state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::ApprovalReviewUpdated {
+                review,
+            }),
+        );
+
+        assert_eq!(
+            second
+                .state
+                .runtime_notices
+                .iter()
+                .filter(|notice| notice.as_str()
+                    == "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn turn_started_clears_previous_approval_review_state() {
         let mut state = sample_conversation();
         state.approval_review = Some(ConversationApprovalReview {
