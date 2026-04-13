@@ -9,8 +9,9 @@ use anyhow::{Result, anyhow};
 
 use self::connection::{AppServerConnection, AppServerConnectionConfig};
 use self::protocol::{
-    ThreadListParams, ThreadStartParams, initialize_detail, sort_and_dedup_warnings, thread_title,
-    to_conversation_snapshot, to_session_summary,
+    ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue, ThreadListParams,
+    ThreadResumeParams, ThreadStartParams, TurnInputText, TurnStartParams, initialize_detail,
+    sort_and_dedup_warnings, thread_title, to_conversation_snapshot, to_session_summary,
 };
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
@@ -22,12 +23,107 @@ use crate::application::port::outbound::codex_app_server_port::{
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 use crate::domain::recent_sessions::RecentSessions;
 
+const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
+const APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
+const SANDBOX_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE";
+
 #[derive(Clone)]
 pub struct CodexAppServerAdapter {
     client_name: String,
     client_version: String,
     connection_config: AppServerConnectionConfig,
+    execution_policy: AppServerExecutionPolicy,
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AppServerExecutionPolicy {
+    approval_policy: ApprovalPolicyValue,
+    approvals_reviewer: Option<ApprovalsReviewerValue>,
+    sandbox_mode: SandboxModeValue,
+}
+
+impl Default for AppServerExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            // Default to full access so turns do not stall waiting for approvals the TUI
+            // cannot yet resolve interactively.
+            approval_policy: ApprovalPolicyValue::Never,
+            approvals_reviewer: Some(ApprovalsReviewerValue::User),
+            sandbox_mode: SandboxModeValue::DangerFullAccess,
+        }
+    }
+}
+
+impl AppServerExecutionPolicy {
+    fn from_environment() -> Self {
+        Self::from_env_values(
+            std::env::var(APPROVAL_POLICY_ENV_VAR).ok().as_deref(),
+            std::env::var(APPROVALS_REVIEWER_ENV_VAR).ok().as_deref(),
+            std::env::var(SANDBOX_MODE_ENV_VAR).ok().as_deref(),
+        )
+    }
+
+    fn from_env_values(
+        approval_policy_value: Option<&str>,
+        approvals_reviewer_value: Option<&str>,
+        sandbox_mode_value: Option<&str>,
+    ) -> Self {
+        let mut policy = Self::default();
+
+        if let Some(approval_policy) = parse_approval_policy_value(approval_policy_value) {
+            policy.approval_policy = approval_policy;
+        }
+        if let Some(approvals_reviewer) = parse_approvals_reviewer_value(approvals_reviewer_value) {
+            policy.approvals_reviewer = Some(approvals_reviewer);
+        }
+        if let Some(sandbox_mode) = parse_sandbox_mode_value(sandbox_mode_value) {
+            policy.sandbox_mode = sandbox_mode;
+        }
+
+        policy
+    }
+}
+
+fn normalize_execution_policy_value(value: Option<&str>) -> Option<String> {
+    let raw_value = value?.trim();
+    if raw_value.is_empty() {
+        return None;
+    }
+
+    Some(
+        raw_value
+            .to_ascii_lowercase()
+            .replace('_', "-")
+            .replace(' ', "-"),
+    )
+}
+
+fn parse_approval_policy_value(value: Option<&str>) -> Option<ApprovalPolicyValue> {
+    match normalize_execution_policy_value(value).as_deref() {
+        Some("untrusted") => Some(ApprovalPolicyValue::Untrusted),
+        Some("on-failure") => Some(ApprovalPolicyValue::OnFailure),
+        Some("on-request") => Some(ApprovalPolicyValue::OnRequest),
+        Some("never") => Some(ApprovalPolicyValue::Never),
+        _ => None,
+    }
+}
+
+fn parse_approvals_reviewer_value(value: Option<&str>) -> Option<ApprovalsReviewerValue> {
+    match normalize_execution_policy_value(value).as_deref() {
+        Some("user") => Some(ApprovalsReviewerValue::User),
+        Some("guardian-subagent") => Some(ApprovalsReviewerValue::GuardianSubagent),
+        _ => None,
+    }
+}
+
+fn parse_sandbox_mode_value(value: Option<&str>) -> Option<SandboxModeValue> {
+    match normalize_execution_policy_value(value).as_deref() {
+        Some("read-only") => Some(SandboxModeValue::ReadOnly),
+        Some("workspace-write") => Some(SandboxModeValue::WorkspaceWrite),
+        Some("danger-full-access") => Some(SandboxModeValue::DangerFullAccess),
+        _ => None,
+    }
 }
 
 impl CodexAppServerAdapter {
@@ -39,22 +135,25 @@ impl CodexAppServerAdapter {
         client_name: impl Into<String>,
         client_version: impl Into<String>,
     ) -> Self {
-        Self::with_connection_config(
+        Self::with_configs(
             client_name,
             client_version,
             AppServerConnectionConfig::from_environment(),
+            AppServerExecutionPolicy::from_environment(),
         )
     }
 
-    fn with_connection_config(
+    fn with_configs(
         client_name: impl Into<String>,
         client_version: impl Into<String>,
         connection_config: AppServerConnectionConfig,
+        execution_policy: AppServerExecutionPolicy,
     ) -> Self {
         Self {
             client_name: client_name.into(),
             client_version: client_version.into(),
             connection_config,
+            execution_policy,
             shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
         }
     }
@@ -258,6 +357,9 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         let result = self.with_streaming_runtime(|connection| {
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(cwd.to_string()),
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox: Some(self.execution_policy.sandbox_mode),
             })?;
             let thread_id = thread_response.thread.id.clone();
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
@@ -266,7 +368,13 @@ impl CodexAppServerPort for CodexAppServerAdapter {
                 cwd: thread_response.thread.cwd.clone(),
             });
 
-            let turn_response = connection.start_turn(&thread_id, prompt)?;
+            let turn_response = connection.start_turn(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![TurnInputText::text(prompt)],
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
+            })?;
 
             let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
                 turn_id: turn_response.turn.id.clone(),
@@ -291,8 +399,19 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         let result = self.with_streaming_runtime(|connection| {
-            connection.resume_thread(thread_id)?;
-            let turn_response = connection.start_turn(thread_id, prompt)?;
+            connection.resume_thread(ThreadResumeParams {
+                thread_id: thread_id.to_string(),
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox: Some(self.execution_policy.sandbox_mode),
+            })?;
+            let turn_response = connection.start_turn(TurnStartParams {
+                thread_id: thread_id.to_string(),
+                input: vec![TurnInputText::text(prompt)],
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
+            })?;
 
             let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
                 turn_id: turn_response.turn.id.clone(),
@@ -308,5 +427,68 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AppServerExecutionPolicy,
+        SANDBOX_MODE_ENV_VAR,
+    };
+    use crate::adapter::outbound::codex_app_server_adapter::protocol::{
+        ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue,
+    };
+
+    #[test]
+    fn execution_policy_defaults_to_full_access_without_approvals() {
+        assert_eq!(
+            AppServerExecutionPolicy::from_env_values(None, None, None),
+            AppServerExecutionPolicy {
+                approval_policy: ApprovalPolicyValue::Never,
+                approvals_reviewer: Some(ApprovalsReviewerValue::User),
+                sandbox_mode: SandboxModeValue::DangerFullAccess,
+            }
+        );
+    }
+
+    #[test]
+    fn execution_policy_parses_environment_overrides() {
+        assert_eq!(
+            AppServerExecutionPolicy::from_env_values(
+                Some("on_request"),
+                Some("guardian-subagent"),
+                Some("workspace write")
+            ),
+            AppServerExecutionPolicy {
+                approval_policy: ApprovalPolicyValue::OnRequest,
+                approvals_reviewer: Some(ApprovalsReviewerValue::GuardianSubagent),
+                sandbox_mode: SandboxModeValue::WorkspaceWrite,
+            }
+        );
+    }
+
+    #[test]
+    fn execution_policy_ignores_invalid_environment_values() {
+        assert_eq!(
+            AppServerExecutionPolicy::from_env_values(Some("bogus"), Some("nope"), Some("unknown")),
+            AppServerExecutionPolicy::default()
+        );
+    }
+
+    #[test]
+    fn execution_policy_environment_variable_names_are_stable() {
+        assert_eq!(
+            APPROVAL_POLICY_ENV_VAR,
+            "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY"
+        );
+        assert_eq!(
+            APPROVALS_REVIEWER_ENV_VAR,
+            "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER"
+        );
+        assert_eq!(
+            SANDBOX_MODE_ENV_VAR,
+            "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE"
+        );
     }
 }

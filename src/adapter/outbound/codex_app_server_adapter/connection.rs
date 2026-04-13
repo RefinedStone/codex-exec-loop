@@ -13,9 +13,9 @@ use crate::domain::conversation::ConversationStreamEvent;
 
 use super::protocol::{
     AccountReadResponse, AppServerNotification, InitializeResponse, ThreadListParams,
-    ThreadListResponse, ThreadReadResponse, ThreadResumeResponse, ThreadStartParams,
-    ThreadStartResponse, TurnNotificationHandling, TurnStartResponse, handle_turn_notification,
-    sort_and_dedup_warnings,
+    ThreadListResponse, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
+    ThreadStartParams, ThreadStartResponse, TurnNotificationHandling, TurnStartParams,
+    TurnStartResponse, handle_turn_notification, sort_and_dedup_warnings,
 };
 
 const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
@@ -187,34 +187,17 @@ impl AppServerConnection {
         self.send_request("thread/start", serde_json::to_value(params)?)
     }
 
-    pub(super) fn resume_thread(&mut self, thread_id: &str) -> Result<ThreadResumeResponse> {
+    pub(super) fn resume_thread(
+        &mut self,
+        params: ThreadResumeParams,
+    ) -> Result<ThreadResumeResponse> {
         self.ensure_initialized()?;
-        self.send_request(
-            "thread/resume",
-            json!({
-                "threadId": thread_id,
-            }),
-        )
+        self.send_request("thread/resume", serde_json::to_value(params)?)
     }
 
-    pub(super) fn start_turn(
-        &mut self,
-        thread_id: &str,
-        prompt: &str,
-    ) -> Result<TurnStartResponse> {
+    pub(super) fn start_turn(&mut self, params: TurnStartParams) -> Result<TurnStartResponse> {
         self.ensure_initialized()?;
-        self.send_request(
-            "turn/start",
-            json!({
-                "threadId": thread_id,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    }
-                ],
-            }),
-        )
+        self.send_request("turn/start", serde_json::to_value(params)?)
     }
 
     pub(super) fn wait_for_turn_stream(

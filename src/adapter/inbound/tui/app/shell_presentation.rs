@@ -2849,7 +2849,7 @@ fn auto_follow_prompt_lines(conversation: &ConversationViewModel) -> Option<Vec<
     ])
 }
 
-fn format_elapsed(duration: Duration) -> String {
+pub(super) fn format_elapsed(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
     let hours = total_seconds / 3600;
     let minutes = (total_seconds % 3600) / 60;

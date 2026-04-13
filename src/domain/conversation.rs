@@ -116,6 +116,13 @@ impl ConversationApprovalReviewStatus {
             Self::Unknown(value) => format!("approval review {}", humanize_protocol_status(value)),
         }
     }
+
+    fn requires_manual_client_action(&self) -> bool {
+        matches!(
+            self,
+            Self::Unknown(value) if humanize_protocol_status(value).contains("human review")
+        )
+    }
 }
 
 fn humanize_protocol_status(value: &str) -> String {
@@ -181,6 +188,17 @@ impl ConversationApprovalReview {
 
         segments.join(" / ")
     }
+
+    pub fn manual_client_action_notice(&self) -> Option<String> {
+        if !self.status.requires_manual_client_action() {
+            return None;
+        }
+
+        Some(
+            "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action"
+                .to_string(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +218,12 @@ mod tests {
         assert_eq!(
             review.status_text(),
             "approval review needs human review / target: command-1 / risk: high"
+        );
+        assert_eq!(
+            review.manual_client_action_notice().as_deref(),
+            Some(
+                "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action"
+            )
         );
     }
 }

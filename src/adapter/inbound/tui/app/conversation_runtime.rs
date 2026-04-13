@@ -199,6 +199,9 @@ pub(super) fn reduce_conversation_runtime(
                 state.buffer_tool_message(activity.text);
             }
             ConversationStreamEvent::ApprovalReviewUpdated { review } => {
+                if let Some(notice) = review.manual_client_action_notice() {
+                    state.extend_runtime_notices([notice]);
+                }
                 state.update_approval_review(review);
             }
             ConversationStreamEvent::TurnCompleted {
@@ -255,6 +258,7 @@ pub(super) fn reduce_conversation_runtime(
                     attempt_number,
                     max_attempts,
                 } => {
+                    state.auto_follow_state.clear_runtime_phase();
                     state.record_planning_repair_queue(attempt_number, max_attempts);
                     state.status_text = format!(
                         "turn completed / queued planning repair {attempt_number}/{max_attempts}"
@@ -271,6 +275,7 @@ pub(super) fn reduce_conversation_runtime(
                     attempt_number,
                     max_attempts,
                 } => {
+                    state.auto_follow_state.clear_runtime_phase();
                     state.status_text = format!(
                         "turn completed / planning repair paused: manual input buffered ({attempt_number}/{max_attempts})"
                     );
@@ -608,6 +613,34 @@ mod tests {
                 .as_ref()
                 .map(|review| review.status.clone()),
             Some(ConversationApprovalReviewStatus::InProgress)
+        );
+    }
+
+    #[test]
+    fn manual_review_required_approval_adds_runtime_notice() {
+        let state = sample_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(
+                ConversationStreamEvent::ApprovalReviewUpdated {
+                    review: ConversationApprovalReview {
+                        target_item_id: "command-1".to_string(),
+                        status: ConversationApprovalReviewStatus::Unknown(
+                            "needsHumanReview".to_string(),
+                        ),
+                        risk_level: Some("high".to_string()),
+                        rationale: Some("escalated".to_string()),
+                    },
+                },
+            ),
+        );
+
+        assert_eq!(
+            reduced.state.runtime_notices.last().map(String::as_str),
+            Some(
+                "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action"
+            )
         );
     }
 
@@ -1143,7 +1176,8 @@ mod tests {
 
     #[test]
     fn post_turn_evaluation_pauses_planning_repair_without_queueing_effect() {
-        let state = sample_conversation();
+        let mut state = sample_conversation();
+        state.begin_auto_followup_evaluation();
 
         let reduced = reduce_conversation_runtime(
             state,
@@ -1189,6 +1223,10 @@ mod tests {
                 .map(|state| state.attempts_used),
             Some(1)
         );
+        assert!(matches!(
+            reduced.state.auto_follow_state.runtime_phase,
+            AutoFollowRuntimePhase::Idle
+        ));
         assert!(
             reduced
                 .state
@@ -1196,6 +1234,54 @@ mod tests {
                 .iter()
                 .any(|notice| notice.contains("planning repair retry 1/2"))
         );
+    }
+
+    #[test]
+    fn post_turn_evaluation_queueing_planning_repair_clears_auto_follow_phase() {
+        let mut state = sample_conversation();
+        state.input_buffer.clear();
+        state.begin_auto_followup_evaluation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::PostTurnEvaluated {
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
+                    planning_repair_state: Some(PlanningRepairState {
+                        root_turn_id: "turn-root".to_string(),
+                        attempts_used: 1,
+                        max_attempts: 2,
+                        latest_request: PlanningRepairRequest {
+                            failure_summary: "failed to parse task-ledger.json".to_string(),
+                            validation_errors: vec!["failed to parse task-ledger.json".to_string()],
+                            directions_toml: "version = 1".to_string(),
+                            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+                            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+                            rejected_task_ledger_json: Some("{ invalid json".to_string()),
+                            rejected_archive_path: None,
+                        },
+                    }),
+                    runtime_notices: Vec::new(),
+                    action: ConversationPostTurnAction::QueuePlanningRepair {
+                        prompt: "repair task ledger".to_string(),
+                        queued_from_turn_id: "turn-1".to_string(),
+                        attempt_number: 1,
+                        max_attempts: 2,
+                    },
+                }),
+            },
+        );
+
+        assert!(matches!(
+            reduced.state.auto_follow_state.runtime_phase,
+            AutoFollowRuntimePhase::Idle
+        ));
+        assert!(reduced.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                ConversationRuntimeEffect::QueuePlanningRepairPrompt { .. }
+            )
+        }));
     }
 
     #[test]
