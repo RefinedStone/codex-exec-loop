@@ -672,6 +672,22 @@ pub(super) enum SandboxPolicyValue {
     DangerFullAccess,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(super) enum ReasoningEffortValue {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "minimal")]
+    Minimal,
+    #[serde(rename = "low")]
+    Low,
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThreadStartParams {
@@ -683,6 +699,8 @@ pub(super) struct ThreadStartParams {
     pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) sandbox: Option<SandboxModeValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -708,6 +726,10 @@ pub(super) struct TurnStartParams {
     pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) sandbox_policy: Option<SandboxPolicyValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) effort: Option<ReasoningEffortValue>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -802,10 +824,10 @@ mod tests {
 
     use super::{
         ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT, AppServerNotification, ApprovalPolicyValue,
-        ApprovalsReviewerValue, SHARED_RUNTIME_NOTICE_PREFIX, SandboxModeValue, SandboxPolicyValue,
-        ThreadResumeParams, ThreadStartParams, TurnInputText, TurnNotificationHandling,
-        TurnStartParams, changed_planning_file_paths, handle_turn_notification,
-        partition_runtime_notices,
+        ApprovalsReviewerValue, ReasoningEffortValue, SHARED_RUNTIME_NOTICE_PREFIX,
+        SandboxModeValue, SandboxPolicyValue, ThreadResumeParams, ThreadStartParams, TurnInputText,
+        TurnNotificationHandling, TurnStartParams, changed_planning_file_paths,
+        handle_turn_notification, partition_runtime_notices,
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
@@ -996,6 +1018,7 @@ mod tests {
             approval_policy: Some(ApprovalPolicyValue::Never),
             approvals_reviewer: Some(ApprovalsReviewerValue::User),
             sandbox: Some(SandboxModeValue::DangerFullAccess),
+            model: None,
         };
 
         assert_eq!(
@@ -1005,6 +1028,28 @@ mod tests {
                 "approvalPolicy": "never",
                 "approvalsReviewer": "user",
                 "sandbox": "danger-full-access",
+            })
+        );
+    }
+
+    #[test]
+    fn thread_start_params_serialize_model_override_when_present() {
+        let params = ThreadStartParams {
+            cwd: Some("/tmp/workspace".to_string()),
+            approval_policy: Some(ApprovalPolicyValue::Never),
+            approvals_reviewer: Some(ApprovalsReviewerValue::User),
+            sandbox: Some(SandboxModeValue::DangerFullAccess),
+            model: Some("gpt-5.4".to_string()),
+        };
+
+        assert_eq!(
+            to_value(params).expect("params should serialize"),
+            json!({
+                "cwd": "/tmp/workspace",
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandbox": "danger-full-access",
+                "model": "gpt-5.4",
             })
         );
     }
@@ -1037,6 +1082,8 @@ mod tests {
             approval_policy: Some(ApprovalPolicyValue::Never),
             approvals_reviewer: Some(ApprovalsReviewerValue::User),
             sandbox_policy: Some(SandboxPolicyValue::DangerFullAccess),
+            model: None,
+            effort: None,
         };
 
         assert_eq!(
@@ -1054,6 +1101,39 @@ mod tests {
                 "sandboxPolicy": {
                     "type": "dangerFullAccess",
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn turn_start_params_serialize_model_and_effort_overrides() {
+        let params = TurnStartParams {
+            thread_id: "thread-1".to_string(),
+            input: vec![TurnInputText::text("hello")],
+            approval_policy: Some(ApprovalPolicyValue::Never),
+            approvals_reviewer: Some(ApprovalsReviewerValue::User),
+            sandbox_policy: Some(SandboxPolicyValue::DangerFullAccess),
+            model: Some("gpt-5.4".to_string()),
+            effort: Some(ReasoningEffortValue::Medium),
+        };
+
+        assert_eq!(
+            to_value(params).expect("params should serialize"),
+            json!({
+                "threadId": "thread-1",
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "hello",
+                    }
+                ],
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandboxPolicy": {
+                    "type": "dangerFullAccess",
+                },
+                "model": "gpt-5.4",
+                "effort": "medium",
             })
         );
     }

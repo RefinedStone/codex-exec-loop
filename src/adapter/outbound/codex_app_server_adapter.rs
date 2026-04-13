@@ -9,16 +9,17 @@ use anyhow::{Result, anyhow};
 
 use self::connection::{AppServerConnection, AppServerConnectionConfig};
 use self::protocol::{
-    ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue, ThreadListParams,
-    ThreadResumeParams, ThreadStartParams, TurnInputText, TurnStartParams, initialize_detail,
-    sort_and_dedup_warnings, thread_title, to_conversation_snapshot, to_session_summary,
+    ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
+    ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputText, TurnStartParams,
+    initialize_detail, sort_and_dedup_warnings, thread_title, to_conversation_snapshot,
+    to_session_summary,
 };
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
 use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort,
+    AppServerStartupContext, CodexAppServerPort, NewThreadReasoningEffort, NewThreadStreamRequest,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 use crate::domain::recent_sessions::RecentSessions;
@@ -164,6 +165,59 @@ impl CodexAppServerAdapter {
             self.client_version.clone(),
             self.connection_config.clone(),
         )
+    }
+
+    fn run_new_thread_stream_request(
+        &self,
+        request: NewThreadStreamRequest,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        let NewThreadStreamRequest {
+            cwd,
+            prompt,
+            model,
+            reasoning_effort,
+        } = request;
+        let effort = reasoning_effort.map(ReasoningEffortValue::from);
+        let result = self.with_streaming_runtime(|connection| {
+            let thread_response = connection.start_thread(ThreadStartParams {
+                cwd: Some(cwd.clone()),
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox: Some(self.execution_policy.sandbox_mode),
+                model: model.clone(),
+            })?;
+            let thread_id = thread_response.thread.id.clone();
+            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
+                thread_id: thread_id.clone(),
+                title: thread_title(&thread_response.thread),
+                cwd: thread_response.thread.cwd.clone(),
+            });
+
+            let turn_response = connection.start_turn(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![TurnInputText::text(prompt.clone())],
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
+                model: model.clone(),
+                effort,
+            })?;
+
+            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
+                turn_id: turn_response.turn.id.clone(),
+            });
+
+            connection.wait_for_turn_stream(&thread_id, &turn_response.turn.id, &event_sender)
+        });
+
+        if let Err(error) = &result {
+            let _ = event_sender.send(ConversationStreamEvent::Failed {
+                message: error.to_string(),
+            });
+        }
+
+        result
     }
 
     fn with_shared_runtime<T, F>(
@@ -354,42 +408,15 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        let result = self.with_streaming_runtime(|connection| {
-            let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(cwd.to_string()),
-                approval_policy: Some(self.execution_policy.approval_policy),
-                approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(self.execution_policy.sandbox_mode),
-            })?;
-            let thread_id = thread_response.thread.id.clone();
-            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
-                thread_id: thread_id.clone(),
-                title: thread_title(&thread_response.thread),
-                cwd: thread_response.thread.cwd.clone(),
-            });
+        self.run_new_thread_stream_request(NewThreadStreamRequest::new(cwd, prompt), event_sender)
+    }
 
-            let turn_response = connection.start_turn(TurnStartParams {
-                thread_id: thread_id.clone(),
-                input: vec![TurnInputText::text(prompt)],
-                approval_policy: Some(self.execution_policy.approval_policy),
-                approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
-            })?;
-
-            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
-                turn_id: turn_response.turn.id.clone(),
-            });
-
-            connection.wait_for_turn_stream(&thread_id, &turn_response.turn.id, &event_sender)
-        });
-
-        if let Err(error) = &result {
-            let _ = event_sender.send(ConversationStreamEvent::Failed {
-                message: error.to_string(),
-            });
-        }
-
-        result
+    fn run_new_thread_stream_with_overrides(
+        &self,
+        request: NewThreadStreamRequest,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        self.run_new_thread_stream_request(request, event_sender)
     }
 
     fn run_turn_stream(
@@ -411,6 +438,8 @@ impl CodexAppServerPort for CodexAppServerAdapter {
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
+                model: None,
+                effort: None,
             })?;
 
             let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
@@ -427,6 +456,19 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         }
 
         result
+    }
+}
+
+impl From<NewThreadReasoningEffort> for ReasoningEffortValue {
+    fn from(value: NewThreadReasoningEffort) -> Self {
+        match value {
+            NewThreadReasoningEffort::None => Self::None,
+            NewThreadReasoningEffort::Minimal => Self::Minimal,
+            NewThreadReasoningEffort::Low => Self::Low,
+            NewThreadReasoningEffort::Medium => Self::Medium,
+            NewThreadReasoningEffort::High => Self::High,
+            NewThreadReasoningEffort::XHigh => Self::XHigh,
+        }
     }
 }
 

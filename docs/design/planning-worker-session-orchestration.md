@@ -51,6 +51,7 @@ Characteristics:
 - implemented with `codex app-server`
 - each planning operation uses a **fresh thread**
 - planner threads are never resumed or reused
+- planner threads default to `gpt-5.4` with reasoning effort `medium`
 - planner transcripts are not mixed into the main conversation transcript
 
 Operations:

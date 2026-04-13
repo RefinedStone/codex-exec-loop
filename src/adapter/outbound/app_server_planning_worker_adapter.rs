@@ -3,7 +3,9 @@ use std::sync::mpsc;
 
 use anyhow::{Result, anyhow};
 
-use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
+use crate::application::port::outbound::codex_app_server_port::{
+    CodexAppServerPort, NewThreadReasoningEffort, NewThreadStreamRequest,
+};
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
@@ -13,6 +15,9 @@ use crate::domain::conversation::ConversationStreamEvent;
 pub struct AppServerPlanningWorkerAdapter {
     codex_app_server_port: Arc<dyn CodexAppServerPort>,
 }
+
+const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
+const PLANNING_WORKER_REASONING_EFFORT: NewThreadReasoningEffort = NewThreadReasoningEffort::Medium;
 
 impl AppServerPlanningWorkerAdapter {
     pub fn new(codex_app_server_port: Arc<dyn CodexAppServerPort>) -> Self {
@@ -28,11 +33,17 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse> {
         let (tx, rx) = mpsc::channel();
-        let stream_result = self.codex_app_server_port.run_new_thread_stream(
-            &request.workspace_directory,
-            &request.prompt,
-            tx,
-        );
+        let stream_result = self
+            .codex_app_server_port
+            .run_new_thread_stream_with_overrides(
+                NewThreadStreamRequest {
+                    cwd: request.workspace_directory.clone(),
+                    prompt: request.prompt.clone(),
+                    model: Some(PLANNING_WORKER_MODEL.to_string()),
+                    reasoning_effort: Some(PLANNING_WORKER_REASONING_EFFORT),
+                },
+                tx,
+            );
 
         let mut final_agent_message = None;
         let mut changed_planning_file_paths = Vec::new();
@@ -80,13 +91,15 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::mpsc::Sender;
 
     use anyhow::Result;
 
     use super::AppServerPlanningWorkerAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
-        AppServerStartupContext, CodexAppServerPort,
+        AppServerStartupContext, CodexAppServerPort, NewThreadReasoningEffort,
+        NewThreadStreamRequest,
     };
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
@@ -96,6 +109,7 @@ mod tests {
 
     struct FakeCodexAppServerPort {
         events: Vec<ConversationStreamEvent>,
+        requests: Mutex<Vec<NewThreadStreamRequest>>,
     }
 
     impl CodexAppServerPort for FakeCodexAppServerPort {
@@ -123,6 +137,18 @@ mod tests {
             Ok(())
         }
 
+        fn run_new_thread_stream_with_overrides(
+            &self,
+            request: NewThreadStreamRequest,
+            event_sender: Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            self.requests
+                .lock()
+                .expect("requests lock should succeed")
+                .push(request);
+            self.run_new_thread_stream("", "", event_sender)
+        }
+
         fn run_turn_stream(
             &self,
             _thread_id: &str,
@@ -135,7 +161,7 @@ mod tests {
 
     #[test]
     fn run_planning_session_collects_completed_message_and_changed_paths() {
-        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakeCodexAppServerPort {
+        let fake_port = Arc::new(FakeCodexAppServerPort {
             events: vec![
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: "thread-1".to_string(),
@@ -154,7 +180,9 @@ mod tests {
                     ],
                 },
             ],
-        }));
+            requests: Mutex::new(Vec::new()),
+        });
+        let adapter = AppServerPlanningWorkerAdapter::new(fake_port.clone());
 
         let result = adapter
             .run_planning_session(PlanningWorkerRequest {
@@ -172,6 +200,19 @@ mod tests {
             result.changed_planning_file_paths,
             vec![".codex-exec-loop/planning/task-ledger.json".to_string()]
         );
+        assert_eq!(
+            fake_port
+                .requests
+                .lock()
+                .expect("requests lock should succeed")
+                .as_slice(),
+            &[NewThreadStreamRequest {
+                cwd: "/tmp/workspace".to_string(),
+                prompt: "refresh".to_string(),
+                model: Some("gpt-5.4".to_string()),
+                reasoning_effort: Some(NewThreadReasoningEffort::Medium),
+            }]
+        );
     }
 
     #[test]
@@ -180,6 +221,7 @@ mod tests {
             events: vec![ConversationStreamEvent::Failed {
                 message: "planner crashed".to_string(),
             }],
+            requests: Mutex::new(Vec::new()),
         }));
 
         let error = adapter
