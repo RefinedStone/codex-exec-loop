@@ -796,7 +796,11 @@ fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
         return false;
     }
 
-    normalized.starts_with(required_prefix) && normalized.ends_with(".md")
+    let Some(suffix) = normalized.strip_prefix(required_prefix) else {
+        return false;
+    };
+
+    suffix.starts_with('/') && suffix.len() > 1 && normalized.ends_with(".md")
 }
 
 fn display_json_location(path: String) -> String {
@@ -1215,6 +1219,71 @@ state = "active"
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
             issue.file_kind == PlanningFileKind::ResultOutput && issue.code == "blank_result_output"
+        }));
+    }
+
+    #[test]
+    fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
+        let validation_service = PlanningValidationService::new();
+        let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
+            directions_toml: r#"version = 1
+
+[[directions]]
+id = "direction-a"
+title = "Direction A"
+summary = "Keep details in a scoped markdown file."
+success_criteria = ["Use a detail doc path inside the directions directory."]
+detail_doc_path = ".codex-exec-loop/planning/directions_backup/direction-a.md"
+state = "active"
+"#,
+            task_ledger_json: r#"{"version":1,"tasks":[]}"#,
+            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
+            result_output_markdown: valid_result_output_markdown(),
+        });
+
+        assert!(result.is_valid(), "{:?}", result.report.issues);
+        let mut report = result.report;
+        let directions = result
+            .directions
+            .expect("directions should parse for supporting file validation");
+        validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
+        assert!(report.errors().iter().any(|issue| {
+            issue.file_kind == PlanningFileKind::Directions
+                && issue.code == "invalid_detail_doc_path"
+        }));
+    }
+
+    #[test]
+    fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
+        let validation_service = PlanningValidationService::new();
+        let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
+            directions_toml: r#"version = 1
+
+[queue_idle]
+policy = "review_and_enqueue"
+prompt_path = ".codex-exec-loop/planning/prompts_backup/queue-idle-review.md"
+
+[[directions]]
+id = "direction-a"
+title = "Direction A"
+summary = "Keep details in a scoped markdown file."
+success_criteria = ["Use a queue-idle prompt inside the prompts directory."]
+state = "active"
+"#,
+            task_ledger_json: r#"{"version":1,"tasks":[]}"#,
+            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
+            result_output_markdown: valid_result_output_markdown(),
+        });
+
+        assert!(result.is_valid(), "{:?}", result.report.issues);
+        let mut report = result.report;
+        let directions = result
+            .directions
+            .expect("directions should parse for supporting file validation");
+        validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
+        assert!(report.errors().iter().any(|issue| {
+            issue.file_kind == PlanningFileKind::Directions
+                && issue.code == "invalid_queue_idle_prompt_path"
         }));
     }
 }
