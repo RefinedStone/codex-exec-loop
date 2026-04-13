@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use crate::application::port::outbound::planning_workspace_port::PlanningDraftFileRecord;
 use crate::application::service::planning_auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
 use crate::domain::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_FORMAT_VERSION,
@@ -69,6 +70,15 @@ pub enum PlanningBootstrapMode {
 pub struct PlanningBootstrapSupplementalFile {
     pub active_path: String,
     pub body: String,
+}
+
+impl From<PlanningBootstrapSupplementalFile> for PlanningDraftFileRecord {
+    fn from(value: PlanningBootstrapSupplementalFile) -> Self {
+        Self {
+            active_path: value.active_path,
+            body: value.body,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -321,6 +321,16 @@ fn bootstrap_active_planning_workspace(workspace_dir: &str) {
     );
 }
 
+fn rewrite_active_directions_toml(workspace_dir: &str, f: impl FnOnce(String) -> String) {
+    let directions_path = std::path::Path::new(workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning")
+        .join("directions.toml");
+    let directions =
+        std::fs::read_to_string(&directions_path).expect("directions.toml should be readable");
+    std::fs::write(&directions_path, f(directions)).expect("updated directions.toml should write");
+}
+
 fn enable_queue_idle_review_and_enqueue(workspace_dir: &str) {
     let planning_dir = std::path::Path::new(workspace_dir)
         .join(".codex-exec-loop")
@@ -693,6 +703,35 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
     let directions = std::fs::read_to_string(planning_dir.join("directions.toml"))
         .expect("promoted directions should be readable");
     assert!(directions.contains("general-workstream"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn directions_editor_still_opens_when_supporting_paths_are_invalid() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("directions-invalid-supporting-paths-app");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+    bootstrap_active_planning_workspace(&workspace_dir);
+    rewrite_active_directions_toml(&workspace_dir, |directions| {
+        directions.replace(
+            r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+            r#"prompt_path = "../escape.md""#,
+        )
+    });
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":directions").expect("command should parse"),
+    );
+    assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert!(app.planning_draft_editor_ui_state.is_open());
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("directions editor ready"));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

@@ -85,11 +85,9 @@ impl PlanningDirectionsService {
         let queue_idle_prompt_exists = queue_idle_prompt_path
             .as_deref()
             .map(|path| {
-                self.planning_workspace_port
-                    .load_optional_planning_file(workspace_dir, path)
-                    .map(|body| body.is_some())
+                self.load_supporting_file_best_effort(workspace_dir, path)
+                    .is_some()
             })
-            .transpose()?
             .unwrap_or(false);
 
         let directions = catalog
@@ -101,11 +99,9 @@ impl PlanningDirectionsService {
                 let detail_doc_exists = detail_doc_path
                     .as_deref()
                     .map(|path| {
-                        self.planning_workspace_port
-                            .load_optional_planning_file(workspace_dir, path)
-                            .map(|body| body.is_some())
+                        self.load_supporting_file_best_effort(workspace_dir, path)
+                            .is_some()
                     })
-                    .transpose()?
                     .unwrap_or(false);
 
                 Ok(DirectionsMaintenanceDirectionSummary {
@@ -142,12 +138,7 @@ impl PlanningDirectionsService {
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
         let prompt_markdown = prompt_path
             .as_deref()
-            .map(|path| {
-                self.planning_workspace_port
-                    .load_optional_planning_file(workspace_dir, path)
-            })
-            .transpose()?
-            .flatten();
+            .and_then(|path| self.load_supporting_file_best_effort(workspace_dir, path));
 
         Ok(QueueIdleReviewContext {
             policy: directions.queue_idle.policy,
@@ -196,19 +187,17 @@ impl PlanningDirectionsService {
             .iter()
             .find(|direction| direction.id.trim() == direction_id.trim())
             .ok_or_else(|| anyhow!("unknown direction id: {}", direction_id.trim()))?;
-        let detail_doc_path = trimmed_non_empty(selected_direction.detail_doc_path.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| default_direction_detail_doc_path(direction_id));
+        let (detail_doc_path, detail_doc_body) = self.resolve_detail_doc_editor_target(
+            workspace_dir,
+            direction_id,
+            trimmed_non_empty(selected_direction.detail_doc_path.as_str()),
+        )?;
         let next_directions_toml = set_direction_detail_doc_path(
             &workspace.directions_toml,
             direction_id,
             &detail_doc_path,
         )?;
         workspace.directions_toml = next_directions_toml;
-        let detail_doc_body = self
-            .planning_workspace_port
-            .load_optional_planning_file(workspace_dir, &detail_doc_path)?
-            .unwrap_or_else(String::new);
         workspace
             .extra_files
             .retain(|file| file.active_path != detail_doc_path);
@@ -231,16 +220,13 @@ impl PlanningDirectionsService {
         let mut workspace = self.load_complete_workspace(workspace_dir)?;
         let directions: DirectionCatalogDocument = toml::from_str(&workspace.directions_toml)
             .map_err(|error| anyhow!("failed to parse directions.toml: {error}"))?;
-        let prompt_path = trimmed_non_empty(directions.queue_idle.prompt_path.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string());
+        let (prompt_path, prompt_body) = self.resolve_queue_idle_prompt_editor_target(
+            workspace_dir,
+            trimmed_non_empty(directions.queue_idle.prompt_path.as_str()),
+        )?;
         let next_directions_toml =
             set_queue_idle_prompt_path(&workspace.directions_toml, &prompt_path)?;
         workspace.directions_toml = next_directions_toml;
-        let prompt_body = self
-            .planning_workspace_port
-            .load_optional_planning_file(workspace_dir, &prompt_path)?
-            .unwrap_or_else(|| DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN.to_string());
         workspace
             .extra_files
             .retain(|file| file.active_path != prompt_path);
@@ -345,9 +331,8 @@ impl PlanningDirectionsService {
                     .map(str::to_string),
             );
             for supporting_path in supporting_paths {
-                if let Some(body) = self
-                    .planning_workspace_port
-                    .load_optional_planning_file(workspace_dir, &supporting_path)?
+                if let Some(body) =
+                    self.load_supporting_file_best_effort(workspace_dir, &supporting_path)
                 {
                     active_workspace.extra_files.push(PlanningDraftFileRecord {
                         active_path: supporting_path,
@@ -357,6 +342,69 @@ impl PlanningDirectionsService {
             }
         }
         Ok(active_workspace)
+    }
+
+    fn load_supporting_file_best_effort(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Option<String> {
+        self.planning_workspace_port
+            .load_optional_planning_file(workspace_dir, relative_path)
+            .ok()
+            .flatten()
+    }
+
+    fn resolve_detail_doc_editor_target(
+        &self,
+        workspace_dir: &str,
+        direction_id: &str,
+        configured_path: Option<&str>,
+    ) -> Result<(String, String)> {
+        if let Some(path) = configured_path {
+            match self
+                .planning_workspace_port
+                .load_optional_planning_file(workspace_dir, path)
+            {
+                Ok(Some(body)) => return Ok((path.to_string(), body)),
+                Ok(None) => return Ok((path.to_string(), String::new())),
+                Err(_) => {}
+            }
+        }
+
+        let fallback_path = default_direction_detail_doc_path(direction_id);
+        let fallback_body = self
+            .load_supporting_file_best_effort(workspace_dir, &fallback_path)
+            .unwrap_or_default();
+        Ok((fallback_path, fallback_body))
+    }
+
+    fn resolve_queue_idle_prompt_editor_target(
+        &self,
+        workspace_dir: &str,
+        configured_path: Option<&str>,
+    ) -> Result<(String, String)> {
+        if let Some(path) = configured_path {
+            match self
+                .planning_workspace_port
+                .load_optional_planning_file(workspace_dir, path)
+            {
+                Ok(Some(body)) => return Ok((path.to_string(), body)),
+                Ok(None) => {
+                    return Ok((
+                        path.to_string(),
+                        DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN.to_string(),
+                    ));
+                }
+                Err(_) => {}
+            }
+        }
+
+        let fallback_path = DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string();
+        let fallback_body = self
+            .load_supporting_file_best_effort(workspace_dir, &fallback_path)
+            .unwrap_or_else(|| DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN.to_string());
+        Ok((fallback_path, fallback_body))
     }
 }
 
@@ -529,6 +577,13 @@ mod tests {
         }
     }
 
+    fn rewrite_directions_toml(workspace_dir: &str, f: impl FnOnce(String) -> String) {
+        let directions_path = Path::new(workspace_dir).join(DIRECTIONS_FILE_PATH);
+        let directions =
+            fs::read_to_string(&directions_path).expect("directions.toml should be readable");
+        fs::write(&directions_path, f(directions)).expect("updated directions.toml should write");
+    }
+
     fn sample_service() -> PlanningDirectionsService {
         PlanningDirectionsService::new(
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
@@ -591,6 +646,50 @@ mod tests {
     }
 
     #[test]
+    fn stage_editor_session_tolerates_invalid_supporting_paths() {
+        let workspace_dir = create_temp_workspace("planning-directions-invalid-summary");
+        write_bootstrap_workspace(&workspace_dir);
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions
+                .replace(
+                    r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+                    r#"prompt_path = "../escape.md""#,
+                )
+                .replace(
+                    r#"detail_doc_path = """#,
+                    r#"detail_doc_path = "../detail.md""#,
+                )
+        });
+
+        let summary = sample_service()
+            .load_summary(&workspace_dir)
+            .expect("directions summary should still load");
+        assert_eq!(
+            summary.queue_idle_prompt_path,
+            Some("../escape.md".to_string())
+        );
+        assert!(!summary.queue_idle_prompt_exists);
+        assert_eq!(
+            summary.directions[0].detail_doc_path,
+            Some("../detail.md".to_string())
+        );
+        assert!(!summary.directions[0].detail_doc_exists);
+
+        let session = sample_service()
+            .stage_editor_session(&workspace_dir)
+            .expect("directions editor should still stage");
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path == DIRECTIONS_FILE_PATH)
+        );
+        assert!(!session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
     fn stage_queue_idle_prompt_editor_session_stages_default_prompt_and_mapping() {
         let workspace_dir = create_temp_workspace("planning-directions-queue-idle");
         write_bootstrap_workspace(&workspace_dir);
@@ -609,6 +708,77 @@ mod tests {
             .iter()
             .find(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
             .expect("queue-idle prompt should be editable");
+
+        assert!(directions.body.contains(&format!(
+            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
+        )));
+        assert_eq!(prompt.body, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
+        assert!(session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn stage_detail_doc_editor_session_recovers_from_invalid_detail_doc_path() {
+        let workspace_dir = create_temp_workspace("planning-directions-invalid-detail-doc");
+        write_bootstrap_workspace(&workspace_dir);
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"detail_doc_path = """#,
+                r#"detail_doc_path = "../detail.md""#,
+            )
+        });
+
+        let session = sample_service()
+            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
+            .expect("detail doc editor should recover from invalid path");
+        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .expect("directions.toml should be editable");
+        let detail_doc = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == detail_doc_path)
+            .expect("default detail doc should be editable");
+
+        assert!(
+            directions
+                .body
+                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
+        );
+        assert_eq!(detail_doc.body, "");
+        assert!(session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn stage_queue_idle_prompt_editor_session_recovers_from_invalid_prompt_path() {
+        let workspace_dir = create_temp_workspace("planning-directions-invalid-queue-idle");
+        write_bootstrap_workspace(&workspace_dir);
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+                r#"prompt_path = "../escape.md""#,
+            )
+        });
+
+        let session = sample_service()
+            .stage_queue_idle_prompt_editor_session(&workspace_dir)
+            .expect("queue-idle prompt editor should recover from invalid path");
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .expect("directions.toml should be editable");
+        let prompt = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+            .expect("default queue-idle prompt should be editable");
 
         assert!(directions.body.contains(&format!(
             r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#

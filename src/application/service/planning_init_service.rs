@@ -278,12 +278,7 @@ impl PlanningInitService {
                 body: artifacts.result_output_markdown,
             },
         ];
-        staged_files.extend(artifacts.supplemental_files.into_iter().map(|file| {
-            PlanningDraftFileRecord {
-                active_path: file.active_path,
-                body: file.body,
-            }
-        }));
+        staged_files.extend(artifacts.supplemental_files.into_iter().map(Into::into));
         let stage_record = self.planning_workspace_port.stage_planning_draft_files(
             workspace_dir,
             &draft_name,
