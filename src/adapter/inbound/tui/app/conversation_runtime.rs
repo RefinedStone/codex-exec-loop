@@ -36,12 +36,6 @@ pub(super) enum ConversationRuntimeEffect {
         transcript_text: String,
         handoff_task: Option<PlanningTaskHandoff>,
     },
-    QueuePlanningRepairPrompt {
-        prompt: String,
-        queued_from_turn_id: String,
-        attempt_number: usize,
-        max_attempts: usize,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -55,16 +49,6 @@ pub(super) struct ConversationPostTurnEvaluation {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(super) enum ConversationPostTurnAction {
-    QueuePlanningRepair {
-        prompt: String,
-        queued_from_turn_id: String,
-        attempt_number: usize,
-        max_attempts: usize,
-    },
-    PausePlanningRepair {
-        attempt_number: usize,
-        max_attempts: usize,
-    },
     QueueAutoPrompt {
         prompt: String,
         queued_from_turn_id: String,
@@ -112,12 +96,6 @@ pub(super) fn reduce_conversation_runtime(
                         context.handoff_task.as_ref(),
                     );
                 }
-                PromptOrigin::PlanningRepair(context) => {
-                    state.record_planning_repair_submission(
-                        context.attempt_number,
-                        context.max_attempts,
-                    );
-                }
             }
             let auto_follow_progress = format!(
                 "{}/{}",
@@ -148,16 +126,16 @@ pub(super) fn reduce_conversation_runtime(
                     None,
                 ),
             };
-            state.record_submitted_prompt(transcript_message, workspace_directory.clone());
+            state.record_submitted_prompt(
+                transcript_message,
+                workspace_directory.clone(),
+                matches!(origin, PromptOrigin::Manual),
+            );
             state.status_text = match origin {
                 PromptOrigin::Manual => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
                     "auto follow-up submitted / turn {auto_follow_progress} / template: {}",
                     context.template_label
-                ),
-                PromptOrigin::PlanningRepair(context) => format!(
-                    "planning repair submitted / retry {}/{}",
-                    context.attempt_number, context.max_attempts
                 ),
             };
             effects.push(ConversationRuntimeEffect::StartStream {
@@ -228,61 +206,7 @@ pub(super) fn reduce_conversation_runtime(
             state.replace_planning_runtime_snapshot(evaluation.planning_runtime_snapshot);
             state.planning_repair_state = evaluation.planning_repair_state;
             state.extend_runtime_notices(evaluation.runtime_notices);
-
-            let action = match evaluation.action {
-                ConversationPostTurnAction::QueuePlanningRepair {
-                    prompt: _,
-                    queued_from_turn_id: _,
-                    attempt_number,
-                    max_attempts,
-                } if !state.input_buffer.trim().is_empty() => {
-                    ConversationPostTurnAction::PausePlanningRepair {
-                        attempt_number,
-                        max_attempts,
-                    }
-                }
-                ConversationPostTurnAction::QueueAutoPrompt { .. }
-                    if !state.input_buffer.trim().is_empty() =>
-                {
-                    ConversationPostTurnAction::SkipAutoFollowup {
-                        reason: AutoFollowupSkipReason::ManualInputBuffered,
-                    }
-                }
-                action => action,
-            };
-
-            match action {
-                ConversationPostTurnAction::QueuePlanningRepair {
-                    prompt,
-                    queued_from_turn_id,
-                    attempt_number,
-                    max_attempts,
-                } => {
-                    state.auto_follow_state.clear_runtime_phase();
-                    state.clear_pending_post_turn_evaluation();
-                    state.record_planning_repair_queue(attempt_number, max_attempts);
-                    state.status_text = format!(
-                        "turn completed / queued planning repair {attempt_number}/{max_attempts}"
-                    );
-                    state.append_status_message(state.status_text.clone());
-                    effects.push(ConversationRuntimeEffect::QueuePlanningRepairPrompt {
-                        prompt,
-                        queued_from_turn_id,
-                        attempt_number,
-                        max_attempts,
-                    });
-                }
-                ConversationPostTurnAction::PausePlanningRepair {
-                    attempt_number,
-                    max_attempts,
-                } => {
-                    state.auto_follow_state.clear_runtime_phase();
-                    state.defer_post_turn_evaluation();
-                    state.status_text = format!(
-                        "turn completed / planning repair paused: manual input buffered ({attempt_number}/{max_attempts})"
-                    );
-                    state.append_status_message(state.status_text.clone());
-                }
+            match evaluation.action {
                 ConversationPostTurnAction::QueueAutoPrompt {
                     prompt,
                     queued_from_turn_id,
@@ -290,7 +214,6 @@ pub(super) fn reduce_conversation_runtime(
                     transcript_text,
                     handoff_task,
                 } => {
-                    state.clear_pending_post_turn_evaluation();
                     state.clear_auto_followup_skip();
                     state.record_auto_followup_queue(&queued_from_turn_id, &template_label);
                     state.status_text = format!(
@@ -306,11 +229,6 @@ pub(super) fn reduce_conversation_runtime(
                     });
                 }
                 ConversationPostTurnAction::SkipAutoFollowup { reason } => {
-                    if reason == AutoFollowupSkipReason::ManualInputBuffered {
-                        state.defer_post_turn_evaluation();
-                    } else {
-                        state.clear_pending_post_turn_evaluation();
-                    }
                     state.record_auto_followup_skip(reason);
                     state.status_text = reason.runtime_status(&state.auto_follow_state);
                     state.append_status_message(state.status_text.clone());
@@ -412,6 +330,7 @@ mod tests {
             reduced.state.messages[0].text,
             "다음 queued task 1개를 이어서 진행합니다."
         );
+        assert_eq!(reduced.state.input_buffer, "continue from the last result");
         assert!(reduced.state.messages[0].debug_detail.is_none());
         assert_eq!(reduced.state.messages[0].label(), "Auto Follow-up");
     }
@@ -476,47 +395,6 @@ mod tests {
             Some(
                 "planner temp session: refresh / refresh ok\nplanner response:\n  queued next task"
             )
-        );
-    }
-
-    #[test]
-    fn planning_repair_submit_records_retry_without_advancing_auto_follow_progress() {
-        let mut state = sample_conversation();
-        state.input_buffer = "repair the invalid task ledger".to_string();
-        state.auto_follow_state.completed_auto_turns = 1;
-
-        let reduced = reduce_conversation_runtime(
-            state,
-            ConversationRuntimeEvent::SubmitPrompt {
-                prompt: "repair the invalid task ledger".to_string(),
-                origin: PromptOrigin::PlanningRepair(PlanningRepairSubmitContext {
-                    queued_from_turn_id: "turn-1".to_string(),
-                    attempt_number: 1,
-                    max_attempts: 2,
-                }),
-            },
-        );
-
-        assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 1);
-        assert_eq!(
-            reduced.state.status_text,
-            "planning repair submitted / retry 1/2"
-        );
-        assert_eq!(
-            reduced
-                .state
-                .last_auto_followup_activity
-                .as_ref()
-                .map(|activity| activity.summary.as_str()),
-            Some("submitted planning repair 1/2")
-        );
-        assert_eq!(
-            reduced.effects,
-            vec![ConversationRuntimeEffect::StartStream {
-                workspace_directory: "/tmp/workspace".to_string(),
-                thread_id: Some("thread-1".to_string()),
-                prompt: "repair the invalid task ledger".to_string(),
-            }]
         );
     }
 
@@ -1180,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn post_turn_evaluation_rechecks_manual_input_before_queueing_auto_prompt() {
+    fn post_turn_evaluation_queues_auto_prompt_even_when_manual_input_is_buffered() {
         let mut state = sample_conversation();
         state.input_buffer = "user is typing".to_string();
 
@@ -1204,10 +1082,19 @@ mod tests {
             },
         );
 
-        assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.effects,
+            vec![ConversationRuntimeEffect::QueueAutoPrompt {
+                prompt: "continue".to_string(),
+                queued_from_turn_id: "turn-1".to_string(),
+                template_label: "builtin next-task".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                handoff_task: None,
+            }]
+        );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / auto follow-up skipped: manual input buffered"
+            "turn completed / queued auto follow-up with template builtin next-task"
         );
         assert_eq!(
             reduced
@@ -1215,13 +1102,12 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("skipped: manual input buffered")
+            Some("queued auto turn 1/3")
         );
-        assert!(reduced.state.pending_post_turn_evaluation);
     }
 
     #[test]
-    fn post_turn_evaluation_defers_retry_when_shell_command_is_buffered() {
+    fn post_turn_evaluation_queues_auto_prompt_when_shell_command_is_buffered() {
         let mut state = sample_conversation();
         state.input_buffer = ":q".to_string();
 
@@ -1245,10 +1131,19 @@ mod tests {
             },
         );
 
-        assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.effects,
+            vec![ConversationRuntimeEffect::QueueAutoPrompt {
+                prompt: "continue".to_string(),
+                queued_from_turn_id: "turn-1".to_string(),
+                template_label: "builtin next-task".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                handoff_task: None,
+            }]
+        );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / auto follow-up skipped: manual input buffered"
+            "turn completed / queued auto follow-up with template builtin next-task"
         );
         assert_eq!(
             reduced
@@ -1256,119 +1151,8 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("skipped: manual input buffered")
+            Some("queued auto turn 1/3")
         );
-        assert!(reduced.state.pending_post_turn_evaluation);
-    }
-
-    #[test]
-    fn post_turn_evaluation_pauses_planning_repair_without_queueing_effect() {
-        let mut state = sample_conversation();
-        state.begin_auto_followup_evaluation();
-
-        let reduced = reduce_conversation_runtime(
-            state,
-            ConversationRuntimeEvent::PostTurnEvaluated {
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
-                    planning_repair_state: Some(PlanningRepairState {
-                        root_turn_id: "turn-root".to_string(),
-                        attempts_used: 1,
-                        max_attempts: 2,
-                        latest_request: PlanningRepairRequest {
-                            failure_summary: "failed to parse task-ledger.json".to_string(),
-                            validation_errors: vec!["failed to parse task-ledger.json".to_string()],
-                            directions_toml: "version = 1".to_string(),
-                            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
-                            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
-                            rejected_task_ledger_json: Some("{ invalid json".to_string()),
-                            rejected_archive_path: None,
-                        },
-                    }),
-                    runtime_notices: vec![
-                        "planning repair retry 1/2 is waiting because manual input is buffered"
-                            .to_string(),
-                    ],
-                    action: ConversationPostTurnAction::PausePlanningRepair {
-                        attempt_number: 1,
-                        max_attempts: 2,
-                    },
-                }),
-            },
-        );
-
-        assert!(reduced.effects.is_empty());
-        assert_eq!(
-            reduced.state.status_text,
-            "turn completed / planning repair paused: manual input buffered (1/2)"
-        );
-        assert_eq!(
-            reduced
-                .state
-                .planning_repair_state
-                .as_ref()
-                .map(|state| state.attempts_used),
-            Some(1)
-        );
-        assert!(matches!(
-            reduced.state.auto_follow_state.runtime_phase,
-            AutoFollowRuntimePhase::Idle
-        ));
-        assert!(
-            reduced
-                .state
-                .runtime_notices
-                .iter()
-                .any(|notice| notice.contains("planning repair retry 1/2"))
-        );
-    }
-
-    #[test]
-    fn post_turn_evaluation_queueing_planning_repair_clears_auto_follow_phase() {
-        let mut state = sample_conversation();
-        state.input_buffer.clear();
-        state.begin_auto_followup_evaluation();
-
-        let reduced = reduce_conversation_runtime(
-            state,
-            ConversationRuntimeEvent::PostTurnEvaluated {
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
-                    planning_repair_state: Some(PlanningRepairState {
-                        root_turn_id: "turn-root".to_string(),
-                        attempts_used: 1,
-                        max_attempts: 2,
-                        latest_request: PlanningRepairRequest {
-                            failure_summary: "failed to parse task-ledger.json".to_string(),
-                            validation_errors: vec!["failed to parse task-ledger.json".to_string()],
-                            directions_toml: "version = 1".to_string(),
-                            task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
-                            accepted_task_ledger_json: "{\"version\":1,\"tasks\":[]}".to_string(),
-                            rejected_task_ledger_json: Some("{ invalid json".to_string()),
-                            rejected_archive_path: None,
-                        },
-                    }),
-                    runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::QueuePlanningRepair {
-                        prompt: "repair task ledger".to_string(),
-                        queued_from_turn_id: "turn-1".to_string(),
-                        attempt_number: 1,
-                        max_attempts: 2,
-                    },
-                }),
-            },
-        );
-
-        assert!(matches!(
-            reduced.state.auto_follow_state.runtime_phase,
-            AutoFollowRuntimePhase::Idle
-        ));
-        assert!(reduced.effects.iter().any(|effect| {
-            matches!(
-                effect,
-                ConversationRuntimeEffect::QueuePlanningRepairPrompt { .. }
-            )
-        }));
     }
 
     #[test]
@@ -1426,7 +1210,6 @@ mod tests {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
-            pending_post_turn_evaluation: false,
             last_planning_task_handoff: None,
             status_text: "thread loaded".to_string(),
         }

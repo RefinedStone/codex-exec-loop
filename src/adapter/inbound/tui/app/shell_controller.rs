@@ -60,12 +60,6 @@ impl NativeTuiApp {
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
                 "auto follow-up paused because startup diagnostics need attention".to_string()
             }
-            (PromptOrigin::PlanningRepair(_), ShellActionAvailability::Pending) => {
-                "planning repair paused while startup checks are still running".to_string()
-            }
-            (PromptOrigin::PlanningRepair(_), ShellActionAvailability::Blocked) => {
-                "planning repair paused because startup diagnostics need attention".to_string()
-            }
         }
     }
 
@@ -172,12 +166,11 @@ impl NativeTuiApp {
         &mut self,
         command_input: InlineShellCommandInput,
     ) {
-        let should_resume_post_turn_evaluation =
-            command_input.command() != InlineShellCommand::NewDraft;
         match command_input.command() {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Queue => self.show_queue_overlay(),
+            InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
             InlineShellCommand::PlanningInit => self.show_planning_init_overlay(),
             InlineShellCommand::MaxAutoTurns => {
@@ -187,9 +180,6 @@ impl NativeTuiApp {
                             .to_string(),
                     });
                     self.clear_input_buffer();
-                    if should_resume_post_turn_evaluation {
-                        self.resume_deferred_post_turn_evaluation_after_inline_command();
-                    }
                     return;
                 };
                 self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
@@ -206,50 +196,6 @@ impl NativeTuiApp {
             });
         }
         self.clear_input_buffer();
-        if should_resume_post_turn_evaluation {
-            self.resume_deferred_post_turn_evaluation_after_inline_command();
-        }
-    }
-
-    fn resume_deferred_post_turn_evaluation_after_inline_command(&mut self) {
-        let Some((workspace_directory, queued_from_turn_id, changed_planning_file_paths)) =
-            (match &mut self.conversation_state {
-                ConversationState::Ready(conversation)
-                    if conversation.pending_post_turn_evaluation
-                        && !conversation.has_running_turn()
-                        && conversation.input_buffer.trim().is_empty() =>
-                {
-                    let Some(queued_from_turn_id) =
-                        conversation.turn_activity.last_completed_turn_id.clone()
-                    else {
-                        conversation.clear_pending_post_turn_evaluation();
-                        return;
-                    };
-                    let workspace_directory =
-                        conversation.planning_workspace_directory().to_string();
-                    let changed_planning_file_paths = conversation
-                        .turn_activity
-                        .last_completed_changed_planning_file_paths()
-                        .to_vec();
-                    conversation.clear_pending_post_turn_evaluation();
-                    Some((
-                        workspace_directory,
-                        queued_from_turn_id,
-                        changed_planning_file_paths,
-                    ))
-                }
-                ConversationState::Loading | ConversationState::Failed(_) => None,
-                ConversationState::Ready(_) => None,
-            })
-        else {
-            return;
-        };
-
-        self.execute_conversation_runtime_effect(ConversationRuntimeEffect::EvaluateAutoFollowup {
-            workspace_directory,
-            queued_from_turn_id,
-            changed_planning_file_paths,
-        });
     }
 
     pub(super) fn open_planning_manual_editor(&mut self) {
@@ -531,6 +477,10 @@ impl NativeTuiApp {
 
     pub(super) fn toggle_auto_followup(&mut self) {
         self.dispatch_followup_controls(FollowupControlEvent::AutoFollowToggled);
+    }
+
+    pub(super) fn stop_post_turn_automation(&mut self) {
+        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowStopped);
     }
 
     pub(super) fn current_max_auto_turns_value(&self) -> usize {

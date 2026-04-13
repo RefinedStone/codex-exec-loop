@@ -376,7 +376,6 @@ fn ready_conversation() -> ConversationViewModel {
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
-        pending_post_turn_evaluation: false,
         last_planning_task_handoff: None,
         status_text: "thread loaded".to_string(),
     }
@@ -1875,16 +1874,99 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
     };
     assert_eq!(conversation.input_buffer, "operator override draft");
     assert!(conversation.planning_repair_state.is_none());
+    assert!(!conversation.status_text.contains("manual input buffered"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("automation-off-no-hidden-repair");
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    let bootstrap_artifacts =
+        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
+            .build_artifacts();
+    std::fs::write(
+        planning_dir.join("directions.toml"),
+        &bootstrap_artifacts.directions_toml,
+    )
+    .expect("directions should write");
+    std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
+        .expect("invalid task ledger should write");
+    std::fs::write(
+        planning_dir.join("task-ledger.schema.json"),
+        &bootstrap_artifacts.task_ledger_schema_json,
+    )
+    .expect("schema should write");
+    std::fs::write(
+        planning_dir.join("result-output.md"),
+        &bootstrap_artifacts.result_output_markdown,
+    )
+    .expect("result output should write");
+
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.enabled = false;
+    conversation.auto_follow_state.template_state.selected_index = 1;
+    conversation.cwd = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-repair-4".to_string());
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+    app.active_turn_planning_capture = Some(ready_turn_planning_capture(
+        &workspace_dir,
+        PlanningExecutionSnapshot {
+            directions_toml: Some(bootstrap_artifacts.directions_toml.clone()),
+            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json.clone()),
+            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json.clone()),
+            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown.clone()),
+            queue_snapshot_json: None,
+        },
+    ));
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-repair-4".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ));
+
+    assert!(
+        codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .is_empty()
+    );
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
     assert_eq!(
         conversation.status_text,
-        "turn completed / auto follow-up skipped: manual input buffered"
+        "turn completed / automation stopped: off"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn buffered_queue_command_does_not_block_auto_followup_submission() {
+fn buffered_queue_command_stays_available_while_auto_followup_submits() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("queue-command-followup");
@@ -1946,23 +2028,112 @@ fn buffered_queue_command_does_not_block_auto_followup_submission() {
         },
     ));
 
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
-        panic!("conversation should remain ready");
-    };
-    assert!(
-        codex_port
+    let mut turn_calls = Vec::new();
+    for _ in 0..20 {
+        turn_calls = codex_port
             .turn_calls
             .lock()
             .expect("turn call mutex poisoned")
-            .is_empty()
-    );
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .collect::<Vec<_>>();
+        if !turn_calls.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert_eq!(turn_calls.len(), 1);
+    assert_eq!(conversation.input_buffer, ":q");
     assert_eq!(
         conversation.status_text,
-        "turn completed / auto follow-up skipped: manual input buffered"
+        "auto follow-up submitted / turn 1/3 / template: builtin next-task"
     );
-    assert!(conversation.pending_post_turn_evaluation);
+    assert_eq!(
+        conversation
+            .last_auto_followup_activity
+            .as_ref()
+            .map(|activity| activity.summary.as_str()),
+        Some("submitted auto turn 1/3")
+    );
 
     app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+    assert!(conversation.input_buffer.is_empty());
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("manual-buffer-followup");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::write(
+        planning_dir.join("task-ledger.json"),
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-buffer-1",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Current next task for the manual buffer regression.",
+      "title": "Convert kimchi lecture notes into table format",
+      "description": "Turn the list into a teaching slide table.",
+      "status": "ready",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": "turn-prev",
+      "updated_at": "2026-04-13T00:00:00Z"
+    }
+  ]
+}"#,
+    )
+    .expect("task ledger should write");
+
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 0;
+    conversation.cwd = workspace_dir.clone();
+    conversation.draft_workspace_directory = workspace_dir.clone();
+    conversation.input_buffer = "operator draft stays here".to_string();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-main".to_string());
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.replace_planning_runtime_snapshot(
+        app.planning_services
+            .runtime_facade
+            .load_runtime_snapshot_or_invalid(&workspace_dir),
+    );
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-main".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ));
 
     let mut turn_calls = Vec::new();
     for _ in 0..20 {
@@ -1984,20 +2155,11 @@ fn buffered_queue_command_does_not_block_auto_followup_submission() {
     };
 
     assert_eq!(turn_calls.len(), 1);
-    assert_eq!(app.shell_overlay, ShellOverlay::Queue);
-    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(conversation.input_buffer, "operator draft stays here");
     assert_eq!(
         conversation.status_text,
         "auto follow-up submitted / turn 1/3 / template: builtin next-task"
     );
-    assert_eq!(
-        conversation
-            .last_auto_followup_activity
-            .as_ref()
-            .map(|activity| activity.summary.as_str()),
-        Some("submitted auto turn 1/3")
-    );
-    assert!(!conversation.pending_post_turn_evaluation);
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -3413,6 +3575,44 @@ fn queue_command_opens_queue_overlay_and_clears_input() {
 }
 
 #[test]
+fn stop_command_turns_off_automation_and_clears_input() {
+    let (mut app, codex_port) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_buffer = ":stop".to_string();
+
+    app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(!conversation.auto_follow_state.enabled);
+    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(conversation.status_text, "automation off");
+    assert!(
+        conversation
+            .last_auto_followup_activity
+            .as_ref()
+            .is_some_and(|activity| activity.summary == "stopped: automation off")
+    );
+    assert!(
+        codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .is_empty()
+    );
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
 fn queue_overlay_view_summarizes_ready_queue_without_raw_dump() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
@@ -4093,7 +4293,7 @@ fn followup_template_overlay_view_collects_preview_status_and_keys() {
     assert_eq!(view.list_view.selected_index, Some(0));
     assert!(list.contains("builtin next-task"));
     assert!(preview.contains("Rendered Preview"));
-    assert!(status.contains("auto follow-up:"));
+    assert!(status.contains("automation:"));
     assert!(keys.contains("change template"));
     assert!(keys.contains("r: reload"));
 }
@@ -5207,8 +5407,8 @@ fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
         "next task: task-1",
     ));
     conversation.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-        summary: "stopped: auto follow-up off".to_string(),
-        detail: "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
+        summary: "stopped: automation off".to_string(),
+        detail: "post-turn automation is off; toggle Ctrl+a to re-enable it".to_string(),
     });
     conversation
         .turn_activity

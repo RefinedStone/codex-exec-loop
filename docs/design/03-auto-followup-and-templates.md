@@ -36,7 +36,8 @@ Templates can render:
 
 ## Operator Controls
 
-- `Ctrl+a`: toggle auto follow-up
+- `Ctrl+a`: toggle post-turn automation
+- `:stop`: turn post-turn automation off explicitly
 - `Ctrl+f`: cycle templates
 - `Ctrl+p` or `:templates`: open template preview
 - `Ctrl+g`: edit stop keyword

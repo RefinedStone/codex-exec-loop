@@ -80,21 +80,6 @@ impl NativeTuiApp {
                     }),
                 );
             }
-            ConversationRuntimeEffect::QueuePlanningRepairPrompt {
-                prompt,
-                queued_from_turn_id,
-                attempt_number,
-                max_attempts,
-            } => {
-                self.submit_prompt(
-                    prompt,
-                    PromptOrigin::PlanningRepair(PlanningRepairSubmitContext {
-                        queued_from_turn_id,
-                        attempt_number,
-                        max_attempts,
-                    }),
-                );
-            }
         }
     }
 

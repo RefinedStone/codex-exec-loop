@@ -646,7 +646,7 @@ pub(super) fn build_followup_template_overlay_view(
 
 fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
     vec![Line::from(
-        "Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: follow-up controls",
+        "Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: automation controls",
     )]
 }
 
@@ -2161,7 +2161,9 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
     vec![
         Line::from("Up/Down or j/k: change template    Ctrl+f: next template    r: reload"),
         Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
-        Line::from("Ctrl+a: auto on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword"),
+        Line::from(
+            "Ctrl+a: automation on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword",
+        ),
         Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
     ]
 }

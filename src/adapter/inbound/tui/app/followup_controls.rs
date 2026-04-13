@@ -10,6 +10,7 @@ pub(super) enum FollowupControlEvent {
         reload_result: FollowupTemplateReloadResult,
     },
     AutoFollowToggled,
+    AutoFollowStopped,
     MaxAutoTurnsUpdated {
         value: String,
     },
@@ -80,10 +81,20 @@ pub(super) fn reduce_followup_controls(
             }
         }
         FollowupControlEvent::AutoFollowToggled => {
-            state.auto_follow_state.toggle();
-            state.clear_auto_followup_skip();
-            state.status_text =
-                format!("auto follow-up {}", state.auto_follow_state.status_label());
+            if state.auto_follow_state.enabled {
+                state.auto_follow_state.stop();
+                state.record_automation_stopped();
+                state.status_text = "automation off".to_string();
+            } else {
+                state.auto_follow_state.enable();
+                state.clear_auto_followup_skip();
+                state.status_text = "automation on".to_string();
+            }
+        }
+        FollowupControlEvent::AutoFollowStopped => {
+            state.auto_follow_state.stop();
+            state.record_automation_stopped();
+            state.status_text = "automation off".to_string();
         }
         FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
@@ -490,8 +501,15 @@ mod tests {
         let reduced = reduce_followup_controls(state, FollowupControlEvent::AutoFollowToggled);
 
         assert!(!reduced.state.auto_follow_state.enabled);
-        assert!(reduced.state.last_auto_followup_activity.is_none());
-        assert_eq!(reduced.state.status_text, "auto follow-up off");
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("stopped: automation off")
+        );
+        assert_eq!(reduced.state.status_text, "automation off");
     }
 
     #[test]

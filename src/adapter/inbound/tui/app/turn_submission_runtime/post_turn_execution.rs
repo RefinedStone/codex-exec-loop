@@ -81,20 +81,24 @@ impl PostTurnEvaluationExecutor {
             request,
             &reconciliation_result,
         );
+        let automation_enabled = conversation.auto_follow_state.enabled;
 
-        if let Some(repair_request) = reconciliation_result.repair_request.as_ref() {
-            let repair_outcome = self.run_hidden_planning_repairs(
-                &request.workspace_directory,
-                &request.queued_from_turn_id,
-                repair_request,
-            );
-            planning_runtime_snapshot = repair_outcome.runtime_snapshot;
+        if automation_enabled {
+            if let Some(repair_request) = reconciliation_result.repair_request.as_ref() {
+                let repair_outcome = self.run_hidden_planning_repairs(
+                    &request.workspace_directory,
+                    &request.queued_from_turn_id,
+                    repair_request,
+                );
+                planning_runtime_snapshot = repair_outcome.runtime_snapshot;
+            }
         }
 
-        if conversation
-            .auto_follow_state
-            .selected_template()
-            .is_builtin_next_task()
+        if automation_enabled
+            && conversation
+                .auto_follow_state
+                .selected_template()
+                .is_builtin_next_task()
         {
             let refresh_outcome = self.run_builtin_next_task_refresh(
                 conversation,
@@ -550,6 +554,10 @@ impl NativeTuiApp {
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
     ) {
+        if !conversation.auto_follow_state.enabled {
+            return;
+        }
+
         if conversation
             .auto_follow_state
             .selected_template()

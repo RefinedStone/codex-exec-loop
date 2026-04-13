@@ -13,7 +13,7 @@ This file describes the implemented shell shape on `prerelease`.
 
 ## Commands And Keys
 
-- inline shell commands: `:diag`, `:sessions`, `:templates`, `:queue`, `:planning`, `:new`, `:help`
+- inline shell commands: `:diag`, `:sessions`, `:templates`, `:queue`, `:stop`, `:planning`, `:new`, `:help`
 - prompt editing: `Enter` send, `Ctrl+j` newline, `Ctrl+u` clear, `Ctrl+w` delete previous word
 - shell navigation: `Ctrl+t` new draft, `Ctrl+C` back, `Ctrl+q` quit
 - follow-up inspection and control stay in-shell instead of opening a separate modal app

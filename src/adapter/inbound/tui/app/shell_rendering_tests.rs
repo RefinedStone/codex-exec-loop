@@ -322,7 +322,7 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
     assert!(rendered.contains("Follow-Up Templates / inline inspection"));
     assert!(rendered.contains("Template List"));
     assert!(rendered.contains("Preview"));
-    assert!(rendered.contains("auto follow-up: on"));
+    assert!(rendered.contains("automation: on"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));

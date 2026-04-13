@@ -3,6 +3,7 @@ pub(super) enum InlineShellCommand {
     Diagnostics,
     Sessions,
     Queue,
+    Stop,
     Templates,
     PlanningInit,
     MaxAutoTurns,
@@ -26,8 +27,7 @@ struct InlineShellCommandSpec {
     execution_status: Option<&'static str>,
 }
 
-const COMMAND_LIST_LINE: &str =
-    "Shell commands: :diag  :sessions  :queue  :templates  :planning  :turns <n>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :stop  :templates  :planning  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
@@ -54,6 +54,14 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to open the planning queue inspection.",
         execution_status: Some("opened planning queue inspection"),
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Stop,
+        primary_name: ":stop",
+        aliases: &[":stop"],
+        suggestion_detail: "stop automation",
+        buffered_hint: "Press Enter to stop post-turn automation.",
+        execution_status: None,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Templates,
@@ -236,6 +244,7 @@ mod tests {
             (":sessions", Some((InlineShellCommand::Sessions, None))),
             (":q", Some((InlineShellCommand::Queue, None))),
             (":queue", Some((InlineShellCommand::Queue, None))),
+            (":stop", Some((InlineShellCommand::Stop, None))),
             (":template", Some((InlineShellCommand::Templates, None))),
             (":templates", Some((InlineShellCommand::Templates, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
@@ -277,6 +286,7 @@ mod tests {
                 InlineShellCommand::Diagnostics,
                 InlineShellCommand::Sessions,
                 InlineShellCommand::Queue,
+                InlineShellCommand::Stop,
                 InlineShellCommand::Templates,
                 InlineShellCommand::PlanningInit,
                 InlineShellCommand::MaxAutoTurns,
@@ -295,6 +305,10 @@ mod tests {
         assert_eq!(
             InlineShellCommand::suggestions(":q"),
             vec![InlineShellCommand::Queue]
+        );
+        assert_eq!(
+            InlineShellCommand::suggestions(":st"),
+            vec![InlineShellCommand::Stop]
         );
         assert_eq!(
             InlineShellCommand::suggestions(":t"),
@@ -339,6 +353,7 @@ mod tests {
             (":diag", Some("opened diagnostics inspection")),
             (":sessions", Some("opened recent sessions inspection")),
             (":queue", Some("opened planning queue inspection")),
+            (":stop", None),
             (":templates", Some("opened template inspection")),
             (":planning", Some("opened planning initialization selector")),
             (":turns 5", None),

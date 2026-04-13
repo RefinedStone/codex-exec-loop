@@ -263,7 +263,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let failure_line = planning_projection.failure_line;
             let mut lines = vec![
                 Line::from(format!(
-                    "auto follow-up: {} / {}",
+                    "automation: {} / {}",
                     conversation.auto_follow_state.status_label(),
                     conversation.auto_follow_state.activity_label()
                 )),

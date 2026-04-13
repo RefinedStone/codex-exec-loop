@@ -84,7 +84,6 @@ fn ready_conversation() -> ConversationViewModel {
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
-        pending_post_turn_evaluation: false,
         last_planning_task_handoff: None,
         status_text: "thread loaded".to_string(),
     }
@@ -353,8 +352,12 @@ fn snapshot_status_keeps_base_status_with_compact_warning_label() {
 }
 
 #[test]
-fn auto_followup_prompt_skips_when_manual_input_is_buffered() {
+fn auto_followup_prompt_ignores_buffered_manual_input() {
     let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
+    ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -363,9 +366,16 @@ fn auto_followup_prompt_skips_when_manual_input_is_buffered() {
     ));
     conversation.input_buffer = "manual prompt".to_string();
 
-    assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered)
+    let AutoFollowupDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_followup(&planning_runtime_facade_service())
+    else {
+        panic!("buffered manual input should not block auto follow-up");
+    };
+
+    assert!(
+        prompt
+            .prompt
+            .contains("Continue the next highest-priority task.")
     );
 }
 
@@ -376,6 +386,7 @@ fn record_submitted_prompt_refreshes_cached_lines_and_tracks_turn_workspace() {
     conversation.record_submitted_prompt(
         ConversationMessage::new(ConversationMessageKind::User, "ship it", None, None),
         "/tmp/turn-workspace".to_string(),
+        true,
     );
 
     assert_eq!(

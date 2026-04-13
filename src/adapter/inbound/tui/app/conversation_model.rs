@@ -61,7 +61,6 @@ pub(crate) enum AutoFollowupDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoFollowupSkipReason {
     Disabled,
-    ManualInputBuffered,
     LimitReached,
     NoAgentReply,
     StopKeywordMatched,
@@ -92,9 +91,8 @@ impl AutoFollowupSkipReason {
         turn_activity: &TurnActivityState,
     ) -> String {
         match self {
-            Self::Disabled => "auto follow-up is off; toggle Ctrl+a to re-enable it".to_string(),
-            Self::ManualInputBuffered => {
-                "the input panel already has a manual prompt buffered".to_string()
+            Self::Disabled => {
+                "post-turn automation is off; toggle Ctrl+a to re-enable it".to_string()
             }
             Self::LimitReached => format!(
                 "reached the configured auto-turn budget ({})",
@@ -129,8 +127,7 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn activity_summary(self) -> &'static str {
         match self {
-            Self::Disabled => "stopped: auto follow-up off",
-            Self::ManualInputBuffered => "skipped: manual input buffered",
+            Self::Disabled => "stopped: automation off",
             Self::LimitReached => "stopped: turn limit reached",
             Self::NoAgentReply => "skipped: no agent reply",
             Self::StopKeywordMatched => "stopped: stop keyword matched",
@@ -143,10 +140,7 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
         match self {
-            Self::Disabled => "turn completed / auto follow-up stopped: off".to_string(),
-            Self::ManualInputBuffered => {
-                "turn completed / auto follow-up skipped: manual input buffered".to_string()
-            }
+            Self::Disabled => "turn completed / automation stopped: off".to_string(),
             Self::LimitReached => format!(
                 "turn completed / auto follow-up stopped: turn limit reached ({})",
                 auto_follow_state.progress_label()
@@ -441,8 +435,20 @@ impl AutoFollowState {
         self.runtime_phase = AutoFollowRuntimePhase::Idle;
     }
 
-    pub(crate) fn toggle(&mut self) {
-        self.enabled = !self.enabled;
+    pub(crate) fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    pub(crate) fn stop(&mut self) {
+        self.enabled = false;
+        if matches!(
+            self.runtime_phase,
+            AutoFollowRuntimePhase::Idle
+                | AutoFollowRuntimePhase::Evaluating { .. }
+                | AutoFollowRuntimePhase::Queued { .. }
+        ) {
+            self.runtime_phase = AutoFollowRuntimePhase::Idle;
+        }
     }
 
     pub(crate) fn set_max_auto_turns(&mut self, value: usize) {
@@ -659,6 +665,7 @@ impl TurnActivityState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn last_completed_changed_planning_file_paths(&self) -> &[String] {
         &self.last_completed_turn_changed_planning_file_paths
     }
@@ -736,7 +743,6 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
-    pub(crate) pending_post_turn_evaluation: bool,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
     pub(crate) status_text: String,
 }
@@ -775,7 +781,6 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
-            pending_post_turn_evaluation: false,
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
@@ -823,7 +828,6 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
-            pending_post_turn_evaluation: false,
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
@@ -1063,10 +1067,12 @@ impl ConversationViewModel {
         &mut self,
         transcript_message: ConversationMessage,
         workspace_directory: String,
+        clear_input_buffer: bool,
     ) {
         self.push_message(transcript_message);
-        self.input_buffer.clear();
-        self.pending_post_turn_evaluation = false;
+        if clear_input_buffer {
+            self.input_buffer.clear();
+        }
         self.mark_turn_submitting(workspace_directory);
     }
 
@@ -1324,38 +1330,15 @@ impl ConversationViewModel {
         self.last_auto_followup_activity = None;
     }
 
-    pub(crate) fn defer_post_turn_evaluation(&mut self) {
-        self.pending_post_turn_evaluation = true;
-    }
-
-    pub(crate) fn clear_pending_post_turn_evaluation(&mut self) {
-        self.pending_post_turn_evaluation = false;
+    pub(crate) fn record_automation_stopped(&mut self) {
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: "stopped: automation off".to_string(),
+            detail: "post-turn automation is off; toggle Ctrl+a to re-enable it".to_string(),
+        });
     }
 
     pub(crate) fn clear_last_planning_task_handoff(&mut self) {
         self.last_planning_task_handoff = None;
-    }
-
-    pub(crate) fn record_planning_repair_submission(
-        &mut self,
-        attempt: usize,
-        max_attempts: usize,
-    ) {
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: format!("submitted planning repair {attempt}/{max_attempts}"),
-            detail: format!(
-                "queued after task-ledger validation failed; submitted retry {attempt}/{max_attempts}"
-            ),
-        });
-    }
-
-    pub(crate) fn record_planning_repair_queue(&mut self, attempt: usize, max_attempts: usize) {
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: format!("queued planning repair {attempt}/{max_attempts}"),
-            detail: format!(
-                "queued after task-ledger validation failed; waiting to submit retry {attempt}/{max_attempts}"
-            ),
-        });
     }
 
     pub(crate) fn record_auto_followup_submission(
@@ -1400,7 +1383,6 @@ impl ConversationViewModel {
 
     pub(crate) fn begin_auto_followup_evaluation(&mut self) {
         if !self.auto_follow_state.enabled
-            || !self.input_buffer.trim().is_empty()
             || !self.auto_follow_state.can_queue_next()
             || self.latest_agent_message_text().is_none()
         {
@@ -1454,10 +1436,6 @@ impl ConversationViewModel {
     ) -> AutoFollowupDecision {
         if !self.auto_follow_state.enabled {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
-        }
-
-        if !self.input_buffer.trim().is_empty() {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::ManualInputBuffered);
         }
 
         if !self.auto_follow_state.can_queue_next() {
