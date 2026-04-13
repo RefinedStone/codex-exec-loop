@@ -2,6 +2,11 @@ use std::rc::Rc;
 
 use ratatui::layout::Position;
 
+#[cfg(test)]
+use super::shell_presentation::{
+    ConversationShellFrameView, build_conversation_shell_frame_view,
+    build_input_prompt_cursor_offset,
+};
 use super::shell_presentation::{
     FollowupTemplateOverlayView, OverlayListView, PlanningDraftEditorOverlayView,
     PlanningInitOverlayView, QueueOverlayView, SessionOverlayView, StartupOverlayView,
@@ -10,12 +15,9 @@ use super::shell_presentation::{
     build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
     build_startup_overlay_view, startup_screen_is_active,
 };
-#[cfg(test)]
-use super::shell_presentation::{
-    ConversationShellFrameView, build_conversation_shell_frame_view,
-    build_input_prompt_cursor_offset,
-};
 use super::*;
+
+const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
 
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
     let _ = mode;
@@ -26,7 +28,7 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
     }
 
     let tail_lines = build_inline_tail_lines(app);
-    let inspection_area = build_inline_terminal_flow_layout(area, &tail_lines)[0];
+    let inspection_area = build_inline_terminal_flow_layout(app, area, &tail_lines)[0];
     let editor_content_height = inspection_area
         .height
         .saturating_sub(14)
@@ -41,7 +43,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     let _ = mode;
     let frame_area = frame.area();
     let tail_lines = build_inline_tail_lines(app);
-    let layout = build_inline_terminal_flow_layout(frame_area, &tail_lines);
+    let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_lines);
 
     draw_inline_conversation_shell(frame, app, tail_lines, &layout);
 
@@ -134,8 +136,18 @@ fn draw_inline_conversation_shell(
     );
 }
 
-fn build_inline_terminal_flow_layout(area: Rect, tail_lines: &[Line<'_>]) -> Rc<[Rect]> {
-    let tail_height = inline_body_height(&tail_lines, area.width, MAX_INLINE_TAIL_HEIGHT);
+fn build_inline_terminal_flow_layout(
+    app: &NativeTuiApp,
+    area: Rect,
+    tail_lines: &[Line<'_>],
+) -> Rc<[Rect]> {
+    let tail_max_height =
+        if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
+            MAX_INLINE_TAIL_HEIGHT
+        } else {
+            MAX_INLINE_INSPECTION_TAIL_HEIGHT
+        };
+    let tail_height = inline_body_height(&tail_lines, area.width, tail_max_height);
 
     Layout::default()
         .direction(Direction::Vertical)
@@ -494,14 +506,23 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
+    let mut content_lines = vec![Line::from("Ready Queue")];
+    content_lines.extend(queue_lines);
+    if !proposal_lines.is_empty() {
+        content_lines.push(Line::from("Proposals"));
+        content_lines.extend(proposal_lines);
+    }
+    if !note_lines.is_empty() {
+        content_lines.push(Line::from("Notes"));
+        content_lines.extend(note_lines);
+    }
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 7)),
-            Constraint::Min(8),
-            Constraint::Length(inline_section_height(&note_lines, 6)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(inline_section_height(&body_lines, 3)),
+            Constraint::Length(inline_section_height(&summary_lines, 3)),
+            Constraint::Min(4),
+            Constraint::Length(inline_section_height(&key_lines, 2)),
         ])
         .split(area);
 
@@ -513,28 +534,8 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
         true,
     );
     render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-
-    let queue_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(layout[2]);
-    render_inline_section(
-        frame,
-        queue_layout[0],
-        Line::from("Ready Queue"),
-        queue_lines,
-        false,
-    );
-    render_inline_section(
-        frame,
-        queue_layout[1],
-        Line::from("Proposals"),
-        proposal_lines,
-        false,
-    );
-
-    render_inline_section(frame, layout[3], Line::from("Notes"), note_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_section(frame, layout[2], Line::from("Queue"), content_lines, false);
+    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {

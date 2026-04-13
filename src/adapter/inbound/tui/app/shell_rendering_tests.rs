@@ -394,7 +394,7 @@ fn prepare_render_state_syncs_inline_planning_editor_scroll_before_render() {
     prepare_render_state(&mut app, ShellFrontendMode::InlineMainBuffer, area);
 
     let tail_lines = build_inline_tail_lines(&app);
-    let inspection_area = build_inline_terminal_flow_layout(area, &tail_lines)[0];
+    let inspection_area = build_inline_terminal_flow_layout(&app, area, &tail_lines)[0];
     let editor_content_height = inspection_area
         .height
         .saturating_sub(14)

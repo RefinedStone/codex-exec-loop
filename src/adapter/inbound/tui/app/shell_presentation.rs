@@ -38,10 +38,9 @@ const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
 const INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
-const QUEUE_INSPECTION_TASK_LIMIT: usize = 4;
-const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 3;
-const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 48;
-const QUEUE_INSPECTION_REASON_DETAIL_LIMIT: usize = 32;
+const QUEUE_INSPECTION_TASK_LIMIT: usize = 2;
+const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
+const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
 const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
 const PROMPT_PRIMARY_PREFIX: &str = "> ";
 const PROMPT_CONTINUATION_PREFIX: &str = "  ";
@@ -462,8 +461,6 @@ pub(super) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
 }
 
 pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
-    let workspace_directory = app.planning_workspace_directory();
-
     let header_lines = vec![
         Line::from(vec![
             Span::styled(
@@ -480,25 +477,17 @@ pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     match &app.conversation_state {
         ConversationState::Loading => QueueOverlayView {
             header_lines,
-            summary_lines: vec![
-                Line::from(format!("workspace: {workspace_directory}")),
-                Line::from("planning status: loading conversation"),
-            ],
+            summary_lines: vec![Line::from("status: loading conversation planning state")],
             queue_lines: vec![Line::from(
                 "Queue inspection becomes available after the thread loads.",
             )],
-            proposal_lines: vec![Line::from(
-                "Proposal summary is unavailable while conversation state is loading.",
-            )],
+            proposal_lines: vec![Line::from("Proposal data is unavailable while loading.")],
             note_lines: vec![Line::from("No planner notes yet.")],
             key_lines: build_queue_overlay_key_lines(),
         },
         ConversationState::Failed(message) => QueueOverlayView {
             header_lines,
-            summary_lines: vec![
-                Line::from(format!("workspace: {workspace_directory}")),
-                Line::from("planning status: conversation unavailable"),
-            ],
+            summary_lines: vec![Line::from("status: conversation unavailable")],
             queue_lines: vec![Line::from(
                 "Queue inspection is unavailable while the conversation failed to load.",
             )],
@@ -551,38 +540,32 @@ pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     }
                 });
 
-            let mut summary_lines = vec![
-                Line::from(format!("workspace: {workspace_directory}")),
-                Line::from(format!(
-                    "planning status: {}",
-                    snapshot.preview_status_label()
-                )),
-                Line::from(format!(
-                    "planner worker: {}",
-                    app.planner_worker_panel_state.status.label()
-                )),
-            ];
-            if let Some(queue_summary) = snapshot.queue_summary() {
-                summary_lines.push(Line::from(format!(
-                    "queue summary: {}",
-                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                )));
-            }
-            if let Some(proposal_summary) = snapshot.proposal_summary() {
-                summary_lines.push(Line::from(format!(
-                    "proposal summary: {}",
-                    compact_whitespace_detail(proposal_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                )));
-            }
+            let mut summary_segments = Vec::new();
             if let Some(queue_head) = snapshot.queue_head() {
-                summary_lines.push(Line::from(format!(
-                    "next up: {}",
+                summary_segments.push(format!(
+                    "next: {}",
                     compact_whitespace_detail(
                         queue_head.task_title.trim(),
                         QUEUE_INSPECTION_TITLE_DETAIL_LIMIT
                     )
-                )));
+                ));
             }
+            if let Some(queue_summary) = snapshot.queue_summary() {
+                summary_segments.push(format!(
+                    "queue: {}",
+                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                ));
+            }
+            if let Some(proposal_summary) = snapshot.proposal_summary() {
+                summary_segments.push(format!(
+                    "proposals: {}",
+                    compact_whitespace_detail(proposal_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                ));
+            }
+            if summary_segments.is_empty() {
+                summary_segments.push(format!("status: {}", snapshot.preview_status_label()));
+            }
+            let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
 
             let mut note_lines = Vec::new();
             if let Some(detail) = snapshot.auto_followup_pause_reason() {
@@ -622,6 +605,8 @@ pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             }
             if note_lines.is_empty() {
                 note_lines.push(Line::from("No planner notices or skipped queue items."));
+            } else {
+                note_lines.truncate(2);
             }
 
             QueueOverlayView {
@@ -660,10 +645,9 @@ pub(super) fn build_followup_template_overlay_view(
 }
 
 fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
-    vec![
-        Line::from("Esc/Ctrl+C: close"),
-        Line::from(":planning: update planning files    Ctrl+f / Ctrl+a: stay on follow-up flow"),
-    ]
+    vec![Line::from(
+        "Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: follow-up controls",
+    )]
 }
 
 fn build_queue_task_lines(
@@ -678,28 +662,12 @@ fn build_queue_task_lines(
     let mut lines = Vec::new();
     for task in tasks.iter().take(max_visible_tasks) {
         lines.push(Line::from(format!(
-            "#{} [{}] {}",
+            "#{} [{} / p{}] {}",
             task.rank,
             task.status.label(),
+            task.combined_priority,
             compact_whitespace_detail(task.task_title.trim(), QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
         )));
-        let mut detail_segments = vec![
-            format!(
-                "direction: {}",
-                compact_whitespace_detail(
-                    task.direction_title.trim(),
-                    QUEUE_INSPECTION_REASON_DETAIL_LIMIT
-                )
-            ),
-            format!("priority: {}", task.combined_priority),
-        ];
-        if let Some(first_reason) = task.rank_reasons.first() {
-            detail_segments.push(format!(
-                "reason: {}",
-                compact_whitespace_detail(first_reason, QUEUE_INSPECTION_REASON_DETAIL_LIMIT)
-            ));
-        }
-        lines.push(Line::from(format!("  {}", detail_segments.join("  |  "))));
     }
 
     let hidden_count = tasks.len().saturating_sub(max_visible_tasks);

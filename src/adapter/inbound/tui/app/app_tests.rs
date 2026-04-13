@@ -3322,11 +3322,11 @@ fn queue_overlay_view_summarizes_ready_queue_without_raw_dump() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(summary.contains("planning status: ready"));
-    assert!(summary.contains("queue summary: 2 ready tasks"));
-    assert!(summary.contains("next up: Implement shell planning status"));
-    assert!(queue.contains("#1 [ready] Implement shell planning status"));
-    assert!(queue.contains("priority: 10"));
+    assert!(summary.contains("next: Implement shell planning status"));
+    assert!(summary.contains("queue: 2 ready tasks"));
+    assert!(!summary.contains("workspace:"));
+    assert!(!summary.contains("planner worker:"));
+    assert!(queue.contains("#1 [ready / p10] Implement shell planning status"));
     assert!(notes.contains("skipped tasks: 1"));
     assert!(!queue.contains("\"task_id\""));
     assert!(!queue.contains("task-1"));
@@ -3351,8 +3351,7 @@ fn queue_overlay_view_shows_proposals_in_compact_form() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(proposals.contains("#1 [proposed] Draft a queue inspection overlay"));
-    assert!(proposals.contains("priority: 7"));
+    assert!(proposals.contains("#1 [proposed / p7] Draft a queue inspection overlay"));
     assert!(!proposals.contains("\"direction_id\""));
 }
 
