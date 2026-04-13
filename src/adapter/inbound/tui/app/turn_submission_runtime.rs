@@ -64,12 +64,15 @@ impl NativeTuiApp {
                 transcript_text,
                 handoff_task,
             } => {
+                let debug_detail =
+                    self.build_auto_follow_transcript_debug_detail(handoff_task.as_ref());
                 self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
                         queued_from_turn_id,
                         template_label,
                         transcript_text,
+                        debug_detail,
                         handoff_task,
                     }),
                 );
@@ -158,5 +161,42 @@ impl NativeTuiApp {
             &conversation.input_buffer,
             &conversation.planning_runtime_snapshot,
         )
+    }
+
+    fn build_auto_follow_transcript_debug_detail(
+        &self,
+        handoff_task: Option<&PlanningTaskHandoff>,
+    ) -> Option<String> {
+        if !self.planner_shows_debug_details() || handoff_task.is_none() {
+            return None;
+        }
+
+        let planner = &self.planner_worker_panel_state;
+        let operation_label = planner.last_operation_label.as_deref().unwrap_or("unknown");
+        let prompt = planner.last_prompt.as_deref();
+        let response = planner.last_response.as_deref();
+        let summary = planner.last_summary.as_deref();
+
+        if prompt.is_none() && response.is_none() && summary.is_none() {
+            return None;
+        }
+
+        let mut lines = vec![format!(
+            "planner temp session: {operation_label} / {}",
+            planner.status.label()
+        )];
+        if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
+            lines.push(format!("planner summary: {summary}"));
+        }
+        if let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) {
+            lines.push("planner prompt:".to_string());
+            lines.extend(prompt.lines().map(|line| format!("  {line}")));
+        }
+        if let Some(response) = response.filter(|response| !response.trim().is_empty()) {
+            lines.push("planner response:".to_string());
+            lines.extend(response.lines().map(|line| format!("  {line}")));
+        }
+
+        Some(lines.join("\n"))
     }
 }

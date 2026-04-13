@@ -108,6 +108,7 @@ struct ShellCorePresentationContext<'a> {
     recent_session_status_label: String,
     github_review_polling_status_label: String,
     transcript_viewport_status_label: String,
+    planner_shows_debug_details: bool,
     conversation_state: ShellConversationState<'a>,
 }
 
@@ -120,6 +121,7 @@ impl<'a> ShellCorePresentationContext<'a> {
             recent_session_status_label: recent_session_status_label(app),
             github_review_polling_status_label: app.github_review_polling_status_label(),
             transcript_viewport_status_label: app.transcript_viewport_status_label(),
+            planner_shows_debug_details: app.planner_shows_debug_details(),
             conversation_state: match &app.conversation_state {
                 ConversationState::Loading => ShellConversationState::Loading,
                 ConversationState::Failed(message) => ShellConversationState::Failed(message),
@@ -967,7 +969,11 @@ fn build_conversation_lines_with_context(
         ShellConversationState::Loading => vec![Line::from("Loading thread history...")],
         ShellConversationState::Failed(message) => vec![Line::from(message.to_string())],
         ShellConversationState::Ready(conversation) => {
-            conversation.cached_conversation_lines.clone()
+            if context.planner_shows_debug_details {
+                format_conversation_lines_with_debug(&conversation.messages, true)
+            } else {
+                conversation.cached_conversation_lines.clone()
+            }
         }
     }
 }
@@ -1016,6 +1022,13 @@ fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
 }
 
 pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {
+    format_conversation_lines_with_debug(messages, false)
+}
+
+pub(super) fn format_conversation_lines_with_debug(
+    messages: &[ConversationMessage],
+    show_debug_details: bool,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     for message in messages {
@@ -1026,6 +1039,14 @@ pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec
         )));
         for text_line in message.text.lines() {
             lines.push(Line::from(format!("  {text_line}")));
+        }
+        if show_debug_details && let Some(debug_detail) = message.debug_detail.as_deref() {
+            for detail_line in debug_detail.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("  {detail_line}"),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
         }
         lines.push(Line::from(""));
     }

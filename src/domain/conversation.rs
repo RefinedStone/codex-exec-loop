@@ -12,6 +12,7 @@ pub struct ConversationSnapshot {
 pub struct ConversationMessage {
     pub kind: ConversationMessageKind,
     pub text: String,
+    pub debug_detail: Option<String>,
     pub phase: Option<String>,
     pub item_id: Option<String>,
     pub display_label: Option<String>,
@@ -27,6 +28,7 @@ impl ConversationMessage {
         Self {
             kind,
             text: text.into(),
+            debug_detail: None,
             phase,
             item_id,
             display_label: None,
@@ -35,6 +37,11 @@ impl ConversationMessage {
 
     pub fn with_display_label(mut self, label: impl Into<String>) -> Self {
         self.display_label = Some(label.into());
+        self
+    }
+
+    pub fn with_debug_detail(mut self, detail: impl Into<String>) -> Self {
+        self.debug_detail = Some(detail.into());
         self
     }
 

@@ -158,6 +158,7 @@ struct AutoFollowupSubmitContext {
     queued_from_turn_id: String,
     template_label: String,
     transcript_text: String,
+    debug_detail: Option<String>,
     handoff_task: Option<PlanningTaskHandoff>,
 }
 
