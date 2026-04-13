@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use ratatui::text::Line;
 
 use super::{
@@ -178,8 +180,31 @@ pub(crate) struct AutoFollowState {
     pub(crate) enabled: bool,
     pub(crate) completed_auto_turns: usize,
     pub(crate) max_auto_turns: usize,
+    pub(crate) runtime_phase: AutoFollowRuntimePhase,
     pub(crate) template_state: AutoFollowTemplateState,
     pub(crate) stop_rules: AutoFollowStopRules,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AutoFollowRuntimePhase {
+    Idle,
+    Evaluating {
+        started_at: Instant,
+    },
+    Queued {
+        started_at: Instant,
+        turn_index: usize,
+        template_label: String,
+    },
+    Submitting {
+        started_at: Instant,
+        turn_index: usize,
+        template_label: String,
+    },
+    Running {
+        started_at: Instant,
+        turn_index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +244,7 @@ impl AutoFollowState {
             enabled: true,
             completed_auto_turns: 0,
             max_auto_turns: DEFAULT_AUTO_FOLLOW_MAX_TURNS,
+            runtime_phase: AutoFollowRuntimePhase::Idle,
             template_state: AutoFollowTemplateState::new(template_catalog),
             stop_rules: AutoFollowStopRules::default(),
         }
@@ -250,6 +276,17 @@ impl AutoFollowState {
 
     pub(crate) fn progress_label(&self) -> String {
         format!("{}/{}", self.completed_auto_turns, self.max_auto_turns)
+    }
+
+    pub(crate) fn completed_progress_label(&self) -> String {
+        format!(
+            "{}/{} completed",
+            self.completed_auto_turns, self.max_auto_turns
+        )
+    }
+
+    pub(crate) fn compact_completed_progress_label(&self) -> String {
+        format!("{}/{} done", self.completed_auto_turns, self.max_auto_turns)
     }
 
     pub(crate) fn max_auto_turns_value(&self) -> usize {
@@ -294,16 +331,112 @@ impl AutoFollowState {
         self.completed_auto_turns + 1
     }
 
+    pub(crate) fn active_turn_index(&self) -> Option<usize> {
+        self.runtime_phase.turn_index()
+    }
+
+    pub(crate) fn active_started_at(&self) -> Option<Instant> {
+        self.runtime_phase.started_at()
+    }
+
+    pub(crate) fn has_live_activity(&self) -> bool {
+        !matches!(self.runtime_phase, AutoFollowRuntimePhase::Idle)
+    }
+
+    pub(crate) fn activity_label(&self) -> String {
+        match &self.runtime_phase {
+            AutoFollowRuntimePhase::Idle => "idle".to_string(),
+            AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next turn".to_string(),
+            AutoFollowRuntimePhase::Queued { turn_index, .. } => {
+                format!("queued turn {turn_index}/{}", self.max_auto_turns)
+            }
+            AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
+                format!("submitting turn {turn_index}/{}", self.max_auto_turns)
+            }
+            AutoFollowRuntimePhase::Running { turn_index, .. } => {
+                format!("running turn {turn_index}/{}", self.max_auto_turns)
+            }
+        }
+    }
+
     pub(crate) fn can_queue_next(&self) -> bool {
         self.enabled && self.completed_auto_turns < self.max_auto_turns
     }
 
     pub(crate) fn reset_for_manual_turn(&mut self) {
         self.completed_auto_turns = 0;
+        self.runtime_phase = AutoFollowRuntimePhase::Idle;
     }
 
-    pub(crate) fn mark_auto_turn_submitted(&mut self) {
-        self.completed_auto_turns += 1;
+    pub(crate) fn begin_post_turn_evaluation(&mut self) {
+        self.runtime_phase = AutoFollowRuntimePhase::Evaluating {
+            started_at: Instant::now(),
+        };
+    }
+
+    pub(crate) fn mark_auto_turn_queued(&mut self, template_label: &str) -> usize {
+        let turn_index = self.next_auto_turn_index();
+        self.runtime_phase = AutoFollowRuntimePhase::Queued {
+            started_at: Instant::now(),
+            turn_index,
+            template_label: template_label.to_string(),
+        };
+        turn_index
+    }
+
+    pub(crate) fn mark_auto_turn_submitted(&mut self, template_label: &str) -> usize {
+        let turn_index = self
+            .active_turn_index()
+            .unwrap_or_else(|| self.next_auto_turn_index());
+        self.runtime_phase = AutoFollowRuntimePhase::Submitting {
+            started_at: Instant::now(),
+            turn_index,
+            template_label: template_label.to_string(),
+        };
+        turn_index
+    }
+
+    pub(crate) fn mark_auto_turn_started(&mut self) -> Option<(usize, String)> {
+        let (turn_index, template_label) = match &self.runtime_phase {
+            AutoFollowRuntimePhase::Queued {
+                turn_index,
+                template_label,
+                ..
+            }
+            | AutoFollowRuntimePhase::Submitting {
+                turn_index,
+                template_label,
+                ..
+            } => (*turn_index, template_label.clone()),
+            AutoFollowRuntimePhase::Idle
+            | AutoFollowRuntimePhase::Evaluating { .. }
+            | AutoFollowRuntimePhase::Running { .. } => return None,
+        };
+        self.runtime_phase = AutoFollowRuntimePhase::Running {
+            started_at: Instant::now(),
+            turn_index,
+        };
+        Some((turn_index, template_label))
+    }
+
+    pub(crate) fn complete_auto_turn_if_running(&mut self) -> bool {
+        match self.runtime_phase {
+            AutoFollowRuntimePhase::Submitting { .. } | AutoFollowRuntimePhase::Running { .. } => {
+                self.completed_auto_turns += 1;
+                self.runtime_phase = AutoFollowRuntimePhase::Idle;
+                true
+            }
+            AutoFollowRuntimePhase::Idle
+            | AutoFollowRuntimePhase::Evaluating { .. }
+            | AutoFollowRuntimePhase::Queued { .. } => {
+                self.runtime_phase = AutoFollowRuntimePhase::Idle;
+                false
+            }
+        }
+    }
+
+    pub(crate) fn clear_runtime_phase(&mut self) {
+        self.runtime_phase = AutoFollowRuntimePhase::Idle;
     }
 
     pub(crate) fn toggle(&mut self) {
@@ -348,6 +481,27 @@ impl AutoFollowState {
             None
         } else {
             Some(value)
+        }
+    }
+}
+
+impl AutoFollowRuntimePhase {
+    fn turn_index(&self) -> Option<usize> {
+        match self {
+            Self::Queued { turn_index, .. }
+            | Self::Submitting { turn_index, .. }
+            | Self::Running { turn_index, .. } => Some(*turn_index),
+            Self::Idle | Self::Evaluating { .. } => None,
+        }
+    }
+
+    fn started_at(&self) -> Option<Instant> {
+        match self {
+            Self::Evaluating { started_at }
+            | Self::Queued { started_at, .. }
+            | Self::Submitting { started_at, .. }
+            | Self::Running { started_at, .. } => Some(*started_at),
+            Self::Idle => None,
         }
     }
 }
@@ -919,8 +1073,18 @@ impl ConversationViewModel {
     pub(crate) fn record_turn_started(&mut self, turn_id: String) {
         self.mark_turn_started(turn_id);
         self.live_agent_message = None;
-        self.status_text = "turn started".to_string();
-        self.append_status_message("turn started");
+        if let Some((turn_index, template_label)) = self.auto_follow_state.mark_auto_turn_started()
+        {
+            let status_text = format!(
+                "auto follow-up running / turn {turn_index}/{} / template: {template_label}",
+                self.auto_follow_state.max_auto_turns_value()
+            );
+            self.status_text = status_text.clone();
+            self.append_status_message(status_text);
+        } else {
+            self.status_text = "turn started".to_string();
+            self.append_status_message("turn started");
+        }
     }
 
     pub(crate) fn append_status_message(&mut self, text: impl Into<String>) -> bool {
@@ -1107,6 +1271,7 @@ impl ConversationViewModel {
 
         self.commit_live_agent_message();
         self.flush_buffered_tool_messages();
+        self.auto_follow_state.complete_auto_turn_if_running();
         self.turn_activity
             .register_changed_planning_file_paths(changed_planning_file_paths);
         self.turn_activity.complete_turn(turn_id);
@@ -1118,6 +1283,7 @@ impl ConversationViewModel {
     pub(crate) fn fail_turn(&mut self, message: String) {
         self.commit_live_agent_message();
         self.flush_buffered_tool_messages();
+        self.auto_follow_state.clear_runtime_phase();
         self.mark_turn_finished();
         self.status_text = "turn failed".to_string();
         self.append_status_message(message);
@@ -1136,6 +1302,7 @@ impl ConversationViewModel {
 
     pub(crate) fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
         let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
+        self.auto_follow_state.clear_runtime_phase();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: reason.activity_summary().to_string(),
             detail,
@@ -1178,7 +1345,13 @@ impl ConversationViewModel {
         template_label: &str,
         handoff_task: Option<&PlanningTaskHandoff>,
     ) {
-        let progress = self.auto_follow_state.progress_label();
+        let turn_index = self
+            .auto_follow_state
+            .mark_auto_turn_submitted(template_label);
+        let progress = format!(
+            "{turn_index}/{}",
+            self.auto_follow_state.max_auto_turns_value()
+        );
         self.last_planning_task_handoff = handoff_task.cloned();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("submitted auto turn {progress}"),
@@ -1193,9 +1366,9 @@ impl ConversationViewModel {
         _queued_from_turn_id: &str,
         template_label: &str,
     ) {
+        let turn_index = self.auto_follow_state.mark_auto_turn_queued(template_label);
         let next_progress = format!(
-            "{}/{}",
-            self.auto_follow_state.next_auto_turn_index(),
+            "{turn_index}/{}",
             self.auto_follow_state.max_auto_turns_value()
         );
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
@@ -1204,6 +1377,20 @@ impl ConversationViewModel {
                 "queued after the previous turn completed; waiting to submit with template {template_label}"
             ),
         });
+    }
+
+    pub(crate) fn begin_auto_followup_evaluation(&mut self) {
+        if !self.auto_follow_state.enabled
+            || !self.input_buffer.trim().is_empty()
+            || !self.auto_follow_state.can_queue_next()
+            || self.latest_agent_message_text().is_none()
+        {
+            self.auto_follow_state.clear_runtime_phase();
+            return;
+        }
+
+        self.auto_follow_state.begin_post_turn_evaluation();
+        self.status_text = "turn completed / auto follow-up evaluating next turn".to_string();
     }
 
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {

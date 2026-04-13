@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::planning_draft_editor_ui::{
     PlanningDraftEditorCloseRequest, PlanningDraftEditorCloseRisk,
 };
@@ -507,6 +509,16 @@ impl NativeTuiApp {
 
     pub(super) fn planner_shows_debug_details(&self) -> bool {
         self.planner_visibility.shows_debug_details()
+    }
+
+    pub(super) fn live_activity_pulse(&self, now: Instant) -> Option<u64> {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => conversation
+                .auto_follow_state
+                .active_started_at()
+                .map(|started_at| now.saturating_duration_since(started_at).as_secs()),
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        }
     }
 
     pub(super) fn is_max_auto_turns_editing(&self) -> bool {

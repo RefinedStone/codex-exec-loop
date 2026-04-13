@@ -9,6 +9,7 @@ pub(super) struct ShellRuntime {
     frontend_mode: ShellFrontendMode,
     should_quit: bool,
     redraw_requested: bool,
+    last_live_activity_pulse: Option<u64>,
 }
 
 impl ShellRuntime {
@@ -18,6 +19,7 @@ impl ShellRuntime {
             frontend_mode,
             should_quit: false,
             redraw_requested: true,
+            last_live_activity_pulse: None,
         }
     }
 
@@ -44,6 +46,7 @@ impl ShellRuntime {
 
     pub(super) fn poll_background_messages(&mut self) {
         let mut redraw_requested = false;
+        let now = Instant::now();
 
         while let Ok(message) = self.app.rx.try_recv() {
             redraw_requested = true;
@@ -119,13 +122,18 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::PostTurnEvaluated { evaluation },
                     );
                 }
-                BackgroundMessage::GithubReviewPollLoaded(result) => self
-                    .app
-                    .record_github_review_poll_result(Instant::now(), result),
+                BackgroundMessage::GithubReviewPollLoaded(result) => {
+                    self.app.record_github_review_poll_result(now, result)
+                }
             }
         }
 
-        redraw_requested |= self.app.maybe_start_github_review_poll(Instant::now());
+        redraw_requested |= self.app.maybe_start_github_review_poll(now);
+        let live_activity_pulse = self.app.live_activity_pulse(now);
+        if live_activity_pulse != self.last_live_activity_pulse {
+            redraw_requested = true;
+        }
+        self.last_live_activity_pulse = live_activity_pulse;
         if redraw_requested {
             self.request_redraw();
         }

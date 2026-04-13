@@ -13,8 +13,8 @@ use super::shell_presentation::{
     build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
 };
 use super::{
-    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext, BackgroundMessage,
-    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ActiveTurnPlanningCapture, AutoFollowRuntimePhase, AutoFollowState, AutoFollowupSubmitContext,
+    BackgroundMessage, ConversationInputState, ConversationMessage, ConversationMessageKind,
     ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, ExitConfirmationState,
     FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, GithubReviewPollingState, InlineShellCommand,
@@ -2172,7 +2172,7 @@ fn inline_prompt_cursor_offset_accounts_for_status_lines() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     app.conversation_state = ConversationState::Ready(ready_conversation());
 
-    assert_eq!(build_inline_prompt_cursor_offset(&app, 80), Some((2, 2)));
+    assert_eq!(build_inline_prompt_cursor_offset(&app, 80), Some((2, 3)));
 }
 
 #[test]
@@ -5248,6 +5248,26 @@ fn recorded_limit_skip_detail_stays_stable_after_progress_resets() {
     assert!(rendered.contains("notice: auto: stopped: turn limit reached"));
     assert!(rendered.contains("detail: reached the configured auto-turn budget (3/3)"));
     assert!(!rendered.contains("detail: reached the configured auto-turn budget (0/3)"));
+}
+
+#[test]
+fn shell_footer_surfaces_auto_follow_working_line_and_completed_progress() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Evaluating {
+        started_at: std::time::Instant::now() - Duration::from_secs(130),
+    };
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_shell_footer_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("auto: on / evaluating next turn"));
+    assert!(rendered.contains("progress: 0/3 done"));
+    assert!(rendered.contains("◦ Working (2m 10s • evaluating next auto follow-up)"));
 }
 
 #[test]

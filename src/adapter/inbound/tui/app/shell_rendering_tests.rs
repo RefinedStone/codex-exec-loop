@@ -86,7 +86,9 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
-    assert!(rendered.contains("thread: new draft  |  turn: idle  |  auto: on (0/3)"));
+    assert!(rendered.contains(
+        "thread: new draft  |  turn: idle  |  auto: on/idle  |  done: 0/3  |  in: draft"
+    ));
     assert!(!rendered.contains("stable history should stay above the live region"));
     assert!(!rendered.contains("No messages in this thread yet."));
     assert!(!rendered.contains("┌"));
