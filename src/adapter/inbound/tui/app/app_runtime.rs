@@ -156,6 +156,10 @@ impl NativeTuiApp {
         self.active_session = state.active_session;
     }
 
+    pub(super) fn reset_planner_worker_panel_state(&mut self) {
+        self.planner_worker_panel_state = super::PlannerWorkerPanelState::default();
+    }
+
     pub(super) fn dispatch_conversation_lifecycle(&mut self, event: ConversationLifecycleEvent) {
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
@@ -269,6 +273,7 @@ impl NativeTuiApp {
             }
             ConversationIntentEffect::OpenNewDraft => {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
+                self.reset_planner_worker_panel_state();
                 let workspace_directory = self.current_workspace_directory();
                 let template_load_result =
                     self.load_followup_template_catalog(&workspace_directory);
@@ -284,6 +289,7 @@ impl NativeTuiApp {
             }
             ConversationIntentEffect::OpenSession { session } => {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
+                self.reset_planner_worker_panel_state();
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
                     session,
                 });

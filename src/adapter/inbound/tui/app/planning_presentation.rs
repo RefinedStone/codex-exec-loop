@@ -11,6 +11,7 @@ const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
 const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
 const FOLLOWUP_PLANNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
+const FOLLOWUP_PLANNER_DEBUG_MAX_LINES: usize = 256;
 
 pub(super) fn build_planning_summary_line(
     app: &NativeTuiApp,
@@ -170,18 +171,18 @@ fn append_planner_debug_preview_lines(lines: &mut Vec<Line<'static>>, app: &Nati
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from("Planner Session Debug"));
+    lines.push(planner_debug_header_line("Planner Session Debug"));
     lines.push(Line::from(format!(
         "last planner session: {} / {}",
         planner.last_operation_label.as_deref().unwrap_or("unknown"),
         planner.status.label()
     )));
 
-    lines.push(Line::from("Prompt"));
+    lines.push(planner_debug_section_header_line("Prompt"));
     append_multiline_debug_block(lines, planner.last_prompt.as_deref());
 
     lines.push(Line::from(""));
-    lines.push(Line::from("Response"));
+    lines.push(planner_debug_section_header_line("Response"));
     append_multiline_debug_block(lines, planner.last_response.as_deref());
 }
 
@@ -196,13 +197,38 @@ fn append_multiline_debug_block(lines: &mut Vec<Line<'static>>, block: Option<&s
         return;
     }
 
-    for line in block.lines() {
+    let total_lines = block.lines().count();
+    for line in block.lines().take(FOLLOWUP_PLANNER_DEBUG_MAX_LINES) {
         if line.is_empty() {
             lines.push(Line::from(""));
         } else {
             lines.push(Line::from(format!("  {line}")));
         }
     }
+    if total_lines > FOLLOWUP_PLANNER_DEBUG_MAX_LINES {
+        lines.push(Line::from(format!(
+            "  ... truncated after {} lines",
+            FOLLOWUP_PLANNER_DEBUG_MAX_LINES
+        )));
+    }
+}
+
+fn planner_debug_header_line(label: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn planner_debug_section_header_line(label: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(Color::Gray)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
 
 pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
