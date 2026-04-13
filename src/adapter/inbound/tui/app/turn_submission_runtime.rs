@@ -7,6 +7,7 @@ use crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TR
 use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
 
+use super::planner_debug_preview::build_debug_preview_lines;
 use super::*;
 
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
@@ -189,30 +190,20 @@ impl NativeTuiApp {
         if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
             lines.push(format!("planner summary: {summary}"));
         }
-        append_truncated_debug_detail_block(&mut lines, "planner prompt:", prompt);
-        append_truncated_debug_detail_block(&mut lines, "planner response:", response);
+        append_debug_detail_preview_block(&mut lines, "planner prompt:", prompt);
+        append_debug_detail_preview_block(&mut lines, "planner response:", response);
 
         Some(lines.join("\n"))
     }
 }
 
-fn append_truncated_debug_detail_block(lines: &mut Vec<String>, label: &str, block: Option<&str>) {
+fn append_debug_detail_preview_block(lines: &mut Vec<String>, label: &str, block: Option<&str>) {
     let Some(block) = block.filter(|block| !block.trim().is_empty()) else {
         return;
     };
 
     lines.push(label.to_string());
-    let mut block_lines = block.lines();
-    for line in block_lines
-        .by_ref()
-        .take(AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES)
-    {
+    for line in build_debug_preview_lines(block, AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES) {
         lines.push(format!("  {line}"));
-    }
-    if block_lines.next().is_some() {
-        lines.push(format!(
-            "  ... truncated after {} lines",
-            AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES
-        ));
     }
 }

@@ -1,3 +1,4 @@
+use super::planner_debug_preview::build_debug_preview_lines;
 use super::*;
 use crate::application::service::planning_runtime_facade_service::{
     PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
@@ -197,19 +198,12 @@ fn append_multiline_debug_block(lines: &mut Vec<Line<'static>>, block: Option<&s
         return;
     }
 
-    let total_lines = block.lines().count();
-    for line in block.lines().take(FOLLOWUP_PLANNER_DEBUG_MAX_LINES) {
+    for line in build_debug_preview_lines(block, FOLLOWUP_PLANNER_DEBUG_MAX_LINES) {
         if line.is_empty() {
             lines.push(Line::from(""));
         } else {
             lines.push(Line::from(format!("  {line}")));
         }
-    }
-    if total_lines > FOLLOWUP_PLANNER_DEBUG_MAX_LINES {
-        lines.push(Line::from(format!(
-            "  ... truncated after {} lines",
-            FOLLOWUP_PLANNER_DEBUG_MAX_LINES
-        )));
     }
 }
 

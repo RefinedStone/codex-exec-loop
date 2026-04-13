@@ -1511,6 +1511,117 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
 }
 
 #[test]
+fn builtin_next_task_refresh_passes_full_latest_agent_reply_to_hidden_planner_prompt() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-refresh-full-latest-reply");
+    bootstrap_active_planning_workspace(&workspace_dir);
+
+    codex_port
+        .new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned")
+        .events = vec![
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id: "planner-thread-1".to_string(),
+            title: "Planner".to_string(),
+            cwd: workspace_dir.clone(),
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id: "planner-item-1".to_string(),
+            phase: None,
+            text: "planner refreshed the queue".to_string(),
+        },
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "planner-turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ];
+
+    let latest_reply = [
+        "시험 최소 범위에 맞추면 아래 목차가 깔끔합니다.",
+        "",
+        "**강의명**",
+        "`CKA 합격을 위한 쿠버네티스 네트워크 최소 핵심`",
+        "",
+        "1. 강의 소개: CKA에서 네트워크가 왜 중요한가, 어디까지 알면 충분한가",
+        "2. 네트워크 기초 15분 압축: IP, Port, TCP/UDP, CIDR, DNS만 빠르게 정리",
+        "3. 쿠버네티스 네트워크의 3가지 기본 원칙: Pod IP, Pod 간 통신, Node 간 통신 관점 이해",
+        "4. Pod 네트워크 이해: Pod IP가 붙는 방식, 같은 노드와 다른 노드 간 통신 흐름, CNI는 무엇인가",
+        "5. Service 핵심: ClusterIP, NodePort, LoadBalancer 차이와 시험에서 보는 포인트",
+        "6. Service가 실제로 연결되는 방식: selector, endpoints, kube-proxy를 아주 얕고 실전적으로 이해",
+        "7. 클러스터 DNS: CoreDNS, Service 이름으로 통신하는 방식, FQDN과 네임스페이스 개념",
+        "8. Ingress 기초: Ingress가 필요한 이유, Service와의 관계, 시험에서 알아야 할 정도만",
+        "9. NetworkPolicy 핵심: ingress/egress, allow 기준 사고방식, 자주 나오는 정책 해석법",
+        "10. 트러블슈팅 패턴: Pod to Pod, Pod to Service, DNS 문제를 어떤 순서로 확인할지",
+        "11. 시험용 필수 명령어: kubectl get svc, kubectl get endpoints, kubectl describe, nslookup, dig, curl, ping 활용",
+        "12. 실습 1: Pod 간 통신 확인",
+        "13. 실습 2: Service 연결 확인과 endpoint 문제 찾기",
+        "14. 실습 3: DNS 조회 실패 문제 해결",
+        "15. 실습 4: NetworkPolicy 적용 전후 통신 비교",
+        "16. 시험 직전 암기 포인트 정리: 꼭 기억할 개념, 자주 헷갈리는 차이점, 문제 풀이 순서",
+        "",
+        "빼도 되는 내용도 정해두면 강의가 더 선명합니다.",
+        "",
+        "- OSI 7계층 상세 설명",
+        "- 라우팅 프로토콜 심화",
+        "- iptables/IPVS 내부 동작 심화",
+        "- CNI 플러그인 구현 디테일",
+        "- BGP, VXLAN 심화",
+    ]
+    .join("\n");
+
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 0;
+    conversation.cwd = workspace_dir.clone();
+    conversation.draft_workspace_directory = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-main".to_string());
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        latest_reply.clone(),
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.replace_planning_runtime_snapshot(
+        app.planning_services
+            .runtime_facade
+            .load_runtime_snapshot_or_invalid(&workspace_dir),
+    );
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-main".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ));
+
+    let mut hidden_prompts = Vec::new();
+    for _ in 0..20 {
+        hidden_prompts = codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .collect::<Vec<_>>();
+        if !hidden_prompts.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(hidden_prompts.len(), 1);
+    assert!(hidden_prompts[0].contains("main session latest reply:"));
+    assert!(hidden_prompts[0].contains("5. Service 핵심"));
+    assert!(hidden_prompts[0].contains("- BGP, VXLAN 심화"));
+    assert!(!hidden_prompts[0].contains("worker received full text"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn stale_planning_repair_state_does_not_queue_visible_retry() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
@@ -2730,7 +2841,7 @@ fn queue_auto_prompt_omits_planner_debug_detail_outside_debug_mode() {
 }
 
 #[test]
-fn queue_auto_prompt_truncates_large_planner_debug_detail_blocks() {
+fn queue_auto_prompt_debug_detail_keeps_tail_lines_when_preview_is_truncated() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     app.planner_visibility = PlannerVisibility::Debug;
@@ -2778,11 +2889,12 @@ fn queue_auto_prompt_truncates_large_planner_debug_detail_blocks() {
         .debug_detail
         .as_deref()
         .expect("debug mode should attach transcript detail");
-    assert!(debug_detail.contains("prompt line 31"));
-    assert!(!debug_detail.contains("prompt line 39"));
-    assert!(debug_detail.contains("response line 31"));
-    assert!(!debug_detail.contains("response line 39"));
-    assert!(debug_detail.contains("... truncated after 32 lines"));
+    assert!(debug_detail.contains("prompt line 15"));
+    assert!(!debug_detail.contains("prompt line 20"));
+    assert!(debug_detail.contains("prompt line 39"));
+    assert!(debug_detail.contains("response line 39"));
+    assert!(debug_detail.contains("middle lines omitted in debug preview"));
+    assert!(debug_detail.contains("worker received full text"));
 }
 
 #[test]
@@ -4038,7 +4150,7 @@ fn followup_template_preview_styles_planner_debug_headers_in_debug_mode() {
 }
 
 #[test]
-fn followup_template_preview_truncates_large_planner_debug_blocks() {
+fn followup_template_preview_keeps_tail_lines_when_debug_block_is_truncated() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::Ready(ready_conversation());
     app.planner_visibility = PlannerVisibility::Debug;
@@ -4064,9 +4176,11 @@ fn followup_template_preview_truncates_large_planner_debug_blocks() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("prompt line 255"));
-    assert!(!rendered.contains("prompt line 299"));
-    assert!(rendered.contains("... truncated after 256 lines"));
+    assert!(rendered.contains("prompt line 127"));
+    assert!(!rendered.contains("prompt line 150"));
+    assert!(rendered.contains("prompt line 299"));
+    assert!(rendered.contains("middle lines omitted in debug preview"));
+    assert!(rendered.contains("worker received full text"));
 }
 
 #[test]

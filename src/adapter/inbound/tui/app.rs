@@ -68,6 +68,8 @@ mod followup_overlay_ui;
 mod github_polling;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/planner_debug_preview.rs"]
+mod planner_debug_preview;
 #[path = "app/planning_draft_editor_ui.rs"]
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
