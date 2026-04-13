@@ -18,8 +18,9 @@ use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
+use crate::adapter::outbound::app_server_planning_worker_adapter::PlanningThreadLauncher;
 use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort, NewThreadReasoningEffort, NewThreadStreamRequest,
+    AppServerStartupContext, CodexAppServerPort,
 };
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
 use crate::domain::recent_sessions::RecentSessions;
@@ -27,6 +28,7 @@ use crate::domain::recent_sessions::RecentSessions;
 const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
 const APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
 const SANDBOX_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE";
+const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 
 #[derive(Clone)]
 pub struct CodexAppServerAdapter {
@@ -169,23 +171,19 @@ impl CodexAppServerAdapter {
 
     fn run_new_thread_stream_request(
         &self,
-        request: NewThreadStreamRequest,
+        cwd: &str,
+        prompt: &str,
+        model: Option<&str>,
+        effort: Option<ReasoningEffortValue>,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        let NewThreadStreamRequest {
-            cwd,
-            prompt,
-            model,
-            reasoning_effort,
-        } = request;
-        let effort = reasoning_effort.map(ReasoningEffortValue::from);
         let result = self.with_streaming_runtime(|connection| {
             let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(cwd.clone()),
+                cwd: Some(cwd.to_string()),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
-                model: model.clone(),
+                model: model.map(str::to_string),
             })?;
             let thread_id = thread_response.thread.id.clone();
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
@@ -196,11 +194,11 @@ impl CodexAppServerAdapter {
 
             let turn_response = connection.start_turn(TurnStartParams {
                 thread_id: thread_id.clone(),
-                input: vec![TurnInputText::text(prompt.clone())],
+                input: vec![TurnInputText::text(prompt)],
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
-                model: model.clone(),
+                model: model.map(str::to_string),
                 effort,
             })?;
 
@@ -218,6 +216,21 @@ impl CodexAppServerAdapter {
         }
 
         result
+    }
+
+    fn run_hidden_planning_thread_stream(
+        &self,
+        workspace_directory: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        self.run_new_thread_stream_request(
+            workspace_directory,
+            prompt,
+            Some(PLANNING_WORKER_MODEL),
+            Some(ReasoningEffortValue::Medium),
+            event_sender,
+        )
     }
 
     fn with_shared_runtime<T, F>(
@@ -408,15 +421,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.run_new_thread_stream_request(NewThreadStreamRequest::new(cwd, prompt), event_sender)
-    }
-
-    fn run_new_thread_stream_with_overrides(
-        &self,
-        request: NewThreadStreamRequest,
-        event_sender: Sender<ConversationStreamEvent>,
-    ) -> Result<()> {
-        self.run_new_thread_stream_request(request, event_sender)
+        self.run_new_thread_stream_request(cwd, prompt, None, None, event_sender)
     }
 
     fn run_turn_stream(
@@ -459,16 +464,14 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 }
 
-impl From<NewThreadReasoningEffort> for ReasoningEffortValue {
-    fn from(value: NewThreadReasoningEffort) -> Self {
-        match value {
-            NewThreadReasoningEffort::None => Self::None,
-            NewThreadReasoningEffort::Minimal => Self::Minimal,
-            NewThreadReasoningEffort::Low => Self::Low,
-            NewThreadReasoningEffort::Medium => Self::Medium,
-            NewThreadReasoningEffort::High => Self::High,
-            NewThreadReasoningEffort::XHigh => Self::XHigh,
-        }
+impl PlanningThreadLauncher for CodexAppServerAdapter {
+    fn run_hidden_planning_thread(
+        &self,
+        workspace_directory: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        self.run_hidden_planning_thread_stream(workspace_directory, prompt, event_sender)
     }
 }
 

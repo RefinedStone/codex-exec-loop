@@ -31,7 +31,9 @@ use super::{
     startup_ascii_art_enabled_from_value,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
-use crate::adapter::outbound::app_server_planning_worker_adapter::AppServerPlanningWorkerAdapter;
+use crate::adapter::outbound::app_server_planning_worker_adapter::{
+    AppServerPlanningWorkerAdapter, PlanningThreadLauncher,
+};
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -144,6 +146,17 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
                 .expect("turn stream behavior mutex poisoned")
                 .clone(),
         )
+    }
+}
+
+impl PlanningThreadLauncher for FakeCodexAppServerPort {
+    fn run_hidden_planning_thread(
+        &self,
+        workspace_directory: &str,
+        prompt: &str,
+        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        self.run_new_thread_stream(workspace_directory, prompt, event_sender)
     }
 }
 
