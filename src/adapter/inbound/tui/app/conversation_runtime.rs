@@ -106,7 +106,6 @@ pub(super) fn reduce_conversation_runtime(
                     state.clear_last_planning_task_handoff();
                 }
                 PromptOrigin::AutoFollow(context) => {
-                    state.auto_follow_state.mark_auto_turn_submitted();
                     state.record_auto_followup_submission(
                         &context.queued_from_turn_id,
                         &context.template_label,
@@ -120,7 +119,14 @@ pub(super) fn reduce_conversation_runtime(
                     );
                 }
             }
-            let auto_follow_progress = state.auto_follow_state.progress_label();
+            let auto_follow_progress = format!(
+                "{}/{}",
+                state
+                    .auto_follow_state
+                    .active_turn_index()
+                    .unwrap_or_else(|| { state.auto_follow_state.next_auto_turn_index() }),
+                state.auto_follow_state.max_auto_turns_value()
+            );
             let transcript_message = match &origin {
                 PromptOrigin::AutoFollow(context) => {
                     let mut message = ConversationMessage::new(
@@ -200,6 +206,7 @@ pub(super) fn reduce_conversation_runtime(
                 changed_planning_file_paths,
             } => {
                 let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
+                state.begin_auto_followup_evaluation();
                 effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
                     workspace_directory,
                     queued_from_turn_id: turn_id,
@@ -368,6 +375,8 @@ mod tests {
             reduced.state.status_text,
             "auto follow-up submitted / turn 1/3 / template: builtin next-task"
         );
+        assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 0);
+        assert_eq!(reduced.state.auto_follow_state.active_turn_index(), Some(1));
         assert_eq!(
             reduced
                 .state
@@ -392,6 +401,39 @@ mod tests {
         );
         assert!(reduced.state.messages[0].debug_detail.is_none());
         assert_eq!(reduced.state.messages[0].label(), "Auto Follow-up");
+    }
+
+    #[test]
+    fn auto_follow_completion_advances_completed_progress_after_turn_finishes() {
+        let mut state = sample_active_turn_conversation();
+        state.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Running {
+            started_at: std::time::Instant::now(),
+            turn_index: 1,
+        };
+        state.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "latest answer",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            }),
+        );
+
+        assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 1);
+        assert!(matches!(
+            reduced.state.auto_follow_state.runtime_phase,
+            AutoFollowRuntimePhase::Evaluating { .. }
+        ));
+        assert_eq!(
+            reduced.state.status_text,
+            "turn completed / auto follow-up evaluating next turn"
+        );
     }
 
     #[test]

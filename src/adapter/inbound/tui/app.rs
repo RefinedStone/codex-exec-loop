@@ -114,8 +114,8 @@ use conversation_lifecycle::{
 };
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
-    AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
-    ConversationState, ConversationViewModel, StopKeywordRule,
+    AutoFollowRuntimePhase, AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason,
+    ConversationInputState, ConversationState, ConversationViewModel, StopKeywordRule,
 };
 #[cfg(test)]
 pub(super) use conversation_model::{RecordedAutoFollowupActivity, TurnActivityState};

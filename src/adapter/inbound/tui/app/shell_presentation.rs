@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 pub(super) use super::planning_presentation::{
     build_followup_template_preview_lines, build_followup_template_status_lines,
 };
@@ -17,6 +19,7 @@ const FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 48;
 const FOOTER_STATUS_DETAIL_LIMIT: usize = 72;
 const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
 const FOOTER_PLANNING_DETAIL_LIMIT: usize = 56;
+const FOOTER_AUTO_FOLLOW_DETAIL_LIMIT: usize = 28;
 const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
 const INLINE_LIVE_AGENT_MAX_CONTENT_LINES: usize = 2;
 const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
@@ -26,6 +29,7 @@ const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
 const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
+const INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
 const PROMPT_PRIMARY_PREFIX: &str = "> ";
 const PROMPT_CONTINUATION_PREFIX: &str = "  ";
 const STARTUP_ASCII_ART_DEFAULT: &str = r#"
@@ -1122,11 +1126,13 @@ fn build_shell_footer_lines_with_context(
                     conversation.input_state.label(),
                 )),
                 Line::from(format!(
-                    "startup: {}  |  gh: {}  |  auto: {} ({})  |  tmpl: {}",
+                    "startup: {}  |  gh: {}  |  auto: {}  |  progress: {}  |  tmpl: {}",
                     context.shell_action_availability.status_text(),
                     context.github_review_polling_status_label.as_str(),
-                    conversation.auto_follow_state.status_label(),
-                    conversation.auto_follow_state.progress_label(),
+                    auto_follow_status_summary(conversation, FOOTER_AUTO_FOLLOW_DETAIL_LIMIT),
+                    conversation
+                        .auto_follow_state
+                        .compact_completed_progress_label(),
                     inline_template_label(conversation),
                 )),
             ];
@@ -1153,6 +1159,11 @@ fn build_shell_footer_lines_with_context(
                 ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
+            if let Some(working_line) =
+                build_auto_follow_working_line(conversation, FOOTER_STATUS_DETAIL_LIMIT)
+            {
+                lines.push(working_line);
+            }
 
             if let Some(planning_line) = planning_summary_line {
                 lines.push(Line::from(planning_line));
@@ -1245,12 +1256,15 @@ fn build_inline_tail_lines_with_context(
                 .map(|summary| compact_inline_summary_label(&summary));
 
             lines.push(Line::from(format!(
-                "thread: {}  |  turn: {}  |  auto: {} ({})  |  input: {}",
+                "thread: {}  |  turn: {}  |  auto: {}  |  done: {}  |  in: {}",
                 inline_thread_label(conversation),
                 turn_status_label(conversation),
-                conversation.auto_follow_state.status_label(),
+                inline_auto_follow_status_summary(
+                    conversation,
+                    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
+                ),
                 conversation.auto_follow_state.progress_label(),
-                conversation.input_state.label(),
+                inline_input_state_label(conversation.input_state),
             )));
             let mut status_segments = vec![format!(
                 "status: {}",
@@ -1272,6 +1286,11 @@ fn build_inline_tail_lines_with_context(
                 ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
+            if let Some(working_line) =
+                build_auto_follow_working_line(conversation, INLINE_TAIL_STATUS_DETAIL_LIMIT)
+            {
+                lines.push(working_line);
+            }
             if let Some(planning_line) = planning_summary_line {
                 lines.push(Line::from(planning_line));
             }
@@ -1407,6 +1426,10 @@ fn build_inline_ready_prompt_lines(
     let mut lines = prompt_buffer.lines;
 
     if conversation.input_buffer.is_empty() {
+        if let Some(status_line) = auto_follow_prompt_status_line(conversation, true) {
+            lines.push(Line::from(status_line));
+            return lines;
+        }
         let line = match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
                 "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
@@ -1442,6 +1465,15 @@ fn build_inline_ready_prompt_lines(
     if InlineShellCommand::suggestion_prefix(&conversation.input_buffer).is_some() {
         lines.extend(build_inline_shell_command_suggestion_lines(
             &conversation.input_buffer,
+        ));
+        return lines;
+    }
+
+    if conversation.auto_follow_state.has_live_activity()
+        && conversation.input_state.can_submit_now()
+    {
+        lines.push(Line::from(
+            "buffered prompt  |  auto follow-up busy  |  Enter when idle",
         ));
         return lines;
     }
@@ -1642,6 +1674,11 @@ pub(super) fn build_ready_input_lines(
     let mut lines = prompt_buffer.lines;
 
     if conversation.input_buffer.is_empty() {
+        if let Some(status_lines) = auto_follow_prompt_lines(conversation) {
+            lines.extend(status_lines);
+            lines.push(Line::from(InlineShellCommand::command_list_line()));
+            return lines;
+        }
         match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
                 lines.push(Line::from("Startup checks are still running."));
@@ -1696,6 +1733,15 @@ pub(super) fn build_ready_input_lines(
     if InlineShellCommand::suggestion_prefix(&conversation.input_buffer).is_some() {
         lines.extend(build_shell_command_suggestion_lines(
             &conversation.input_buffer,
+        ));
+        return lines;
+    }
+
+    if conversation.auto_follow_state.has_live_activity()
+        && conversation.input_state.can_submit_now()
+    {
+        lines.push(Line::from(
+            "Prompt buffered. Ctrl+j inserts a new line. Press Enter when auto follow-up finishes.",
         ));
         return lines;
     }
@@ -2687,10 +2733,143 @@ fn build_followup_template_list_entry(
 }
 
 fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
-    if conversation.has_running_turn() {
-        "running"
+    if conversation.has_running_turn() || conversation.auto_follow_state.has_live_activity() {
+        "working"
     } else {
         "idle"
+    }
+}
+
+fn auto_follow_status_summary(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> String {
+    let summary = if conversation.auto_follow_state.enabled {
+        format!(
+            "{} / {}",
+            conversation.auto_follow_state.status_label(),
+            conversation.auto_follow_state.activity_label()
+        )
+    } else {
+        conversation.auto_follow_state.status_label().to_string()
+    };
+    compact_inline_detail(&summary, max_detail_len)
+}
+
+fn inline_auto_follow_status_summary(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> String {
+    let summary = if conversation.auto_follow_state.enabled {
+        format!(
+            "{}/{}",
+            conversation.auto_follow_state.status_label(),
+            conversation.auto_follow_state.activity_label()
+        )
+    } else {
+        conversation.auto_follow_state.status_label().to_string()
+    };
+    compact_inline_detail(&summary, max_detail_len)
+}
+
+fn build_auto_follow_working_line(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> Option<Line<'static>> {
+    let started_at = conversation.auto_follow_state.active_started_at()?;
+    let detail = compact_inline_detail(&auto_follow_working_detail(conversation), max_detail_len);
+    let elapsed = format_elapsed(Instant::now().saturating_duration_since(started_at));
+
+    Some(Line::from(vec![
+        Span::styled(
+            "◦ Working".to_string(),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" ({elapsed} • {detail})"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+}
+
+fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
+    match &conversation.auto_follow_state.runtime_phase {
+        AutoFollowRuntimePhase::Idle => "idle".to_string(),
+        AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
+        AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} queued for submission",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Submitting { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} starting",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Running { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} running",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+    }
+}
+
+fn auto_follow_prompt_status_line(
+    conversation: &ConversationViewModel,
+    inline: bool,
+) -> Option<String> {
+    let detail = match &conversation.auto_follow_state.runtime_phase {
+        AutoFollowRuntimePhase::Idle => return None,
+        AutoFollowRuntimePhase::Evaluating { .. } => "auto follow-up evaluating".to_string(),
+        AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} queued",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Submitting { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} starting",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Running { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} running",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+    };
+
+    Some(if inline {
+        format!("prompt: {detail}  |  type now, Enter when idle")
+    } else {
+        detail
+    })
+}
+
+fn auto_follow_prompt_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
+    let detail = auto_follow_prompt_status_line(conversation, false)?;
+    Some(vec![
+        Line::from(format!("Auto follow-up is {detail}.")),
+        Line::from("Type now; press Enter after the shell returns idle."),
+    ])
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn inline_input_state_label(input_state: ConversationInputState) -> &'static str {
+    match input_state {
+        ConversationInputState::DraftReady => "draft",
+        ConversationInputState::ReadyToContinue => "ready",
+        ConversationInputState::SubmittingTurn => "sending",
+        ConversationInputState::StreamingTurn => "streaming",
     }
 }
 

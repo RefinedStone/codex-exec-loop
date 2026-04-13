@@ -269,12 +269,13 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let failure_line = planning_projection.failure_line;
             let mut lines = vec![
                 Line::from(format!(
-                    "auto follow-up: {}",
-                    conversation.auto_follow_state.status_label()
+                    "auto follow-up: {} / {}",
+                    conversation.auto_follow_state.status_label(),
+                    conversation.auto_follow_state.activity_label()
                 )),
                 Line::from(format!(
                     "progress: {}",
-                    conversation.auto_follow_state.progress_label()
+                    conversation.auto_follow_state.completed_progress_label()
                 )),
                 Line::from(format!(
                     "max auto turns: {}",
@@ -316,6 +317,18 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     activity_line
                 }),
             ];
+            if let Some(started_at) = conversation.auto_follow_state.active_started_at() {
+                let elapsed = std::time::Instant::now().saturating_duration_since(started_at);
+                let elapsed_label = if elapsed.as_secs() >= 60 {
+                    format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+                } else {
+                    format!("{}s", elapsed.as_secs())
+                };
+                lines.push(Line::from(format!(
+                    "working: {}  |  elapsed: {elapsed_label}",
+                    conversation.auto_follow_state.activity_label()
+                )));
+            }
             if let Some(repair_attempt_line) = repair_attempt_line {
                 lines.push(Line::from(repair_attempt_line));
             }
