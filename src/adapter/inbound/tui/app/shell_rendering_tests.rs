@@ -178,6 +178,46 @@ fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
 }
 
 #[test]
+fn inline_main_buffer_clears_stale_tail_rows_when_overlay_opens() {
+    let mut terminal = inline_terminal(80, 24);
+    let mut app = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    conversation.active_turn_started_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+    conversation.live_agent_message = Some(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "overlay ghost line should disappear".to_string(),
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("first inline render succeeds");
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should stay in a ready conversation state");
+    };
+    conversation.live_agent_message = None;
+    conversation.active_turn_id = None;
+    conversation.active_turn_started_at = None;
+    conversation.input_state = ConversationInputState::ReadyToContinue;
+    app.shell_overlay = ShellOverlay::Startup;
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("overlay inline render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(!rendered.contains("overlay ghost line should disappear"));
+}
+
+#[test]
 fn inline_render_positions_cursor_on_empty_prompt_line() {
     let mut terminal = inline_terminal(80, 24);
     let mut app = make_test_app();
