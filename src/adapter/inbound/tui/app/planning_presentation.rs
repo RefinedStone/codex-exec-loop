@@ -319,11 +319,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             ];
             if let Some(started_at) = conversation.auto_follow_state.active_started_at() {
                 let elapsed = std::time::Instant::now().saturating_duration_since(started_at);
-                let elapsed_label = if elapsed.as_secs() >= 60 {
-                    format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
-                } else {
-                    format!("{}s", elapsed.as_secs())
-                };
+                let elapsed_label = super::shell_presentation::format_elapsed(elapsed);
                 lines.push(Line::from(format!(
                     "working: {}  |  elapsed: {elapsed_label}",
                     conversation.auto_follow_state.activity_label()

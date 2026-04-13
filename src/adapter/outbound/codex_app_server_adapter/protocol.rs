@@ -621,11 +621,109 @@ pub(super) struct ThreadListParams {
     pub(super) source_kinds: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(super) enum ApprovalPolicyValue {
+    #[serde(rename = "untrusted")]
+    Untrusted,
+    #[serde(rename = "on-failure")]
+    OnFailure,
+    #[serde(rename = "on-request")]
+    OnRequest,
+    #[serde(rename = "never")]
+    Never,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(super) enum ApprovalsReviewerValue {
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "guardian_subagent")]
+    GuardianSubagent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(super) enum SandboxModeValue {
+    #[serde(rename = "read-only")]
+    ReadOnly,
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite,
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
+}
+
+impl SandboxModeValue {
+    pub(super) fn as_turn_sandbox_policy(self) -> SandboxPolicyValue {
+        match self {
+            Self::ReadOnly => SandboxPolicyValue::ReadOnly,
+            Self::WorkspaceWrite => SandboxPolicyValue::WorkspaceWrite,
+            Self::DangerFullAccess => SandboxPolicyValue::DangerFullAccess,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "type")]
+pub(super) enum SandboxPolicyValue {
+    #[serde(rename = "readOnly")]
+    ReadOnly,
+    #[serde(rename = "workspaceWrite")]
+    WorkspaceWrite,
+    #[serde(rename = "dangerFullAccess")]
+    DangerFullAccess,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approval_policy: Option<ApprovalPolicyValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) sandbox: Option<SandboxModeValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ThreadResumeParams {
+    pub(super) thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approval_policy: Option<ApprovalPolicyValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) sandbox: Option<SandboxModeValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TurnStartParams {
+    pub(super) thread_id: String,
+    pub(super) input: Vec<TurnInputText>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approval_policy: Option<ApprovalPolicyValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) sandbox_policy: Option<SandboxPolicyValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct TurnInputText {
+    #[serde(rename = "type")]
+    input_type: &'static str,
+    text: String,
+}
+
+impl TurnInputText {
+    pub(super) fn text(text: impl Into<String>) -> Self {
+        Self {
+            input_type: "text",
+            text: text.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -700,12 +798,14 @@ pub(super) struct ThreadGitInfo {
 mod tests {
     use std::sync::mpsc;
 
-    use serde_json::json;
+    use serde_json::{json, to_value};
 
     use super::{
-        ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT, AppServerNotification,
-        SHARED_RUNTIME_NOTICE_PREFIX, TurnNotificationHandling, changed_planning_file_paths,
-        handle_turn_notification, partition_runtime_notices,
+        ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT, AppServerNotification, ApprovalPolicyValue,
+        ApprovalsReviewerValue, SHARED_RUNTIME_NOTICE_PREFIX, SandboxModeValue, SandboxPolicyValue,
+        ThreadResumeParams, ThreadStartParams, TurnInputText, TurnNotificationHandling,
+        TurnStartParams, changed_planning_file_paths, handle_turn_notification,
+        partition_runtime_notices,
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
@@ -886,6 +986,75 @@ mod tests {
         assert_eq!(
             notification.warning_text("while waiting for response id=7"),
             "app-server sent notification `fuzzyFileSearch/sessionUpdated` while waiting for response id=7"
+        );
+    }
+
+    #[test]
+    fn thread_start_params_serialize_permissive_execution_overrides() {
+        let params = ThreadStartParams {
+            cwd: Some("/tmp/workspace".to_string()),
+            approval_policy: Some(ApprovalPolicyValue::Never),
+            approvals_reviewer: Some(ApprovalsReviewerValue::User),
+            sandbox: Some(SandboxModeValue::DangerFullAccess),
+        };
+
+        assert_eq!(
+            to_value(params).expect("params should serialize"),
+            json!({
+                "cwd": "/tmp/workspace",
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandbox": "danger-full-access",
+            })
+        );
+    }
+
+    #[test]
+    fn thread_resume_params_serialize_execution_overrides() {
+        let params = ThreadResumeParams {
+            thread_id: "thread-1".to_string(),
+            approval_policy: Some(ApprovalPolicyValue::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewerValue::GuardianSubagent),
+            sandbox: Some(SandboxModeValue::WorkspaceWrite),
+        };
+
+        assert_eq!(
+            to_value(params).expect("params should serialize"),
+            json!({
+                "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "guardian_subagent",
+                "sandbox": "workspace-write",
+            })
+        );
+    }
+
+    #[test]
+    fn turn_start_params_serialize_sandbox_policy_object() {
+        let params = TurnStartParams {
+            thread_id: "thread-1".to_string(),
+            input: vec![TurnInputText::text("hello")],
+            approval_policy: Some(ApprovalPolicyValue::Never),
+            approvals_reviewer: Some(ApprovalsReviewerValue::User),
+            sandbox_policy: Some(SandboxPolicyValue::DangerFullAccess),
+        };
+
+        assert_eq!(
+            to_value(params).expect("params should serialize"),
+            json!({
+                "threadId": "thread-1",
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "hello",
+                    }
+                ],
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandboxPolicy": {
+                    "type": "dangerFullAccess",
+                }
+            })
         );
     }
 }
