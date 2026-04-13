@@ -76,6 +76,7 @@ fn ready_conversation() -> ConversationViewModel {
         startup_submit_armed: false,
         active_turn_id: None,
         active_turn_workspace_directory: None,
+        active_turn_started_at: None,
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),

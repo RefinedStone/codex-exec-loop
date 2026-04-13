@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use ratatui::Terminal;
@@ -136,6 +137,44 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("prompt: new thread ready"));
+}
+
+#[test]
+fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
+    let mut terminal = inline_terminal(80, 24);
+    let mut app = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    conversation.active_turn_started_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+    conversation.live_agent_message = Some(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "ghost line should disappear".to_string(),
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("first inline render succeeds");
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should stay in a ready conversation state");
+    };
+    conversation.live_agent_message = None;
+    conversation.active_turn_id = None;
+    conversation.active_turn_started_at = None;
+    conversation.input_state = ConversationInputState::ReadyToContinue;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("second inline render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(!rendered.contains("ghost line should disappear"));
 }
 
 #[test]
