@@ -1113,6 +1113,9 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         "Simple mode keeps the direction catalog generic and leaves the task ledger empty.",
                     ),
                     Line::from(
+                        "It also stages a default queue-idle review prompt so the first reply can seed justified follow-up work.",
+                    ),
+                    Line::from(
                         "No active planning files change until you explicitly promote this staged draft.",
                     ),
                 ],

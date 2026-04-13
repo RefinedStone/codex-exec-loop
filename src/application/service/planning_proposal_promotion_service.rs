@@ -250,6 +250,16 @@ mod tests {
             artifacts.result_output_markdown,
         )
         .expect("result output should write");
+        for file in artifacts.supplemental_files {
+            let file_path = Path::new(workspace_dir).join(&file.active_path);
+            fs::create_dir_all(
+                file_path
+                    .parent()
+                    .expect("supplemental planning file should have a parent"),
+            )
+            .expect("supplemental planning directory should be created");
+            fs::write(file_path, file.body).expect("supplemental planning file should write");
+        }
     }
 
     fn service() -> PlanningProposalPromotionService {

@@ -18,7 +18,7 @@ This file describes the planning feature that already ships on `prerelease`.
 
 - `:planning` opens planning mode inside the shell
 - `:directions` opens staged directions maintenance inside the shell
-- `simple mode` stages one generic active direction plus an empty task ledger
+- `simple mode` stages one generic active direction, an empty task ledger, and the default queue-idle review prompt
 - `detail mode -> manual` opens the embedded draft editor for richer authoring
 - `detail mode -> llm-assisted` is shown in the UI but currently disabled
 - staged drafts stay inactive until the operator explicitly promotes them

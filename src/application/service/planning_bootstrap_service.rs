@@ -1,8 +1,10 @@
 use serde_json::json;
 
+use crate::application::service::planning_auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PLANNING_FORMAT_VERSION, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH, TaskLedgerDocument,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_FORMAT_VERSION,
+    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    TaskLedgerDocument,
 };
 
 const DEFAULT_DIRECTIONS_TOML: &str = r#"version = 1
@@ -28,8 +30,8 @@ state = "active"
 const SIMPLE_MODE_DIRECTIONS_TOML: &str = r#"version = 1
 
 [queue_idle]
-policy = "stop"
-prompt_path = ""
+policy = "review_and_enqueue"
+prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 
 [[directions]]
 id = "general-workstream"
@@ -64,6 +66,12 @@ pub enum PlanningBootstrapMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningBootstrapSupplementalFile {
+    pub active_path: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningBootstrapArtifacts {
     pub directions_path: String,
     pub directions_toml: String,
@@ -73,6 +81,7 @@ pub struct PlanningBootstrapArtifacts {
     pub task_ledger_schema_json: String,
     pub result_output_path: String,
     pub result_output_markdown: String,
+    pub supplemental_files: Vec<PlanningBootstrapSupplementalFile>,
 }
 
 impl PlanningBootstrapService {
@@ -91,6 +100,13 @@ impl PlanningBootstrapService {
         let directions_toml = match mode {
             PlanningBootstrapMode::Detail => DEFAULT_DIRECTIONS_TOML,
             PlanningBootstrapMode::Simple => SIMPLE_MODE_DIRECTIONS_TOML,
+        };
+        let supplemental_files = match mode {
+            PlanningBootstrapMode::Detail => Vec::new(),
+            PlanningBootstrapMode::Simple => vec![PlanningBootstrapSupplementalFile {
+                active_path: DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
+                body: DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN.to_string(),
+            }],
         };
 
         PlanningBootstrapArtifacts {
@@ -192,6 +208,7 @@ impl PlanningBootstrapService {
             .expect("bootstrap task-ledger schema should serialize"),
             result_output_path: RESULT_OUTPUT_FILE_PATH.to_string(),
             result_output_markdown: DEFAULT_RESULT_OUTPUT_MARKDOWN.to_string(),
+            supplemental_files,
         }
     }
 }
@@ -200,7 +217,8 @@ impl PlanningBootstrapService {
 mod tests {
     use super::{PlanningBootstrapMode, PlanningBootstrapService};
     use crate::domain::planning::{
-        DirectionCatalogDocument, DirectionState, PLANNING_FORMAT_VERSION,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DirectionCatalogDocument, DirectionState,
+        PLANNING_FORMAT_VERSION, QueueIdlePolicy,
     };
 
     #[test]
@@ -238,22 +256,33 @@ mod tests {
     #[test]
     fn simple_mode_artifacts_use_generic_catch_all_direction() {
         let service = PlanningBootstrapService::new();
-        let directions: DirectionCatalogDocument = toml::from_str(
-            service
-                .build_artifacts_for_mode(PlanningBootstrapMode::Simple)
-                .directions_toml
-                .as_str(),
-        )
-        .expect("simple mode directions should parse");
+        let artifacts = service.build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+        let directions: DirectionCatalogDocument =
+            toml::from_str(artifacts.directions_toml.as_str())
+                .expect("simple mode directions should parse");
 
         assert_eq!(directions.version, PLANNING_FORMAT_VERSION);
         assert_eq!(directions.directions.len(), 1);
         assert_eq!(directions.directions[0].id, "general-workstream");
         assert_eq!(directions.directions[0].state, DirectionState::Active);
+        assert_eq!(
+            directions.queue_idle.policy,
+            QueueIdlePolicy::ReviewAndEnqueue
+        );
+        assert_eq!(
+            directions.queue_idle.prompt_path,
+            DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+        );
         assert!(
             directions.directions[0]
                 .summary
                 .contains("task-ledger.json")
         );
+        assert_eq!(artifacts.supplemental_files.len(), 1);
+        assert_eq!(
+            artifacts.supplemental_files[0].active_path,
+            DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+        );
+        assert!(!artifacts.supplemental_files[0].body.trim().is_empty());
     }
 }

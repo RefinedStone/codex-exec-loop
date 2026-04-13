@@ -619,6 +619,7 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
         "task-ledger.json".to_string(),
         "task-ledger.schema.json".to_string(),
         "result-output.md".to_string(),
+        "prompts".to_string(),
     ]
     .into_iter()
     .collect::<HashSet<_>>();
@@ -626,6 +627,12 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
     let directions = std::fs::read_to_string(draft_directories[0].join("directions.toml"))
         .expect("staged directions should be readable");
     assert!(directions.contains("general-workstream"));
+    assert!(
+        draft_directories[0]
+            .join("prompts")
+            .join("queue-idle-review.md")
+            .exists()
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

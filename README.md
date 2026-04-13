@@ -236,7 +236,8 @@ planning이 만들어 두는 핵심 파일:
 
 - `simple mode`
   - 가장 빠른 시작 경로입니다.
-  - generic direction 1개와 빈 task ledger를 staged draft로 만듭니다.
+  - generic direction 1개, 빈 task ledger, 기본 queue-idle review prompt를 staged draft로 만듭니다.
+  - 기본 `queue_idle.policy = review_and_enqueue`로 시작하므로, 첫 답변 뒤 justified follow-up queue review가 바로 가능하게 설정됩니다.
   - `Enter` 또는 `Ctrl+P`로 promote합니다.
 - `detail mode -> manual`
   - 셸 안의 draft editor로 들어가 planning 파일을 직접 편집합니다.

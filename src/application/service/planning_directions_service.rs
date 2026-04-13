@@ -157,21 +157,18 @@ impl PlanningDirectionsService {
     }
 
     pub fn stage_editor_session(&self, workspace_dir: &str) -> Result<PlanningDraftEditorSession> {
-        let mut workspace = self.load_complete_workspace(workspace_dir)?;
+        let workspace = self.load_complete_workspace(workspace_dir)?;
         let editable_paths =
             match toml::from_str::<DirectionCatalogDocument>(&workspace.directions_toml) {
                 Ok(directions) => {
                     if let Some(prompt_path) =
                         trimmed_non_empty(directions.queue_idle.prompt_path.as_str())
                     {
-                        if let Some(prompt_body) = self
-                            .planning_workspace_port
-                            .load_optional_planning_file(workspace_dir, prompt_path)?
+                        if workspace
+                            .extra_files
+                            .iter()
+                            .any(|file| file.active_path == prompt_path)
                         {
-                            workspace.extra_files.push(PlanningDraftFileRecord {
-                                active_path: prompt_path.to_string(),
-                                body: prompt_body,
-                            });
                             vec![DIRECTIONS_FILE_PATH.to_string(), prompt_path.to_string()]
                         } else {
                             vec![DIRECTIONS_FILE_PATH.to_string()]
@@ -212,6 +209,9 @@ impl PlanningDirectionsService {
             .planning_workspace_port
             .load_optional_planning_file(workspace_dir, &detail_doc_path)?
             .unwrap_or_else(String::new);
+        workspace
+            .extra_files
+            .retain(|file| file.active_path != detail_doc_path);
         workspace.extra_files.push(PlanningDraftFileRecord {
             active_path: detail_doc_path.clone(),
             body: detail_doc_body,
@@ -241,6 +241,9 @@ impl PlanningDirectionsService {
             .planning_workspace_port
             .load_optional_planning_file(workspace_dir, &prompt_path)?
             .unwrap_or_else(|| DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN.to_string());
+        workspace
+            .extra_files
+            .retain(|file| file.active_path != prompt_path);
         workspace.extra_files.push(PlanningDraftFileRecord {
             active_path: prompt_path.clone(),
             body: prompt_body,
@@ -311,7 +314,7 @@ impl PlanningDirectionsService {
         let workspace = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
-        Ok(ActiveDirectionsWorkspace {
+        let mut active_workspace = ActiveDirectionsWorkspace {
             directions_toml: workspace.directions_toml.ok_or_else(|| {
                 anyhow!("planning directions are unavailable; initialize planning first")
             })?,
@@ -325,7 +328,35 @@ impl PlanningDirectionsService {
                 .result_output_markdown
                 .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
             extra_files: Vec::new(),
-        })
+        };
+        if let Ok(directions) =
+            toml::from_str::<DirectionCatalogDocument>(&active_workspace.directions_toml)
+        {
+            let mut supporting_paths = HashSet::new();
+            if let Some(prompt_path) = trimmed_non_empty(directions.queue_idle.prompt_path.as_str())
+            {
+                supporting_paths.insert(prompt_path.to_string());
+            }
+            supporting_paths.extend(
+                directions
+                    .directions
+                    .iter()
+                    .filter_map(|direction| trimmed_non_empty(direction.detail_doc_path.as_str()))
+                    .map(str::to_string),
+            );
+            for supporting_path in supporting_paths {
+                if let Some(body) = self
+                    .planning_workspace_port
+                    .load_optional_planning_file(workspace_dir, &supporting_path)?
+                {
+                    active_workspace.extra_files.push(PlanningDraftFileRecord {
+                        active_path: supporting_path,
+                        body,
+                    });
+                }
+            }
+        }
+        Ok(active_workspace)
     }
 }
 
@@ -486,6 +517,16 @@ mod tests {
             artifacts.result_output_markdown,
         )
         .expect("result output should write");
+        for file in artifacts.supplemental_files {
+            let file_path = Path::new(workspace_dir).join(&file.active_path);
+            fs::create_dir_all(
+                file_path
+                    .parent()
+                    .expect("supplemental planning file should have a parent"),
+            )
+            .expect("supplemental planning directory should be created");
+            fs::write(file_path, file.body).expect("supplemental planning file should write");
+        }
     }
 
     fn sample_service() -> PlanningDirectionsService {
@@ -496,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn load_summary_defaults_to_stop_policy_and_missing_detail_docs() {
+    fn load_summary_reflects_simple_mode_queue_review_defaults() {
         let workspace_dir = create_temp_workspace("planning-directions-summary");
         write_bootstrap_workspace(&workspace_dir);
 
@@ -504,9 +545,12 @@ mod tests {
             .load_summary(&workspace_dir)
             .expect("directions summary should load");
 
-        assert_eq!(summary.queue_idle_policy, QueueIdlePolicy::Stop);
-        assert_eq!(summary.queue_idle_prompt_path, None);
-        assert!(!summary.queue_idle_prompt_exists);
+        assert_eq!(summary.queue_idle_policy, QueueIdlePolicy::ReviewAndEnqueue);
+        assert_eq!(
+            summary.queue_idle_prompt_path,
+            Some(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string())
+        );
+        assert!(summary.queue_idle_prompt_exists);
         assert_eq!(summary.directions.len(), 1);
         assert_eq!(summary.directions[0].detail_doc_path, None);
         assert!(!summary.directions[0].detail_doc_exists);

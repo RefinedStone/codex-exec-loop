@@ -237,7 +237,7 @@ impl PlanningInitService {
         let artifacts = self
             .planning_bootstrap_service
             .build_artifacts_for_mode(mode);
-        let validation_result = self.planning_validation_service.validate_workspace_files(
+        let mut validation_result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions_toml: &artifacts.directions_toml,
                 task_ledger_json: &artifacts.task_ledger_json,
@@ -245,29 +245,49 @@ impl PlanningInitService {
                 result_output_markdown: &artifacts.result_output_markdown,
             },
         );
+        if let Some(directions) = validation_result.directions.as_ref() {
+            let staged_supporting_paths = artifacts
+                .supplemental_files
+                .iter()
+                .map(|file| file.active_path.as_str())
+                .collect::<Vec<_>>();
+            self.planning_validation_service
+                .validate_direction_supporting_files(
+                    directions,
+                    |path| staged_supporting_paths.contains(&path),
+                    &mut validation_result.report,
+                );
+        }
 
         let draft_name = build_bootstrap_draft_name(Utc::now());
+        let mut staged_files = vec![
+            PlanningDraftFileRecord {
+                active_path: artifacts.directions_path,
+                body: artifacts.directions_toml,
+            },
+            PlanningDraftFileRecord {
+                active_path: artifacts.task_ledger_path,
+                body: artifacts.task_ledger_json,
+            },
+            PlanningDraftFileRecord {
+                active_path: artifacts.task_ledger_schema_path,
+                body: artifacts.task_ledger_schema_json,
+            },
+            PlanningDraftFileRecord {
+                active_path: artifacts.result_output_path,
+                body: artifacts.result_output_markdown,
+            },
+        ];
+        staged_files.extend(artifacts.supplemental_files.into_iter().map(|file| {
+            PlanningDraftFileRecord {
+                active_path: file.active_path,
+                body: file.body,
+            }
+        }));
         let stage_record = self.planning_workspace_port.stage_planning_draft_files(
             workspace_dir,
             &draft_name,
-            &[
-                PlanningDraftFileRecord {
-                    active_path: artifacts.directions_path,
-                    body: artifacts.directions_toml,
-                },
-                PlanningDraftFileRecord {
-                    active_path: artifacts.task_ledger_path,
-                    body: artifacts.task_ledger_json,
-                },
-                PlanningDraftFileRecord {
-                    active_path: artifacts.task_ledger_schema_path,
-                    body: artifacts.task_ledger_schema_json,
-                },
-                PlanningDraftFileRecord {
-                    active_path: artifacts.result_output_path,
-                    body: artifacts.result_output_markdown,
-                },
-            ],
+            &staged_files,
         )?;
 
         Ok(PlanningInitStageResult {
@@ -362,8 +382,8 @@ mod tests {
     };
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::domain::planning::{
-        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-        TASK_LEDGER_SCHEMA_FILE_PATH,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+        TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
 
     #[derive(Default)]
@@ -414,25 +434,22 @@ mod tests {
                 .draft_file_bodies
                 .lock()
                 .expect("draft_file_bodies mutex should not be poisoned");
+            let mut active_paths = draft_file_bodies.keys().cloned().collect::<Vec<_>>();
+            active_paths.sort();
             Ok(PlanningDraftLoadRecord {
                 draft_name: draft_name.to_string(),
                 draft_directory: format!("/tmp/{draft_name}"),
-                staged_files: [
-                    DIRECTIONS_FILE_PATH,
-                    TASK_LEDGER_FILE_PATH,
-                    TASK_LEDGER_SCHEMA_FILE_PATH,
-                    RESULT_OUTPUT_FILE_PATH,
-                ]
-                .into_iter()
-                .map(|active_path| PlanningDraftLoadFileRecord {
-                    active_path: active_path.to_string(),
-                    staged_path: format!("/tmp/{draft_name}/{active_path}"),
-                    body: draft_file_bodies
-                        .get(active_path)
-                        .cloned()
-                        .unwrap_or_default(),
-                })
-                .collect(),
+                staged_files: active_paths
+                    .into_iter()
+                    .map(|active_path| PlanningDraftLoadFileRecord {
+                        staged_path: format!("/tmp/{draft_name}/{active_path}"),
+                        body: draft_file_bodies
+                            .get(&active_path)
+                            .cloned()
+                            .unwrap_or_default(),
+                        active_path,
+                    })
+                    .collect(),
             })
         }
 
@@ -537,6 +554,7 @@ mod tests {
 
         assert_eq!(result.mode, PlanningBootstrapMode::Simple);
         assert!(result.is_valid(), "{:?}", result.validation_report.issues);
+        assert_eq!(result.staged_file_count, 5);
         let staged_files = workspace_port
             .staged_files
             .lock()
@@ -547,6 +565,12 @@ mod tests {
             .map(|file| file.body.as_str())
             .expect("directions.toml should be staged");
         assert!(directions_body.contains("general-workstream"));
+        assert!(directions_body.contains(r#"policy = "review_and_enqueue""#));
+        assert!(
+            staged_files
+                .iter()
+                .any(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+        );
     }
 
     #[test]
@@ -658,7 +682,7 @@ mod tests {
             .expect("valid staged draft should promote");
 
         assert!(result.validation_report.is_valid());
-        assert_eq!(result.promoted_file_count, 4);
+        assert_eq!(result.promoted_file_count, 5);
         let active_files = workspace_port
             .active_file_bodies
             .lock()
@@ -667,6 +691,7 @@ mod tests {
         assert!(active_files.contains_key(TASK_LEDGER_FILE_PATH));
         assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
         assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
+        assert!(active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
     }
 
     #[test]
