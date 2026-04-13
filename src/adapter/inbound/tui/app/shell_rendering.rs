@@ -119,6 +119,7 @@ fn draw_inline_conversation_shell(
     let tail_lines = build_inline_tail_lines(app);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
         let frame_area = frame.area();
+        frame.render_widget(Clear, frame_area);
         let tail_area = if startup_screen_is_active(app) {
             frame_area
         } else {

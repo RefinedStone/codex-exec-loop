@@ -1159,8 +1159,7 @@ fn build_shell_footer_lines_with_context(
                 ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
-            if let Some(working_line) =
-                build_auto_follow_working_line(conversation, FOOTER_STATUS_DETAIL_LIMIT)
+            if let Some(working_line) = build_working_line(conversation, FOOTER_STATUS_DETAIL_LIMIT)
             {
                 lines.push(working_line);
             }
@@ -1287,7 +1286,7 @@ fn build_inline_tail_lines_with_context(
             }
             lines.push(Line::from(status_segments.join("  |  ")));
             if let Some(working_line) =
-                build_auto_follow_working_line(conversation, INLINE_TAIL_STATUS_DETAIL_LIMIT)
+                build_working_line(conversation, INLINE_TAIL_STATUS_DETAIL_LIMIT)
             {
                 lines.push(working_line);
             }
@@ -2772,12 +2771,22 @@ fn inline_auto_follow_status_summary(
     compact_inline_detail(&summary, max_detail_len)
 }
 
-fn build_auto_follow_working_line(
+fn build_working_line(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
 ) -> Option<Line<'static>> {
-    let started_at = conversation.auto_follow_state.active_started_at()?;
-    let detail = compact_inline_detail(&auto_follow_working_detail(conversation), max_detail_len);
+    let (started_at, detail) = if conversation.auto_follow_state.has_live_activity() {
+        (
+            conversation.auto_follow_state.active_started_at()?,
+            auto_follow_working_detail(conversation),
+        )
+    } else {
+        (
+            conversation.active_turn_started_at?,
+            manual_turn_working_detail(conversation)?,
+        )
+    };
+    let detail = compact_inline_detail(&detail, max_detail_len);
     let elapsed = format_elapsed(Instant::now().saturating_duration_since(started_at));
 
     Some(Line::from(vec![
@@ -2792,6 +2801,24 @@ fn build_auto_follow_working_line(
             Style::default().fg(Color::DarkGray),
         ),
     ]))
+}
+
+fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<String> {
+    if !conversation.has_running_turn() {
+        return None;
+    }
+
+    match conversation.input_state {
+        ConversationInputState::SubmittingTurn => Some("starting turn".to_string()),
+        ConversationInputState::StreamingTurn => {
+            if conversation.live_agent_message.is_some() {
+                Some("turn running".to_string())
+            } else {
+                Some("waiting for response".to_string())
+            }
+        }
+        ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => None,
+    }
 }
 
 fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {

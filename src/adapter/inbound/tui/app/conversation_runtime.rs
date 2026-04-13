@@ -656,15 +656,17 @@ mod tests {
 
         let first = reduce_conversation_runtime(
             state,
-            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::ApprovalReviewUpdated {
-                review: review.clone(),
-            }),
+            ConversationRuntimeEvent::StreamUpdated(
+                ConversationStreamEvent::ApprovalReviewUpdated {
+                    review: review.clone(),
+                },
+            ),
         );
         let second = reduce_conversation_runtime(
             first.state,
-            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::ApprovalReviewUpdated {
-                review,
-            }),
+            ConversationRuntimeEvent::StreamUpdated(
+                ConversationStreamEvent::ApprovalReviewUpdated { review },
+            ),
         );
 
         assert_eq!(
@@ -1359,6 +1361,7 @@ mod tests {
             startup_submit_armed: false,
             active_turn_id: None,
             active_turn_workspace_directory: None,
+            active_turn_started_at: None,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(FollowupTemplateCatalog {
@@ -1384,6 +1387,7 @@ mod tests {
         state.input_state = ConversationInputState::StreamingTurn;
         state.active_turn_id = Some("turn-1".to_string());
         state.active_turn_workspace_directory = Some("/tmp/workspace".to_string());
+        state.active_turn_started_at = Some(std::time::Instant::now());
         state
     }
 }

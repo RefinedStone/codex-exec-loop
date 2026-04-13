@@ -727,6 +727,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) startup_submit_armed: bool,
     pub(crate) active_turn_id: Option<String>,
     pub(crate) active_turn_workspace_directory: Option<String>,
+    pub(crate) active_turn_started_at: Option<Instant>,
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
@@ -764,6 +765,7 @@ impl ConversationViewModel {
             startup_submit_armed: false,
             active_turn_id: None,
             active_turn_workspace_directory: None,
+            active_turn_started_at: None,
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
@@ -810,6 +812,7 @@ impl ConversationViewModel {
             startup_submit_armed: false,
             active_turn_id: None,
             active_turn_workspace_directory: None,
+            active_turn_started_at: None,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(template_load_result.catalog),
@@ -1243,11 +1246,13 @@ impl ConversationViewModel {
         self.startup_submit_armed = false;
         self.input_state = ConversationInputState::SubmittingTurn;
         self.active_turn_workspace_directory = Some(workspace_directory);
+        self.active_turn_started_at = Some(Instant::now());
     }
 
     pub(crate) fn mark_turn_started(&mut self, turn_id: String) {
         self.active_turn_id = Some(turn_id);
         self.input_state = ConversationInputState::StreamingTurn;
+        self.active_turn_started_at.get_or_insert_with(Instant::now);
         self.turn_activity.start_new_turn();
         self.approval_review = None;
         self.buffered_tool_messages.clear();
@@ -1256,6 +1261,7 @@ impl ConversationViewModel {
     pub(crate) fn mark_turn_finished(&mut self) {
         self.active_turn_id = None;
         self.active_turn_workspace_directory = None;
+        self.active_turn_started_at = None;
         self.input_state = self.ready_input_state();
     }
 

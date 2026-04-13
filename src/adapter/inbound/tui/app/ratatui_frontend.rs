@@ -203,8 +203,12 @@ impl InlineHistoryState {
     }
 
     fn shifted_window_overlap_len(&self, current_lines: &[Line<'static>]) -> Option<usize> {
-        if self.rendered_lines.len() != MAX_CONVERSATION_HISTORY_LINES
-            || current_lines.len() != MAX_CONVERSATION_HISTORY_LINES
+        if current_lines.len() < self.rendered_lines.len() {
+            return None;
+        }
+
+        if current_lines.len() == self.rendered_lines.len()
+            && current_lines.len() != MAX_CONVERSATION_HISTORY_LINES
         {
             return None;
         }
@@ -396,6 +400,27 @@ mod tests {
                 Line::from(format!("line {}", MAX_CONVERSATION_HISTORY_LINES + 1)),
                 Line::from(format!("line {}", MAX_CONVERSATION_HISTORY_LINES + 2)),
             ]
+        );
+    }
+
+    #[test]
+    fn pending_lines_only_inserts_new_suffix_when_history_first_hits_cap() {
+        let state = InlineHistoryState {
+            rendered_lines: (0..MAX_CONVERSATION_HISTORY_LINES - 10)
+                .map(|idx| Line::from(format!("line {idx}")))
+                .collect(),
+        };
+        let current_lines = (10..MAX_CONVERSATION_HISTORY_LINES + 10)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect::<Vec<_>>();
+
+        let pending = state.pending_lines(&current_lines);
+
+        assert_eq!(
+            pending,
+            (MAX_CONVERSATION_HISTORY_LINES - 10..MAX_CONVERSATION_HISTORY_LINES + 10)
+                .map(|idx| Line::from(format!("line {idx}")))
+                .collect::<Vec<_>>()
         );
     }
 

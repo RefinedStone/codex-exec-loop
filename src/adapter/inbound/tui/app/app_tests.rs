@@ -353,6 +353,7 @@ fn ready_conversation() -> ConversationViewModel {
         startup_submit_armed: false,
         active_turn_id: None,
         active_turn_workspace_directory: None,
+        active_turn_started_at: None,
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(sample_template_catalog()),
@@ -5052,6 +5053,30 @@ fn inline_tail_surfaces_stale_planning_status_while_turn_is_running() {
         .join("\n");
 
     assert!(rendered.contains("planning: stale  |  queue: next task: rank 1 / task-1"));
+}
+
+#[test]
+fn inline_tail_surfaces_manual_turn_working_line() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    conversation.active_turn_started_at = Some(std::time::Instant::now() - Duration::from_secs(45));
+    conversation.live_agent_message = Some(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "still streaming".to_string(),
+        Some("commentary".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("◦ Working (45s • turn running)"));
 }
 
 #[test]
