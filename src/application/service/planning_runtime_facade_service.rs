@@ -56,6 +56,7 @@ pub enum PlanningRuntimeAutoFollowDecision {
 pub struct PlanningRuntimeQueuedAutoFollowPrompt {
     pub prompt: String,
     pub transcript_text: String,
+    pub handoff_task: Option<PlanningTaskHandoff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +70,13 @@ pub struct PlanningRuntimeRenderedPreview {
 pub struct PlanningMainSessionHandoff {
     pub prompt: String,
     pub transcript_text: String,
+    pub task: PlanningTaskHandoff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningTaskHandoff {
+    pub task_id: String,
+    pub task_title: String,
 }
 
 #[derive(Clone)]
@@ -126,10 +134,11 @@ impl PlanningRuntimeFacadeService {
         let queue_head = snapshot.queue_head()?;
         Some(PlanningMainSessionHandoff {
             prompt: render_builtin_next_task_handoff_prompt(queue_head),
-            transcript_text: format!(
-                "planner selected the next task: {}",
-                queue_head.task_title.trim()
-            ),
+            transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+            task: PlanningTaskHandoff {
+                task_id: queue_head.task_id.trim().to_string(),
+                task_title: queue_head.task_title.trim().to_string(),
+            },
         })
     }
 
@@ -248,7 +257,10 @@ impl PlanningRuntimeFacadeService {
     ) -> PlanningRuntimeAutoFollowDecision {
         if snapshot.blocks_auto_followup() {
             return PlanningRuntimeAutoFollowDecision::Blocked(
-                PlanningAutoFollowBlockReason::InvalidWorkspace,
+                snapshot
+                    .auto_followup_pause_reason()
+                    .map(|_| PlanningAutoFollowBlockReason::RepeatedQueueHead)
+                    .unwrap_or(PlanningAutoFollowBlockReason::InvalidWorkspace),
             );
         }
 
@@ -257,6 +269,7 @@ impl PlanningRuntimeFacadeService {
                 PlanningRuntimeQueuedAutoFollowPrompt {
                     prompt: handoff.prompt,
                     transcript_text: handoff.transcript_text,
+                    handoff_task: Some(handoff.task),
                 },
             ),
             None => PlanningRuntimeAutoFollowDecision::Blocked(
@@ -300,6 +313,7 @@ impl PlanningRuntimeFacadeService {
             transcript_text: self
                 .planning_runtime_policy_service
                 .auto_follow_transcript_text(request.template, request.snapshot, prompt_mode),
+            handoff_task: None,
         }
     }
 
@@ -335,7 +349,7 @@ fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> St
         .map(String::as_str)
         .unwrap_or("this is the highest-priority actionable task");
     format!(
-        "Continue the next highest-priority task.\n\nTask: {}\nDirection: {}\nPriority: rank {} / combined priority {}\nWhy now: {}\n\nWork from the current repository state and focus on this task only. Do not refresh planning queues or rewrite planning control files unless the task itself strictly requires it. When you finish, summarize what you completed and what remains.",
+        "Continue the next highest-priority task.\n\nTask: {}\nDirection: {}\nPriority: rank {} / combined priority {}\nWhy now: {}\n\nWork from the current repository state and focus on this task only. Treat `.codex-exec-loop/planning` and other planning control files as internal runtime state. Do not inspect, mention, or update them unless the user explicitly asked for planning maintenance or this task strictly requires it. Do not describe planning queue refresh logic in commentary or in the final answer. When you finish, summarize what you completed and what remains.",
         queue_head.task_title.trim(),
         queue_head.direction_title.trim(),
         queue_head.rank,
@@ -535,7 +549,11 @@ mod tests {
         assert!(prompt.prompt.contains("General workstream"));
         assert_eq!(
             prompt.transcript_text,
-            "planner selected the next task: Implement planning runtime facade"
+            "다음 queued task 1개를 이어서 진행합니다."
+        );
+        assert_eq!(
+            prompt.handoff_task.as_ref().map(|task| task.task_id.as_str()),
+            Some("task-1")
         );
     }
 

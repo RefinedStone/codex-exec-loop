@@ -16,6 +16,7 @@ pub struct PlanningRuntimePolicyService;
 pub enum PlanningAutoFollowBlockReason {
     InvalidWorkspace,
     ActionableQueueRequired,
+    RepeatedQueueHead,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +104,12 @@ impl PlanningRuntimePolicyService {
         if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
             return PlanningAutoFollowPolicyDecision::Blocked(
                 PlanningAutoFollowBlockReason::InvalidWorkspace,
+            );
+        }
+
+        if snapshot.auto_followup_pause_reason().is_some() {
+            return PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::RepeatedQueueHead,
             );
         }
 
@@ -201,6 +208,7 @@ impl PlanningRuntimePolicyService {
             proposal_summary: request.snapshot.proposal_summary().map(str::to_string),
             failure_summary: request
                 .repair_failure_summary
+                .or_else(|| request.snapshot.auto_followup_pause_reason())
                 .or_else(|| request.snapshot.failure_reason())
                 .map(str::to_string),
             workspace_state,
@@ -234,6 +242,12 @@ impl PlanningRuntimePolicyService {
                         "selected template requires an actionable planning queue head".to_string()
                     }
                 }
+                PlanningAutoFollowBlockReason::RepeatedQueueHead => snapshot
+                    .auto_followup_pause_reason()
+                    .unwrap_or(
+                        "selected template is paused until the planning queue advances beyond the previously handed-off task",
+                    )
+                    .to_string(),
             };
             return PlanningRuntimePreviewView {
                 status_label: preview_block_label(reason),
@@ -387,6 +401,7 @@ fn preview_block_label(reason: PlanningAutoFollowBlockReason) -> &'static str {
     match reason {
         PlanningAutoFollowBlockReason::InvalidWorkspace => "blocked",
         PlanningAutoFollowBlockReason::ActionableQueueRequired => "queue-empty",
+        PlanningAutoFollowBlockReason::RepeatedQueueHead => "paused",
     }
 }
 

@@ -251,11 +251,6 @@ impl GithubReviewPollerAdapter {
         users_root: &Path,
         current_user: &str,
     ) -> Result<Option<PathBuf>> {
-        let direct_match = users_root.join(current_user);
-        if direct_match.is_dir() {
-            return Ok(Some(direct_match));
-        }
-
         let entries = match fs::read_dir(users_root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
@@ -276,6 +271,11 @@ impl GithubReviewPollerAdapter {
                     return Ok(Some(path));
                 }
             }
+        }
+
+        let direct_match = users_root.join(current_user);
+        if direct_match.is_dir() {
+            return Ok(Some(direct_match));
         }
 
         Ok(None)

@@ -9,13 +9,16 @@ use crate::application::service::planning_prompt_service::PlanningRuntimeSnapsho
 use crate::application::service::planning_reconciliation_service::{
     PlanningRepairRequest, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
-use crate::application::service::planning_runtime_facade_service::PlanningRuntimeFacadeService;
+use crate::application::service::planning_runtime_facade_service::{
+    PlanningRuntimeFacadeService, PlanningTaskHandoff,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningQueueRefreshRequest<'a> {
     pub workspace_directory: &'a str,
     pub root_turn_id: &'a str,
     pub latest_main_reply: &'a str,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +66,10 @@ impl PlanningWorkerOrchestrationService {
             request.workspace_directory,
             &format!("planner-refresh-{}", request.root_turn_id),
             PlanningWorkerOperation::RefreshQueue,
-            build_planning_queue_refresh_prompt(request.latest_main_reply),
+            build_planning_queue_refresh_prompt(
+                request.latest_main_reply,
+                request.previous_handoff_task,
+            ),
         )
     }
 
@@ -150,7 +156,17 @@ impl PlanningWorkerOrchestrationService {
     }
 }
 
-fn build_planning_queue_refresh_prompt(latest_main_reply: &str) -> String {
+fn build_planning_queue_refresh_prompt(
+    latest_main_reply: &str,
+    previous_handoff_task: Option<&PlanningTaskHandoff>,
+) -> String {
+    let previous_handoff_section = previous_handoff_task.map_or_else(String::new, |task| {
+        format!(
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이면 `in_progress`, 막혔으면 `blocked`, 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            task.task_id, task.task_title
+        )
+    });
+
     format!(
         r#"대리인입니다.
 planning worker refresh 입니다.
@@ -163,6 +179,7 @@ planning worker refresh 입니다.
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
 - builtin next-task 자동 진행을 위해, `proposed`만 있고 바로 이어서 진행해야 할 후속 작업이 분명하면 최상위 proposal 1개를 `ready`로 승격하고 나머지 선택지는 `proposed`로 유지하세요.
 - 마지막에는 이번 refresh에서 queue에 반영한 핵심 변경을 짧게 요약하세요.
+{previous_handoff_section}
 
 main session latest reply:
 {latest_main_reply}"#
@@ -351,6 +368,7 @@ mod tests {
                 workspace_directory: &workspace_dir,
                 root_turn_id: "turn-1",
                 latest_main_reply: "Implemented the previous queue head and found one more task.",
+                previous_handoff_task: None,
             })
             .expect("refresh should succeed");
 
@@ -390,6 +408,7 @@ mod tests {
                 workspace_directory: &workspace_dir,
                 root_turn_id: "turn-2",
                 latest_main_reply: "Need to continue after the broken planning update.",
+                previous_handoff_task: None,
             })
             .expect("refresh should reconcile invalid worker candidate");
 

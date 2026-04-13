@@ -83,6 +83,7 @@ fn ready_conversation() -> ConversationViewModel {
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
+        last_planning_task_handoff: None,
         status_text: "thread loaded".to_string(),
     }
 }
@@ -198,7 +199,11 @@ fn auto_followup_prompt_renders_builtin_template() {
     assert!(prompt.prompt.contains("General workstream"));
     assert_eq!(
         prompt.transcript_text,
-        "planner selected the next task: Implement shell planning status"
+        "다음 queued task 1개를 이어서 진행합니다."
+    );
+    assert_eq!(
+        prompt.handoff_task.as_ref().map(|task| task.task_id.as_str()),
+        Some("task-1")
     );
 }
 

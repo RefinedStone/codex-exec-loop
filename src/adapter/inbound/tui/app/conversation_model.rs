@@ -8,7 +8,7 @@ use crate::application::service::planning_prompt_service::PlanningRuntimeSnapsho
 use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
 use crate::application::service::planning_runtime_facade_service::{
     PlanningRuntimeAutoFollowDecision, PlanningRuntimeAutoFollowRequest,
-    PlanningRuntimeFacadeService, PlanningRuntimeQueuedAutoFollowPrompt,
+    PlanningRuntimeFacadeService, PlanningRuntimeQueuedAutoFollowPrompt, PlanningTaskHandoff,
 };
 use crate::application::service::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 use crate::domain::conversation::{
@@ -65,6 +65,7 @@ pub(crate) enum AutoFollowupSkipReason {
     NoFileChanges,
     PlanningBlocked,
     PlanningQueueHeadRequired,
+    PlanningRepeatedQueueHead,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +117,10 @@ impl AutoFollowupSkipReason {
                 "the selected auto follow-up template requires an actionable planning queue head"
                     .to_string()
             }
+            Self::PlanningRepeatedQueueHead => {
+                "the planning queue selected the same task again; auto follow-up stays paused until the queue advances"
+                    .to_string()
+            }
         }
     }
 
@@ -129,6 +134,7 @@ impl AutoFollowupSkipReason {
             Self::NoFileChanges => "stopped: no file changes",
             Self::PlanningBlocked => "paused: planning files invalid",
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
+            Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
         }
     }
 
@@ -157,6 +163,10 @@ impl AutoFollowupSkipReason {
             }
             Self::PlanningQueueHeadRequired => {
                 "turn completed / auto follow-up paused: planning queue has no next task"
+                    .to_string()
+            }
+            Self::PlanningRepeatedQueueHead => {
+                "turn completed / auto follow-up paused: planning queue repeated the previous task"
                     .to_string()
             }
         }
@@ -570,6 +580,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
+    pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
     pub(crate) status_text: String,
 }
 
@@ -606,6 +617,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
+            last_planning_task_handoff: None,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -651,6 +663,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
+            last_planning_task_handoff: None,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -1133,6 +1146,10 @@ impl ConversationViewModel {
         self.last_auto_followup_activity = None;
     }
 
+    pub(crate) fn clear_last_planning_task_handoff(&mut self) {
+        self.last_planning_task_handoff = None;
+    }
+
     pub(crate) fn record_planning_repair_submission(
         &mut self,
         attempt: usize,
@@ -1159,8 +1176,10 @@ impl ConversationViewModel {
         &mut self,
         _queued_from_turn_id: &str,
         template_label: &str,
+        handoff_task: Option<&PlanningTaskHandoff>,
     ) {
         let progress = self.auto_follow_state.progress_label();
+        self.last_planning_task_handoff = handoff_task.cloned();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("submitted auto turn {progress}"),
             detail: format!(
@@ -1185,6 +1204,10 @@ impl ConversationViewModel {
                 "queued after the previous turn completed; waiting to submit with template {template_label}"
             ),
         });
+    }
+
+    pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
+        self.last_planning_task_handoff.as_ref()
     }
 
     pub(crate) fn accepts_post_turn_evaluation(
@@ -1277,6 +1300,9 @@ impl ConversationViewModel {
                     }
                     PlanningAutoFollowBlockReason::ActionableQueueRequired => {
                         AutoFollowupSkipReason::PlanningQueueHeadRequired
+                    }
+                    PlanningAutoFollowBlockReason::RepeatedQueueHead => {
+                        AutoFollowupSkipReason::PlanningRepeatedQueueHead
                     }
                 })
             }

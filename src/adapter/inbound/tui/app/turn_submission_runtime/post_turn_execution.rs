@@ -32,14 +32,12 @@ pub(super) struct PostTurnEvaluationRequest {
 #[derive(Debug, Clone)]
 struct HiddenPlanningRepairOutcome {
     runtime_snapshot: PlanningRuntimeSnapshot,
-    notices: Vec<String>,
     resolved: bool,
 }
 
 #[derive(Debug, Clone)]
 struct BuiltinNextTaskRefreshOutcome {
     runtime_snapshot: PlanningRuntimeSnapshot,
-    notices: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +75,7 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
     ) -> PostTurnEvaluationExecution {
         let reconciliation_result = self.reconcile_planning_after_turn(request);
-        let mut runtime_notices = reconciliation_result.notices.clone();
+        let runtime_notices = reconciliation_result.notices.clone();
         let mut planning_runtime_snapshot = self.planning_runtime_snapshot_after_reconciliation(
             conversation,
             request,
@@ -90,7 +88,6 @@ impl PostTurnEvaluationExecutor {
                 &request.queued_from_turn_id,
                 repair_request,
             );
-            runtime_notices.extend(repair_outcome.notices);
             planning_runtime_snapshot = repair_outcome.runtime_snapshot;
         }
 
@@ -104,7 +101,6 @@ impl PostTurnEvaluationExecutor {
                 request,
                 planning_runtime_snapshot.clone(),
             );
-            runtime_notices.extend(refresh_outcome.notices);
             planning_runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
 
@@ -203,7 +199,6 @@ impl PostTurnEvaluationExecutor {
         root_turn_id: &str,
         repair_request: &PlanningRepairRequest,
     ) -> HiddenPlanningRepairOutcome {
-        let mut notices = Vec::new();
         let mut runtime_snapshot = self
             .planning_services
             .runtime_facade
@@ -237,10 +232,8 @@ impl PostTurnEvaluationExecutor {
                         &detail,
                         &runtime_snapshot,
                     );
-                    notices.push(detail);
                     return HiddenPlanningRepairOutcome {
                         runtime_snapshot,
-                        notices,
                         resolved: false,
                     };
                 }
@@ -248,12 +241,10 @@ impl PostTurnEvaluationExecutor {
 
             self.record_planner_worker_outcome(PlannerWorkerStatus::RepairSucceeded, &outcome);
             runtime_snapshot = outcome.runtime_snapshot.clone();
-            notices.extend(outcome.notices);
 
             let Some(repair_request) = outcome.repair_request else {
                 return HiddenPlanningRepairOutcome {
                     runtime_snapshot,
-                    notices,
                     resolved: true,
                 };
             };
@@ -268,10 +259,8 @@ impl PostTurnEvaluationExecutor {
                     &detail,
                     &runtime_snapshot,
                 );
-                notices.push(detail);
                 return HiddenPlanningRepairOutcome {
                     runtime_snapshot,
-                    notices,
                     resolved: false,
                 };
             }
@@ -286,7 +275,6 @@ impl PostTurnEvaluationExecutor {
 
         HiddenPlanningRepairOutcome {
             runtime_snapshot,
-            notices,
             resolved: false,
         }
     }
@@ -304,7 +292,6 @@ impl PostTurnEvaluationExecutor {
         ) {
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
-                notices: Vec::new(),
             };
         }
 
@@ -315,7 +302,6 @@ impl PostTurnEvaluationExecutor {
         else {
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
-                notices: Vec::new(),
             };
         };
 
@@ -327,6 +313,7 @@ impl PostTurnEvaluationExecutor {
                 workspace_directory: &request.workspace_directory,
                 root_turn_id: &request.queued_from_turn_id,
                 latest_main_reply,
+                previous_handoff_task: conversation.last_planning_task_handoff(),
             });
 
         let outcome = match worker_outcome {
@@ -342,13 +329,11 @@ impl PostTurnEvaluationExecutor {
                 );
                 return BuiltinNextTaskRefreshOutcome {
                     runtime_snapshot: invalid_snapshot,
-                    notices: vec![detail],
                 };
             }
         };
 
         self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
-        let mut notices = outcome.notices.clone();
         let mut runtime_snapshot = outcome.runtime_snapshot.clone();
 
         if let Some(repair_request) = outcome.repair_request.as_ref() {
@@ -357,7 +342,6 @@ impl PostTurnEvaluationExecutor {
                 &request.queued_from_turn_id,
                 repair_request,
             );
-            notices.extend(repair_outcome.notices);
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
             } else {
@@ -378,10 +362,15 @@ impl PostTurnEvaluationExecutor {
 
             match promotion_outcome {
                 Ok(promotion_outcome) => {
-                    notices.extend(promotion_outcome.notices);
                     runtime_snapshot = promotion_outcome.runtime_snapshot;
                     self.planner_worker_panel_state.last_queue_summary =
                         planner_queue_summary(&runtime_snapshot);
+                    self.planner_worker_panel_state.last_host_detail =
+                        promotion_outcome.promoted_task_title.map(|title| {
+                            format!(
+                                "host promoted top follow-up proposal into the executable queue: {title}"
+                            )
+                        });
                 }
                 Err(error) => {
                     let detail = format!("host proposal promotion failed: {error}");
@@ -394,16 +383,20 @@ impl PostTurnEvaluationExecutor {
                     );
                     return BuiltinNextTaskRefreshOutcome {
                         runtime_snapshot: invalid_snapshot,
-                        notices: vec![detail],
                     };
                 }
             }
         }
 
-        BuiltinNextTaskRefreshOutcome {
-            runtime_snapshot,
-            notices,
+        if let Some(detail) =
+            repeated_queue_head_detail(conversation.last_planning_task_handoff(), &runtime_snapshot)
+        {
+            self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
+            self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
+            runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail.clone());
         }
+
+        BuiltinNextTaskRefreshOutcome { runtime_snapshot }
     }
 
     fn auto_followup_action_from_snapshot(
@@ -422,6 +415,7 @@ impl PostTurnEvaluationExecutor {
                     queued_from_turn_id: request.queued_from_turn_id.clone(),
                     template_label: conversation.auto_follow_state.template_label().to_string(),
                     transcript_text: queued_prompt.transcript_text,
+                    handoff_task: queued_prompt.handoff_task,
                 }
             }
             AutoFollowupDecision::Skip(reason) => {
@@ -432,6 +426,7 @@ impl PostTurnEvaluationExecutor {
 
     fn record_planner_worker_running(&mut self, status: PlannerWorkerStatus) {
         self.planner_worker_panel_state.status = status;
+        self.planner_worker_panel_state.last_host_detail = None;
     }
 
     fn record_planner_worker_outcome(
@@ -454,6 +449,7 @@ impl PostTurnEvaluationExecutor {
         self.planner_worker_panel_state.last_rejected_summary = outcome.rejected_summary.clone();
         self.planner_worker_panel_state.last_queue_summary =
             planner_queue_summary(&outcome.runtime_snapshot);
+        self.planner_worker_panel_state.last_host_detail = None;
     }
 
     fn record_planner_worker_failure(
@@ -467,6 +463,7 @@ impl PostTurnEvaluationExecutor {
         self.planner_worker_panel_state.last_rejected_summary = None;
         self.planner_worker_panel_state.last_queue_summary =
             planner_queue_summary(runtime_snapshot);
+        self.planner_worker_panel_state.last_host_detail = None;
     }
 }
 
@@ -540,6 +537,22 @@ fn planner_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
         .queue_head()
         .map(|queue_head| format!("next task: {}", queue_head.task_title.trim()))
         .or_else(|| snapshot.queue_summary().map(str::to_string))
+}
+
+fn repeated_queue_head_detail(
+    previous_handoff: Option<&PlanningTaskHandoff>,
+    snapshot: &PlanningRuntimeSnapshot,
+) -> Option<String> {
+    let previous_handoff = previous_handoff?;
+    let queue_head = snapshot.queue_head()?;
+    if queue_head.task_id.trim() != previous_handoff.task_id.trim() {
+        return None;
+    }
+
+    Some(format!(
+        "planner refresh kept the previously handed-off task as the queue head: {}",
+        previous_handoff.task_title
+    ))
 }
 
 fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResult {

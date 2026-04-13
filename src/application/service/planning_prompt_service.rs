@@ -42,6 +42,7 @@ pub struct PlanningRuntimeSnapshot {
     proposal_summary: Option<String>,
     queue_head: Option<PriorityQueueTask>,
     failure_reason: Option<String>,
+    auto_followup_pause_reason: Option<String>,
 }
 
 impl PlanningRuntimeSnapshot {
@@ -53,6 +54,7 @@ impl PlanningRuntimeSnapshot {
             proposal_summary: None,
             queue_head: None,
             failure_reason: None,
+            auto_followup_pause_reason: None,
         }
     }
 
@@ -64,6 +66,7 @@ impl PlanningRuntimeSnapshot {
             proposal_summary: None,
             queue_head: None,
             failure_reason: Some(reason.into()),
+            auto_followup_pause_reason: None,
         }
     }
 
@@ -92,6 +95,7 @@ impl PlanningRuntimeSnapshot {
             proposal_summary,
             queue_head,
             failure_reason: None,
+            auto_followup_pause_reason: None,
         }
     }
 
@@ -119,6 +123,16 @@ impl PlanningRuntimeSnapshot {
         self.failure_reason.as_deref()
     }
 
+    pub fn auto_followup_pause_reason(&self) -> Option<&str> {
+        self.auto_followup_pause_reason.as_deref()
+    }
+
+    pub fn with_auto_followup_pause_reason(&self, reason: impl Into<String>) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.auto_followup_pause_reason = Some(reason.into());
+        snapshot
+    }
+
     pub fn preview_status_label(&self) -> &'static str {
         match self.workspace_status {
             PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
@@ -129,17 +143,20 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn preview_detail(&self) -> Option<&str> {
-        self.failure_reason()
+        self.auto_followup_pause_reason()
+            .or_else(|| self.failure_reason())
             .or_else(|| self.queue_summary())
             .or_else(|| self.proposal_summary())
     }
 
     pub fn blocks_auto_followup(&self) -> bool {
         self.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid
+            || self.auto_followup_pause_reason.is_some()
     }
 
     pub fn has_actionable_queue_head(&self) -> bool {
         self.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask
+            && self.auto_followup_pause_reason.is_none()
     }
 
     pub fn has_proposal_candidates(&self) -> bool {

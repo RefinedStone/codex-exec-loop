@@ -496,6 +496,7 @@ mod tests {
                     last_queue_summary: Some("next task: stale".to_string()),
                     last_summary: Some("stale".to_string()),
                     last_rejected_summary: None,
+                    last_host_detail: None,
                 },
             })
             .expect("background message should enqueue");

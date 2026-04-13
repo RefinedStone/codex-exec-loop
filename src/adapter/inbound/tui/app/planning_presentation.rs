@@ -52,6 +52,10 @@ pub(super) fn build_planning_notice_line(
 }
 
 pub(super) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
+    if !app.planner_shows_debug_details() {
+        return Vec::new();
+    }
+
     let planner = &app.planner_worker_panel_state;
     if !planner.has_content() {
         return Vec::new();
@@ -70,6 +74,12 @@ pub(super) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
         lines.push(format!(
             "planner detail: {}",
             compact_whitespace_detail(summary, max_detail_len)
+        ));
+    }
+    if let Some(host_detail) = planner.last_host_detail.as_deref() {
+        lines.push(format!(
+            "planner host detail: {}",
+            compact_whitespace_detail(host_detail, max_detail_len)
         ));
     }
     if let Some(rejected_summary) = planner.last_rejected_summary.as_deref() {
@@ -199,6 +209,10 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                     "stop on no-file-change: {}",
                     conversation.auto_follow_state.no_file_change_stop_label()
                 )),
+                Line::from(format!(
+                    "planner detail: {}",
+                    app.planner_visibility_label()
+                )),
                 Line::from(planning_status_line),
                 Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
@@ -258,7 +272,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 )));
             } else {
                 lines.push(Line::from(
-                    "edit controls: Ctrl+l max turns  |  Ctrl+g stop keyword",
+                    "edit controls: Ctrl+l max turns  |  Ctrl+g stop keyword  |  Ctrl+b planner detail",
                 ));
             }
             lines.push(Line::from(Span::styled(

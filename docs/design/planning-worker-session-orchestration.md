@@ -133,8 +133,14 @@ The UI exposes planner state through planner status lines in the follow-up/statu
 - last queue summary
 - last planner detail summary
 - last rejected planning summary
+- host-side planner detail such as proposal promotion or duplicate-next-task pause reasons
 
 This keeps planner activity visible without polluting the main transcript.
+
+Visibility is mode-dependent:
+
+- normal mode keeps planner transcript hidden and shows only compact planning status
+- debug mode expands planner panel detail without merging planner reasoning into the main conversation transcript
 
 ## Implementation Notes
 
@@ -150,3 +156,5 @@ Key behavior changes:
 - manual main-session prompts no longer append planning context
 - `builtin next-task` no longer queues a planning-refresh prompt into the main session
 - planning repair is hidden from the main transcript
+- `builtin next-task` handoff tells the main session to treat `.codex-exec-loop/planning` as internal runtime state unless the user explicitly asked for planning maintenance
+- host pauses auto follow-up when planner refresh returns the same queue-head task that was just handed off to the main session

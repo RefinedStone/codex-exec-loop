@@ -62,6 +62,7 @@ impl NativeTuiApp {
                 queued_from_turn_id,
                 template_label,
                 transcript_text,
+                handoff_task,
             } => {
                 self.submit_prompt(
                     prompt,
@@ -69,6 +70,7 @@ impl NativeTuiApp {
                         queued_from_turn_id,
                         template_label,
                         transcript_text,
+                        handoff_task,
                     }),
                 );
             }

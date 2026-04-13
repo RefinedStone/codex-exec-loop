@@ -25,6 +25,7 @@ use crate::domain::conversation::{
 };
 use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 use crate::domain::session_summary::SessionSummary;
+use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
 
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
@@ -45,6 +46,7 @@ const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const DEFAULT_TRANSCRIPT_PAGE_STEP: u16 = 6;
 const ALT_SCREEN_ENV_VAR: &str = "CODEX_EXEC_LOOP_ALT_SCREEN";
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
+const PLANNER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
@@ -156,6 +158,7 @@ struct AutoFollowupSubmitContext {
     queued_from_turn_id: String,
     template_label: String,
     transcript_text: String,
+    handoff_task: Option<PlanningTaskHandoff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,12 +229,58 @@ impl PlannerWorkerStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PlannerVisibility {
+    #[default]
+    Normal,
+    Debug,
+}
+
+impl PlannerVisibility {
+    fn from_environment() -> Self {
+        Self::from_env_value(std::env::var(PLANNER_VISIBILITY_ENV_VAR).ok().as_deref())
+    }
+
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("debug") | Some("verbose") | Some("detailed") | Some("1") | Some("true") => {
+                Self::Debug
+            }
+            _ => Self::Normal,
+        }
+    }
+
+    fn toggle(self) -> Self {
+        match self {
+            Self::Normal => Self::Debug,
+            Self::Debug => Self::Normal,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Debug => "debug",
+        }
+    }
+
+    fn shows_debug_details(self) -> bool {
+        matches!(self, Self::Debug)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PlannerWorkerPanelState {
     status: PlannerWorkerStatus,
     last_summary: Option<String>,
     last_rejected_summary: Option<String>,
     last_queue_summary: Option<String>,
+    last_host_detail: Option<String>,
 }
 
 impl PlannerWorkerPanelState {
@@ -240,6 +289,7 @@ impl PlannerWorkerPanelState {
             || self.last_summary.is_some()
             || self.last_rejected_summary.is_some()
             || self.last_queue_summary.is_some()
+            || self.last_host_detail.is_some()
     }
 }
 
@@ -263,6 +313,7 @@ struct NativeTuiApp {
     planning_services: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
+    planner_visibility: PlannerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     show_startup_ascii_art: bool,
@@ -291,7 +342,7 @@ mod tests;
 
 #[cfg(test)]
 mod startup_ascii_art_env_tests {
-    use super::startup_ascii_art_enabled_from_value;
+    use super::{PlannerVisibility, startup_ascii_art_enabled_from_value};
 
     #[test]
     fn startup_ascii_art_defaults_to_enabled() {
@@ -308,5 +359,31 @@ mod startup_ascii_art_env_tests {
         assert!(!startup_ascii_art_enabled_from_value(Some("0")));
         assert!(!startup_ascii_art_enabled_from_value(Some("off")));
         assert!(!startup_ascii_art_enabled_from_value(Some("no")));
+    }
+
+    #[test]
+    fn planner_visibility_defaults_to_normal() {
+        assert_eq!(PlannerVisibility::from_env_value(None), PlannerVisibility::Normal);
+        assert_eq!(PlannerVisibility::from_env_value(Some("")), PlannerVisibility::Normal);
+        assert_eq!(
+            PlannerVisibility::from_env_value(Some("normal")),
+            PlannerVisibility::Normal
+        );
+    }
+
+    #[test]
+    fn planner_visibility_supports_debug_values() {
+        assert_eq!(
+            PlannerVisibility::from_env_value(Some("debug")),
+            PlannerVisibility::Debug
+        );
+        assert_eq!(
+            PlannerVisibility::from_env_value(Some("TRUE")),
+            PlannerVisibility::Debug
+        );
+        assert_eq!(
+            PlannerVisibility::from_env_value(Some("verbose")),
+            PlannerVisibility::Debug
+        );
     }
 }

@@ -501,6 +501,14 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn planner_visibility_label(&self) -> &'static str {
+        self.planner_visibility.label()
+    }
+
+    pub(super) fn planner_shows_debug_details(&self) -> bool {
+        self.planner_visibility.shows_debug_details()
+    }
+
     pub(super) fn is_max_auto_turns_editing(&self) -> bool {
         self.followup_overlay_ui_state
             .max_auto_turns_editor
@@ -609,6 +617,13 @@ impl NativeTuiApp {
 
     pub(super) fn toggle_no_file_change_stop(&mut self) {
         self.dispatch_followup_controls(FollowupControlEvent::NoFileChangeStopToggled);
+    }
+
+    pub(super) fn toggle_planner_visibility(&mut self) {
+        self.planner_visibility = self.planner_visibility.toggle();
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: format!("planner detail {}", self.planner_visibility.label()),
+        });
     }
 
     pub(super) fn reset_transcript_viewport(&mut self) {
@@ -883,6 +898,9 @@ impl NativeTuiApp {
                 }
                 KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
                     self.toggle_no_file_change_stop()
+                }
+                KeyCode::Char('b') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.toggle_planner_visibility()
                 }
                 KeyCode::PageUp if key.modifiers.is_empty() => self
                     .scroll_followup_template_preview(

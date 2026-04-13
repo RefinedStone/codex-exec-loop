@@ -34,6 +34,7 @@ pub(super) enum ConversationRuntimeEffect {
         queued_from_turn_id: String,
         template_label: String,
         transcript_text: String,
+        handoff_task: Option<PlanningTaskHandoff>,
     },
     QueuePlanningRepairPrompt {
         prompt: String,
@@ -69,6 +70,7 @@ pub(super) enum ConversationPostTurnAction {
         queued_from_turn_id: String,
         template_label: String,
         transcript_text: String,
+        handoff_task: Option<PlanningTaskHandoff>,
     },
     SkipAutoFollowup {
         reason: AutoFollowupSkipReason,
@@ -101,12 +103,14 @@ pub(super) fn reduce_conversation_runtime(
                     state.planning_repair_state = None;
                     state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_followup_skip();
+                    state.clear_last_planning_task_handoff();
                 }
                 PromptOrigin::AutoFollow(context) => {
                     state.auto_follow_state.mark_auto_turn_submitted();
                     state.record_auto_followup_submission(
                         &context.queued_from_turn_id,
                         &context.template_label,
+                        context.handoff_task.as_ref(),
                     );
                 }
                 PromptOrigin::PlanningRepair(context) => {
@@ -264,6 +268,7 @@ pub(super) fn reduce_conversation_runtime(
                     queued_from_turn_id,
                     template_label,
                     transcript_text,
+                    handoff_task,
                 } => {
                     state.clear_auto_followup_skip();
                     state.record_auto_followup_queue(&queued_from_turn_id, &template_label);
@@ -276,6 +281,7 @@ pub(super) fn reduce_conversation_runtime(
                         queued_from_turn_id,
                         template_label,
                         transcript_text,
+                        handoff_task,
                     });
                 }
                 ConversationPostTurnAction::SkipAutoFollowup { reason } => {
@@ -345,8 +351,9 @@ mod tests {
                 origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
-                    transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다."
+                    transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                         .to_string(),
+                    handoff_task: None,
                 }),
             },
         );
@@ -375,7 +382,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.messages[0].text,
-            "priority queue의 현재 next task 1개를 이어서 진행합니다."
+            "다음 queued task 1개를 이어서 진행합니다."
         );
         assert_eq!(reduced.state.messages[0].label(), "Auto Follow-up");
     }
@@ -978,8 +985,9 @@ mod tests {
                         prompt: "continue".to_string(),
                         queued_from_turn_id: "turn-1".to_string(),
                         template_label: "builtin next-task".to_string(),
-                        transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다."
+                        transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                             .to_string(),
+                        handoff_task: None,
                     },
                 }),
             },
@@ -991,8 +999,9 @@ mod tests {
                 prompt: "continue".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
                 template_label: "builtin next-task".to_string(),
-                transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다."
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                     .to_string(),
+                handoff_task: None,
             }]
         );
         assert_eq!(
@@ -1033,8 +1042,9 @@ mod tests {
                         prompt: "continue".to_string(),
                         queued_from_turn_id: "turn-1".to_string(),
                         template_label: "builtin next-task".to_string(),
-                        transcript_text: "priority queue의 현재 next task 1개를 이어서 진행합니다."
+                        transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                             .to_string(),
+                        handoff_task: None,
                     },
                 }),
             },
@@ -1166,6 +1176,7 @@ mod tests {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
+            last_planning_task_handoff: None,
             status_text: "thread loaded".to_string(),
         }
     }
