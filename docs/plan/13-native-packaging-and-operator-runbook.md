@@ -146,8 +146,8 @@ The repository can publish native bundles directly to GitHub Release assets from
 Typical release flow:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v<version>
+git push origin v<version>
 ```
 
 After the workflow finishes, download the archives from the GitHub `Releases` page for that tag.

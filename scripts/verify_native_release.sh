@@ -8,11 +8,11 @@ Usage: scripts/verify_native_release.sh [--archive <path>] [--bundle-dir <path>]
 Verify native release checksum artifacts produced by scripts/package_native_release.sh.
 
 Examples:
-  ./scripts/verify_native_release.sh --archive dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-  ./scripts/verify_native_release.sh --bundle-dir dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu
+  ./scripts/verify_native_release.sh --archive dist/native/codex-exec-loop-native-<version>-x86_64-unknown-linux-gnu.tar.gz
+  ./scripts/verify_native_release.sh --bundle-dir dist/native/codex-exec-loop-native-<version>-x86_64-unknown-linux-gnu
   ./scripts/verify_native_release.sh \
-    --archive dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu.tar.gz \
-    --bundle-dir dist/native/codex-exec-loop-native-0.1.0-x86_64-unknown-linux-gnu
+    --archive dist/native/codex-exec-loop-native-<version>-x86_64-unknown-linux-gnu.tar.gz \
+    --bundle-dir dist/native/codex-exec-loop-native-<version>-x86_64-unknown-linux-gnu
 EOF
 }
 
