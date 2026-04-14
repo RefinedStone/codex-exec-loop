@@ -45,17 +45,21 @@ use crate::application::port::outbound::codex_app_server_port::{
 use crate::application::port::outbound::followup_template_port::{
     FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
 };
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
+use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+use crate::application::service::planning_contract::{
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
+};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
-    ConversationStreamEvent,
 };
 use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
@@ -63,9 +67,6 @@ use crate::domain::followup_template::{
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
-};
-use crate::domain::planning::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -1427,8 +1428,7 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
 
-    let bootstrap_artifacts =
-        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2367,8 +2367,7 @@ fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts =
-        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2465,8 +2464,7 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts =
-        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2547,8 +2545,7 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts =
-        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2831,8 +2828,7 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts =
-        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,

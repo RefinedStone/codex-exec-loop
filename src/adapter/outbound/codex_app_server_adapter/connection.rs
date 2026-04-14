@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::domain::conversation::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
 use super::protocol::{
     AccountReadResponse, AppServerNotification, InitializeResponse, ThreadListParams,

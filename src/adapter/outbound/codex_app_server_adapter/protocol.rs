@@ -4,12 +4,13 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::planning_contract::canonical_active_planning_file_path;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
-    ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
-    ConversationToolActivity, ConversationToolActivityKind,
+    ConversationMessageKind, ConversationSnapshot, ConversationToolActivity,
+    ConversationToolActivityKind,
 };
-use crate::domain::planning::canonical_active_planning_file_path;
 use crate::domain::session_summary::SessionSummary;
 
 pub(super) const SHARED_RUNTIME_NOTICE_PREFIX: &str = "shared runtime ";
@@ -830,11 +831,12 @@ mod tests {
         TurnNotificationHandling, TurnStartParams, changed_planning_file_paths,
         handle_turn_notification, partition_runtime_notices,
     };
-    use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationStreamEvent,
-    };
-    use crate::domain::planning::{
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    };
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus,
     };
 
     #[test]

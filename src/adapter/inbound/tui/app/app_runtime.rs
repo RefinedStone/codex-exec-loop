@@ -1,6 +1,7 @@
 use std::sync::mpsc;
 use std::thread;
 
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning::PlanningServices;
@@ -23,7 +24,7 @@ use super::{
     reduce_conversation_runtime, reduce_followup_controls, reduce_followup_overlay_ui,
     reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
-use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+use crate::domain::conversation::ConversationSnapshot;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]

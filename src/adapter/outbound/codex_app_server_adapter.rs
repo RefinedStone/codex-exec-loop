@@ -22,7 +22,8 @@ use crate::adapter::outbound::app_server_planning_worker_adapter::PlanningThread
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
-use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::recent_sessions::RecentSessions;
 
 const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";

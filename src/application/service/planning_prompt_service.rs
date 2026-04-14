@@ -5,10 +5,13 @@ use anyhow::Result;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
+use crate::application::service::planning_contract::{
+    DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+};
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PLAN_OFF_FILE_PATH,
-    PlanningWorkspaceFiles, PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH,
-    QueueIdlePolicy, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueSnapshot,
+    PriorityQueueTask, QueueIdlePolicy,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -675,6 +678,10 @@ mod tests {
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_contract::{
+        DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+        TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    };
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
@@ -708,21 +715,11 @@ mod tests {
             relative_path: &str,
         ) -> Result<Option<String>> {
             let body = match relative_path {
-                crate::domain::planning::DIRECTIONS_FILE_PATH => {
-                    self.load_record.directions_toml.clone()
-                }
-                crate::domain::planning::TASK_LEDGER_FILE_PATH => {
-                    self.load_record.task_ledger_json.clone()
-                }
-                crate::domain::planning::TASK_LEDGER_SCHEMA_FILE_PATH => {
-                    self.load_record.task_ledger_schema_json.clone()
-                }
-                crate::domain::planning::QUEUE_SNAPSHOT_FILE_PATH => {
-                    self.load_record.queue_snapshot_json.clone()
-                }
-                crate::domain::planning::RESULT_OUTPUT_FILE_PATH => {
-                    self.load_record.result_output_markdown.clone()
-                }
+                DIRECTIONS_FILE_PATH => self.load_record.directions_toml.clone(),
+                TASK_LEDGER_FILE_PATH => self.load_record.task_ledger_json.clone(),
+                TASK_LEDGER_SCHEMA_FILE_PATH => self.load_record.task_ledger_schema_json.clone(),
+                QUEUE_SNAPSHOT_FILE_PATH => self.load_record.queue_snapshot_json.clone(),
+                RESULT_OUTPUT_FILE_PATH => self.load_record.result_output_markdown.clone(),
                 _ => None,
             };
             Ok(body)

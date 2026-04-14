@@ -5,47 +5,50 @@ use crate::application::port::outbound::planning_worker_port::{
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
+use super::planning_bootstrap_service::PlanningBootstrapService;
+use super::planning_directions_service::PlanningDirectionsService;
+use super::planning_init_service::PlanningInitService;
+use super::planning_prompt_service::PlanningPromptService;
+use super::planning_proposal_promotion_service::PlanningProposalPromotionService;
+use super::planning_reconciliation_service::PlanningReconciliationService;
+use super::planning_runtime_facade_service::PlanningRuntimeFacadeService;
+use super::planning_runtime_policy_service::PlanningRuntimePolicyService;
+use super::planning_validation_service::PlanningValidationService;
+use super::planning_worker_orchestration_service::PlanningWorkerOrchestrationService;
 use super::priority_queue_service::PriorityQueueService;
 use super::turn_prompt_assembly_service::TurnPromptAssemblyService;
 
 pub use self::PlanningFeature as PlanningServices;
 pub use super::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
-pub use super::planning_bootstrap_service::{PlanningBootstrapMode, PlanningBootstrapService};
+pub use super::planning_bootstrap_service::PlanningBootstrapMode;
 pub use super::planning_directions_service::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
-    DirectionsSupportingFileStatus, PlanningDirectionsService, QueueIdleReviewContext,
+    DirectionsSupportingFileStatus, QueueIdleReviewContext,
 };
 pub use super::planning_init_service::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
-    PlanningDraftSaveResult, PlanningInitService, PlanningInitStageResult,
+    PlanningDraftSaveResult, PlanningInitStageResult,
 };
-pub use super::planning_prompt_service::{
-    PlanningPromptService, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
-};
+pub use super::planning_prompt_service::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 pub use super::planning_proposal_promotion_service::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
-    PlanningProposalPromotionService,
 };
 pub use super::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueSnapshotAction,
-    PlanningReconciliationResult, PlanningReconciliationService, PlanningRepairRequest,
-    PlanningRepairRetryReason,
+    PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
 pub use super::planning_runtime_facade_service::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
-    PlanningRuntimeAutoFollowRequest, PlanningRuntimeFacadeService, PlanningRuntimePreviewRequest,
+    PlanningRuntimeAutoFollowRequest, PlanningRuntimePreviewRequest,
     PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeRenderedPreview,
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     PlanningRuntimeSummaryRequest, PlanningRuntimeSummaryView, PlanningTaskHandoff,
 };
-pub use super::planning_runtime_policy_service::{
-    PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
-};
-pub use super::planning_validation_service::PlanningValidationService;
+pub use super::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 pub use super::planning_worker_orchestration_service::{
     PlanningLedgerRepairRequest, PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
-    PlanningWorkerOrchestrationService, PlanningWorkerRunOutcome,
+    PlanningWorkerRunOutcome,
 };
 
 #[derive(Clone)]
@@ -84,7 +87,7 @@ impl PlanningFeature {
         let runtime_facade = PlanningRuntimeFacadeService::new(
             planning_prompt_service.clone(),
             planning_reconciliation_service.clone(),
-            super::planning_runtime_policy_service::PlanningRuntimePolicyService::new(),
+            PlanningRuntimePolicyService::new(),
             TurnPromptAssemblyService::new(),
         );
         let proposal_promotion = PlanningProposalPromotionService::new(

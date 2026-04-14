@@ -11,6 +11,7 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::{
     FollowupTemplateReloadResult, FollowupTemplateService,
@@ -22,7 +23,7 @@ use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
-    ConversationMessage, ConversationMessageKind, ConversationSnapshot, ConversationStreamEvent,
+    ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
 use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 use crate::domain::session_summary::SessionSummary;

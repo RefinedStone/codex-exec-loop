@@ -8,10 +8,11 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningStagedFileRecord,
     PlanningWorkspacePort,
 };
-use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, PlanningValidationReport, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+use crate::application::service::planning_contract::{
+    DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    TASK_LEDGER_SCHEMA_FILE_PATH,
 };
+use crate::domain::planning::PlanningValidationReport;
 
 use super::planning_bootstrap_service::{PlanningBootstrapMode, PlanningBootstrapService};
 use super::planning_validation_service::PlanningValidationService;
@@ -401,11 +402,11 @@ mod tests {
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_validation_service::PlanningValidationService;
-    use crate::domain::planning::{
+    use crate::application::service::planning_contract::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
         RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
+    use crate::application::service::planning_validation_service::PlanningValidationService;
 
     #[derive(Default)]
     struct FakePlanningWorkspacePort {

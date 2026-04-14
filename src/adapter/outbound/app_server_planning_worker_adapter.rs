@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
-use crate::domain::conversation::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
 pub(crate) trait PlanningThreadLauncher: Send + Sync {
     fn run_hidden_planning_thread(
@@ -97,7 +97,7 @@ mod tests {
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
     };
-    use crate::domain::conversation::ConversationStreamEvent;
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct HiddenPlanningThreadCall {

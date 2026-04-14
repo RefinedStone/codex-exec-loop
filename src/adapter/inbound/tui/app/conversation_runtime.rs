@@ -1,5 +1,7 @@
 use super::conversation_model::{AutoFollowupSkipReason, PlanningRepairState};
 use super::*;
+use crate::adapter::inbound::tui::conversation_text::approval_review_manual_client_action_notice;
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 #[derive(Debug, Clone)]
@@ -177,7 +179,7 @@ pub(super) fn reduce_conversation_runtime(
                 state.buffer_tool_message(activity.text);
             }
             ConversationStreamEvent::ApprovalReviewUpdated { review } => {
-                if let Some(notice) = review.manual_client_action_notice() {
+                if let Some(notice) = approval_review_manual_client_action_notice(&review) {
                     state.extend_runtime_notices([notice]);
                 }
                 state.update_approval_review(review);
@@ -244,8 +246,12 @@ pub(super) fn reduce_conversation_runtime(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
+    use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
     use crate::application::service::planning::PlanningRepairRequest;
     use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::application::service::planning_contract::{
+        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
@@ -332,7 +338,10 @@ mod tests {
         );
         assert_eq!(reduced.state.input_buffer, "continue from the last result");
         assert!(reduced.state.messages[0].debug_detail.is_none());
-        assert_eq!(reduced.state.messages[0].label(), "Auto Follow-up");
+        assert_eq!(
+            conversation_message_label(&reduced.state.messages[0]),
+            "Auto Follow-up"
+        );
     }
 
     #[test]
@@ -753,8 +762,8 @@ mod tests {
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
                 changed_planning_file_paths: vec![
-                    crate::domain::planning::DIRECTIONS_FILE_PATH.to_string(),
-                    crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
+                    DIRECTIONS_FILE_PATH.to_string(),
+                    TASK_LEDGER_FILE_PATH.to_string(),
                 ],
             }),
         );
@@ -765,8 +774,8 @@ mod tests {
                 workspace_directory: "/tmp/workspace".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
                 changed_planning_file_paths: vec![
-                    crate::domain::planning::DIRECTIONS_FILE_PATH.to_string(),
-                    crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
+                    DIRECTIONS_FILE_PATH.to_string(),
+                    TASK_LEDGER_FILE_PATH.to_string(),
                 ],
             }]
         );
@@ -776,8 +785,8 @@ mod tests {
                 .turn_activity
                 .last_completed_changed_planning_file_paths(),
             [
-                crate::domain::planning::DIRECTIONS_FILE_PATH.to_string(),
-                crate::domain::planning::TASK_LEDGER_FILE_PATH.to_string(),
+                DIRECTIONS_FILE_PATH.to_string(),
+                TASK_LEDGER_FILE_PATH.to_string(),
             ]
         );
     }

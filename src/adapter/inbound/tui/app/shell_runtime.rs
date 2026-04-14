@@ -254,13 +254,14 @@ mod tests {
         FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
     };
     use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::followup_template_service::FollowupTemplateService;
     use crate::application::service::github_review_poller_service::GithubReviewPollerService;
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+    use crate::domain::conversation::ConversationSnapshot;
     use crate::domain::github_review::{
         GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
     };

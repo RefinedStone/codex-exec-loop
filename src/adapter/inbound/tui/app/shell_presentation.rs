@@ -7,6 +7,9 @@ use super::planning::{
     build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
 };
 use super::*;
+use crate::adapter::inbound::tui::conversation_text::{
+    conversation_message_kind_label, conversation_message_label,
+};
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
@@ -1544,7 +1547,7 @@ fn planning_init_option_line(
 
 fn current_live_agent_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
     let message = conversation.live_agent_message.as_ref()?;
-    let label = message.kind.label(message.phase.as_deref());
+    let label = conversation_message_kind_label(message.kind, message.phase.as_deref());
     let content_lines = message.text.split('\n').collect::<Vec<_>>();
     let start_index = content_lines
         .len()
@@ -1637,7 +1640,7 @@ pub(super) fn format_conversation_lines_with_debug(
     let mut lines = Vec::new();
 
     for message in messages {
-        let label = message.label();
+        let label = conversation_message_label(message);
         lines.push(Line::from(Span::styled(
             format!("{label}:"),
             label_style(message.kind),

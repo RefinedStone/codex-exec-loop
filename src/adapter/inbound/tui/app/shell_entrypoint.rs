@@ -79,7 +79,8 @@ mod tests {
     use crate::application::port::outbound::followup_template_port::{
         FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
     };
-    use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::domain::conversation::ConversationSnapshot;
     use crate::domain::recent_sessions::RecentSessions;
 
     #[derive(Default)]

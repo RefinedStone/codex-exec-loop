@@ -1,3 +1,3 @@
 pub mod app;
-pub mod event_driven_poc;
+pub(crate) mod conversation_text;
 pub mod shell_chrome;

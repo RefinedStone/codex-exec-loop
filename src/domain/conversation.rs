@@ -44,12 +44,6 @@ impl ConversationMessage {
         self.debug_detail = Some(detail.into());
         self
     }
-
-    pub fn label(&self) -> &str {
-        self.display_label
-            .as_deref()
-            .unwrap_or_else(|| self.kind.label(self.phase.as_deref()))
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,20 +52,6 @@ pub enum ConversationMessageKind {
     Agent,
     Tool,
     Status,
-}
-
-impl ConversationMessageKind {
-    pub fn label(&self, phase: Option<&str>) -> &'static str {
-        match self {
-            ConversationMessageKind::User => "You",
-            ConversationMessageKind::Agent => match phase {
-                Some("commentary") => "Codex Commentary",
-                _ => "Codex",
-            },
-            ConversationMessageKind::Tool => "Tool",
-            ConversationMessageKind::Status => "Status",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,172 +76,10 @@ pub enum ConversationApprovalReviewStatus {
     Unknown(String),
 }
 
-impl ConversationApprovalReviewStatus {
-    fn summary_label(&self) -> String {
-        match self {
-            Self::InProgress => "reviewing".to_string(),
-            Self::Approved => "approved".to_string(),
-            Self::Denied => "denied".to_string(),
-            Self::Aborted => "aborted".to_string(),
-            Self::Unknown(value) => humanize_protocol_status(value),
-        }
-    }
-
-    fn status_prefix(&self) -> String {
-        match self {
-            Self::InProgress => "approval review in progress".to_string(),
-            Self::Approved => "approval review approved".to_string(),
-            Self::Denied => "approval review denied".to_string(),
-            Self::Aborted => "approval review aborted".to_string(),
-            Self::Unknown(value) => format!("approval review {}", humanize_protocol_status(value)),
-        }
-    }
-
-    fn requires_manual_client_action(&self) -> bool {
-        matches!(
-            self,
-            Self::Unknown(value) if humanize_protocol_status(value).contains("human review")
-        )
-    }
-}
-
-fn humanize_protocol_status(value: &str) -> String {
-    let mut normalized = String::new();
-    let mut previous_was_separator = false;
-    let mut previous_was_lower_or_digit = false;
-
-    for ch in value.chars() {
-        if ch == '-' || ch == '_' || ch.is_whitespace() {
-            if !normalized.is_empty() && !previous_was_separator {
-                normalized.push(' ');
-            }
-            previous_was_separator = true;
-            previous_was_lower_or_digit = false;
-            continue;
-        }
-
-        if ch.is_uppercase() && previous_was_lower_or_digit && !normalized.ends_with(' ') {
-            normalized.push(' ');
-        }
-
-        normalized.extend(ch.to_lowercase());
-        previous_was_separator = false;
-        previous_was_lower_or_digit = ch.is_lowercase() || ch.is_ascii_digit();
-    }
-
-    normalized.trim().to_string()
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationApprovalReview {
     pub target_item_id: String,
     pub status: ConversationApprovalReviewStatus,
     pub risk_level: Option<String>,
     pub rationale: Option<String>,
-}
-
-impl ConversationApprovalReview {
-    pub fn summary_text(&self) -> String {
-        match self
-            .risk_level
-            .as_deref()
-            .filter(|risk| !risk.trim().is_empty())
-        {
-            Some(risk_level) => format!("{} {risk_level}", self.status.summary_label()),
-            None => self.status.summary_label(),
-        }
-    }
-
-    pub fn status_text(&self) -> String {
-        let mut segments = vec![self.status.status_prefix()];
-
-        if !self.target_item_id.trim().is_empty() {
-            segments.push(format!("target: {}", self.target_item_id));
-        }
-        if let Some(risk_level) = self
-            .risk_level
-            .as_deref()
-            .filter(|risk| !risk.trim().is_empty())
-        {
-            segments.push(format!("risk: {risk_level}"));
-        }
-
-        segments.join(" / ")
-    }
-
-    pub fn manual_client_action_notice(&self) -> Option<String> {
-        if !self.status.requires_manual_client_action() {
-            return None;
-        }
-
-        Some(
-            "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action"
-                .to_string(),
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ConversationApprovalReview, ConversationApprovalReviewStatus};
-
-    #[test]
-    fn unknown_approval_statuses_are_preserved_as_readable_text() {
-        let review = ConversationApprovalReview {
-            target_item_id: "command-1".to_string(),
-            status: ConversationApprovalReviewStatus::Unknown("needsHumanReview".to_string()),
-            risk_level: Some("high".to_string()),
-            rationale: None,
-        };
-
-        assert_eq!(review.summary_text(), "needs human review high");
-        assert_eq!(
-            review.status_text(),
-            "approval review needs human review / target: command-1 / risk: high"
-        );
-        assert_eq!(
-            review.manual_client_action_notice().as_deref(),
-            Some(
-                "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action"
-            )
-        );
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConversationStreamEvent {
-    ThreadPrepared {
-        thread_id: String,
-        title: String,
-        cwd: String,
-    },
-    TurnStarted {
-        turn_id: String,
-    },
-    StatusUpdated {
-        text: String,
-    },
-    AgentMessageDelta {
-        item_id: String,
-        phase: Option<String>,
-        delta: String,
-    },
-    AgentMessageCompleted {
-        item_id: String,
-        phase: Option<String>,
-        text: String,
-    },
-    ToolActivity {
-        activity: ConversationToolActivity,
-    },
-    ApprovalReviewUpdated {
-        review: ConversationApprovalReview,
-    },
-    TurnCompleted {
-        turn_id: String,
-        changed_planning_file_paths: Vec<String>,
-    },
-    Failed {
-        message: String,
-    },
 }

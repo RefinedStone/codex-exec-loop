@@ -5,11 +5,11 @@ use anyhow::{Context, Result, anyhow};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PlanningWorkspaceFiles, QUEUE_SNAPSHOT_FILE_PATH,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    canonical_active_planning_file_path,
+use crate::application::service::planning_contract::{
+    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
 };
+use crate::domain::planning::PlanningWorkspaceFiles;
 
 use super::planning_validation_service::PlanningValidationService;
 use super::priority_queue_service::PriorityQueueService;
@@ -592,12 +592,12 @@ mod tests {
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
-    use crate::application::service::planning_validation_service::PlanningValidationService;
-    use crate::application::service::priority_queue_service::PriorityQueueService;
-    use crate::domain::planning::{
+    use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
+    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()

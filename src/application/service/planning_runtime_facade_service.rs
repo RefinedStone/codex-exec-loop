@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 use crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::planning_prompt_service::{
     PlanningPromptService, PlanningRuntimeSnapshot,
@@ -18,6 +16,7 @@ use crate::application::service::turn_prompt_assembly_service::{
 };
 use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::PriorityQueueTask;
+use anyhow::Result;
 
 pub use crate::application::service::planning_runtime_policy_service::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
@@ -395,6 +394,10 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
+    use crate::application::service::planning_contract::{
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
+        RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    };
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
     use crate::application::service::planning_runtime_policy_service::{
@@ -466,17 +469,11 @@ mod tests {
                 return Ok(None);
             };
             let body = match relative_path {
-                crate::domain::planning::DIRECTIONS_FILE_PATH => record.directions_toml.clone(),
-                crate::domain::planning::TASK_LEDGER_FILE_PATH => record.task_ledger_json.clone(),
-                crate::domain::planning::TASK_LEDGER_SCHEMA_FILE_PATH => {
-                    record.task_ledger_schema_json.clone()
-                }
-                crate::domain::planning::QUEUE_SNAPSHOT_FILE_PATH => {
-                    record.queue_snapshot_json.clone()
-                }
-                crate::domain::planning::RESULT_OUTPUT_FILE_PATH => {
-                    record.result_output_markdown.clone()
-                }
+                DIRECTIONS_FILE_PATH => record.directions_toml.clone(),
+                TASK_LEDGER_FILE_PATH => record.task_ledger_json.clone(),
+                TASK_LEDGER_SCHEMA_FILE_PATH => record.task_ledger_schema_json.clone(),
+                QUEUE_SNAPSHOT_FILE_PATH => record.queue_snapshot_json.clone(),
+                RESULT_OUTPUT_FILE_PATH => record.result_output_markdown.clone(),
                 _ => None,
             };
             Ok(body)
@@ -709,7 +706,7 @@ mod tests {
             )
             .with_queue_idle_policy(
                 crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue,
-                Some(crate::domain::planning::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()),
+                Some(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()),
             );
 
         let preview = service.build_auto_follow_preview(PlanningRuntimePreviewRequest {

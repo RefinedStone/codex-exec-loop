@@ -1,9 +1,11 @@
+pub mod conversation_runtime_event;
 pub mod conversation_service;
 pub mod followup_template_service;
 pub mod github_review_poller_service;
 pub mod planning;
 pub mod planning_auto_follow_copy;
 pub(crate) mod planning_bootstrap_service;
+pub mod planning_contract;
 pub(crate) mod planning_directions_service;
 pub(crate) mod planning_init_service;
 pub(crate) mod planning_prompt_service;
