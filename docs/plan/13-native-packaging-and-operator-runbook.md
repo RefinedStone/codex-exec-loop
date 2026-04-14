@@ -36,6 +36,7 @@ dist/native/
 Bundle contents:
 
 - native binary
+- `akra` launcher on macOS/Linux or `akra.cmd` on Windows
 - `README.md`
 - `OPERATOR.md`
 - `VERSION.txt`
@@ -69,6 +70,24 @@ The packaging flow emits:
 Rust is not required on the operator machine after the bundle is built.
 
 ## Launch
+
+If the unpacked bundle directory is on `PATH`, launch from any workspace with:
+
+macOS or Linux:
+
+```bash
+cd /path/to/workspace
+akra
+```
+
+Windows PowerShell:
+
+```powershell
+Set-Location C:\path\to\workspace
+akra
+```
+
+You can still run the native binary directly if you prefer:
 
 macOS or Linux:
 

@@ -138,12 +138,34 @@ cp "${binary_path}" "${bundle_dir}/${binary_file_name}"
 cp "${repo_root}/README.md" "${bundle_dir}/README.md"
 cp "${runbook_path}" "${bundle_dir}/OPERATOR.md"
 
+write_bundle_launcher() {
+  if [[ "${artifact_target}" == *windows* ]]; then
+    cat > "${bundle_dir}/akra.cmd" <<EOF
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+"%SCRIPT_DIR%${binary_file_name}" %*
+EOF
+    return 0
+  fi
+
+  cat > "${bundle_dir}/akra" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+exec "\${script_dir}/${binary_file_name}" "\$@"
+EOF
+  chmod +x "${bundle_dir}/akra"
+}
+
 cat > "${bundle_dir}/VERSION.txt" <<EOF
 name=${binary_name}
 version=${version}
 target=${artifact_target}
 profile=${profile}
 binary=${binary_file_name}
+launcher=akra
 EOF
 
 copy_tracked_bundle_samples() {
@@ -190,6 +212,7 @@ write_bundle_checksums() {
   done < <(find "${bundle_dir}" -type f ! -name 'SHA256SUMS.txt' | sort)
 }
 
+write_bundle_launcher
 copy_tracked_bundle_samples
 write_bundle_checksums > "${bundle_checksum_path}"
 
