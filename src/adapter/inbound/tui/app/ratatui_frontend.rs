@@ -296,7 +296,7 @@ mod tests {
     };
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::followup_template_service::FollowupTemplateService;
-    use crate::application::service::planning_services::PlanningServices;
+    use crate::application::service::planning::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};

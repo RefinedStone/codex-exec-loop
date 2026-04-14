@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
-pub(super) use super::planning_presentation::{
+pub(super) use super::planning::{
     build_followup_template_preview_lines, build_followup_template_status_lines,
 };
-use super::planning_presentation::{
+use super::planning::{
     build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
 };
 use super::*;
-use crate::application::service::planning_prompt_service::{
+use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::application::service::session_service::{

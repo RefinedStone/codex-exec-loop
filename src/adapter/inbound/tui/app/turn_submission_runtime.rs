@@ -3,7 +3,7 @@ mod post_turn_execution;
 #[path = "turn_submission_runtime/stream_execution.rs"]
 mod stream_execution;
 
-use crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+use crate::application::service::planning::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
 
@@ -145,7 +145,7 @@ impl NativeTuiApp {
     }
 
     fn assemble_manual_prompt(&self, conversation: &ConversationViewModel) -> Option<String> {
-        self.planning_services.runtime_facade.build_manual_prompt(
+        self.planning.runtime.build_manual_prompt(
             &conversation.input_buffer,
             &conversation.planning_runtime_snapshot,
         )

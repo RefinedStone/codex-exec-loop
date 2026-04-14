@@ -1,4 +1,4 @@
-use crate::application::service::planning_init_service::PlanningInitStageResult;
+use crate::application::service::planning::PlanningInitStageResult;
 use crate::domain::planning::PlanningValidationReport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,8 +171,8 @@ mod tests {
         PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
         PlanningInitOverlayUiState,
     };
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapMode;
-    use crate::application::service::planning_init_service::PlanningInitStageResult;
+    use crate::application::service::planning::PlanningBootstrapMode;
+    use crate::application::service::planning::PlanningInitStageResult;
     use crate::domain::planning::PlanningValidationReport;
 
     #[test]

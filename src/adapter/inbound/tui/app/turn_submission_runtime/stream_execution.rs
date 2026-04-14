@@ -40,8 +40,8 @@ impl NativeTuiApp {
 
     fn capture_active_turn_planning(&self, workspace_directory: &str) -> ActiveTurnPlanningCapture {
         match self
-            .planning_services
-            .runtime_facade
+            .planning
+            .runtime
             .load_execution_snapshot(workspace_directory)
         {
             Ok(snapshot) => ActiveTurnPlanningCapture::ready(workspace_directory, snapshot),

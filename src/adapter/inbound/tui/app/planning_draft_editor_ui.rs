@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use crate::application::service::planning_init_service::{
-    PlanningDraftEditorFile, PlanningDraftEditorSession,
-};
+use crate::application::service::planning::{PlanningDraftEditorFile, PlanningDraftEditorSession};
 use crate::domain::planning::PlanningValidationReport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -509,7 +507,7 @@ fn char_to_byte_index(line: &str, column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{PlanningDraftEditorCloseRequest, PlanningDraftEditorUiState};
-    use crate::application::service::planning_init_service::{
+    use crate::application::service::planning::{
         PlanningDraftEditorFile, PlanningDraftEditorSession,
     };
     use crate::domain::planning::{

@@ -1,26 +1,24 @@
 # Current Product State
 
-`prerelease` currently ships a shell-first native client built on `codex app-server`.
+`prerelease` ships a shell-first Rust client on `codex app-server`.
 
-## Baseline
+## Shipped Surface
 
-- inline main-buffer mode is the only frontend
-- startup diagnostics begin immediately and the shell becomes visible before all checks finish
-- manual input can buffer while startup is still pending, then auto-submit once the shell reaches a sendable state
-- the client can start a new draft, resume an existing thread, load snapshots, and stream new turns through the shared app-server boundary
-- inline inspection surfaces cover diagnostics, recent sessions, follow-up templates, queue inspection, and planning
-- recent-session browsing supports search, paging, and current-workspace filtering
-- auto follow-up ships with builtin templates plus workspace templates from `.codex-exec-loop/followups/`
-- the planning feature already exists: `:planning` can stage simple or detail/manual drafts, open the embedded draft editor, promote staged files, and surface queue/proposal status in the shell
-- invalid planning task-ledger writes are rolled back and can trigger a bounded repair retry
-- approval state, tool activity, runtime warnings, and optional GitHub review polling are visible in routine shell flow
-- thread and turn startup now default to a permissive app-server execution policy so approval prompts do not stall builtin automation paths
+- Inline shell is the only frontend.
+- Startup diagnostics begin immediately and the shell renders before all checks finish.
+- Manual submit can queue while startup is pending, then auto-submit once the shell is ready.
+- The client can open a new draft, resume a thread, load snapshots, and stream turns through the shared app-server boundary.
+- Shell overlays cover diagnostics, recent sessions, follow-up templates, queue state, and planning.
+- Recent sessions support search, paging, and current-workspace filtering.
+- Auto follow-up uses builtin templates plus workspace templates from `.codex-exec-loop/followups/`.
+- Planning is already live: `:planning` stages drafts, opens the embedded editor, promotes accepted files, and exposes queue/proposal state.
+- Invalid planning writes are rolled back and can trigger a bounded repair flow.
+- Runtime warnings, approval state, tool activity, and optional GitHub review polling are visible in normal shell flow.
 
-## Current Constraints
+## Active Constraints
 
-- shell rendering still needs real-terminal validation when prompt, streaming, overlay, or restore behavior changes
-- recent-session loading and some shell actions remain gated by startup diagnostics
-- some non-stream requests still fall back to isolated runtime access while a turn stream is active
-- long-session editing and navigation are intentionally lighter than a mature standalone CLI
-- planning detail mode only supports manual draft authoring today; the `llm-assisted` branch is visible but disabled
-- `2026-04-13` upstream verification shows newer `codex app-server` approval request-response methods exist, but this repo still ships against an older checked-in schema snapshot and does not yet expose client approve/deny actions in the TUI
+- Real-terminal validation is still required after prompt, streaming, overlay, or restore changes.
+- Some shell actions remain gated by startup diagnostics.
+- Non-stream requests can still fall back to isolated runtime access while a main stream is active.
+- Planning detail mode supports manual authoring only; the `llm-assisted` branch remains disabled.
+- The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.

@@ -354,6 +354,6 @@ manual editor 화면:
 
 - [docs/design/01-current-product-state.md](./docs/design/01-current-product-state.md)
 - [docs/design/02-tui-shell-flow.md](./docs/design/02-tui-shell-flow.md)
-- [docs/design/03-auto-followup-and-templates.md](./docs/design/03-auto-followup-and-templates.md)
 - [docs/design/06-planning-runtime-and-draft-editor.md](./docs/design/06-planning-runtime-and-draft-editor.md)
+- [docs/design/04-hexagonal-runtime-architecture.md](./docs/design/04-hexagonal-runtime-architecture.md)
 - [docs/plan/13-native-packaging-and-operator-runbook.md](./docs/plan/13-native-packaging-and-operator-runbook.md)

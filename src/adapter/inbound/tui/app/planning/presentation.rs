@@ -1,6 +1,6 @@
-use super::planner_debug_preview::build_debug_preview_lines;
-use super::*;
-use crate::application::service::planning_runtime_facade_service::{
+use super::super::planner_debug_preview::build_debug_preview_lines;
+use super::super::*;
+use crate::application::service::planning::{
     PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
 };
@@ -14,14 +14,14 @@ const FOLLOWUP_PLANNING_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
 const FOLLOWUP_PLANNER_DEBUG_MAX_LINES: usize = 256;
 
-pub(super) fn build_planning_summary_line(
+pub(crate) fn build_planning_summary_line(
     app: &NativeTuiApp,
     conversation: &ConversationViewModel,
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<String> {
-    app.planning_services
-        .runtime_facade
+    app.planning
+        .runtime
         .build_summary_line(PlanningRuntimeSummaryLineRequest {
             snapshot: &conversation.planning_runtime_snapshot,
             has_running_turn: conversation.has_running_turn(),
@@ -44,7 +44,7 @@ pub(super) fn build_planning_summary_line(
         })
 }
 
-pub(super) fn build_planning_notice_line(
+pub(crate) fn build_planning_notice_line(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
 ) -> Option<String> {
@@ -53,7 +53,7 @@ pub(super) fn build_planning_notice_line(
         .map(|summary| format!("planning notice: {summary}"))
 }
 
-pub(super) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
+pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
     if !app.planner_shows_debug_details() {
         return Vec::new();
     }
@@ -99,24 +99,24 @@ pub(super) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
     lines
 }
 
-pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(crate) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("conversation is still loading")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => {
             let template = conversation.auto_follow_state.selected_template();
-            let preview = app
-                .planning_services
-                .runtime_facade
-                .build_auto_follow_preview(PlanningRuntimePreviewRequest {
-                    template,
-                    auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
-                    max_auto_turns: conversation.auto_follow_state.max_auto_turns_value(),
-                    session_id: &conversation.thread_id,
-                    stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
-                    last_message: conversation.latest_agent_message_text(),
-                    snapshot: &conversation.planning_runtime_snapshot,
-                });
+            let preview =
+                app.planning
+                    .runtime
+                    .build_auto_follow_preview(PlanningRuntimePreviewRequest {
+                        template,
+                        auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
+                        max_auto_turns: conversation.auto_follow_state.max_auto_turns_value(),
+                        session_id: &conversation.thread_id,
+                        stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
+                        last_message: conversation.latest_agent_message_text(),
+                        snapshot: &conversation.planning_runtime_snapshot,
+                    });
             let preview_thread_id = if conversation.thread_id.trim().is_empty() {
                 PREVIEW_THREAD_ID_PLACEHOLDER
             } else {
@@ -140,7 +140,7 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             }
             lines.push(Line::from(preview.planning_status_line));
             if let Some(detail_line) = preview.planning_detail_line.as_deref() {
-                lines.push(Line::from(detail_line.to_string()));
+                lines.push(Line::raw(detail_line.to_string()));
             }
 
             lines.push(Line::from(""));
@@ -152,7 +152,7 @@ pub(super) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             lines.push(Line::from(""));
             lines.push(Line::from("Rendered Preview"));
             for preview_line in preview.rendered_prompt.lines() {
-                lines.push(Line::from(preview_line.to_string()));
+                lines.push(Line::raw(preview_line.to_string()));
             }
 
             append_planner_debug_preview_lines(&mut lines, app);
@@ -225,7 +225,7 @@ fn planner_debug_section_header_line(label: &str) -> Line<'static> {
     ))
 }
 
-pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("conversation is still loading")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
@@ -237,10 +237,8 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
                 app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
-            let planning_projection = app
-                .planning_services
-                .runtime_facade
-                .build_followup_status_projection(PlanningRuntimeStatusProjectionRequest {
+            let planning_projection = app.planning.runtime.build_followup_status_projection(
+                PlanningRuntimeStatusProjectionRequest {
                     snapshot: &conversation.planning_runtime_snapshot,
                     has_running_turn: turn_running,
                     is_repairing: conversation.planning_repair_state.is_some(),
@@ -255,7 +253,8 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                         }
                     }),
                     max_detail_len: FOLLOWUP_PLANNING_DETAIL_LIMIT,
-                });
+                },
+            );
             let planning_status_line = planning_projection.planning_status_line;
             let repair_attempt_line = planning_projection.repair_attempt_line;
             let queue_head_line = planning_projection.queue_head_line;
@@ -313,7 +312,7 @@ pub(super) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             ];
             if let Some(started_at) = conversation.auto_follow_state.active_started_at() {
                 let elapsed = std::time::Instant::now().saturating_duration_since(started_at);
-                let elapsed_label = super::shell_presentation::format_elapsed(elapsed);
+                let elapsed_label = super::super::shell_presentation::format_elapsed(elapsed);
                 lines.push(Line::from(format!(
                     "working: {}  |  elapsed: {elapsed_label}",
                     conversation.auto_follow_state.activity_label()

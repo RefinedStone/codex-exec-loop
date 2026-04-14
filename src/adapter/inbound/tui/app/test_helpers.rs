@@ -1,4 +1,4 @@
-use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::planning::{
     PriorityQueueSkippedTask, PriorityQueueSnapshot, PriorityQueueTask, TaskStatus,
 };

@@ -47,12 +47,10 @@ use crate::application::port::outbound::followup_template_port::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
-use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-use crate::application::service::planning_reconciliation_service::{
-    PlanningExecutionSnapshot, PlanningRepairRequest,
-};
-use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
-use crate::application::service::planning_services::PlanningServices;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::PlanningTaskHandoff;
+use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -326,14 +324,14 @@ fn create_temp_workspace(prefix: &str) -> String {
 }
 
 fn bootstrap_active_planning_workspace(workspace_dir: &str) {
-    let planning_services =
+    let planning =
         PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
-    let stage_result = planning_services
-        .init_service
+    let stage_result = planning
+        .workspace
         .stage_simple_mode_draft(workspace_dir)
         .expect("planning workspace should stage");
-    let promote_result = planning_services
-        .init_service
+    let promote_result = planning
+        .workspace
         .promote_staged_draft(workspace_dir, &stage_result.draft_name)
         .expect("planning workspace should promote");
     assert!(
@@ -1430,8 +1428,7 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
 
     let bootstrap_artifacts =
-        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
-            .build_artifacts();
+        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -1645,8 +1642,8 @@ fn queue_idle_active_derivation_creates_next_task_and_submits_auto_followup() {
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -1804,8 +1801,8 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -1948,8 +1945,8 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -2118,8 +2115,8 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -2248,8 +2245,8 @@ fn builtin_next_task_refresh_passes_full_latest_agent_reply_to_hidden_planner_pr
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -2371,8 +2368,7 @@ fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
     let bootstrap_artifacts =
-        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
-            .build_artifacts();
+        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2470,8 +2466,7 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
     let bootstrap_artifacts =
-        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
-            .build_artifacts();
+        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2553,8 +2548,7 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
     let bootstrap_artifacts =
-        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
-            .build_artifacts();
+        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2679,8 +2673,8 @@ fn buffered_queue_command_stays_available_while_auto_followup_submits() {
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -2786,8 +2780,8 @@ fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
         Some("agent-1".to_string()),
     ));
     conversation.replace_planning_runtime_snapshot(
-        app.planning_services
-            .runtime_facade
+        app.planning
+            .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
     app.conversation_state = ConversationState::Ready(conversation);
@@ -2838,8 +2832,7 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
     let bootstrap_artifacts =
-        crate::application::service::planning_bootstrap_service::PlanningBootstrapService::new()
-            .build_artifacts();
+        crate::application::service::planning::PlanningBootstrapService::new().build_artifacts();
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
