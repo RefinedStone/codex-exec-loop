@@ -4,12 +4,14 @@
 
 All GitHub writes for this repo must authenticate as `RefinedStone`.
 
+- Set repo-local commit identity before the first commit in a worktree: `git config user.name RefinedStone` and `git config user.email chem.en.9273@gmail.com`.
 - Keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`.
 - Prefer the repo-local `.git/refinedstone-credentials`.
 - If another `credential.helper` is inherited, override it in this repo's local `.git/config` only.
 - Before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`.
 - Use `bash scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies.
 - Do not use GitHub MCP tools for PR or review-thread writes in this repo because they authenticate as `seungjoo-1ee`.
+- If a commit is created under another author or committer identity, rewrite the branch history to `RefinedStone <chem.en.9273@gmail.com>` before any push or further review activity.
 - If the RefinedStone identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment.
 
 ## Delivery Default

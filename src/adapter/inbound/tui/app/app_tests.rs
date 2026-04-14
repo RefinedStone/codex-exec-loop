@@ -66,7 +66,9 @@ use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
 };
-use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, TASK_LEDGER_FILE_PATH};
+use crate::domain::planning::{
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
+};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -596,6 +598,71 @@ fn planning_init_command_opens_selector_overlay() {
             .status_text
             .contains("opened planning initialization selector")
     );
+}
+
+#[test]
+fn planning_command_opens_existing_workspace_controls_when_workspace_is_present() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-existing-controls");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ExistingWorkspace
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("opened planning workspace controls")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_off_command_turns_plan_off_and_blocks_directions() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-off-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning off").expect("command should parse"),
+    );
+
+    let plan_off_path = Path::new(&workspace_dir).join(PLAN_OFF_FILE_PATH);
+    assert!(plan_off_path.exists(), "Plan off marker should be written");
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(!conversation.planning_runtime_snapshot.plan_enabled());
+    assert!(conversation.status_text.contains("Plan off"));
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":directions").expect("command should parse"),
+    );
+    assert_ne!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(
+        conversation.status_text,
+        "Plan off - initialize with :planning first"
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
@@ -3123,6 +3190,48 @@ fn status_footer_height_expands_for_ready_shell_summary() {
     let rendered = build_shell_footer_lines(&app);
 
     assert_eq!(shell_layout::build_shell_footer_height(&rendered), 5);
+}
+
+#[test]
+fn shell_footer_shows_plan_on_indicator() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "planning context",
+        "next task: rank 1 / task-1 / Implement shell planning status",
+    ));
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_shell_footer_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Plan on / ready"));
+}
+
+#[test]
+fn shell_footer_shows_plan_off_indicator() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.replace_planning_runtime_snapshot(
+        sample_planning_runtime_snapshot(
+            "planning context",
+            "next task: rank 1 / task-1 / Implement shell planning status",
+        )
+        .with_plan_enabled(false),
+    );
+    app.conversation_state = ConversationState::Ready(conversation);
+
+    let rendered = build_shell_footer_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Plan off"));
+    assert!(!rendered.contains("Plan on"));
 }
 
 #[test]

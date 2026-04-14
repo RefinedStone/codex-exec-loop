@@ -271,6 +271,12 @@ impl PlanningRuntimeFacadeService {
         &self,
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningRuntimeAutoFollowDecision {
+        if snapshot.workspace_present() && !snapshot.plan_enabled() {
+            return PlanningRuntimeAutoFollowDecision::Blocked(
+                PlanningAutoFollowBlockReason::PlanningDisabled,
+            );
+        }
+
         if snapshot.blocks_auto_followup() {
             return PlanningRuntimeAutoFollowDecision::Blocked(
                 snapshot

@@ -9,8 +9,8 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspacePort,
 };
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, PlanningValidationReport, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, PlanningValidationReport, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 use super::planning_bootstrap_service::{PlanningBootstrapMode, PlanningBootstrapService};
@@ -146,6 +146,28 @@ impl PlanningInitService {
         })
     }
 
+    pub fn has_planning_workspace(&self, workspace_dir: &str) -> Result<bool> {
+        Ok(self
+            .planning_workspace_port
+            .load_planning_workspace_files(workspace_dir)?
+            .has_any_files())
+    }
+
+    pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> Result<()> {
+        if enabled {
+            return self
+                .planning_workspace_port
+                .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None);
+        }
+
+        if !self.has_planning_workspace(workspace_dir)? {
+            anyhow::bail!("planning workspace is unavailable; initialize planning first");
+        }
+
+        self.planning_workspace_port
+            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, Some("plan off\n"))
+    }
+
     pub fn save_draft_editor_files(
         &self,
         workspace_dir: &str,
@@ -221,6 +243,7 @@ impl PlanningInitService {
                     Some(file.body.as_str()),
                 )?;
         }
+        self.set_plan_enabled(workspace_dir, true)?;
 
         Ok(PlanningDraftPromoteResult {
             draft_name: draft_name.to_string(),

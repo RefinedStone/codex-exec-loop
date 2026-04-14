@@ -119,6 +119,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn show_directions_maintenance_overlay(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+        if !snapshot.plan_enabled() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "Plan off - initialize with :planning first".to_string(),
+            });
+            return;
+        }
         self.present_directions_maintenance_overview(
             "opened directions maintenance".to_string(),
             true,
@@ -164,9 +172,30 @@ impl NativeTuiApp {
     }
 
     pub(super) fn show_planning_init_overlay(&mut self) {
-        self.planning_init_overlay_ui_state.reset();
+        let workspace_directory = self.planning_workspace_directory();
+        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        if snapshot.workspace_present() {
+            self.planning_init_overlay_ui_state
+                .open_existing_workspace();
+        } else {
+            self.planning_init_overlay_ui_state.reset();
+        }
         self.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: if snapshot.workspace_present() {
+                if snapshot.plan_enabled() {
+                    "opened planning workspace controls".to_string()
+                } else {
+                    "opened planning workspace controls / Plan off".to_string()
+                }
+            } else {
+                "opened planning initialization selector".to_string()
+            },
+        });
     }
 
     pub(super) fn toggle_startup_overlay(&mut self) {
@@ -217,7 +246,9 @@ impl NativeTuiApp {
             InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Templates => self.show_followup_template_overlay(),
-            InlineShellCommand::PlanningInit => self.show_planning_init_overlay(),
+            InlineShellCommand::PlanningInit => {
+                self.handle_planning_shell_command(command_input.argument())
+            }
             InlineShellCommand::MaxAutoTurns => {
                 let Some(value) = command_input.argument().map(str::to_string) else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -241,6 +272,86 @@ impl NativeTuiApp {
             });
         }
         self.clear_input_buffer();
+    }
+
+    fn handle_planning_shell_command(&mut self, argument: Option<&str>) {
+        match argument.map(str::trim).filter(|value| !value.is_empty()) {
+            None => self.show_planning_init_overlay(),
+            Some(value) if value.eq_ignore_ascii_case("off") => self.turn_plan_off(),
+            Some(value) if value.eq_ignore_ascii_case("on") => self.turn_plan_on(),
+            Some(value) => self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: format!(
+                    "unsupported :planning argument `{value}` / supported: :planning, :planning on, :planning off"
+                ),
+            }),
+        }
+    }
+
+    fn turn_plan_on(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        if let Err(error) = self
+            .planning_services
+            .init_service
+            .set_plan_enabled(&workspace_directory, true)
+        {
+            let fallback_status = if !self
+                .planning_services
+                .init_service
+                .has_planning_workspace(&workspace_directory)
+                .unwrap_or(false)
+            {
+                self.show_planning_init_overlay();
+                "planning workspace missing; open :planning to initialize it".to_string()
+            } else {
+                format!("failed to enable planning mode: {error}")
+            };
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: fallback_status,
+            });
+            return;
+        }
+
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        if self.shell_overlay == ShellOverlay::PlanningInit {
+            self.planning_init_overlay_ui_state
+                .open_existing_workspace();
+        }
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "Plan on / using the existing planning workspace".to_string(),
+        });
+    }
+
+    fn turn_plan_off(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning_services
+            .init_service
+            .set_plan_enabled(&workspace_directory, false)
+        {
+            Ok(()) => {
+                self.stop_post_turn_automation();
+                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                    &workspace_directory,
+                );
+                if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
+                    self.close_shell_overlay();
+                } else if self.shell_overlay == ShellOverlay::PlanningInit {
+                    self.planning_init_overlay_ui_state
+                        .open_existing_workspace();
+                }
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: "Plan off / planning workspace retained for later resume"
+                        .to_string(),
+                });
+            }
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("failed to turn Plan off: {error}"),
+                })
+            }
+        }
     }
 
     pub(super) fn open_planning_manual_editor(&mut self) {
@@ -1320,6 +1431,47 @@ impl NativeTuiApp {
 
         if self.shell_overlay == ShellOverlay::PlanningInit {
             match self.planning_init_overlay_ui_state.step() {
+                PlanningInitOverlayStep::ExistingWorkspace => match key.code {
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        let snapshot = self
+                            .load_planning_runtime_snapshot(&self.planning_workspace_directory());
+                        if snapshot.plan_enabled() {
+                            self.close_shell_overlay();
+                            self.show_queue_overlay();
+                        } else {
+                            self.turn_plan_on();
+                        }
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        let snapshot = self
+                            .load_planning_runtime_snapshot(&self.planning_workspace_directory());
+                        if snapshot.plan_enabled() {
+                            self.close_shell_overlay();
+                            self.show_directions_maintenance_overlay();
+                        } else {
+                            self.dispatch_conversation_input(
+                                ConversationInputEvent::StatusMessageShown {
+                                    status_text: "Plan off - initialize with :planning first"
+                                        .to_string(),
+                                },
+                            );
+                        }
+                    }
+                    KeyCode::Char('o') | KeyCode::Char('O')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        let snapshot = self
+                            .load_planning_runtime_snapshot(&self.planning_workspace_directory());
+                        if snapshot.plan_enabled() {
+                            self.turn_plan_off();
+                        } else {
+                            self.turn_plan_on();
+                        }
+                    }
+                    _ => {}
+                },
                 PlanningInitOverlayStep::ModeSelection => match key.code {
                     KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                         self.planning_init_overlay_ui_state.move_mode_selection(-1)

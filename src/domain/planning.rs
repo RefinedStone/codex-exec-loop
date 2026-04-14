@@ -6,6 +6,7 @@ pub const TASK_LEDGER_FILE_PATH: &str = ".codex-exec-loop/planning/task-ledger.j
 pub const TASK_LEDGER_SCHEMA_FILE_PATH: &str = ".codex-exec-loop/planning/task-ledger.schema.json";
 pub const QUEUE_SNAPSHOT_FILE_PATH: &str = ".codex-exec-loop/planning/queue.snapshot.json";
 pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+pub const PLAN_OFF_FILE_PATH: &str = ".codex-exec-loop/planning/plan.off";
 pub const PLANNING_DIRECTION_DOCS_DIRECTORY: &str = ".codex-exec-loop/planning/directions";
 pub const PLANNING_PROMPTS_DIRECTORY: &str = ".codex-exec-loop/planning/prompts";
 pub const DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH: &str =

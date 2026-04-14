@@ -300,6 +300,12 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         current_snapshot: PlanningRuntimeSnapshot,
     ) -> BuiltinNextTaskRefreshOutcome {
+        if current_snapshot.workspace_present() && !current_snapshot.plan_enabled() {
+            return BuiltinNextTaskRefreshOutcome {
+                runtime_snapshot: current_snapshot,
+            };
+        }
+
         if !matches!(
             current_snapshot.workspace_status(),
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
@@ -510,6 +516,18 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> ConversationPostTurnAction {
+        if conversation
+            .auto_follow_state
+            .selected_template()
+            .is_builtin_next_task()
+            && planning_runtime_snapshot.workspace_present()
+            && !planning_runtime_snapshot.plan_enabled()
+        {
+            return ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::PlanningDisabled,
+            };
+        }
+
         if conversation
             .auto_follow_state
             .selected_template()

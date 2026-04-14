@@ -7,6 +7,9 @@ use super::planning_presentation::{
     build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
 };
 use super::*;
+use crate::application::service::planning_prompt_service::{
+    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+};
 use crate::application::service::session_service::{
     SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
@@ -112,6 +115,13 @@ struct PromptBufferView {
     lines: Vec<Line<'static>>,
     cursor_line_index: usize,
     cursor_column: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PlanModeIndicatorView {
+    primary_label: &'static str,
+    detail_label: Option<&'static str>,
+    color: Color,
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +283,7 @@ pub(super) fn build_conversation_shell_view(
 ) -> ConversationShellView {
     let _ = mode;
     let context = ShellCorePresentationContext::from_app(app);
+    let plan_mode_indicator = current_plan_mode_indicator(app);
     let planning_summary_line = context.ready_conversation().and_then(|conversation| {
         build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
     });
@@ -284,6 +295,7 @@ pub(super) fn build_conversation_shell_view(
     header_lines.push(build_frontend_summary_line());
     let mut footer_lines = build_shell_footer_lines_with_context(
         &context,
+        plan_mode_indicator,
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
@@ -968,6 +980,86 @@ pub(super) fn build_directions_maintenance_overlay_view(
 
 pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
+        PlanningInitOverlayStep::ExistingWorkspace => {
+            let workspace_directory = app.planning_workspace_directory();
+            let snapshot = match &app.conversation_state {
+                ConversationState::Ready(conversation) => {
+                    conversation.planning_runtime_snapshot.clone()
+                }
+                ConversationState::Loading | ConversationState::Failed(_) => {
+                    app.load_planning_runtime_snapshot(&workspace_directory)
+                }
+            };
+            let plan_state_label = if snapshot.plan_enabled() {
+                format!("Plan on / {}", plan_runtime_substate_label(&snapshot))
+            } else {
+                "Plan off".to_string()
+            };
+            let queue_summary = snapshot
+                .queue_summary()
+                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
+                .unwrap_or_else(|| "queue state unavailable".to_string());
+            let failure_summary = snapshot
+                .failure_reason()
+                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
+
+            PlanningInitOverlayView {
+                header_lines: vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Planning Controls",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" / existing workspace"),
+                    ]),
+                    Line::from(
+                        "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
+                    ),
+                ],
+                summary_lines: vec![
+                    Line::from(
+                        "Use :directions only after Plan on. Hidden planner sessions still update task-ledger.json only.",
+                    ),
+                    Line::from(
+                        "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
+                    ),
+                ],
+                option_lines: vec![
+                    Line::from(format!("workspace: {workspace_directory}")),
+                    Line::from(format!("state: {plan_state_label}")),
+                    Line::from(format!("queue: {queue_summary}")),
+                    Line::from(format!("policy: {}", snapshot.queue_idle_policy().label())),
+                ],
+                status_lines: {
+                    let mut lines = if snapshot.plan_enabled() {
+                        vec![
+                            Line::from(
+                                "Enter opens queue inspection for the existing planning workspace.",
+                            ),
+                            Line::from("Press D to maintain directions, or O to turn Plan off."),
+                        ]
+                    } else {
+                        vec![
+                            Line::from(
+                                "Enter turns Plan on and resumes the existing planning workspace.",
+                            ),
+                            Line::from("Directions maintenance stays blocked while Plan off."),
+                        ]
+                    };
+                    if let Some(failure_summary) = failure_summary {
+                        lines.push(Line::from(format!("failure: {failure_summary}")));
+                    }
+                    lines
+                },
+                key_lines: vec![
+                    Line::from("Enter: open queue or resume Plan on"),
+                    Line::from("D: directions maintenance    O: toggle Plan on/off"),
+                    Line::from("Esc/Ctrl+C: close"),
+                ],
+            }
+        }
         PlanningInitOverlayStep::ModeSelection => PlanningInitOverlayView {
             header_lines: vec![
                 Line::from(vec![
@@ -1578,6 +1670,7 @@ pub(super) fn format_conversation_lines_with_debug(
 #[cfg(test)]
 pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     let context = ShellCorePresentationContext::from_app(app);
+    let plan_mode_indicator = current_plan_mode_indicator(app);
     let planning_summary_line = context.ready_conversation().and_then(|conversation| {
         build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
     });
@@ -1588,6 +1681,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
 
     build_shell_footer_lines_with_context(
         &context,
+        plan_mode_indicator,
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
@@ -1598,6 +1692,7 @@ pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
 #[cfg(test)]
 fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
+    plan_mode_indicator: PlanModeIndicatorView,
     github_review_recent_changes_summary: Option<String>,
     planning_summary_line: Option<String>,
     planning_notice_line: Option<String>,
@@ -1605,21 +1700,27 @@ fn build_shell_footer_lines_with_context(
 ) -> Vec<Line<'static>> {
     match context.conversation_state {
         ShellConversationState::Loading => vec![
-            Line::from(format!(
-                "startup: {}  |  sessions: {}  |  github: {}",
-                context.shell_action_availability.status_text(),
-                context.recent_session_status_label.as_str(),
-                context.github_review_polling_status_label.as_str(),
+            Line::from(plan_mode_prefixed_spans(
+                format!(
+                    "startup: {}  |  sessions: {}  |  github: {}",
+                    context.shell_action_availability.status_text(),
+                    context.recent_session_status_label.as_str(),
+                    context.github_review_polling_status_label.as_str(),
+                ),
+                plan_mode_indicator,
             )),
             Line::from("conversation state: loading thread metadata"),
             Line::from("status: waiting for thread history from codex app-server"),
         ],
         ShellConversationState::Failed(message) => vec![
-            Line::from(format!(
-                "startup: {}  |  sessions: {}  |  github: {}",
-                context.shell_action_availability.status_text(),
-                context.recent_session_status_label.as_str(),
-                context.github_review_polling_status_label.as_str(),
+            Line::from(plan_mode_prefixed_spans(
+                format!(
+                    "startup: {}  |  sessions: {}  |  github: {}",
+                    context.shell_action_availability.status_text(),
+                    context.recent_session_status_label.as_str(),
+                    context.github_review_polling_status_label.as_str(),
+                ),
+                plan_mode_indicator,
             )),
             Line::from("conversation state: failed"),
             Line::from(format!("status: {message}")),
@@ -1629,11 +1730,14 @@ fn build_shell_footer_lines_with_context(
             let runtime_notice_summary =
                 conversation.runtime_notice_summary(FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT);
             let mut lines = vec![
-                Line::from(format!(
-                    "thread: {}  |  turn: {}  |  input: {}",
-                    inline_thread_label(conversation),
-                    turn_status_label(conversation),
-                    conversation.input_state.label(),
+                Line::from(plan_mode_prefixed_spans(
+                    format!(
+                        "thread: {}  |  turn: {}  |  input: {}",
+                        inline_thread_label(conversation),
+                        turn_status_label(conversation),
+                        conversation.input_state.label(),
+                    ),
+                    plan_mode_indicator,
                 )),
                 Line::from(format!(
                     "startup: {}  |  gh: {}  |  auto: {}  |  progress: {}  |  tmpl: {}",
@@ -1697,6 +1801,7 @@ fn build_shell_footer_lines_with_context(
 
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     let context = ShellCorePresentationContext::from_app(app);
+    let plan_mode_indicator = current_plan_mode_indicator(app);
     let planning_summary_line = context.ready_conversation().and_then(|conversation| {
         build_planning_summary_line(app, conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
     });
@@ -1707,6 +1812,7 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
 
     build_inline_tail_lines_with_context(
         &context,
+        plan_mode_indicator,
         app.github_review_recent_changes_summary(INLINE_TAIL_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
@@ -1716,6 +1822,7 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
 
 fn build_inline_tail_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
+    plan_mode_indicator: PlanModeIndicatorView,
     github_review_recent_changes_summary: Option<String>,
     planning_summary_line: Option<String>,
     planning_notice_line: Option<String>,
@@ -1731,10 +1838,13 @@ fn build_inline_tail_lines_with_context(
 
     match context.conversation_state {
         ShellConversationState::Loading => {
-            lines.push(Line::from(format!(
-                "thread: loading  |  startup: {}  |  sessions: {}",
-                context.shell_action_availability.status_text(),
-                context.recent_session_status_label.as_str(),
+            lines.push(Line::from(plan_mode_prefixed_spans(
+                format!(
+                    "thread: loading  |  startup: {}  |  sessions: {}",
+                    context.shell_action_availability.status_text(),
+                    context.recent_session_status_label.as_str(),
+                ),
+                plan_mode_indicator,
             )));
             lines.push(Line::from(format!(
                 "github: {}  |  flow: terminal main buffer",
@@ -1745,10 +1855,13 @@ fn build_inline_tail_lines_with_context(
             ));
         }
         ShellConversationState::Failed(message) => {
-            lines.push(Line::from(format!(
-                "thread: unavailable  |  startup: {}  |  sessions: {}",
-                context.shell_action_availability.status_text(),
-                context.recent_session_status_label.as_str(),
+            lines.push(Line::from(plan_mode_prefixed_spans(
+                format!(
+                    "thread: unavailable  |  startup: {}  |  sessions: {}",
+                    context.shell_action_availability.status_text(),
+                    context.recent_session_status_label.as_str(),
+                ),
+                plan_mode_indicator,
             )));
             lines.push(Line::from(format!(
                 "github: {}  |  flow: terminal main buffer",
@@ -1764,16 +1877,19 @@ fn build_inline_tail_lines_with_context(
                 .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
                 .map(|summary| compact_inline_summary_label(&summary));
 
-            lines.push(Line::from(format!(
-                "thread: {}  |  turn: {}  |  auto: {}  |  done: {}  |  in: {}",
-                inline_thread_label(conversation),
-                turn_status_label(conversation),
-                inline_auto_follow_status_summary(
-                    conversation,
-                    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
+            lines.push(Line::from(plan_mode_prefixed_spans(
+                format!(
+                    "thread: {}  |  turn: {}  |  auto: {}  |  done: {}  |  in: {}",
+                    inline_thread_label(conversation),
+                    turn_status_label(conversation),
+                    inline_auto_follow_status_summary(
+                        conversation,
+                        INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
+                    ),
+                    conversation.auto_follow_state.progress_label(),
+                    inline_input_state_label(conversation.input_state),
                 ),
-                conversation.auto_follow_state.progress_label(),
-                inline_input_state_label(conversation.input_state),
+                plan_mode_indicator,
             )));
             let mut status_segments = vec![format!(
                 "status: {}",
@@ -1887,6 +2003,62 @@ fn build_inline_startup_screen_lines_with_context(
 
     lines.push(Line::from(""));
     lines
+}
+
+fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
+    match &app.conversation_state {
+        ConversationState::Ready(conversation) => {
+            plan_mode_indicator_from_snapshot(&conversation.planning_runtime_snapshot)
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => {
+            let workspace_directory = app.current_workspace_directory();
+            let snapshot = app.load_planning_runtime_snapshot(&workspace_directory);
+            plan_mode_indicator_from_snapshot(&snapshot)
+        }
+    }
+}
+
+fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanModeIndicatorView {
+    if !snapshot.plan_enabled() {
+        return PlanModeIndicatorView {
+            primary_label: "Plan off",
+            detail_label: None,
+            color: Color::Red,
+        };
+    }
+
+    PlanModeIndicatorView {
+        primary_label: "Plan on",
+        detail_label: Some(plan_runtime_substate_label(snapshot)),
+        color: Color::Blue,
+    }
+}
+
+fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
+    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+        "invalid"
+    } else if snapshot.auto_followup_pause_reason().is_some() {
+        "paused"
+    } else if snapshot.has_actionable_queue_head() {
+        "ready"
+    } else {
+        "idle"
+    }
+}
+
+fn plan_mode_prefixed_spans(
+    leading_text: String,
+    indicator: PlanModeIndicatorView,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::raw(leading_text), Span::raw("  |  ")];
+    spans.push(Span::styled(
+        indicator.primary_label,
+        Style::default().fg(indicator.color),
+    ));
+    if let Some(detail_label) = indicator.detail_label {
+        spans.push(Span::raw(format!(" / {detail_label}")));
+    }
+    spans
 }
 
 fn inline_diagnostic_status(

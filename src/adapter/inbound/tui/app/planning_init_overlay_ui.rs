@@ -4,6 +4,7 @@ use crate::domain::planning::PlanningValidationReport;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanningInitOverlayStep {
     ModeSelection,
+    ExistingWorkspace,
     DetailSelection,
     SimpleReview,
     ManualEditor,
@@ -115,6 +116,11 @@ impl PlanningInitOverlayUiState {
         self.simple_review = None;
     }
 
+    pub fn open_existing_workspace(&mut self) {
+        self.step = PlanningInitOverlayStep::ExistingWorkspace;
+        self.simple_review = None;
+    }
+
     pub fn open_manual_editor(&mut self) {
         self.mode_selection = PlanningInitModeSelection::Detail;
         self.detail_selection = PlanningInitDetailSelection::Manual;
@@ -186,6 +192,16 @@ mod tests {
 
         assert_eq!(state.step(), PlanningInitOverlayStep::DetailSelection);
         assert_eq!(state.selected_mode(), PlanningInitModeSelection::Detail);
+    }
+
+    #[test]
+    fn opening_existing_workspace_switches_overlay_step() {
+        let mut state = PlanningInitOverlayUiState::default();
+
+        state.open_existing_workspace();
+
+        assert_eq!(state.step(), PlanningInitOverlayStep::ExistingWorkspace);
+        assert!(state.simple_review().is_none());
     }
 
     #[test]

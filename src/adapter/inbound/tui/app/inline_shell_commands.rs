@@ -86,7 +86,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":planning", ":planning-init"],
         suggestion_detail: "planning mode",
         buffered_hint: "Press Enter to open the planning mode selector.",
-        execution_status: Some("opened planning initialization selector"),
+        execution_status: None,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::MaxAutoTurns,
@@ -130,6 +130,18 @@ impl InlineShellCommandInput {
 
     pub(super) fn buffered_hint(&self) -> String {
         match self.command {
+            InlineShellCommand::PlanningInit => match self.argument() {
+                Some(value) if value.eq_ignore_ascii_case("off") => {
+                    "Press Enter to turn Plan off.".to_string()
+                }
+                Some(value) if value.eq_ignore_ascii_case("on") => {
+                    "Press Enter to turn Plan on.".to_string()
+                }
+                Some(value) => format!(
+                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off."
+                ),
+                None => self.command.spec().buffered_hint.to_string(),
+            },
             InlineShellCommand::MaxAutoTurns => match self.argument() {
                 Some(value) if is_valid_max_auto_turn_argument(value) => {
                     format!("Press Enter to set max auto turns to {value}.")
@@ -258,6 +270,14 @@ mod tests {
             (":templates", Some((InlineShellCommand::Templates, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
             (
+                ":planning off",
+                Some((InlineShellCommand::PlanningInit, Some("off"))),
+            ),
+            (
+                ":planning on",
+                Some((InlineShellCommand::PlanningInit, Some("on"))),
+            ),
+            (
                 ":planning-init",
                 Some((InlineShellCommand::PlanningInit, None)),
             ),
@@ -358,6 +378,20 @@ mod tests {
     }
 
     #[test]
+    fn planning_command_hint_is_argument_aware() {
+        let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");
+        let off = InlineShellCommandInput::parse(":planning off").expect("command should parse");
+        let on = InlineShellCommandInput::parse(":planning on").expect("command should parse");
+
+        assert_eq!(
+            plain.buffered_hint(),
+            "Press Enter to open the planning mode selector."
+        );
+        assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
+        assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");
+    }
+
+    #[test]
     fn execution_status_stays_alias_neutral() {
         let cases = [
             (":diag", Some("opened diagnostics inspection")),
@@ -365,7 +399,7 @@ mod tests {
             (":queue", Some("opened planning queue inspection")),
             (":stop", None),
             (":templates", Some("opened template inspection")),
-            (":planning", Some("opened planning initialization selector")),
+            (":planning", None),
             (":turns 5", None),
         ];
 

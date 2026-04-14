@@ -6,9 +6,9 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::domain::planning::{
-    DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles,
-    PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH, QueueIdlePolicy,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, DirectionCatalogDocument, DirectionState, PLAN_OFF_FILE_PATH,
+    PlanningWorkspaceFiles, PriorityQueueSnapshot, PriorityQueueTask, QUEUE_SNAPSHOT_FILE_PATH,
+    QueueIdlePolicy, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -36,6 +36,8 @@ pub enum PlanningRuntimeWorkspaceStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeSnapshot {
+    workspace_present: bool,
+    plan_enabled: bool,
     workspace_status: PlanningRuntimeWorkspaceStatus,
     prompt_fragment: Option<String>,
     queue_summary: Option<String>,
@@ -51,6 +53,8 @@ pub struct PlanningRuntimeSnapshot {
 impl PlanningRuntimeSnapshot {
     pub fn uninitialized() -> Self {
         Self {
+            workspace_present: false,
+            plan_enabled: false,
             workspace_status: PlanningRuntimeWorkspaceStatus::Uninitialized,
             prompt_fragment: None,
             queue_summary: None,
@@ -66,6 +70,8 @@ impl PlanningRuntimeSnapshot {
 
     pub fn invalid(reason: impl Into<String>) -> Self {
         Self {
+            workspace_present: true,
+            plan_enabled: true,
             workspace_status: PlanningRuntimeWorkspaceStatus::Invalid,
             prompt_fragment: None,
             queue_summary: None,
@@ -94,6 +100,8 @@ impl PlanningRuntimeSnapshot {
         queue_head: Option<PriorityQueueTask>,
     ) -> Self {
         Self {
+            workspace_present: true,
+            plan_enabled: true,
             workspace_status: if queue_head.is_some() {
                 PlanningRuntimeWorkspaceStatus::ReadyWithTask
             } else {
@@ -119,6 +127,8 @@ impl PlanningRuntimeSnapshot {
         queue_snapshot: PriorityQueueSnapshot,
     ) -> Self {
         Self {
+            workspace_present: true,
+            plan_enabled: true,
             workspace_status: if queue_head.is_some() {
                 PlanningRuntimeWorkspaceStatus::ReadyWithTask
             } else {
@@ -144,6 +154,24 @@ impl PlanningRuntimeSnapshot {
         self.queue_idle_policy = policy;
         self.queue_idle_prompt_path = prompt_path;
         self
+    }
+
+    pub fn with_plan_enabled(mut self, enabled: bool) -> Self {
+        self.plan_enabled = enabled;
+        self
+    }
+
+    pub fn with_workspace_present(mut self, present: bool) -> Self {
+        self.workspace_present = present;
+        self
+    }
+
+    pub fn workspace_present(&self) -> bool {
+        self.workspace_present
+    }
+
+    pub fn plan_enabled(&self) -> bool {
+        self.plan_enabled
     }
 
     pub fn workspace_status(&self) -> PlanningRuntimeWorkspaceStatus {
@@ -193,6 +221,9 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn preview_status_label(&self) -> &'static str {
+        if !self.plan_enabled {
+            return "inactive";
+        }
         match self.workspace_status {
             PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
             PlanningRuntimeWorkspaceStatus::Invalid => "blocked",
@@ -209,12 +240,14 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn blocks_auto_followup(&self) -> bool {
-        self.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid
+        (self.workspace_present && !self.plan_enabled)
+            || self.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid
             || self.auto_followup_pause_reason.is_some()
     }
 
     pub fn has_actionable_queue_head(&self) -> bool {
-        self.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask
+        self.plan_enabled
+            && self.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask
             && self.auto_followup_pause_reason.is_none()
     }
 
@@ -240,17 +273,24 @@ impl PlanningPromptService {
         let workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
+        let workspace_present = workspace_record.has_any_files();
 
-        if !workspace_record.has_any_files() {
+        if !workspace_present {
             return Ok(PlanningRuntimeSnapshot::uninitialized());
         }
+        let plan_enabled = self
+            .planning_workspace_port
+            .load_optional_planning_file(workspace_dir, PLAN_OFF_FILE_PATH)?
+            .is_none();
 
         let missing_paths = missing_workspace_paths(&workspace_record);
         if !missing_paths.is_empty() {
             return Ok(PlanningRuntimeSnapshot::invalid(format!(
                 "planning files incomplete: missing {}",
                 missing_paths.join(", ")
-            )));
+            ))
+            .with_workspace_present(workspace_present)
+            .with_plan_enabled(plan_enabled));
         }
 
         let workspace_files = workspace_record_to_files(&workspace_record);
@@ -280,7 +320,9 @@ impl PlanningPromptService {
                 .unwrap_or_else(|| "planning validation failed".to_string());
             return Ok(PlanningRuntimeSnapshot::invalid(format!(
                 "planning validation failed: {first_error}"
-            )));
+            ))
+            .with_workspace_present(workspace_present)
+            .with_plan_enabled(plan_enabled));
         }
 
         let directions = validation_result
@@ -297,7 +339,9 @@ impl PlanningPromptService {
             Err(error) => {
                 return Ok(PlanningRuntimeSnapshot::invalid(format!(
                     "planning queue build failed: {error}"
-                )));
+                ))
+                .with_workspace_present(workspace_present)
+                .with_plan_enabled(plan_enabled));
             }
         };
         let result_output_markdown = workspace_record
@@ -312,6 +356,8 @@ impl PlanningPromptService {
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
 
         Ok(PlanningRuntimeSnapshot {
+            workspace_present,
+            plan_enabled,
             workspace_status: if queue_snapshot.next_task.is_some() {
                 PlanningRuntimeWorkspaceStatus::ReadyWithTask
             } else {
