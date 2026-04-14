@@ -55,6 +55,8 @@ const PLANNER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
+#[path = "app/conversation/mod.rs"]
+mod conversation;
 #[path = "app/conversation_input.rs"]
 mod conversation_input;
 #[path = "app/conversation_intents.rs"]
@@ -67,6 +69,8 @@ mod conversation_model;
 mod conversation_runtime;
 #[path = "app/directions_maintenance_ui.rs"]
 mod directions_maintenance_ui;
+#[path = "app/followup/mod.rs"]
+mod followup;
 #[path = "app/followup_controls.rs"]
 mod followup_controls;
 #[path = "app/followup_overlay_ui.rs"]
@@ -150,6 +154,7 @@ use shell_frontend::ShellFrontendMode;
 use shell_layout::build_conversation_scroll_offset;
 #[cfg(test)]
 use shell_layout::{block_height_for_lines, build_input_block_height, build_shell_footer_height};
+#[cfg(test)]
 use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{
