@@ -26,29 +26,21 @@ pub(super) fn reduce_conversation_input(
 ) -> ConversationInputReduction {
     match event {
         ConversationInputEvent::CharacterTyped { character } => {
-            clear_startup_submit_after_input_change(&mut state);
-            state.input_buffer.push(character);
-            state.sync_inline_shell_command_palette();
+            modify_input_buffer_and_sync(&mut state, |buffer| buffer.push(character));
         }
         ConversationInputEvent::NewlineInserted => {
-            clear_startup_submit_after_input_change(&mut state);
-            state.input_buffer.push('\n');
-            state.sync_inline_shell_command_palette();
+            modify_input_buffer_and_sync(&mut state, |buffer| buffer.push('\n'));
         }
         ConversationInputEvent::BackspacePressed => {
-            clear_startup_submit_after_input_change(&mut state);
-            state.input_buffer.pop();
-            state.sync_inline_shell_command_palette();
+            modify_input_buffer_and_sync(&mut state, |buffer| {
+                buffer.pop();
+            });
         }
         ConversationInputEvent::PreviousWordDeleted => {
-            clear_startup_submit_after_input_change(&mut state);
-            delete_previous_word(&mut state.input_buffer);
-            state.sync_inline_shell_command_palette();
+            modify_input_buffer_and_sync(&mut state, delete_previous_word);
         }
         ConversationInputEvent::InputCleared => {
-            clear_startup_submit_after_input_change(&mut state);
-            state.input_buffer.clear();
-            state.sync_inline_shell_command_palette();
+            modify_input_buffer_and_sync(&mut state, String::clear);
         }
         ConversationInputEvent::InlineCommandPaletteSelectionMoved { delta } => {
             state.move_inline_shell_command_palette_selection(delta);
@@ -77,6 +69,15 @@ pub(super) fn reduce_conversation_input(
     }
 
     ConversationInputReduction { state }
+}
+
+fn modify_input_buffer_and_sync(
+    state: &mut ConversationViewModel,
+    modifier: impl FnOnce(&mut String),
+) {
+    clear_startup_submit_after_input_change(state);
+    modifier(&mut state.input_buffer);
+    state.sync_inline_shell_command_palette();
 }
 
 fn delete_previous_word(buffer: &mut String) {

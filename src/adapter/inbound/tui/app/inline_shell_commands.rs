@@ -297,13 +297,17 @@ impl InlineShellCommand {
     }
 
     pub(super) fn completion_text(self) -> &'static str {
-        if self.requires_argument() {
-            match self {
-                InlineShellCommand::MaxAutoTurns => ":turns ",
-                _ => self.command_name(),
-            }
-        } else {
-            self.command_name()
+        match self {
+            InlineShellCommand::MaxAutoTurns => ":turns ",
+            InlineShellCommand::Diagnostics
+            | InlineShellCommand::Sessions
+            | InlineShellCommand::Queue
+            | InlineShellCommand::Directions
+            | InlineShellCommand::Stop
+            | InlineShellCommand::Templates
+            | InlineShellCommand::PlanningInit
+            | InlineShellCommand::NewDraft
+            | InlineShellCommand::Help => self.command_name(),
         }
     }
 
@@ -486,6 +490,19 @@ mod tests {
         assert_eq!(
             state.selected_command(),
             Some(InlineShellCommand::PlanningInit)
+        );
+    }
+
+    #[test]
+    fn completion_text_uses_canonical_argument_ready_command_forms() {
+        assert_eq!(InlineShellCommand::Diagnostics.completion_text(), ":diag");
+        assert_eq!(
+            InlineShellCommand::PlanningInit.completion_text(),
+            ":planning"
+        );
+        assert_eq!(
+            InlineShellCommand::MaxAutoTurns.completion_text(),
+            ":turns "
         );
     }
 

@@ -614,6 +614,13 @@ impl ConversationViewModel {
         !self.can_submit_prompt()
     }
 
+    pub(crate) fn live_activity_started_at(&self) -> Option<Instant> {
+        self.auto_follow_state.active_started_at().or_else(|| {
+            self.active_turn_started_at
+                .filter(|_| self.has_running_turn())
+        })
+    }
+
     pub(crate) fn arm_startup_submit(&mut self) {
         self.startup_submit_armed = true;
     }

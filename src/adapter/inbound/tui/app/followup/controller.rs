@@ -82,8 +82,7 @@ impl NativeTuiApp {
     pub(crate) fn live_activity_pulse(&self, now: Instant) -> Option<u64> {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation
-                .auto_follow_state
-                .active_started_at()
+                .live_activity_started_at()
                 .map(|started_at| now.saturating_duration_since(started_at).as_secs()),
             ConversationState::Loading | ConversationState::Failed(_) => None,
         }

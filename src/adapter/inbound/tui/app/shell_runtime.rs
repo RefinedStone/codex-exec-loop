@@ -711,6 +711,24 @@ mod tests {
     }
 
     #[test]
+    fn manual_turn_elapsed_pulse_requests_redraw() {
+        let mut runtime = make_test_runtime();
+        let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state
+        else {
+            panic!("expected ready conversation state");
+        };
+        conversation.input_state = ConversationInputState::StreamingTurn;
+        conversation.active_turn_id = Some("turn-1".to_string());
+        conversation.active_turn_started_at = Some(Instant::now() - Duration::from_secs(5));
+        runtime.last_live_activity_pulse = Some(4);
+        runtime.take_redraw_request();
+
+        runtime.poll_background_messages();
+
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
     fn poll_background_messages_starts_github_review_polling_when_due() {
         let mut runtime = make_test_runtime();
         runtime.app_mut().configure_github_review_polling(
