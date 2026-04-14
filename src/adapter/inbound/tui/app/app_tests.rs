@@ -52,7 +52,9 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
-use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+use crate::application::service::planning_bootstrap_service::{
+    PlanningBootstrapMode, PlanningBootstrapService,
+};
 use crate::application::service::planning_contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
@@ -488,7 +490,7 @@ fn empty_existing_session_prompts_for_next_message() {
 fn inline_tail_compacts_empty_session_prompt_copy() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let rendered = build_inline_tail_lines(&app)
         .iter()
@@ -512,7 +514,7 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
     let mut conversation = ready_conversation();
     conversation.thread_id.clear();
     conversation.input_state = ConversationInputState::DraftReady;
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_inline_tail_lines(&app)
         .iter()
@@ -541,7 +543,7 @@ fn inline_tail_uses_compact_thread_title_instead_of_full_thread_id() {
     let mut conversation = ready_conversation();
     conversation.thread_id = "019d6e93-818a-7661-9e0d-7dec23c4b84d".to_string();
     conversation.title = "Untitled thread".to_string();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_inline_tail_lines(&app)
         .iter()
@@ -1315,7 +1317,7 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
     let startup_draft_count = count_staged_planning_drafts(&startup_workspace_dir);
     app.startup_state =
         StartupState::Ready(sample_startup_diagnostics(&startup_workspace_dir, true));
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("app should stay in ready state");
     };
@@ -1429,7 +1431,8 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
 
-    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -1462,7 +1465,7 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(ready_turn_planning_capture(
         &workspace_dir,
         PlanningExecutionSnapshot {
@@ -1647,7 +1650,7 @@ fn queue_idle_active_derivation_creates_next_task_and_submits_auto_followup() {
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -1806,7 +1809,7 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -1950,7 +1953,7 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2120,7 +2123,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2250,7 +2253,7 @@ fn builtin_next_task_refresh_passes_full_latest_agent_reply_to_hidden_planner_pr
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2316,7 +2319,7 @@ fn stale_planning_repair_state_does_not_queue_visible_retry() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2368,7 +2371,8 @@ fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2412,7 +2416,7 @@ fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(ready_turn_planning_capture(
         &workspace_dir,
         PlanningExecutionSnapshot {
@@ -2465,7 +2469,8 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2496,7 +2501,7 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(ready_turn_planning_capture(
         &workspace_dir,
         PlanningExecutionSnapshot {
@@ -2546,7 +2551,8 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2577,7 +2583,7 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(ready_turn_planning_capture(
         &workspace_dir,
         PlanningExecutionSnapshot {
@@ -2675,7 +2681,7 @@ fn buffered_queue_command_stays_available_while_auto_followup_submits() {
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2782,7 +2788,7 @@ fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_dir),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -2829,7 +2835,8 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
         .join(".codex-exec-loop")
         .join("planning");
     std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-    let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+    let bootstrap_artifacts =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
     std::fs::write(
         planning_dir.join("directions.toml"),
         &bootstrap_artifacts.directions_toml,
@@ -2873,7 +2880,7 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(ready_turn_planning_capture(
         &workspace_dir,
         PlanningExecutionSnapshot {
@@ -2926,7 +2933,7 @@ fn snapshot_capture_failure_blocks_followup_without_claiming_reconciliation() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(failed_turn_planning_capture(
         &workspace_dir,
         "planning reconciliation could not capture the accepted planning snapshot before the turn started: failed to read task-ledger.json",
@@ -2989,7 +2996,7 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.active_turn_planning_capture = Some(ready_turn_planning_capture(
         &stale_workspace,
         PlanningExecutionSnapshot {
@@ -3200,7 +3207,7 @@ fn inline_tail_command_prefix_shows_filtered_matches_while_typing() {
     let mut conversation = ready_conversation();
     conversation.input_buffer = ":p".to_string();
     conversation.sync_inline_shell_command_palette();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_inline_tail_lines(&app)
         .iter()
@@ -3216,7 +3223,7 @@ fn inline_tail_command_prefix_shows_filtered_matches_while_typing() {
 #[test]
 fn input_prompt_cursor_offset_starts_after_prompt_prefix() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     assert_eq!(build_input_prompt_cursor_offset(&app, 80), Some((2, 0)));
 }
@@ -3226,7 +3233,7 @@ fn input_prompt_cursor_offset_tracks_trailing_blank_line() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
     conversation.input_buffer = "first line\n".to_string();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     assert_eq!(build_input_prompt_cursor_offset(&app, 80), Some((2, 1)));
 }
@@ -3235,7 +3242,7 @@ fn input_prompt_cursor_offset_tracks_trailing_blank_line() {
 fn inline_prompt_cursor_offset_accounts_for_status_lines() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     assert_eq!(build_inline_prompt_cursor_offset(&app, 80), Some((2, 3)));
 }
@@ -3256,7 +3263,7 @@ fn multiline_buffer_expands_composer_height() {
 #[test]
 fn status_footer_height_expands_for_ready_shell_summary() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let rendered = build_shell_footer_lines(&app);
 
@@ -3271,7 +3278,7 @@ fn shell_footer_shows_plan_on_indicator() {
         "planning context",
         "next task: rank 1 / task-1 / Implement shell planning status",
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -3293,7 +3300,7 @@ fn shell_footer_shows_plan_off_indicator() {
         )
         .with_plan_enabled(false),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -3308,7 +3315,7 @@ fn shell_footer_shows_plan_off_indicator() {
 #[test]
 fn shell_footer_shows_github_polling_state_summary() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.github_review_polling_state = GithubReviewPollingState::SetupError {
         target: Some(GithubPullRequestTarget::new("acme/widgets", 42)),
         message: "missing RefinedStone credential".to_string(),
@@ -3326,7 +3333,7 @@ fn shell_footer_shows_github_polling_state_summary() {
 #[test]
 fn shell_footer_surfaces_recent_github_review_change_summary() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.github_review_polling_state = GithubReviewPollingState::active(
         super::github_polling::GithubReviewPollingConfig {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
@@ -3662,13 +3669,13 @@ fn auto_follow_submission_respects_startup_gate() {
 
     app.submit_prompt(
         "continue working".to_string(),
-        PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+        PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
             queued_from_turn_id: "turn-0".to_string(),
             template_label: "builtin next-task".to_string(),
             transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
             debug_detail: None,
             handoff_task: None,
-        }),
+        })),
     );
 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
@@ -4235,7 +4242,7 @@ fn inline_turns_command_with_invalid_argument_keeps_validation_message() {
 fn queue_command_opens_queue_overlay_and_clears_input() {
     for command in [":q", ":queue"] {
         let (mut app, codex_port) = make_test_app();
-        app.conversation_state = ConversationState::Ready(ready_conversation());
+        app.conversation_state = ConversationState::ready(ready_conversation());
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("app should stay ready");
         };
@@ -4319,7 +4326,7 @@ fn queue_overlay_view_summarizes_ready_queue_without_raw_dump() {
         "focus on queue",
         "2 ready tasks",
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let view = build_queue_overlay_view(&app);
     let summary = view
@@ -4360,7 +4367,7 @@ fn queue_overlay_view_shows_proposals_in_compact_form() {
         "0 ready tasks",
         "1 proposal available",
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let view = build_queue_overlay_view(&app);
     let proposals = view
@@ -4377,7 +4384,7 @@ fn queue_overlay_view_shows_proposals_in_compact_form() {
 #[test]
 fn transcript_title_describes_live_scrollback() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     assert_eq!(
         build_transcript_title(&app, ShellFrontendMode::InlineMainBuffer).to_string(),
@@ -4388,7 +4395,7 @@ fn transcript_title_describes_live_scrollback() {
 #[test]
 fn transcript_panel_view_collects_title_and_tail_scroll_offset() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     let transcript_lines = (1..=24)
         .map(|index| Line::from(format!("line {index}")))
         .collect::<Vec<_>>();
@@ -4403,7 +4410,7 @@ fn transcript_panel_view_collects_title_and_tail_scroll_offset() {
 #[test]
 fn input_title_includes_submit_and_newline_hints() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
@@ -4416,7 +4423,7 @@ fn input_title_includes_submit_and_newline_hints() {
 fn input_title_shows_readiness_gated_submit_hint() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Loading;
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
@@ -4429,7 +4436,7 @@ fn composer_title_shows_queued_submit_hint_when_startup_queue_is_armed() {
     app.startup_state = StartupState::Loading;
     let mut conversation = ready_conversation();
     conversation.startup_submit_armed = true;
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_input_title(&app, ShellFrontendMode::InlineMainBuffer).to_string();
 
@@ -4447,7 +4454,7 @@ fn status_title_surfaces_overlay_and_followup_controls() {
 fn conversation_shell_view_collects_inline_snapshot_content() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
     let header = view
@@ -4546,7 +4553,7 @@ fn inline_tail_keeps_startup_context_above_buffered_prompt_in_new_draft() {
 fn inline_transcript_panel_stays_pinned_to_tail_even_after_manual_viewport_state() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     let transcript_lines = (1..=24)
         .map(|index| Line::from(format!("line {index}")))
         .collect::<Vec<_>>();
@@ -4560,7 +4567,7 @@ fn inline_transcript_panel_stays_pinned_to_tail_even_after_manual_viewport_state
 fn conversation_shell_frame_view_collects_layout_and_transcript_panel() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let view = build_conversation_shell_frame_view(
         &mut app,
@@ -4948,7 +4955,7 @@ fn followup_template_overlay_view_collects_preview_status_and_keys() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let view = build_followup_template_overlay_view(&app);
     let list = view
@@ -5008,7 +5015,7 @@ fn followup_template_preview_renders_selected_template_and_runtime_values() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_preview_lines(&app)
         .iter()
@@ -5028,7 +5035,7 @@ fn followup_template_preview_uses_placeholder_without_agent_reply() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
     conversation.auto_follow_state.template_state.selected_index = 1;
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_preview_lines(&app)
         .iter()
@@ -5055,7 +5062,7 @@ fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
             Some(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()),
         ),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_preview_lines(&app)
         .iter()
@@ -5073,7 +5080,7 @@ fn followup_template_preview_surfaces_planning_refresh_for_builtin_next_task() {
 #[test]
 fn followup_template_preview_hides_planner_session_debug_outside_debug_mode() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
         last_operation_label: Some("refresh".to_string()),
@@ -5100,7 +5107,7 @@ fn followup_template_preview_hides_planner_session_debug_outside_debug_mode() {
 #[test]
 fn followup_template_preview_shows_planner_session_debug_in_debug_mode() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.planner_visibility = PlannerVisibility::Debug;
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
@@ -5129,7 +5136,7 @@ fn followup_template_preview_shows_planner_session_debug_in_debug_mode() {
 #[test]
 fn followup_template_preview_styles_planner_debug_headers_in_debug_mode() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.planner_visibility = PlannerVisibility::Debug;
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
@@ -5172,7 +5179,7 @@ fn followup_template_preview_styles_planner_debug_headers_in_debug_mode() {
 #[test]
 fn followup_template_preview_keeps_tail_lines_when_debug_block_is_truncated() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.planner_visibility = PlannerVisibility::Debug;
     let long_prompt = (0..300)
         .map(|index| format!("prompt line {index}"))
@@ -5206,7 +5213,7 @@ fn followup_template_preview_keeps_tail_lines_when_debug_block_is_truncated() {
 #[test]
 fn followup_template_overlay_navigation_updates_selection() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.show_followup_template_overlay();
 
     assert_eq!(app.shell_overlay, ShellOverlay::FollowupTemplates);
@@ -5241,7 +5248,7 @@ fn followup_template_overlay_reload_refreshes_catalog_for_active_thread() {
         .stop_rules
         .stop_on_no_file_changes = true;
     conversation.auto_follow_state.template_state.selected_index = 1;
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.show_followup_template_overlay();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,)));
@@ -5275,7 +5282,7 @@ fn followup_template_overlay_reload_reports_noop_when_catalog_is_current() {
         "/tmp/root".to_string(),
         app.load_followup_template_catalog("/tmp/root"),
     );
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.show_followup_template_overlay();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,)));
@@ -5299,7 +5306,7 @@ fn followup_template_overlay_reload_failure_keeps_existing_catalog() {
         app.load_followup_template_catalog("/tmp/root"),
     );
     conversation.auto_follow_state.template_state.selected_index = 4;
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.show_followup_template_overlay();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE,)));
@@ -5352,7 +5359,7 @@ fn sessions_overlay_reload_is_gated_until_startup_ready() {
 #[test]
 fn sessions_overlay_enter_opens_selected_session_and_dismisses_chrome() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.exit_confirmation_state = ExitConfirmationState::Visible;
     app.session_state = SessionState::Ready(RecentSessions {
         items: vec![sample_session("thread-1"), sample_session("thread-2")],
@@ -5382,7 +5389,7 @@ fn sessions_overlay_enter_while_turn_is_streaming_keeps_overlay_visible() {
     conversation.thread_id = "thread-current".to_string();
     conversation.title = "Streaming thread".to_string();
     conversation.input_state = ConversationInputState::StreamingTurn;
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.session_state = SessionState::Ready(RecentSessions {
         items: vec![sample_session("thread-2")],
         warnings: Vec::new(),
@@ -5408,7 +5415,7 @@ fn sessions_overlay_enter_while_turn_is_streaming_keeps_overlay_visible() {
 #[test]
 fn sessions_overlay_page_controls_open_selected_filtered_page_session() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.session_overlay_ui_state = SessionOverlayUiState::new(1);
     app.session_state = SessionState::Ready(RecentSessions {
         items: vec![
@@ -5545,7 +5552,7 @@ fn session_overlay_view_describes_query_miss_inside_project_filter() {
 #[test]
 fn followup_template_overlay_enter_closes_overlay() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.show_followup_template_overlay();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
@@ -5556,7 +5563,7 @@ fn followup_template_overlay_enter_closes_overlay() {
 #[test]
 fn followup_template_overlay_scroll_keys_update_preview_offset() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.show_followup_template_overlay();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,)));
@@ -5585,7 +5592,7 @@ fn followup_template_overlay_scroll_keys_update_preview_offset() {
 #[test]
 fn ctrl_g_starts_stop_keyword_edit_in_followup_overlay() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     app.start_stop_keyword_edit();
 
@@ -5600,7 +5607,7 @@ fn ctrl_g_starts_stop_keyword_edit_in_followup_overlay() {
 #[test]
 fn ctrl_l_starts_max_auto_turns_edit_in_followup_overlay() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     app.start_max_auto_turns_edit();
 
@@ -5622,7 +5629,7 @@ fn max_auto_turns_edit_commit_updates_saved_value_and_preview() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.start_max_auto_turns_edit();
     app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "5".to_string();
 
@@ -5646,7 +5653,7 @@ fn max_auto_turns_edit_commit_updates_saved_value_and_preview() {
 #[test]
 fn invalid_max_auto_turns_edit_keeps_editor_open() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_max_auto_turns_edit();
     app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "51".to_string();
 
@@ -5670,7 +5677,7 @@ fn invalid_max_auto_turns_edit_keeps_editor_open() {
 #[test]
 fn max_auto_turns_edit_ignores_non_digit_input() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_max_auto_turns_edit();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE,)));
@@ -5693,7 +5700,7 @@ fn stop_keyword_edit_commit_updates_saved_value_and_preview() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.start_stop_keyword_edit();
     app.followup_overlay_ui_state.stop_keyword_editor.buffer = "DONE".to_string();
 
@@ -5717,7 +5724,7 @@ fn stop_keyword_edit_commit_updates_saved_value_and_preview() {
 #[test]
 fn invalid_stop_keyword_edit_keeps_editor_open() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_stop_keyword_edit();
     app.followup_overlay_ui_state.stop_keyword_editor.buffer = "two words".to_string();
 
@@ -5744,7 +5751,7 @@ fn followup_template_status_lines_include_latest_status_text() {
     let mut conversation = ready_conversation();
     conversation.status_text =
         "auto stop keyword must use only letters, numbers, or underscores".to_string();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5767,7 +5774,7 @@ fn followup_template_status_lines_include_warning_summary_detail() {
         "workspace template missing".to_string(),
     ];
     conversation.warnings = conversation.template_warnings.clone();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5786,7 +5793,7 @@ fn followup_template_status_lines_include_runtime_notice_summary() {
     conversation.warnings = conversation.template_warnings.clone();
     conversation.runtime_notices =
         vec!["shared runtime reconnected after the previous app-server process exited".to_string()];
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5822,7 +5829,7 @@ fn followup_template_status_lines_surface_planning_queue_failure_and_notice() {
     });
     conversation.runtime_notices =
         vec!["planning reconciliation restored protected directions.toml".to_string()];
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5845,7 +5852,7 @@ fn followup_template_status_lines_hide_planner_panel_outside_debug_mode() {
         "Planning Context",
         "next task: rank 1 / task-1 / Implement shell planning status",
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
         last_operation_label: Some("refresh".to_string()),
@@ -5880,7 +5887,7 @@ fn followup_template_status_lines_show_planner_panel_in_debug_mode() {
         "Planning Context",
         "next task: rank 1 / task-1 / Implement shell planning status",
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
     app.planner_visibility = PlannerVisibility::Debug;
     app.planner_worker_panel_state = PlannerWorkerPanelState {
         status: PlannerWorkerStatus::RefreshSucceeded,
@@ -5921,7 +5928,7 @@ fn followup_template_status_lines_surface_proposed_followups_when_queue_is_idle(
         ),
         None,
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5939,7 +5946,7 @@ fn followup_template_status_lines_include_max_auto_turns_value() {
     let (mut app, _) = make_test_app();
     let mut conversation = ready_conversation();
     conversation.auto_follow_state.set_max_auto_turns(5);
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5957,7 +5964,7 @@ fn followup_template_status_lines_include_recent_tool_activity() {
     conversation.turn_activity.last_completed_turn_command_count = 2;
     conversation.turn_activity.last_completed_turn_last_summary =
         Some("command: cargo test [completed]".to_string());
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5979,7 +5986,7 @@ fn followup_template_status_lines_include_approval_review_summary() {
         risk_level: Some("high".to_string()),
         rationale: None,
     });
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_followup_template_status_lines(&app)
         .iter()
@@ -5993,7 +6000,7 @@ fn followup_template_status_lines_include_approval_review_summary() {
 #[test]
 fn followup_template_status_lines_include_github_review_change_summary() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.github_review_polling_state = GithubReviewPollingState::active(
         super::github_polling::GithubReviewPollingConfig {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
@@ -6018,7 +6025,7 @@ fn followup_template_status_lines_include_github_review_change_summary() {
 #[test]
 fn followup_template_status_lines_fit_default_overlay_budget() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
 
     let lines = build_followup_template_status_lines(&app);
 
@@ -6028,7 +6035,7 @@ fn followup_template_status_lines_fit_default_overlay_budget() {
 #[test]
 fn followup_template_status_lines_fit_edit_overlay_budget() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_max_auto_turns_edit();
 
     let lines = build_followup_template_status_lines(&app);
@@ -6039,7 +6046,7 @@ fn followup_template_status_lines_fit_edit_overlay_budget() {
 #[test]
 fn stop_keyword_edit_cancel_restores_saved_value() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_stop_keyword_edit();
     app.followup_overlay_ui_state.stop_keyword_editor.buffer = "DONE".to_string();
 
@@ -6055,7 +6062,7 @@ fn stop_keyword_edit_cancel_restores_saved_value() {
 #[test]
 fn max_auto_turns_edit_cancel_restores_saved_value() {
     let (mut app, _) = make_test_app();
-    app.conversation_state = ConversationState::Ready(ready_conversation());
+    app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_max_auto_turns_edit();
     app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "9".to_string();
 
@@ -6082,7 +6089,7 @@ fn auto_followup_skip_reason_is_visible_in_status_footer() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -6124,7 +6131,7 @@ fn auto_followup_queue_clears_previous_skip_reason_from_status_footer() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -6162,7 +6169,7 @@ fn inline_tail_hides_raw_turn_ids_after_auto_followup_status_updates() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -6191,7 +6198,7 @@ fn inline_tail_surfaces_stale_planning_status_while_turn_is_running() {
     ));
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-1".to_string());
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_inline_tail_lines(&app)
         .iter()
@@ -6215,7 +6222,7 @@ fn inline_tail_surfaces_manual_turn_working_line() {
         Some("commentary".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_inline_tail_lines(&app)
         .iter()
@@ -6236,7 +6243,7 @@ fn shell_footer_surfaces_recent_tool_activity_summary() {
         .last_completed_turn_file_change_count = 3;
     conversation.turn_activity.last_completed_turn_last_summary =
         Some("file change: update src/app.rs".to_string());
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6255,7 +6262,7 @@ fn shell_footer_surfaces_warning_summary_detail() {
     let mut conversation = ready_conversation();
     conversation.template_warnings = vec!["workspace template missing".to_string()];
     conversation.warnings = conversation.template_warnings.clone();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6279,7 +6286,7 @@ fn shell_footer_prioritizes_runtime_warning_summary_when_runtime_and_template_mi
         .chain(conversation.template_warnings.iter())
         .cloned()
         .collect();
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6298,7 +6305,7 @@ fn shell_footer_surfaces_runtime_notice_summary() {
     conversation.warnings = conversation.template_warnings.clone();
     conversation.runtime_notices =
         vec!["shared runtime reconnected after the previous app-server process exited".to_string()];
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6320,7 +6327,7 @@ fn shell_footer_surfaces_planning_summary_and_notice() {
     ));
     conversation.runtime_notices =
         vec!["planning reconciliation restored protected directions.toml".to_string()];
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6348,7 +6355,7 @@ fn shell_footer_surfaces_approval_review_summary() {
         risk_level: Some("medium".to_string()),
         rationale: None,
     });
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6372,7 +6379,7 @@ fn shell_footer_shows_current_turn_activity_while_streaming() {
     conversation.turn_activity.current_turn_file_change_count = 2;
     conversation.turn_activity.current_turn_last_summary =
         Some("command: cargo test [running]".to_string());
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()
@@ -6397,7 +6404,7 @@ fn recorded_limit_skip_detail_stays_stable_after_progress_resets() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
         ConversationStreamEvent::TurnCompleted {
@@ -6429,7 +6436,7 @@ fn shell_footer_surfaces_auto_follow_working_line_and_completed_progress() {
     conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Evaluating {
         started_at: std::time::Instant::now() - Duration::from_secs(130),
     };
-    app.conversation_state = ConversationState::Ready(conversation);
+    app.conversation_state = ConversationState::ready(conversation);
 
     let rendered = build_shell_footer_lines(&app)
         .iter()

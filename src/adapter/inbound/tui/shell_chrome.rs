@@ -62,6 +62,12 @@ impl ShellChromeState {
     }
 }
 
+impl Default for ShellChromeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ShellChromeEvent {
     StartupCheckRequested,

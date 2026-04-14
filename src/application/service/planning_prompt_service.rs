@@ -677,7 +677,9 @@ mod tests {
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_bootstrap_service::{
+        PlanningBootstrapMode, PlanningBootstrapService,
+    };
     use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
         TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
@@ -789,7 +791,8 @@ mod tests {
 
     #[test]
     fn partial_planning_workspace_blocks_auto_followup() {
-        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = sample_service(PlanningWorkspaceLoadRecord {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
@@ -813,7 +816,8 @@ mod tests {
 
     #[test]
     fn valid_planning_workspace_without_queue_head_is_ready_no_task() {
-        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = sample_service(PlanningWorkspaceLoadRecord {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
@@ -840,7 +844,8 @@ mod tests {
 
     #[test]
     fn proposed_followups_are_surfaceable_when_no_executable_queue_head_exists() {
-        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = sample_service(PlanningWorkspaceLoadRecord {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(
@@ -902,7 +907,8 @@ mod tests {
 
     #[test]
     fn non_promotable_proposals_do_not_surface_as_proposal_candidates() {
-        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = sample_service(PlanningWorkspaceLoadRecord {
             directions_toml: Some(
                 r#"
@@ -961,7 +967,8 @@ state = "paused"
 
     #[test]
     fn valid_planning_workspace_builds_prompt_fragment_with_queue_context() {
-        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = sample_service(PlanningWorkspaceLoadRecord {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(
@@ -1026,7 +1033,8 @@ state = "paused"
 
     #[test]
     fn invalid_planning_workspace_blocks_auto_followup_with_validation_reason() {
-        let bootstrap_artifacts = PlanningBootstrapService::new().build_artifacts();
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = sample_service(PlanningWorkspaceLoadRecord {
             directions_toml: Some(bootstrap_artifacts.directions_toml),
             task_ledger_json: Some(

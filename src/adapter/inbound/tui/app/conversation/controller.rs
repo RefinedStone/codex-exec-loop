@@ -73,6 +73,6 @@ impl NativeTuiApp {
         conversation.replace_planning_runtime_snapshot(
             self.load_planning_runtime_snapshot(workspace_directory),
         );
-        self.conversation_state = ConversationState::Ready(conversation);
+        self.conversation_state = ConversationState::ready(conversation);
     }
 }

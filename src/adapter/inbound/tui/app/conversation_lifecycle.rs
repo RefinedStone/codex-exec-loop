@@ -45,7 +45,7 @@ pub(super) fn reduce_conversation_lifecycle(
             template_load_result,
         } => {
             state.active_session = None;
-            state.conversation_state = ConversationState::Ready(ConversationViewModel::new_draft(
+            state.conversation_state = ConversationState::ready(ConversationViewModel::new_draft(
                 workspace_directory,
                 template_load_result,
             ));
@@ -64,7 +64,7 @@ pub(super) fn reduce_conversation_lifecycle(
             state.conversation_state = match result {
                 Ok(snapshot) => match template_load_result {
                     Some(template_load_result) => {
-                        ConversationState::Ready(ConversationViewModel::from_snapshot(
+                        ConversationState::ready(ConversationViewModel::from_snapshot(
                             snapshot,
                             template_load_result,
                             draft_workspace_directory,
@@ -141,7 +141,7 @@ mod tests {
 
     fn sample_state() -> ConversationLifecycleState {
         ConversationLifecycleState {
-            conversation_state: ConversationState::Ready(ConversationViewModel::new_draft(
+            conversation_state: ConversationState::ready(ConversationViewModel::new_draft(
                 "/tmp/root".to_string(),
                 sample_template_load_result(),
             )),

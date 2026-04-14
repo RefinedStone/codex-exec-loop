@@ -95,12 +95,7 @@ fn normalize_execution_policy_value(value: Option<&str>) -> Option<String> {
         return None;
     }
 
-    Some(
-        raw_value
-            .to_ascii_lowercase()
-            .replace('_', "-")
-            .replace(' ', "-"),
-    )
+    Some(raw_value.to_ascii_lowercase().replace(['_', ' '], "-"))
 }
 
 fn parse_approval_policy_value(value: Option<&str>) -> Option<ApprovalPolicyValue> {

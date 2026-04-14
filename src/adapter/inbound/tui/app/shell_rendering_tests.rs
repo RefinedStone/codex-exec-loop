@@ -52,7 +52,7 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
     .with_display_label("Auto Follow-up")
     .with_debug_detail("planner temp session: refresh / refresh ok");
 
-    let without_debug = format_conversation_lines(&[message.clone()]);
+    let without_debug = format_conversation_lines(std::slice::from_ref(&message));
     assert!(
         !without_debug
             .iter()

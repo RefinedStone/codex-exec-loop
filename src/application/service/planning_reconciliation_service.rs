@@ -591,7 +591,9 @@ mod tests {
         PlanningRepairRetryReason, build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_bootstrap_service::{
+        PlanningBootstrapMode, PlanningBootstrapService,
+    };
     use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
@@ -612,7 +614,8 @@ mod tests {
     fn write_bootstrap_workspace(workspace_dir: &str) -> PlanningExecutionSnapshot {
         let planning_dir = Path::new(workspace_dir).join(".codex-exec-loop/planning");
         fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-        let artifacts = PlanningBootstrapService::new().build_artifacts();
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let directions =
             toml::from_str(&artifacts.directions_toml).expect("bootstrap directions should parse");
         let task_ledger = serde_json::from_str(&artifacts.task_ledger_json)

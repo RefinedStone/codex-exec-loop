@@ -17,7 +17,9 @@ pub(super) struct ConversationIntentState {
 #[derive(Debug, Clone)]
 pub(super) enum ConversationIntentEvent {
     NewDraftRequested,
-    SessionOpenRequested { session: Option<SessionSummary> },
+    SessionOpenRequested {
+        session: Option<Box<SessionSummary>>,
+    },
     CtrlCPressed,
 }
 
@@ -60,7 +62,7 @@ pub(super) fn reduce_conversation_intents(
                             .to_string(),
                 });
             } else if let Some(session) = session {
-                effects.push(ConversationIntentEffect::OpenSession { session });
+                effects.push(ConversationIntentEffect::OpenSession { session: *session });
             }
         }
         ConversationIntentEvent::CtrlCPressed => {

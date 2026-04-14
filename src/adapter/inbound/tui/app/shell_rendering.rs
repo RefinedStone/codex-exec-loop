@@ -151,7 +151,7 @@ fn build_inline_terminal_flow_layout(
         } else {
             MAX_INLINE_INSPECTION_TAIL_HEIGHT
         };
-    let tail_height = inline_body_height(&tail_lines, area.width, tail_max_height);
+    let tail_height = inline_body_height(tail_lines, area.width, tail_max_height);
 
     Layout::default()
         .direction(Direction::Vertical)

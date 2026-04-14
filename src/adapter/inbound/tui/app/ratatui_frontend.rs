@@ -113,18 +113,10 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
+#[derive(Default)]
 struct InlineViewportState {
     history: InlineHistoryState,
     last_tail_frame: Option<InlineTailFrameSignature>,
-}
-
-impl Default for InlineViewportState {
-    fn default() -> Self {
-        Self {
-            history: InlineHistoryState::default(),
-            last_tail_frame: None,
-        }
-    }
 }
 
 impl InlineViewportState {

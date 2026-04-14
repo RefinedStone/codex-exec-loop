@@ -49,18 +49,18 @@ pub(super) struct ConversationPostTurnEvaluation {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+pub(super) struct QueuedAutoPrompt {
+    pub prompt: String,
+    pub queued_from_turn_id: String,
+    pub template_label: String,
+    pub transcript_text: String,
+    pub handoff_task: Option<PlanningTaskHandoff>,
+}
+
+#[derive(Debug, Clone)]
 pub(super) enum ConversationPostTurnAction {
-    QueueAutoPrompt {
-        prompt: String,
-        queued_from_turn_id: String,
-        template_label: String,
-        transcript_text: String,
-        handoff_task: Option<PlanningTaskHandoff>,
-    },
-    SkipAutoFollowup {
-        reason: AutoFollowupSkipReason,
-    },
+    QueueAutoPrompt(Box<QueuedAutoPrompt>),
+    SkipAutoFollowup { reason: AutoFollowupSkipReason },
 }
 
 #[derive(Debug, Clone)]
@@ -209,13 +209,14 @@ pub(super) fn reduce_conversation_runtime(
             state.planning_repair_state = evaluation.planning_repair_state;
             state.extend_runtime_notices(evaluation.runtime_notices);
             match evaluation.action {
-                ConversationPostTurnAction::QueueAutoPrompt {
-                    prompt,
-                    queued_from_turn_id,
-                    template_label,
-                    transcript_text,
-                    handoff_task,
-                } => {
+                ConversationPostTurnAction::QueueAutoPrompt(queued_prompt) => {
+                    let QueuedAutoPrompt {
+                        prompt,
+                        queued_from_turn_id,
+                        template_label,
+                        transcript_text,
+                        handoff_task,
+                    } = *queued_prompt;
                     state.clear_auto_followup_skip();
                     state.record_auto_followup_queue(&queued_from_turn_id, &template_label);
                     state.status_text = format!(
@@ -298,13 +299,13 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "continue from the last result".to_string(),
-                origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
                     transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                     debug_detail: None,
                     handoff_task: None,
-                }),
+                })),
             },
         );
 
@@ -386,7 +387,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "continue from the last result".to_string(),
-                origin: PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
                     transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
@@ -395,7 +396,7 @@ mod tests {
                             .to_string(),
                     ),
                     handoff_task: None,
-                }),
+                })),
             },
         );
 
@@ -1025,13 +1026,16 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
-                    action: ConversationPostTurnAction::QueueAutoPrompt {
-                        prompt: "continue".to_string(),
-                        queued_from_turn_id: "turn-1".to_string(),
-                        template_label: "builtin next-task".to_string(),
-                        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
-                        handoff_task: None,
-                    },
+                    action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
+                        QueuedAutoPrompt {
+                            prompt: "continue".to_string(),
+                            queued_from_turn_id: "turn-1".to_string(),
+                            template_label: "builtin next-task".to_string(),
+                            transcript_text: "다음 queued task 1개를 이어서 진행합니다."
+                                .to_string(),
+                            handoff_task: None,
+                        },
+                    )),
                 }),
             },
         );
@@ -1080,13 +1084,16 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
-                    action: ConversationPostTurnAction::QueueAutoPrompt {
-                        prompt: "continue".to_string(),
-                        queued_from_turn_id: "turn-1".to_string(),
-                        template_label: "builtin next-task".to_string(),
-                        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
-                        handoff_task: None,
-                    },
+                    action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
+                        QueuedAutoPrompt {
+                            prompt: "continue".to_string(),
+                            queued_from_turn_id: "turn-1".to_string(),
+                            template_label: "builtin next-task".to_string(),
+                            transcript_text: "다음 queued task 1개를 이어서 진행합니다."
+                                .to_string(),
+                            handoff_task: None,
+                        },
+                    )),
                 }),
             },
         );
@@ -1129,13 +1136,16 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
-                    action: ConversationPostTurnAction::QueueAutoPrompt {
-                        prompt: "continue".to_string(),
-                        queued_from_turn_id: "turn-1".to_string(),
-                        template_label: "builtin next-task".to_string(),
-                        transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
-                        handoff_task: None,
-                    },
+                    action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
+                        QueuedAutoPrompt {
+                            prompt: "continue".to_string(),
+                            queued_from_turn_id: "turn-1".to_string(),
+                            template_label: "builtin next-task".to_string(),
+                            transcript_text: "다음 queued task 1개를 이어서 진행합니다."
+                                .to_string(),
+                            handoff_task: None,
+                        },
+                    )),
                 }),
             },
         );

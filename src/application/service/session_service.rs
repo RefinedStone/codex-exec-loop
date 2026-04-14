@@ -272,7 +272,7 @@ pub fn project_recent_sessions(
     let total_pages = if filtered_session_count == 0 {
         0
     } else {
-        (filtered_session_count + browser_state.page_size - 1) / browser_state.page_size
+        filtered_session_count.div_ceil(browser_state.page_size)
     };
     let page_index = if total_pages == 0 {
         0
@@ -387,13 +387,12 @@ fn resolve_selected_index(
     selected_session_id: Option<&str>,
     selected_session_index: usize,
 ) -> Option<usize> {
-    if let Some(selected_session_id) = selected_session_id {
-        if let Some(selected_index) = visible_sessions
+    if let Some(selected_session_id) = selected_session_id
+        && let Some(selected_index) = visible_sessions
             .iter()
             .position(|session| session.id == selected_session_id)
-        {
-            return Some(selected_index);
-        }
+    {
+        return Some(selected_index);
     }
 
     (!visible_sessions.is_empty())
@@ -448,10 +447,13 @@ fn current_workspace_bonus(
     session: &SessionSummary,
     current_workspace_directory: Option<&str>,
 ) -> u32 {
-    current_workspace_directory
+    if current_workspace_directory
         .is_some_and(|workspace_directory| session.cwd == workspace_directory)
-        .then_some(4)
-        .unwrap_or(0)
+    {
+        4
+    } else {
+        0
+    }
 }
 
 fn search_token_score(session: &SessionSummary, search_token: &str) -> Option<u32> {

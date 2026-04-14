@@ -305,7 +305,9 @@ mod tests {
         PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_bootstrap_service::{
+        PlanningBootstrapMode, PlanningBootstrapService,
+    };
     use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
@@ -372,7 +374,8 @@ mod tests {
     fn write_bootstrap_workspace(workspace_dir: &str) {
         let planning_dir = Path::new(workspace_dir).join(".codex-exec-loop/planning");
         fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-        let artifacts = PlanningBootstrapService::new().build_artifacts();
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         fs::write(
             planning_dir.join("directions.toml"),
             artifacts.directions_toml,

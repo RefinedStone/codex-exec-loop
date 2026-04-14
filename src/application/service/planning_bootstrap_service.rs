@@ -101,10 +101,6 @@ impl PlanningBootstrapService {
         Self
     }
 
-    pub fn build_artifacts(&self) -> PlanningBootstrapArtifacts {
-        self.build_artifacts_for_mode(PlanningBootstrapMode::Detail)
-    }
-
     pub fn build_artifacts_for_mode(
         &self,
         mode: PlanningBootstrapMode,
@@ -236,7 +232,7 @@ mod tests {
     #[test]
     fn bootstrap_artifacts_use_expected_paths_and_versioned_contracts() {
         let service = PlanningBootstrapService::new();
-        let artifacts = service.build_artifacts();
+        let artifacts = service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         assert!(artifacts.directions_path.ends_with("directions.toml"));
         assert!(artifacts.task_ledger_path.ends_with("task-ledger.json"));
@@ -256,8 +252,9 @@ mod tests {
     #[test]
     fn bootstrap_direction_catalog_remains_readable() {
         let service = PlanningBootstrapService::new();
+        let artifacts = service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let directions: DirectionCatalogDocument =
-            toml::from_str(service.build_artifacts().directions_toml.as_str())
+            toml::from_str(artifacts.directions_toml.as_str())
                 .expect("bootstrap directions should parse");
 
         assert_eq!(directions.version, PLANNING_FORMAT_VERSION);

@@ -179,7 +179,7 @@ struct AutoFollowupSubmitContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptOrigin {
     Manual,
-    AutoFollow(AutoFollowupSubmitContext),
+    AutoFollow(Box<AutoFollowupSubmitContext>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
