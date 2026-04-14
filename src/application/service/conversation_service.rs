@@ -4,7 +4,8 @@ use std::sync::mpsc::Sender;
 use anyhow::Result;
 
 use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
-use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::domain::conversation::ConversationSnapshot;
 
 #[derive(Clone)]
 pub struct ConversationService {

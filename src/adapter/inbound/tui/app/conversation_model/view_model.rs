@@ -2,6 +2,9 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
+use crate::adapter::inbound::tui::conversation_text::{
+    approval_review_status_text, approval_review_summary_text,
+};
 use crate::application::service::planning::{
     PlanningAutoFollowBlockReason, PlanningRepairRequest, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeSnapshot, PlanningRuntimeUseCases,
@@ -294,11 +297,11 @@ impl ConversationViewModel {
     pub(crate) fn approval_summary(&self) -> Option<String> {
         self.approval_review
             .as_ref()
-            .map(ConversationApprovalReview::summary_text)
+            .map(approval_review_summary_text)
     }
 
     pub(crate) fn update_approval_review(&mut self, review: ConversationApprovalReview) {
-        self.set_status_with_warnings(review.status_text());
+        self.set_status_with_warnings(approval_review_status_text(&review));
         self.approval_review = Some(review);
     }
 

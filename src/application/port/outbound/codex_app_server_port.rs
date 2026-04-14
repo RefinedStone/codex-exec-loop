@@ -2,7 +2,8 @@ use std::sync::mpsc::Sender;
 
 use anyhow::Result;
 
-use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::recent_sessions::RecentSessions;
 
 pub trait CodexAppServerPort: Send + Sync {

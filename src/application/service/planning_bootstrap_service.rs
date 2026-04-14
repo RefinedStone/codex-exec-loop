@@ -2,11 +2,11 @@ use serde_json::json;
 
 use crate::application::port::outbound::planning_workspace_port::PlanningDraftFileRecord;
 use crate::application::service::planning_auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
-use crate::domain::planning::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_FORMAT_VERSION,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    TaskLedgerDocument,
+use crate::application::service::planning_contract::{
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
+use crate::domain::planning::{PLANNING_FORMAT_VERSION, TaskLedgerDocument};
 
 const DEFAULT_DIRECTIONS_TOML: &str = r#"version = 1
 
@@ -228,9 +228,9 @@ impl PlanningBootstrapService {
 #[cfg(test)]
 mod tests {
     use super::{PlanningBootstrapMode, PlanningBootstrapService};
+    use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
     use crate::domain::planning::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DirectionCatalogDocument, DirectionState,
-        PLANNING_FORMAT_VERSION, QueueIdlePolicy,
+        DirectionCatalogDocument, DirectionState, PLANNING_FORMAT_VERSION, QueueIdlePolicy,
     };
 
     #[test]

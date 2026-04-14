@@ -5,6 +5,7 @@ use anyhow::Result;
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
 };
+use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
 use crate::application::service::planning_reconciliation_service::{
     PlanningRepairRequest, PlanningRepairRetryReason, build_planning_repair_prompt,
@@ -168,7 +169,7 @@ impl PlanningWorkerOrchestrationService {
         let task_ledger_changed = worker_response
             .changed_planning_file_paths
             .iter()
-            .any(|path| path == crate::domain::planning::TASK_LEDGER_FILE_PATH);
+            .any(|path| path == TASK_LEDGER_FILE_PATH);
         let mut notices = reconciliation_result.notices;
         if let Some(worker_summary) = worker_summary.as_deref() {
             notices.push(format!(
@@ -305,6 +306,9 @@ mod tests {
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_contract::{
+        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    };
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
     use crate::application::service::planning_runtime_facade_service::{
@@ -314,9 +318,6 @@ mod tests {
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
-    use crate::domain::planning::{
-        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    };
 
     #[derive(Clone)]
     struct ScriptedPlanningWorkerPort {

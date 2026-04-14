@@ -9,16 +9,16 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning_auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
+use crate::application::service::planning_contract::{
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
+    PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    TASK_LEDGER_SCHEMA_FILE_PATH, default_direction_detail_doc_path,
+};
 use crate::application::service::planning_init_service::{
     PlanningDraftEditorFile, PlanningDraftEditorSession,
 };
 use crate::application::service::planning_validation_service::PlanningValidationService;
-use crate::domain::planning::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, DirectionCatalogDocument,
-    PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QueueIdlePolicy,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    default_direction_detail_doc_path,
-};
+use crate::domain::planning::{DirectionCatalogDocument, QueueIdlePolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectionsSupportingFileStatus {
@@ -602,8 +602,9 @@ mod tests {
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
+    use crate::application::service::planning_contract::default_direction_detail_doc_path;
     use crate::application::service::planning_validation_service::PlanningValidationService;
-    use crate::domain::planning::{QueueIdlePolicy, default_direction_detail_doc_path};
+    use crate::domain::planning::QueueIdlePolicy;
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()

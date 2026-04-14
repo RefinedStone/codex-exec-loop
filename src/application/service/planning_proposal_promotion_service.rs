@@ -6,6 +6,7 @@ use chrono::{SecondsFormat, Utc};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
+use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning_prompt_service::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
@@ -13,8 +14,8 @@ use crate::application::service::planning_reconciliation_service::PlanningReconc
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles,
-    TASK_LEDGER_FILE_PATH, TaskActor, TaskLedgerDocument, TaskStatus,
+    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles, TaskActor,
+    TaskLedgerDocument, TaskStatus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,11 +215,11 @@ mod tests {
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
+    use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
-    use crate::domain::planning::TASK_LEDGER_FILE_PATH;
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()
