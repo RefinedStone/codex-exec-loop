@@ -7,6 +7,9 @@ pub(super) enum ConversationInputEvent {
     BackspacePressed,
     PreviousWordDeleted,
     InputCleared,
+    InlineCommandPaletteSelectionMoved { delta: isize },
+    InlineCommandPaletteDismissed,
+    InlineCommandPaletteCommandInserted { command: InlineShellCommand },
     StartupSubmitArmed { status_text: String },
     StartupSubmitDisarmed { status_text: Option<String> },
     StatusMessageShown { status_text: String },
@@ -25,22 +28,37 @@ pub(super) fn reduce_conversation_input(
         ConversationInputEvent::CharacterTyped { character } => {
             clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.push(character);
+            state.sync_inline_shell_command_palette();
         }
         ConversationInputEvent::NewlineInserted => {
             clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.push('\n');
+            state.sync_inline_shell_command_palette();
         }
         ConversationInputEvent::BackspacePressed => {
             clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.pop();
+            state.sync_inline_shell_command_palette();
         }
         ConversationInputEvent::PreviousWordDeleted => {
             clear_startup_submit_after_input_change(&mut state);
             delete_previous_word(&mut state.input_buffer);
+            state.sync_inline_shell_command_palette();
         }
         ConversationInputEvent::InputCleared => {
             clear_startup_submit_after_input_change(&mut state);
             state.input_buffer.clear();
+            state.sync_inline_shell_command_palette();
+        }
+        ConversationInputEvent::InlineCommandPaletteSelectionMoved { delta } => {
+            state.move_inline_shell_command_palette_selection(delta);
+        }
+        ConversationInputEvent::InlineCommandPaletteDismissed => {
+            state.dismiss_inline_shell_command_palette();
+        }
+        ConversationInputEvent::InlineCommandPaletteCommandInserted { command } => {
+            clear_startup_submit_after_input_change(&mut state);
+            state.insert_inline_shell_command_completion(command);
         }
         ConversationInputEvent::StartupSubmitArmed { status_text } => {
             state.arm_startup_submit();
@@ -224,6 +242,64 @@ mod tests {
             "queued startup send canceled after input changed"
         );
         assert_eq!(reduced.state.input_buffer, "a");
+    }
+
+    #[test]
+    fn colon_input_opens_inline_command_palette() {
+        let state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CharacterTyped { character: ':' },
+        );
+
+        assert!(reduced.state.inline_shell_command_palette_state.is_active());
+        assert_eq!(
+            reduced
+                .state
+                .inline_shell_command_palette_state
+                .selected_command(),
+            Some(InlineShellCommand::Diagnostics)
+        );
+    }
+
+    #[test]
+    fn command_palette_can_be_dismissed_without_clearing_input() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = ":p".to_string();
+        state.sync_inline_shell_command_palette();
+
+        let reduced =
+            reduce_conversation_input(state, ConversationInputEvent::InlineCommandPaletteDismissed);
+
+        assert_eq!(reduced.state.input_buffer, ":p");
+        assert!(!reduced.state.inline_shell_command_palette_state.is_active());
+    }
+
+    #[test]
+    fn command_palette_inserted_command_switches_to_argument_entry() {
+        let mut state = ConversationViewModel::new_draft(
+            "/tmp/root".to_string(),
+            sample_template_load_result(),
+        );
+        state.input_buffer = ":t".to_string();
+        state.sync_inline_shell_command_palette();
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::InlineCommandPaletteCommandInserted {
+                command: InlineShellCommand::MaxAutoTurns,
+            },
+        );
+
+        assert_eq!(reduced.state.input_buffer, ":turns ");
+        assert!(!reduced.state.inline_shell_command_palette_state.is_active());
     }
 
     #[test]

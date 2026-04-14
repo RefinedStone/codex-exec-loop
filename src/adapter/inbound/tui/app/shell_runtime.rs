@@ -172,6 +172,36 @@ impl ShellRuntime {
             return;
         }
 
+        if self.app.is_inline_command_palette_active() {
+            match key.code {
+                KeyCode::Esc if key.modifiers.is_empty() => {
+                    if self.app.dismiss_inline_command_palette() {
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                KeyCode::Up if key.modifiers.is_empty() => {
+                    if self.app.move_inline_command_palette_selection(-1) {
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                KeyCode::Down if key.modifiers.is_empty() => {
+                    if self.app.move_inline_command_palette_selection(1) {
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                KeyCode::Enter if key.modifiers.is_empty() => {
+                    if self.app.accept_inline_command_palette_selection() {
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
             self.app.handle_ctrl_c();
             self.request_redraw();
@@ -520,6 +550,86 @@ mod tests {
         };
         assert_eq!(conversation.input_buffer, "a");
         assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn enter_executes_selected_inline_command_palette_item() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().push_input_character(':');
+        runtime.app_mut().push_input_character('d');
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Startup);
+        assert!(conversation.input_buffer.is_empty());
+        assert!(
+            conversation
+                .status_text
+                .contains("opened diagnostics inspection")
+        );
+    }
+
+    #[test]
+    fn down_then_enter_on_palette_item_with_argument_inserts_completion() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().push_input_character(':');
+        runtime.app_mut().push_input_character('t');
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.input_buffer, ":turns ");
+        assert!(!conversation.inline_shell_command_palette_state.is_active());
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Hidden);
+    }
+
+    #[test]
+    fn up_wraps_inline_command_palette_selection() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().push_input_character(':');
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(
+            conversation
+                .inline_shell_command_palette_state
+                .selected_command(),
+            Some(InlineShellCommand::Help)
+        );
+    }
+
+    #[test]
+    fn escape_dismisses_inline_command_palette_without_clearing_buffer() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().push_input_character(':');
+        runtime.app_mut().push_input_character('p');
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.input_buffer, ":p");
+        assert!(!conversation.inline_shell_command_palette_state.is_active());
     }
 
     #[test]

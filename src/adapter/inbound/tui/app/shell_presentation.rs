@@ -44,6 +44,7 @@ const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
 const INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
+const INLINE_COMMAND_PALETTE_VISIBLE_LIMIT: usize = 4;
 const QUEUE_INSPECTION_TASK_LIMIT: usize = 2;
 const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
 const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
@@ -2138,18 +2139,13 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
-        lines.push(Line::from(command.buffered_hint()));
-        lines.extend(build_inline_shell_command_suggestion_lines(
-            &conversation.input_buffer,
-        ));
+    if conversation.inline_shell_command_palette_state.is_active() {
+        lines.extend(build_shell_command_palette_lines(conversation));
         return lines;
     }
 
-    if InlineShellCommand::suggestion_prefix(&conversation.input_buffer).is_some() {
-        lines.extend(build_inline_shell_command_suggestion_lines(
-            &conversation.input_buffer,
-        ));
+    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
+        lines.push(Line::from(command.buffered_hint()));
         return lines;
     }
 
@@ -2181,36 +2177,6 @@ fn build_inline_ready_prompt_lines(
         }
     };
     lines.push(Line::from(hint));
-    lines
-}
-
-fn build_inline_shell_command_suggestion_lines(input: &str) -> Vec<Line<'static>> {
-    let Some(prefix) = InlineShellCommand::suggestion_prefix(input) else {
-        return Vec::new();
-    };
-    let suggestions = InlineShellCommand::suggestions(input);
-    if suggestions.is_empty() {
-        return vec![Line::from(format!("commands: no match for {prefix}"))];
-    }
-
-    let mut lines = Vec::new();
-    let labels = suggestions
-        .iter()
-        .map(|command| command.command_name())
-        .collect::<Vec<_>>();
-    for (index, chunk) in labels.chunks(3).enumerate() {
-        let chunk_text = chunk.join("  ");
-        if index == 0 {
-            let prefix_label = if prefix == ":" {
-                "commands".to_string()
-            } else {
-                format!("matches {prefix}")
-            };
-            lines.push(Line::from(format!("{prefix_label}: {chunk_text}")));
-        } else {
-            lines.push(Line::from(format!("commands: {chunk_text}")));
-        }
-    }
     lines
 }
 
@@ -2409,18 +2375,13 @@ pub(super) fn build_ready_input_lines(
         return lines;
     }
 
-    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
-        lines.push(Line::from(command.buffered_hint()));
-        lines.extend(build_shell_command_suggestion_lines(
-            &conversation.input_buffer,
-        ));
+    if conversation.inline_shell_command_palette_state.is_active() {
+        lines.extend(build_shell_command_palette_lines(conversation));
         return lines;
     }
 
-    if InlineShellCommand::suggestion_prefix(&conversation.input_buffer).is_some() {
-        lines.extend(build_shell_command_suggestion_lines(
-            &conversation.input_buffer,
-        ));
+    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
+        lines.push(Line::from(command.buffered_hint()));
         return lines;
     }
 
@@ -2469,33 +2430,74 @@ pub(super) fn build_ready_input_lines(
     lines
 }
 
-#[cfg(test)]
-fn build_shell_command_suggestion_lines(input: &str) -> Vec<Line<'static>> {
-    let Some(prefix) = InlineShellCommand::suggestion_prefix(input) else {
+fn build_shell_command_palette_lines(conversation: &ConversationViewModel) -> Vec<Line<'static>> {
+    let palette_state = &conversation.inline_shell_command_palette_state;
+    if !palette_state.is_active() {
+        return Vec::new();
+    }
+
+    let Some(prefix) = InlineShellCommand::suggestion_prefix(&conversation.input_buffer) else {
         return Vec::new();
     };
-    let suggestions = InlineShellCommand::suggestions(input);
-    if suggestions.is_empty() {
-        return vec![
-            Line::from(format!("No shell commands match `{prefix}`.")),
-            Line::from("Keep typing to refine the command, or send it as a normal prompt."),
-        ];
+    if palette_state.suggestions().is_empty() {
+        return vec![Line::from(format!("  no shell commands match `{prefix}`"))];
     }
 
-    let mut lines = vec![Line::from(if prefix == ":" {
-        "Shell commands: type a name, then press Enter.".to_string()
-    } else {
-        format!("Matching shell commands for `{prefix}`:")
-    })];
+    let selected_index = palette_state.selected_index().unwrap_or(0);
+    let suggestions = palette_state.suggestions();
+    let (window_start, window_end) =
+        build_shell_command_palette_window(suggestions.len(), selected_index);
 
-    let entries = suggestions
+    suggestions[window_start..window_end]
         .iter()
-        .map(|command| format!("{} {}", command.command_name(), command.suggestion_detail()))
-        .collect::<Vec<_>>();
-    for chunk in entries.chunks(2) {
-        lines.push(Line::from(chunk.join("  |  ")));
+        .enumerate()
+        .map(|(offset, command)| {
+            let is_selected = selected_index == window_start + offset;
+            let selector = if is_selected { "> " } else { "  " };
+            let detail = if command.requires_argument() {
+                format!("{} / add value", command.suggestion_detail())
+            } else {
+                command.suggestion_detail().to_string()
+            };
+            let label_style = if is_selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let detail_style = if is_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            Line::from(vec![
+                Span::raw(selector),
+                Span::styled(command.command_name().to_string(), label_style),
+                Span::raw("  "),
+                Span::styled(detail, detail_style),
+            ])
+        })
+        .collect()
+}
+
+fn build_shell_command_palette_window(
+    suggestion_count: usize,
+    selected_index: usize,
+) -> (usize, usize) {
+    if suggestion_count <= INLINE_COMMAND_PALETTE_VISIBLE_LIMIT {
+        return (0, suggestion_count);
     }
-    lines
+
+    let max_window_start = suggestion_count - INLINE_COMMAND_PALETTE_VISIBLE_LIMIT;
+    let window_start = selected_index
+        .saturating_sub(INLINE_COMMAND_PALETTE_VISIBLE_LIMIT / 2)
+        .min(max_window_start);
+    (
+        window_start,
+        window_start + INLINE_COMMAND_PALETTE_VISIBLE_LIMIT,
+    )
 }
 
 #[cfg(test)]

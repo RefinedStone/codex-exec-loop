@@ -15,6 +15,7 @@ use crate::domain::conversation::{
 };
 use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 
+use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
 use super::super::shell_presentation::format_conversation_lines;
 use super::auto_follow::{AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason};
 use super::turn_activity::TurnActivityState;
@@ -79,6 +80,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) warnings: Vec<String>,
     pub(crate) runtime_notices: Vec<String>,
     pub(crate) input_buffer: String,
+    pub(crate) inline_shell_command_palette_state: InlineShellCommandPaletteState,
     pub(crate) startup_submit_armed: bool,
     pub(crate) active_turn_id: Option<String>,
     pub(crate) active_turn_workspace_directory: Option<String>,
@@ -117,6 +119,7 @@ impl ConversationViewModel {
             warnings: template_load_result.warnings,
             runtime_notices: Vec::new(),
             input_buffer: String::new(),
+            inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
             startup_submit_armed: false,
             active_turn_id: None,
             active_turn_workspace_directory: None,
@@ -164,6 +167,7 @@ impl ConversationViewModel {
             warnings,
             runtime_notices,
             input_buffer: String::new(),
+            inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
             startup_submit_armed: false,
             active_turn_id: None,
             active_turn_workspace_directory: None,
@@ -317,6 +321,26 @@ impl ConversationViewModel {
         self.planning_runtime_snapshot = planning_runtime_snapshot;
     }
 
+    pub(crate) fn sync_inline_shell_command_palette(&mut self) {
+        let preferred_selection = self.inline_shell_command_palette_state.selected_command();
+        self.inline_shell_command_palette_state
+            .sync_to_input(&self.input_buffer, preferred_selection);
+    }
+
+    pub(crate) fn move_inline_shell_command_palette_selection(&mut self, delta: isize) -> bool {
+        self.inline_shell_command_palette_state
+            .move_selection(delta)
+    }
+
+    pub(crate) fn dismiss_inline_shell_command_palette(&mut self) -> bool {
+        self.inline_shell_command_palette_state.dismiss()
+    }
+
+    pub(crate) fn insert_inline_shell_command_completion(&mut self, command: InlineShellCommand) {
+        self.input_buffer = command.completion_text().to_string();
+        self.sync_inline_shell_command_palette();
+    }
+
     pub(crate) fn set_status_with_warnings(&mut self, base_status: String) {
         self.status_text = match self.warning_status_label() {
             Some(warning_label) => format!("{base_status} / {warning_label}"),
@@ -416,6 +440,7 @@ impl ConversationViewModel {
         self.push_message(transcript_message);
         if clear_input_buffer {
             self.input_buffer.clear();
+            self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
         }
         self.mark_turn_submitting(workspace_directory);
     }

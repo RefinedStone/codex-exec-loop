@@ -424,6 +424,7 @@ fn ready_conversation() -> ConversationViewModel {
         warnings: Vec::new(),
         runtime_notices: Vec::new(),
         input_buffer: String::new(),
+        inline_shell_command_palette_state: Default::default(),
         startup_submit_armed: false,
         active_turn_id: None,
         active_turn_workspace_directory: None,
@@ -3126,6 +3127,7 @@ fn trailing_newline_keeps_blank_prompt_line_visible() {
 fn inline_shell_command_buffer_shows_command_hint() {
     let mut conversation = ready_conversation();
     conversation.input_buffer = ":templates".to_string();
+    conversation.sync_inline_shell_command_palette();
 
     let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
         .iter()
@@ -3134,8 +3136,8 @@ fn inline_shell_command_buffer_shows_command_hint() {
         .join("\n");
 
     assert!(rendered.contains("> :templates"));
-    assert!(rendered.contains("Press Enter to open the template inspection."));
-    assert!(rendered.contains(":templates template inspection"));
+    assert!(rendered.contains("template inspection"));
+    assert!(!rendered.contains("Press Enter to open the template inspection."));
 }
 
 #[test]
@@ -3151,13 +3153,14 @@ fn max_auto_turns_command_buffer_shows_argument_aware_hint() {
 
     assert!(rendered.contains("> :turns 8"));
     assert!(rendered.contains("Press Enter to set max auto turns to 8."));
-    assert!(rendered.contains(":turns set max auto turns"));
+    assert!(!rendered.contains("add value"));
 }
 
 #[test]
 fn colon_only_buffer_shows_available_shell_commands() {
     let mut conversation = ready_conversation();
     conversation.input_buffer = ":".to_string();
+    conversation.sync_inline_shell_command_palette();
 
     let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
         .iter()
@@ -3166,17 +3169,18 @@ fn colon_only_buffer_shows_available_shell_commands() {
         .join("\n");
 
     assert!(rendered.contains("> :"));
-    assert!(rendered.contains("Shell commands: type a name, then press Enter."));
-    assert!(rendered.contains(":diag diagnostics"));
-    assert!(rendered.contains(":planning planning mode"));
-    assert!(rendered.contains(":turns set max auto turns"));
-    assert!(rendered.contains(":help command help"));
+    assert!(rendered.contains("> :diag  diagnostics"));
+    assert!(rendered.contains("  :sessions  recent sessions"));
+    assert!(rendered.contains("  :queue  planning queue"));
+    assert!(rendered.contains("  :directions  directions maintenance"));
+    assert!(!rendered.contains(":help  command help"));
 }
 
 #[test]
 fn command_prefix_buffer_filters_matching_shell_commands() {
     let mut conversation = ready_conversation();
     conversation.input_buffer = ":p".to_string();
+    conversation.sync_inline_shell_command_palette();
 
     let rendered = build_ready_input_lines(&conversation, ShellActionAvailability::Ready)
         .iter()
@@ -3185,9 +3189,8 @@ fn command_prefix_buffer_filters_matching_shell_commands() {
         .join("\n");
 
     assert!(rendered.contains("> :p"));
-    assert!(rendered.contains("Matching shell commands for `:p`:"));
-    assert!(rendered.contains(":planning planning mode"));
-    assert!(!rendered.contains(":diag diagnostics"));
+    assert!(rendered.contains("> :planning  planning mode"));
+    assert!(!rendered.contains(":diag  diagnostics"));
 }
 
 #[test]
@@ -3196,6 +3199,7 @@ fn inline_tail_command_prefix_shows_filtered_matches_while_typing() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let mut conversation = ready_conversation();
     conversation.input_buffer = ":p".to_string();
+    conversation.sync_inline_shell_command_palette();
     app.conversation_state = ConversationState::Ready(conversation);
 
     let rendered = build_inline_tail_lines(&app)
@@ -3205,7 +3209,7 @@ fn inline_tail_command_prefix_shows_filtered_matches_while_typing() {
         .join("\n");
 
     assert!(rendered.contains("> :p"));
-    assert!(rendered.contains("matches :p: :planning"));
+    assert!(rendered.contains("> :planning  planning mode"));
     assert!(!rendered.contains(":diag"));
 }
 

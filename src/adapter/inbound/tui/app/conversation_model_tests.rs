@@ -74,6 +74,7 @@ fn ready_conversation() -> ConversationViewModel {
         warnings: Vec::new(),
         runtime_notices: Vec::new(),
         input_buffer: String::new(),
+        inline_shell_command_palette_state: Default::default(),
         startup_submit_armed: false,
         active_turn_id: None,
         active_turn_workspace_directory: None,

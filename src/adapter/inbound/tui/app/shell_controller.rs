@@ -753,6 +753,60 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
     }
 
+    pub(super) fn is_inline_command_palette_active(&self) -> bool {
+        matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.inline_shell_command_palette_state.is_active()
+        )
+    }
+
+    pub(super) fn move_inline_command_palette_selection(&mut self, delta: isize) -> bool {
+        if !self.is_inline_command_palette_active() {
+            return false;
+        }
+
+        self.dispatch_conversation_input(
+            ConversationInputEvent::InlineCommandPaletteSelectionMoved { delta },
+        );
+        true
+    }
+
+    pub(super) fn dismiss_inline_command_palette(&mut self) -> bool {
+        if !self.is_inline_command_palette_active() {
+            return false;
+        }
+
+        self.dispatch_conversation_input(ConversationInputEvent::InlineCommandPaletteDismissed);
+        true
+    }
+
+    pub(super) fn accept_inline_command_palette_selection(&mut self) -> bool {
+        let selected_command = match &self.conversation_state {
+            ConversationState::Ready(conversation)
+                if conversation.inline_shell_command_palette_state.is_active() =>
+            {
+                conversation
+                    .inline_shell_command_palette_state
+                    .selected_command()
+            }
+            _ => None,
+        };
+        let Some(command) = selected_command else {
+            return false;
+        };
+
+        if command.requires_argument() {
+            self.dispatch_conversation_input(
+                ConversationInputEvent::InlineCommandPaletteCommandInserted { command },
+            );
+            return true;
+        }
+
+        self.execute_inline_shell_command_input(InlineShellCommandInput::from_command(command));
+        true
+    }
+
     pub(super) fn insert_input_newline(&mut self) {
         self.dispatch_conversation_input(ConversationInputEvent::NewlineInserted);
     }

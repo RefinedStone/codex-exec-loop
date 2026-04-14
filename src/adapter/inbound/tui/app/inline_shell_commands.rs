@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum InlineShellCommand {
+pub(crate) enum InlineShellCommand {
     Diagnostics,
     Sessions,
     Queue,
@@ -18,6 +18,13 @@ pub(super) struct InlineShellCommandInput {
     argument: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct InlineShellCommandPaletteState {
+    active: bool,
+    selected_index: usize,
+    suggestions: Vec<InlineShellCommand>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct InlineShellCommandSpec {
     command: InlineShellCommand,
@@ -26,6 +33,7 @@ struct InlineShellCommandSpec {
     suggestion_detail: &'static str,
     buffered_hint: &'static str,
     execution_status: Option<&'static str>,
+    requires_argument: bool,
 }
 
 const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning  :turns <n>  :new  :help";
@@ -39,6 +47,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "diagnostics",
         buffered_hint: "Press Enter to open the diagnostics inspection.",
         execution_status: Some("opened diagnostics inspection"),
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Sessions,
@@ -47,6 +56,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "recent sessions",
         buffered_hint: "Press Enter to open the recent-sessions inspection.",
         execution_status: Some("opened recent sessions inspection"),
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Queue,
@@ -55,6 +65,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to open the planning queue inspection.",
         execution_status: Some("opened planning queue inspection"),
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Directions,
@@ -63,6 +74,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "directions maintenance",
         buffered_hint: "Press Enter to review or edit planning directions.",
         execution_status: None,
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Stop,
@@ -71,6 +83,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "stop automation",
         buffered_hint: "Press Enter to stop post-turn automation.",
         execution_status: None,
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Templates,
@@ -79,6 +92,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "template inspection",
         buffered_hint: "Press Enter to open the template inspection.",
         execution_status: Some("opened template inspection"),
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::PlanningInit,
@@ -87,6 +101,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning mode",
         buffered_hint: "Press Enter to open the planning mode selector.",
         execution_status: None,
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::MaxAutoTurns,
@@ -95,6 +110,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "set max auto turns",
         buffered_hint: MAX_AUTO_TURNS_USAGE,
         execution_status: None,
+        requires_argument: true,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::NewDraft,
@@ -103,6 +119,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "new draft",
         buffered_hint: "Press Enter to open a new draft in the shell.",
         execution_status: None,
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Help,
@@ -111,6 +128,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "command help",
         buffered_hint: "Press Enter to show the available shell commands.",
         execution_status: Some(COMMAND_LIST_LINE),
+        requires_argument: false,
     },
 ];
 
@@ -158,6 +176,75 @@ impl InlineShellCommandInput {
     pub(super) fn execution_status(&self) -> Option<String> {
         self.command.spec().execution_status.map(str::to_string)
     }
+
+    pub(super) fn from_command(command: InlineShellCommand) -> Self {
+        Self {
+            command,
+            argument: None,
+        }
+    }
+}
+
+impl InlineShellCommandPaletteState {
+    pub(super) fn sync_to_input(
+        &mut self,
+        input: &str,
+        preferred_selection: Option<InlineShellCommand>,
+    ) {
+        let Some(_prefix) = suggestion_prefix_token(input) else {
+            *self = Self::default();
+            return;
+        };
+
+        let suggestions = InlineShellCommand::suggestions(input);
+        let selected_index = preferred_selection
+            .and_then(|command| {
+                suggestions
+                    .iter()
+                    .position(|candidate| *candidate == command)
+            })
+            .unwrap_or(0);
+        self.active = true;
+        self.selected_index = selected_index.min(suggestions.len().saturating_sub(1));
+        self.suggestions = suggestions;
+    }
+
+    pub(super) fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(super) fn dismiss(&mut self) -> bool {
+        if !self.active {
+            return false;
+        }
+
+        *self = Self::default();
+        true
+    }
+
+    pub(super) fn move_selection(&mut self, delta: isize) -> bool {
+        if !self.active || self.suggestions.is_empty() {
+            return false;
+        }
+
+        let len = self.suggestions.len() as isize;
+        let next = (self.selected_index as isize + delta).rem_euclid(len);
+        let changed = next as usize != self.selected_index;
+        self.selected_index = next as usize;
+        changed
+    }
+
+    pub(super) fn selected_command(&self) -> Option<InlineShellCommand> {
+        self.suggestions.get(self.selected_index).copied()
+    }
+
+    pub(super) fn selected_index(&self) -> Option<usize> {
+        self.selected_command().map(|_| self.selected_index)
+    }
+
+    pub(super) fn suggestions(&self) -> &[InlineShellCommand] {
+        &self.suggestions
+    }
 }
 
 impl InlineShellCommand {
@@ -201,9 +288,23 @@ impl InlineShellCommand {
         self.spec().primary_name
     }
 
-    #[cfg(test)]
     pub(super) fn suggestion_detail(self) -> &'static str {
         self.spec().suggestion_detail
+    }
+
+    pub(super) fn requires_argument(self) -> bool {
+        self.spec().requires_argument
+    }
+
+    pub(super) fn completion_text(self) -> &'static str {
+        if self.requires_argument() {
+            match self {
+                InlineShellCommand::MaxAutoTurns => ":turns ",
+                _ => self.command_name(),
+            }
+        } else {
+            self.command_name()
+        }
     }
 
     #[cfg(test)]
@@ -229,15 +330,19 @@ fn tokenize_inline_command_input(input: &str) -> Option<(String, Option<String>)
 }
 
 fn suggestion_prefix_token(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || !trimmed.starts_with(':') {
+    let trimmed_start = input.trim_start();
+    if trimmed_start.is_empty() || !trimmed_start.starts_with(':') {
         return None;
     }
-    let command_token = trimmed
-        .split_whitespace()
-        .next()
-        .expect("trimmed shell command input should have a first token");
-    Some(command_token.to_ascii_lowercase())
+
+    let command_token_end = trimmed_start
+        .find(char::is_whitespace)
+        .unwrap_or(trimmed_start.len());
+    if command_token_end != trimmed_start.len() {
+        return None;
+    }
+
+    Some(trimmed_start[..command_token_end].to_ascii_lowercase())
 }
 
 fn is_valid_max_auto_turn_argument(value: &str) -> bool {
@@ -250,7 +355,10 @@ fn is_valid_max_auto_turn_argument(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineShellCommand, InlineShellCommandInput, MAX_AUTO_TURNS_USAGE};
+    use super::{
+        InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState,
+        MAX_AUTO_TURNS_USAGE,
+    };
 
     #[test]
     fn parse_recognizes_supported_aliases() {
@@ -346,6 +454,38 @@ mod tests {
                 InlineShellCommand::Templates,
                 InlineShellCommand::MaxAutoTurns,
             ]
+        );
+    }
+
+    #[test]
+    fn suggestion_prefix_only_stays_active_while_typing_command_name() {
+        assert_eq!(
+            InlineShellCommand::suggestion_prefix(":planning"),
+            Some(":planning".to_string())
+        );
+        assert_eq!(
+            InlineShellCommand::suggestion_prefix("  :p"),
+            Some(":p".to_string())
+        );
+        assert_eq!(InlineShellCommand::suggestion_prefix(":turns "), None);
+        assert_eq!(InlineShellCommand::suggestion_prefix(":planning off"), None);
+    }
+
+    #[test]
+    fn palette_state_keeps_selected_command_when_input_refines() {
+        let mut state = InlineShellCommandPaletteState::default();
+        state.sync_to_input(":", None);
+        assert!(state.move_selection(6));
+        assert_eq!(
+            state.selected_command(),
+            Some(InlineShellCommand::PlanningInit)
+        );
+
+        state.sync_to_input(":p", state.selected_command());
+
+        assert_eq!(
+            state.selected_command(),
+            Some(InlineShellCommand::PlanningInit)
         );
     }
 
