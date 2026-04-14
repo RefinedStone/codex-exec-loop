@@ -108,6 +108,7 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
@@ -121,12 +122,13 @@ jobs:
             exit 1
           fi
 
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${files[@]}" --clobber
+          if gh release view "${tag}" --repo "${GH_REPO}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${files[@]}" --repo "${GH_REPO}" --clobber
           else
             gh release create "${tag}" "${files[@]}" \
+              --repo "${GH_REPO}" \
               --title "${title}" \
               --generate-notes
           fi
 
-          gh release view "${tag}" --json url --jq '.url'
+          gh release view "${tag}" --repo "${GH_REPO}" --json url --jq '.url'
