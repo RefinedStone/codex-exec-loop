@@ -203,27 +203,11 @@ impl PlanningWorkspaceUseCases {
             .load_queue_idle_review_context(workspace_dir)
     }
 
-    pub fn stage_directions_editor_session(
-        &self,
-        workspace_dir: &str,
-    ) -> anyhow::Result<PlanningDraftEditorSession> {
-        self.directions_service.stage_editor_session(workspace_dir)
-    }
-
     pub fn stage_editor_session(
         &self,
         workspace_dir: &str,
     ) -> anyhow::Result<PlanningDraftEditorSession> {
-        self.stage_directions_editor_session(workspace_dir)
-    }
-
-    pub fn stage_direction_detail_doc_editor_session(
-        &self,
-        workspace_dir: &str,
-        direction_id: &str,
-    ) -> anyhow::Result<PlanningDraftEditorSession> {
-        self.directions_service
-            .stage_detail_doc_editor_session(workspace_dir, direction_id)
+        self.directions_service.stage_editor_session(workspace_dir)
     }
 
     pub fn stage_detail_doc_editor_session(
@@ -231,7 +215,8 @@ impl PlanningWorkspaceUseCases {
         workspace_dir: &str,
         direction_id: &str,
     ) -> anyhow::Result<PlanningDraftEditorSession> {
-        self.stage_direction_detail_doc_editor_session(workspace_dir, direction_id)
+        self.directions_service
+            .stage_detail_doc_editor_session(workspace_dir, direction_id)
     }
 
     pub fn stage_queue_idle_prompt_editor_session(
