@@ -32,9 +32,7 @@ pub(super) fn reduce_conversation_input(
             modify_input_buffer_and_sync(&mut state, |buffer| buffer.push('\n'));
         }
         ConversationInputEvent::BackspacePressed => {
-            modify_input_buffer_and_sync(&mut state, |buffer| {
-                buffer.pop();
-            });
+            modify_input_buffer_and_sync(&mut state, |buffer| { buffer.pop(); });
         }
         ConversationInputEvent::PreviousWordDeleted => {
             modify_input_buffer_and_sync(&mut state, delete_previous_word);
