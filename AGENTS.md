@@ -1,3 +1,7 @@
+## Review guidelines
+
+- Using Korean language when you're reviewing except code-block
+
 # Repository Guidelines
 
 ## Scope
@@ -16,7 +20,8 @@ This file is the fast path for Codex in this repo. Read it first, then open only
 - Commands: source `"$HOME/.cargo/env"`, then run `cargo run`, `cargo build`, `cargo test`, or `cargo fmt`; add `cargo clippy --all-targets --all-features -D warnings` for lint-sensitive work
 - Tests: unit tests beside modules, integration tests under `tests/`; focus on startup checks, app-server parsing, stream reduction, and session list mapping
 - Working style: use official Codex interfaces first; keep commits small; add ports only for real boundaries; include a terminal capture in meaningful TUI PRs when practical
-- GitHub writes: authenticate as `RefinedStone`, set repo-local `git config user.name RefinedStone` and `git config user.email chem.en.9273@gmail.com` before committing, keep `origin` on the RefinedStone repo, use `bash scripts/gh-refinedstone.sh` for PR and review-thread writes, and do not write to GitHub if identity is uncertain
+- GitHub writes: authenticate as `RefinedStone`, set repo-local `git config user.name RefinedStone` and `git config user.email chem.en.9273@gmail.com` before committing, keep `origin` on the RefinedStone repo, use
+  `bash scripts/gh-refinedstone.sh` for PR and review-thread writes, and do not write to GitHub if identity is uncertain
 - Delivery default: once a change is reviewable, finish with `commit -> push -> PR` unless the user says to hold locally
 - Parallel work: one worktree and one reviewable slice per branch, usually from `origin/prerelease`; inspect active work before choosing a lane
 - Do not expand this file into backlog or design notes; keep that in `docs/design` or `docs/plan`
