@@ -53,6 +53,8 @@ jobs:
           archive="$(printf '%s\n' "${output}" | sed -n 's/^archive=//p')"
           archive_checksum="$(printf '%s\n' "${output}" | sed -n 's/^archive_checksum=//p')"
           bundle_dir="$(printf '%s\n' "${output}" | sed -n 's/^bundle_dir=//p')"
+          archive_upload="${archive}"
+          archive_checksum_upload="${archive_checksum}"
 
           for required_path in "${archive}" "${archive_checksum}" "${bundle_dir}"; do
             if [[ -z "${required_path}" || ! -e "${required_path}" ]]; then
@@ -61,9 +63,16 @@ jobs:
             fi
           done
 
+          if [[ "${RUNNER_OS}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+            archive_upload="$(cygpath -m "${archive}")"
+            archive_checksum_upload="$(cygpath -m "${archive_checksum}")"
+          fi
+
           printf 'archive=%s\n' "${archive}" >> "${GITHUB_OUTPUT}"
           printf 'archive_checksum=%s\n' "${archive_checksum}" >> "${GITHUB_OUTPUT}"
           printf 'bundle_dir=%s\n' "${bundle_dir}" >> "${GITHUB_OUTPUT}"
+          printf 'archive_upload=%s\n' "${archive_upload}" >> "${GITHUB_OUTPUT}"
+          printf 'archive_checksum_upload=%s\n' "${archive_checksum_upload}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify packaged bundle
         shell: bash
@@ -80,8 +89,8 @@ jobs:
           name: native-release-${{ matrix.label }}
           if-no-files-found: error
           path: |
-            ${{ steps.package.outputs.archive }}
-            ${{ steps.package.outputs.archive_checksum }}
+            ${{ steps.package.outputs.archive_upload }}
+            ${{ steps.package.outputs.archive_checksum_upload }}
 
   publish-release:
     name: Publish GitHub Release Assets
