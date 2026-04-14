@@ -23,8 +23,14 @@ use super::turn_activity::TurnActivityState;
 #[derive(Debug, Clone)]
 pub(crate) enum ConversationState {
     Loading,
-    Ready(ConversationViewModel),
+    Ready(Box<ConversationViewModel>),
     Failed(String),
+}
+
+impl ConversationState {
+    pub(crate) fn ready(conversation: ConversationViewModel) -> Self {
+        Self::Ready(Box::new(conversation))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

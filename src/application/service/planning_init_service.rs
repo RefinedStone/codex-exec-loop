@@ -98,10 +98,6 @@ impl PlanningInitService {
         }
     }
 
-    pub fn stage_bootstrap_draft(&self, workspace_dir: &str) -> Result<PlanningInitStageResult> {
-        self.stage_draft(workspace_dir, PlanningBootstrapMode::Detail)
-    }
-
     pub fn stage_simple_mode_draft(&self, workspace_dir: &str) -> Result<PlanningInitStageResult> {
         self.stage_draft(workspace_dir, PlanningBootstrapMode::Simple)
     }
@@ -111,13 +107,6 @@ impl PlanningInitService {
         workspace_dir: &str,
     ) -> Result<PlanningDraftEditorSession> {
         self.stage_editor_session(workspace_dir, PlanningBootstrapMode::Detail)
-    }
-
-    pub fn stage_simple_editor_session(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<PlanningDraftEditorSession> {
-        self.stage_editor_session(workspace_dir, PlanningBootstrapMode::Simple)
     }
 
     pub fn load_manual_editor_session(
@@ -558,7 +547,7 @@ mod tests {
         );
 
         let result = service
-            .stage_bootstrap_draft("/tmp/workspace")
+            .stage_draft("/tmp/workspace", PlanningBootstrapMode::Detail)
             .expect("bootstrap draft should stage");
 
         assert_eq!(result.mode, PlanningBootstrapMode::Detail);
@@ -651,7 +640,7 @@ mod tests {
         );
 
         let session = service
-            .stage_simple_editor_session("/tmp/workspace")
+            .stage_editor_session("/tmp/workspace", PlanningBootstrapMode::Simple)
             .expect("simple editor session should stage");
 
         assert!(session.validation_report.is_valid());

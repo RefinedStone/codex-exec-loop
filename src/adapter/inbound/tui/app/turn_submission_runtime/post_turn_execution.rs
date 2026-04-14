@@ -16,7 +16,7 @@ use crate::domain::planning::QueueIdlePolicy;
 #[cfg(not(test))]
 use super::super::app_runtime::BackgroundMessage;
 use super::super::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation,
+    ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
 use super::*;
 
@@ -542,13 +542,13 @@ impl PostTurnEvaluationExecutor {
             .decide_auto_followup_with_snapshot(&self.planning.runtime, planning_runtime_snapshot)
         {
             AutoFollowupDecision::QueuePrompt(queued_prompt) => {
-                ConversationPostTurnAction::QueueAutoPrompt {
+                ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
                     prompt: queued_prompt.prompt,
                     queued_from_turn_id: request.queued_from_turn_id.clone(),
                     template_label: conversation.auto_follow_state.template_label().to_string(),
                     transcript_text: queued_prompt.transcript_text,
                     handoff_task: queued_prompt.handoff_task,
-                }
+                }))
             }
             AutoFollowupDecision::Skip(reason) => {
                 ConversationPostTurnAction::SkipAutoFollowup { reason }
@@ -654,7 +654,7 @@ impl NativeTuiApp {
 
     fn ready_conversation_snapshot(&self) -> Option<ConversationViewModel> {
         match &self.conversation_state {
-            ConversationState::Ready(conversation) => Some(conversation.clone()),
+            ConversationState::Ready(conversation) => Some(conversation.as_ref().clone()),
             ConversationState::Loading | ConversationState::Failed(_) => None,
         }
     }

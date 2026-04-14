@@ -69,7 +69,7 @@ impl NativeTuiApp {
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
-            conversation_state: ConversationState::Ready(initial_conversation),
+            conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             followup_overlay_ui_state: FollowupOverlayUiState::default(),
@@ -189,7 +189,7 @@ impl NativeTuiApp {
     pub(super) fn take_ready_conversation_state(&mut self) -> Option<ConversationViewModel> {
         let state = std::mem::replace(&mut self.conversation_state, ConversationState::Loading);
         match state {
-            ConversationState::Ready(conversation) => Some(conversation),
+            ConversationState::Ready(conversation) => Some(*conversation),
             other => {
                 self.conversation_state = other;
                 None
@@ -207,7 +207,7 @@ impl NativeTuiApp {
         };
 
         let reduction = reduce_conversation_runtime(conversation, event);
-        self.conversation_state = ConversationState::Ready(reduction.state);
+        self.conversation_state = ConversationState::ready(reduction.state);
         if clear_turn_snapshot {
             self.active_turn_planning_capture = None;
         }
@@ -235,7 +235,7 @@ impl NativeTuiApp {
         };
 
         let reduction = reduce_conversation_input(conversation, event);
-        self.conversation_state = ConversationState::Ready(reduction.state);
+        self.conversation_state = ConversationState::ready(reduction.state);
     }
 
     pub(super) fn clear_input_buffer(&mut self) {
@@ -307,7 +307,7 @@ impl NativeTuiApp {
         };
 
         let reduction = reduce_followup_controls(conversation, event);
-        self.conversation_state = ConversationState::Ready(reduction.state);
+        self.conversation_state = ConversationState::ready(reduction.state);
         if !self.is_max_auto_turns_editing() {
             self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsValueSynced {
                 value: self.current_max_auto_turns_value().to_string(),
@@ -325,17 +325,17 @@ impl NativeTuiApp {
 
     fn execute_followup_control_effect(&mut self, effect: FollowupControlEffect) {
         match effect {
-            FollowupControlEffect::SyncTemplateOverlayUi => {
+            FollowupControlEffect::TemplateOverlayUi => {
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::TemplateChanged);
             }
-            FollowupControlEffect::SyncMaxAutoTurnsEditor { value } => {
+            FollowupControlEffect::MaxAutoTurnsEditor { value } => {
                 self.dispatch_followup_overlay_ui(
                     FollowupOverlayUiEvent::MaxAutoTurnsEditCommitted {
                         current_value: value,
                     },
                 );
             }
-            FollowupControlEffect::SyncStopKeywordEditor { value } => {
+            FollowupControlEffect::StopKeywordEditor { value } => {
                 self.dispatch_followup_overlay_ui(
                     FollowupOverlayUiEvent::StopKeywordEditCommitted {
                         current_value: value,

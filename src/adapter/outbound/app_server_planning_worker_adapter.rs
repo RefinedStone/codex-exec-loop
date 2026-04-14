@@ -47,9 +47,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut changed_planning_file_paths = Vec::new();
         let mut failure_message = None;
 
-        if let Err(error) = stream_result {
-            return Err(error);
-        }
+        stream_result?;
 
         for event in rx.iter() {
             match event {

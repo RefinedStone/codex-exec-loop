@@ -147,17 +147,6 @@ impl PlanningRuntimePolicyService {
         PlanningAutoFollowPolicyDecision::QueuePrompt(PlanningAutoFollowPromptMode::TemplatePrompt)
     }
 
-    pub fn auto_follow_block_reason(
-        &self,
-        template: &FollowupTemplateDefinition,
-        snapshot: &PlanningRuntimeSnapshot,
-    ) -> Option<PlanningAutoFollowBlockReason> {
-        match self.decide_auto_follow(template, snapshot) {
-            PlanningAutoFollowPolicyDecision::Blocked(reason) => Some(reason),
-            PlanningAutoFollowPolicyDecision::QueuePrompt(_) => None,
-        }
-    }
-
     pub fn auto_follow_transcript_text(
         &self,
         template: &FollowupTemplateDefinition,
@@ -221,14 +210,6 @@ impl PlanningRuntimePolicyService {
                 .map(str::to_string),
             workspace_state,
         }
-    }
-
-    pub fn build_preview_view(
-        &self,
-        template: &FollowupTemplateDefinition,
-        snapshot: &PlanningRuntimeSnapshot,
-    ) -> PlanningRuntimePreviewView {
-        self.build_preview_view_for_decision(self.decide_auto_follow(template, snapshot), snapshot)
     }
 
     pub fn build_preview_view_for_decision(
@@ -505,14 +486,17 @@ mod tests {
     fn builtin_next_task_blocks_when_planning_is_uninitialized() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::uninitialized();
+        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
 
         assert_eq!(
-            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
-            Some(PlanningAutoFollowBlockReason::ActionableQueueRequired)
+            decision,
+            PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
+            )
         );
         assert_eq!(
             service
-                .build_preview_view(&builtin_next_task_template(), &snapshot)
+                .build_preview_view_for_decision(decision, &snapshot)
                 .status_label,
             "queue-empty"
         );
@@ -527,13 +511,16 @@ mod tests {
             Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
             None,
         );
+        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
 
         assert_eq!(
-            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
-            None
+            decision,
+            PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::RefreshPlanningQueue
+            )
         );
 
-        let preview = service.build_preview_view(&builtin_next_task_template(), &snapshot);
+        let preview = service.build_preview_view_for_decision(decision, &snapshot);
 
         assert_eq!(preview.status_label, "ready");
         assert!(preview.detail.as_deref().is_some_and(|detail| {
@@ -551,14 +538,17 @@ mod tests {
             None,
             None,
         );
+        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
 
         assert_eq!(
-            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
-            None
+            decision,
+            PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::RefreshPlanningQueue
+            )
         );
         assert_eq!(
             service
-                .build_preview_view(&builtin_next_task_template(), &snapshot)
+                .build_preview_view_for_decision(decision, &snapshot)
                 .status_label,
             "ready"
         );
@@ -568,14 +558,17 @@ mod tests {
     fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::uninitialized();
+        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
 
         assert_eq!(
-            service.auto_follow_block_reason(&builtin_next_task_template(), &snapshot),
-            Some(PlanningAutoFollowBlockReason::ActionableQueueRequired)
+            decision,
+            PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
+            )
         );
         assert!(
             service
-                .build_preview_view(&builtin_next_task_template(), &snapshot)
+                .build_preview_view_for_decision(decision, &snapshot)
                 .detail
                 .as_deref()
                 .is_some_and(|detail| {
@@ -590,8 +583,10 @@ mod tests {
         let snapshot = PlanningRuntimeSnapshot::uninitialized();
 
         assert_eq!(
-            service.auto_follow_block_reason(&workspace_template(), &snapshot),
-            None
+            service.decide_auto_follow(&workspace_template(), &snapshot),
+            PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::TemplatePrompt
+            )
         );
     }
 
@@ -607,10 +602,6 @@ mod tests {
             "planner refresh kept the previously handed-off task as the queue head",
         );
 
-        assert_eq!(
-            service.auto_follow_block_reason(&workspace_template(), &snapshot),
-            None
-        );
         assert_eq!(
             service.decide_auto_follow(&workspace_template(), &snapshot),
             PlanningAutoFollowPolicyDecision::QueuePrompt(

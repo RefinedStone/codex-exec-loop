@@ -71,13 +71,13 @@ impl NativeTuiApp {
                 let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
                 self.submit_prompt(
                     prompt,
-                    PromptOrigin::AutoFollow(AutoFollowupSubmitContext {
+                    PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                         queued_from_turn_id,
                         template_label,
                         transcript_text,
                         debug_detail,
                         handoff_task,
-                    }),
+                    })),
                 );
             }
         }

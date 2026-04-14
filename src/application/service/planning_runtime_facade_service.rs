@@ -21,7 +21,7 @@ use anyhow::Result;
 pub use crate::application::service::planning_runtime_policy_service::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
-    PlanningRuntimeSummaryRequest, PlanningRuntimeSummaryView,
+    PlanningRuntimeSummaryRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,14 +240,6 @@ impl PlanningRuntimeFacadeService {
                 .detail
                 .map(|detail| format!("planning detail: {detail}")),
         }
-    }
-
-    pub fn build_summary_view(
-        &self,
-        request: PlanningRuntimeSummaryRequest<'_>,
-    ) -> PlanningRuntimeSummaryView {
-        self.planning_runtime_policy_service
-            .build_summary_view(request)
     }
 
     pub fn build_summary_line(

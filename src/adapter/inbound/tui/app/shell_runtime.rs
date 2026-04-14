@@ -659,7 +659,7 @@ mod tests {
     fn ctrl_l_starts_max_auto_turns_editing() {
         let mut runtime = make_test_runtime();
         runtime.app_mut().conversation_state =
-            ConversationState::Ready(ConversationViewModel::new_draft(
+            ConversationState::ready(ConversationViewModel::new_draft(
                 "/tmp/root".to_string(),
                 runtime.app().load_followup_template_catalog("/tmp/root"),
             ));

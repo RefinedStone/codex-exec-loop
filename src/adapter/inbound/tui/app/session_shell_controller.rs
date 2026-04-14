@@ -11,7 +11,7 @@ impl NativeTuiApp {
 
     pub(super) fn open_conversation_shell(&mut self) {
         self.dispatch_conversation_intent(ConversationIntentEvent::SessionOpenRequested {
-            session: self.current_session().cloned(),
+            session: self.current_session().cloned().map(Box::new),
         });
     }
 

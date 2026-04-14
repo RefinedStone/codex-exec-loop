@@ -32,7 +32,9 @@ pub(super) fn reduce_conversation_input(
             modify_input_buffer_and_sync(&mut state, |buffer| buffer.push('\n'));
         }
         ConversationInputEvent::BackspacePressed => {
-            modify_input_buffer_and_sync(&mut state, |buffer| { buffer.pop(); });
+            modify_input_buffer_and_sync(&mut state, |buffer| {
+                buffer.pop();
+            });
         }
         ConversationInputEvent::PreviousWordDeleted => {
             modify_input_buffer_and_sync(&mut state, delete_previous_word);
@@ -55,10 +57,10 @@ pub(super) fn reduce_conversation_input(
             state.status_text = status_text;
         }
         ConversationInputEvent::StartupSubmitDisarmed { status_text } => {
-            if state.clear_startup_submit() {
-                if let Some(status_text) = status_text {
-                    state.status_text = status_text;
-                }
+            if state.clear_startup_submit()
+                && let Some(status_text) = status_text
+            {
+                state.status_text = status_text;
             }
         }
         ConversationInputEvent::StatusMessageShown { status_text } => {

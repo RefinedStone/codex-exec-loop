@@ -825,7 +825,9 @@ fn placeholder_marker(line: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::PlanningValidationService;
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
+    use crate::application::service::planning_bootstrap_service::{
+        PlanningBootstrapMode, PlanningBootstrapService,
+    };
     use crate::domain::planning::{PlanningFileKind, PlanningWorkspaceFiles};
 
     fn valid_result_output_markdown() -> &'static str {
@@ -851,7 +853,7 @@ mod tests {
     fn bootstrap_artifacts_validate_successfully() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(bootstrap_files(&artifacts));
 
@@ -1019,7 +1021,7 @@ state = "active"
     fn rejects_task_ledgers_that_fail_json_schema() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
@@ -1041,7 +1043,7 @@ state = "active"
     fn rejects_unknown_task_ledger_fields() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
@@ -1083,7 +1085,7 @@ state = "active"
     fn rejects_conflicting_done_relationships_and_multiple_in_progress_tasks() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
@@ -1170,7 +1172,7 @@ state = "active"
     fn rejects_result_output_without_heading() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
             task_ledger_json: &artifacts.task_ledger_json,
@@ -1189,7 +1191,7 @@ state = "active"
     fn warns_on_result_output_placeholders() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
             task_ledger_json: &artifacts.task_ledger_json,
@@ -1211,7 +1213,7 @@ state = "active"
     fn rejects_blank_result_output_prompt() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
-        let artifacts = bootstrap_service.build_artifacts();
+        let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
             task_ledger_json: &artifacts.task_ledger_json,

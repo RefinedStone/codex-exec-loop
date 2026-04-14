@@ -43,7 +43,7 @@ pub use super::planning_runtime_facade_service::{
     PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeRenderedPreview,
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
-    PlanningRuntimeSummaryRequest, PlanningRuntimeSummaryView, PlanningTaskHandoff,
+    PlanningRuntimeSummaryRequest, PlanningTaskHandoff,
 };
 pub use super::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 pub use super::planning_worker_orchestration_service::{
@@ -270,13 +270,6 @@ impl PlanningRuntimeUseCases {
         request: PlanningRuntimePreviewRequest<'_>,
     ) -> PlanningRuntimeRenderedPreview {
         self.runtime_facade.build_auto_follow_preview(request)
-    }
-
-    pub fn build_summary_view(
-        &self,
-        request: PlanningRuntimeSummaryRequest<'_>,
-    ) -> PlanningRuntimeSummaryView {
-        self.runtime_facade.build_summary_view(request)
     }
 
     pub fn build_summary_line(

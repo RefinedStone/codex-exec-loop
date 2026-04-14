@@ -25,9 +25,9 @@ pub(super) enum FollowupControlEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FollowupControlEffect {
-    SyncTemplateOverlayUi,
-    SyncMaxAutoTurnsEditor { value: String },
-    SyncStopKeywordEditor { value: String },
+    TemplateOverlayUi,
+    MaxAutoTurnsEditor { value: String },
+    StopKeywordEditor { value: String },
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ pub(super) fn reduce_followup_controls(
             template_load_result,
         } => {
             if state.sync_draft_workspace(workspace_directory, template_load_result) {
-                effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
+                effects.push(FollowupControlEffect::TemplateOverlayUi);
             }
         }
         FollowupControlEvent::TemplateCatalogReloaded { reload_result } => {
@@ -77,7 +77,7 @@ pub(super) fn reduce_followup_controls(
 
             state.reload_followup_templates(reload_result.load_result);
             if catalog_changed {
-                effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
+                effects.push(FollowupControlEffect::TemplateOverlayUi);
             }
         }
         FollowupControlEvent::AutoFollowToggled => {
@@ -109,7 +109,7 @@ pub(super) fn reduce_followup_controls(
                 "auto follow-up max turns {}",
                 state.auto_follow_state.max_auto_turns_value()
             );
-            effects.push(FollowupControlEffect::SyncMaxAutoTurnsEditor {
+            effects.push(FollowupControlEffect::MaxAutoTurnsEditor {
                 value: value.to_string(),
             });
         }
@@ -136,7 +136,7 @@ pub(super) fn reduce_followup_controls(
                 "auto stop keyword value {}",
                 state.auto_follow_state.stop_keyword_label()
             );
-            effects.push(FollowupControlEffect::SyncStopKeywordEditor { value });
+            effects.push(FollowupControlEffect::StopKeywordEditor { value });
         }
         FollowupControlEvent::NoFileChangeStopToggled => {
             state.auto_follow_state.toggle_no_file_change_stop();
@@ -153,7 +153,7 @@ pub(super) fn reduce_followup_controls(
                 "auto follow-up template: {}",
                 state.auto_follow_state.template_label()
             );
-            effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
+            effects.push(FollowupControlEffect::TemplateOverlayUi);
         }
         FollowupControlEvent::TemplateCycledBackward => {
             state.auto_follow_state.cycle_template_kind_backward();
@@ -162,7 +162,7 @@ pub(super) fn reduce_followup_controls(
                 "auto follow-up template: {}",
                 state.auto_follow_state.template_label()
             );
-            effects.push(FollowupControlEffect::SyncTemplateOverlayUi);
+            effects.push(FollowupControlEffect::TemplateOverlayUi);
         }
     }
 
@@ -199,7 +199,7 @@ mod tests {
         assert!(reduced.state.status_text.contains("draft workspace synced"));
         assert_eq!(
             reduced.effects,
-            vec![FollowupControlEffect::SyncTemplateOverlayUi]
+            vec![FollowupControlEffect::TemplateOverlayUi]
         );
     }
 
@@ -320,7 +320,7 @@ mod tests {
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,
-            vec![FollowupControlEffect::SyncTemplateOverlayUi]
+            vec![FollowupControlEffect::TemplateOverlayUi]
         );
     }
 
@@ -531,7 +531,7 @@ mod tests {
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,
-            vec![FollowupControlEffect::SyncMaxAutoTurnsEditor {
+            vec![FollowupControlEffect::MaxAutoTurnsEditor {
                 value: "5".to_string()
             }]
         );
@@ -634,7 +634,7 @@ mod tests {
         );
         assert_eq!(
             reduced.effects,
-            vec![FollowupControlEffect::SyncTemplateOverlayUi]
+            vec![FollowupControlEffect::TemplateOverlayUi]
         );
     }
 
@@ -657,7 +657,7 @@ mod tests {
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,
-            vec![FollowupControlEffect::SyncStopKeywordEditor {
+            vec![FollowupControlEffect::StopKeywordEditor {
                 value: "DONE".to_string()
             }]
         );

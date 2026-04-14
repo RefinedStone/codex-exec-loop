@@ -188,12 +188,12 @@ pub(super) enum GithubReviewPollingState {
         target: Option<GithubPullRequestTarget>,
         message: String,
     },
-    Active(GithubReviewPollingRuntimeState),
+    Active(Box<GithubReviewPollingRuntimeState>),
 }
 
 impl GithubReviewPollingState {
     pub(super) fn active(config: GithubReviewPollingConfig, now: Instant) -> Self {
-        Self::Active(GithubReviewPollingRuntimeState::new(config, now))
+        Self::Active(Box::new(GithubReviewPollingRuntimeState::new(config, now)))
     }
 
     pub(super) fn status_label(&self) -> String {
