@@ -129,3 +129,25 @@ Markdown summary:
 - attach the exact commit SHA used for the build
 - keep the emitted `.sha256` file with the archive
 - fix platform-specific terminal defects in focused follow-up branches instead of widening the packaging change
+
+## GitHub Release Assets
+
+The repository can publish native bundles directly to GitHub Release assets from a tag push.
+
+- workflow: `.github/workflows/release-native-assets.yml`
+- accepted tags: `<version>` or `v<version>` where `<version>` matches `Cargo.toml`
+- published assets:
+  - Linux `x86_64-unknown-linux-gnu`
+  - Windows `x86_64-pc-windows-msvc`
+  - macOS `x86_64-apple-darwin`
+  - macOS `aarch64-apple-darwin`
+- each asset upload includes the archive and matching `.sha256` file
+
+Typical release flow:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+After the workflow finishes, download the archives from the GitHub `Releases` page for that tag.

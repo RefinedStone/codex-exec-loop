@@ -49,6 +49,9 @@ cargo run
 
 배포된 native bundle을 받았다면 Rust 없이 바로 실행할 수 있습니다.
 
+태그 기반 자동 배포를 쓰는 경우, GitHub 저장소의 `Releases` 페이지에서 플랫폼별 asset을 바로 받을 수 있습니다.
+릴리스는 `Cargo.toml` 버전과 같은 태그 또는 `v<version>` 태그를 push하면 GitHub Actions가 자동으로 생성합니다.
+
 macOS/Linux:
 
 ```bash
