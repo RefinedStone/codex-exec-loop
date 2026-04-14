@@ -9,6 +9,7 @@
 
 - `src/domain/`: pure models such as session summaries and startup diagnostics
 - `src/application/service/`: use-case orchestration such as `StartupService` and `ConversationService`
+- `src/application/service/planning/`: planning feature facades exposed to the TUI
 - `src/application/port/`: interfaces owned by the application layer
 - `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
 - `src/adapter/outbound/`: `codex app-server` integration and filesystem adapters
@@ -22,6 +23,7 @@ Keep mapping logic in adapters, not domain models.
 - Dependency flow points inward: `adapter -> application -> domain`.
 - Inbound adapters translate user events into service calls.
 - Application services orchestrate use cases and depend on ports defined in `src/application/port/`.
+- Planning changes should enter through `src/application/service/planning/` and `src/adapter/inbound/tui/app/planning/` before touching lower-level planning internals.
 - Outbound adapters implement those ports and own process, stdio, JSON, and filesystem details.
 - `domain/` stays free of TUI types, transport formats, and external I/O.
 - Add a port before a new outbound capability when it improves a real boundary.

@@ -20,11 +20,11 @@ use crate::application::port::outbound::followup_template_port::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
-use crate::application::service::planning_bootstrap_service::PlanningBootstrapMode;
-use crate::application::service::planning_init_service::{
+use crate::application::service::planning::PlanningBootstrapMode;
+use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningInitStageResult,
 };
-use crate::application::service::planning_services::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};

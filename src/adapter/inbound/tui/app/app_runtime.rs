@@ -3,7 +3,7 @@ use std::thread;
 
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::FollowupTemplateService;
-use crate::application::service::planning_services::PlanningServices;
+use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestPollResult;
@@ -48,7 +48,7 @@ impl NativeTuiApp {
         session_service: SessionService,
         conversation_service: ConversationService,
         followup_template_service: FollowupTemplateService,
-        planning_services: PlanningServices,
+        planning: PlanningServices,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let workspace_directory = std::env::current_dir()
@@ -59,8 +59,8 @@ impl NativeTuiApp {
             followup_template_service.load_catalog(&workspace_directory),
         );
         initial_conversation.replace_planning_runtime_snapshot(
-            planning_services
-                .runtime_facade
+            planning
+                .runtime
                 .load_runtime_snapshot_or_invalid(&workspace_directory),
         );
         Self {
@@ -81,7 +81,7 @@ impl NativeTuiApp {
             session_service,
             conversation_service,
             followup_template_service,
-            planning_services,
+            planning,
             active_turn_planning_capture: None,
             planner_worker_panel_state: super::PlannerWorkerPanelState::default(),
             planner_visibility: super::PlannerVisibility::from_environment(),

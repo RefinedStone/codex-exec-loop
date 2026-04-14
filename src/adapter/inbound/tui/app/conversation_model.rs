@@ -6,13 +6,13 @@ use super::{
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
     format_conversation_lines,
 };
-use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
-use crate::application::service::planning_runtime_facade_service::{
+use crate::application::service::planning::PlanningAutoFollowBlockReason;
+use crate::application::service::planning::PlanningRepairRequest;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::{
     PlanningRuntimeAutoFollowDecision, PlanningRuntimeAutoFollowRequest,
-    PlanningRuntimeFacadeService, PlanningRuntimeQueuedAutoFollowPrompt, PlanningTaskHandoff,
+    PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeUseCases, PlanningTaskHandoff,
 };
-use crate::application::service::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
     ConversationToolActivity, ConversationToolActivityKind,
@@ -1439,17 +1439,14 @@ impl ConversationViewModel {
     #[cfg(test)]
     pub(crate) fn decide_auto_followup(
         &self,
-        planning_runtime_facade_service: &PlanningRuntimeFacadeService,
+        planning_runtime: &PlanningRuntimeUseCases,
     ) -> AutoFollowupDecision {
-        self.decide_auto_followup_with_snapshot(
-            planning_runtime_facade_service,
-            &self.planning_runtime_snapshot,
-        )
+        self.decide_auto_followup_with_snapshot(planning_runtime, &self.planning_runtime_snapshot)
     }
 
     pub(crate) fn decide_auto_followup_with_snapshot(
         &self,
-        planning_runtime_facade_service: &PlanningRuntimeFacadeService,
+        planning_runtime: &PlanningRuntimeUseCases,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> AutoFollowupDecision {
         if !self.auto_follow_state.enabled {
@@ -1481,17 +1478,15 @@ impl ConversationViewModel {
             return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
         }
 
-        match planning_runtime_facade_service.decide_auto_followup(
-            PlanningRuntimeAutoFollowRequest {
-                template: self.auto_follow_state.selected_template(),
-                auto_turn: self.auto_follow_state.next_auto_turn_index(),
-                max_auto_turns: self.auto_follow_state.max_auto_turns_value(),
-                session_id: &self.thread_id,
-                stop_keyword: self.auto_follow_state.stop_keyword_value(),
-                last_message: last_message.trim(),
-                snapshot: planning_runtime_snapshot,
-            },
-        ) {
+        match planning_runtime.decide_auto_followup(PlanningRuntimeAutoFollowRequest {
+            template: self.auto_follow_state.selected_template(),
+            auto_turn: self.auto_follow_state.next_auto_turn_index(),
+            max_auto_turns: self.auto_follow_state.max_auto_turns_value(),
+            session_id: &self.thread_id,
+            stop_keyword: self.auto_follow_state.stop_keyword_value(),
+            last_message: last_message.trim(),
+            snapshot: planning_runtime_snapshot,
+        }) {
             PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
                 AutoFollowupDecision::QueuePrompt(prompt)
             }

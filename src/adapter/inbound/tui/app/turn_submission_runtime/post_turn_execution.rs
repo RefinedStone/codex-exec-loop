@@ -1,15 +1,15 @@
-use crate::application::service::planning_prompt_service::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
-};
-use crate::application::service::planning_proposal_promotion_service::PlanningProposalPromotionRequest;
-use crate::application::service::planning_reconciliation_service::{
+use crate::application::service::planning::PlanningProposalPromotionRequest;
+use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
 };
-use crate::application::service::planning_services::PlanningServices;
-use crate::application::service::planning_worker_orchestration_service::{
+use crate::application::service::planning::{
     PlanningLedgerRepairRequest, PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
     PlanningWorkerRunOutcome,
+};
+use crate::application::service::planning::{
+    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::planning::QueueIdlePolicy;
 
@@ -53,19 +53,19 @@ struct PostTurnEvaluationExecution {
 
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
-    planning_services: PlanningServices,
+    planning: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
 }
 
 impl PostTurnEvaluationExecutor {
     fn new(
-        planning_services: PlanningServices,
+        planning: PlanningServices,
         active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
         planner_worker_panel_state: PlannerWorkerPanelState,
     ) -> Self {
         Self {
-            planning_services,
+            planning,
             active_turn_planning_capture,
             planner_worker_panel_state,
         }
@@ -140,8 +140,8 @@ impl PostTurnEvaluationExecutor {
         } else if request.changed_planning_file_paths.is_empty() {
             conversation.planning_runtime_snapshot.clone()
         } else {
-            self.planning_services
-                .runtime_facade
+            self.planning
+                .runtime
                 .load_runtime_snapshot_or_invalid(&request.workspace_directory)
         }
     }
@@ -181,7 +181,7 @@ impl PostTurnEvaluationExecutor {
             }
         };
 
-        match self.planning_services.runtime_facade.reconcile_after_turn(
+        match self.planning.runtime.reconcile_after_turn(
             &request.workspace_directory,
             &request.queued_from_turn_id,
             &request.changed_planning_file_paths,
@@ -206,8 +206,8 @@ impl PostTurnEvaluationExecutor {
         repair_request: &PlanningRepairRequest,
     ) -> HiddenPlanningRepairOutcome {
         let mut runtime_snapshot = self
-            .planning_services
-            .runtime_facade
+            .planning
+            .runtime
             .load_runtime_snapshot_or_invalid(workspace_directory);
         let mut next_request = repair_request.clone();
         let mut next_retry_reason = None;
@@ -222,18 +222,15 @@ impl PostTurnEvaluationExecutor {
                 retry_reason: next_retry_reason,
             };
             let worker_prompt = self
-                .planning_services
-                .worker_orchestration
+                .planning
+                .worker
                 .render_repair_task_ledger_prompt(&worker_request);
             self.record_planner_worker_running(
                 PlannerWorkerStatus::RepairRunning,
                 "repair",
                 worker_prompt,
             );
-            let worker_outcome = self
-                .planning_services
-                .worker_orchestration
-                .repair_task_ledger(worker_request);
+            let worker_outcome = self.planning.worker.repair_task_ledger(worker_request);
 
             let outcome = match worker_outcome {
                 Ok(outcome) => outcome,
@@ -330,8 +327,8 @@ impl PostTurnEvaluationExecutor {
             PlanningRuntimeWorkspaceStatus::ReadyWithTask => None,
             PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
                 let review_context = match self
-                    .planning_services
-                    .directions_service
+                    .planning
+                    .workspace
                     .load_queue_idle_review_context(&request.workspace_directory)
                 {
                     Ok(context) => context,
@@ -391,8 +388,8 @@ impl PostTurnEvaluationExecutor {
             mode: mode.clone(),
         };
         let worker_prompt = self
-            .planning_services
-            .worker_orchestration
+            .planning
+            .worker
             .render_refresh_queue_prompt(&worker_request);
         self.record_planner_worker_running(
             PlannerWorkerStatus::RefreshRunning,
@@ -403,8 +400,8 @@ impl PostTurnEvaluationExecutor {
             worker_prompt,
         );
         let worker_outcome = self
-            .planning_services
-            .worker_orchestration
+            .planning
+            .worker
             .refresh_queue_from_reply(worker_request);
 
         let outcome = match worker_outcome {
@@ -451,8 +448,8 @@ impl PostTurnEvaluationExecutor {
             && runtime_snapshot.has_proposal_candidates()
         {
             let promotion_outcome = self
-                .planning_services
-                .proposal_promotion
+                .planning
+                .worker
                 .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                     workspace_directory: &request.workspace_directory,
                     root_turn_id: &request.queued_from_turn_id,
@@ -541,10 +538,9 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        match conversation.decide_auto_followup_with_snapshot(
-            &self.planning_services.runtime_facade,
-            planning_runtime_snapshot,
-        ) {
+        match conversation
+            .decide_auto_followup_with_snapshot(&self.planning.runtime, planning_runtime_snapshot)
+        {
             AutoFollowupDecision::QueuePrompt(queued_prompt) => {
                 ConversationPostTurnAction::QueueAutoPrompt {
                     prompt: queued_prompt.prompt,
@@ -627,7 +623,7 @@ impl NativeTuiApp {
 
         self.mark_post_turn_evaluation_running(&conversation, &request);
         let executor = PostTurnEvaluationExecutor::new(
-            self.planning_services.clone(),
+            self.planning.clone(),
             self.active_turn_planning_capture.take(),
             self.planner_worker_panel_state.clone(),
         );

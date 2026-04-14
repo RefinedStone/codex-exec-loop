@@ -1,6 +1,6 @@
 use super::conversation_model::{AutoFollowupSkipReason, PlanningRepairState};
 use super::*;
-use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
@@ -244,8 +244,8 @@ pub(super) fn reduce_conversation_runtime(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
-    use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-    use crate::application::service::planning_reconciliation_service::PlanningRepairRequest;
+    use crate::application::service::planning::PlanningRepairRequest;
+    use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,

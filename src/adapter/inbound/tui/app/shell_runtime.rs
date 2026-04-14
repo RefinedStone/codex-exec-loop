@@ -257,7 +257,7 @@ mod tests {
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::followup_template_service::FollowupTemplateService;
     use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-    use crate::application::service::planning_services::PlanningServices;
+    use crate::application::service::planning::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{ConversationSnapshot, ConversationStreamEvent};
@@ -465,7 +465,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
-                    planning_runtime_snapshot: crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::invalid(
+                    planning_runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
                         "stale snapshot".to_string(),
                     ),
                     planning_repair_state: None,

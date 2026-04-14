@@ -16,9 +16,9 @@ use crate::application::service::followup_template_service::{
     FollowupTemplateReloadResult, FollowupTemplateService,
 };
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::planning_reconciliation_service::PlanningExecutionSnapshot;
-use crate::application::service::planning_runtime_facade_service::PlanningTaskHandoff;
-use crate::application::service::planning_services::PlanningServices;
+use crate::application::service::planning::PlanningExecutionSnapshot;
+use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -77,12 +77,12 @@ mod github_polling;
 mod inline_shell_commands;
 #[path = "app/planner_debug_preview.rs"]
 mod planner_debug_preview;
+#[path = "app/planning/mod.rs"]
+mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
-#[path = "app/planning_presentation.rs"]
-mod planning_presentation;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/session_overlay_ui.rs"]
@@ -319,7 +319,7 @@ struct NativeTuiApp {
     session_service: SessionService,
     conversation_service: ConversationService,
     followup_template_service: FollowupTemplateService,
-    planning_services: PlanningServices,
+    planning: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
     planner_visibility: PlannerVisibility,

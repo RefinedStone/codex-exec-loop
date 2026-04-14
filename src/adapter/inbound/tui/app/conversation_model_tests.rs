@@ -14,12 +14,13 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
     PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_prompt_service::PlanningPromptService;
-use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-use crate::application::service::planning_runtime_facade_service::PlanningRuntimeFacadeService;
-use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
-use crate::application::service::planning_validation_service::PlanningValidationService;
+use crate::application::service::planning::PlanningPromptService;
+use crate::application::service::planning::PlanningReconciliationService;
+use crate::application::service::planning::PlanningRuntimeFacadeService;
+use crate::application::service::planning::PlanningRuntimeUseCases;
+use crate::application::service::planning::PlanningRuntimePolicyService;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 use crate::domain::conversation::{
@@ -161,9 +162,9 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
     }
 }
 
-fn planning_runtime_facade_service() -> PlanningRuntimeFacadeService {
+fn planning_runtime() -> PlanningRuntimeUseCases {
     let port = Arc::new(FakePlanningWorkspacePort);
-    PlanningRuntimeFacadeService::new(
+    PlanningRuntimeUseCases::new(PlanningRuntimeFacadeService::new(
         PlanningPromptService::new(
             port.clone(),
             PlanningValidationService::new(),
@@ -176,7 +177,7 @@ fn planning_runtime_facade_service() -> PlanningRuntimeFacadeService {
         ),
         PlanningRuntimePolicyService::new(),
         TurnPromptAssemblyService::new(),
-    )
+    ))
 }
 
 #[test]
@@ -194,7 +195,7 @@ fn auto_followup_prompt_renders_builtin_template() {
     ));
 
     let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
+        conversation.decide_auto_followup(&planning_runtime())
     else {
         panic!("auto follow-up prompt should render");
     };
@@ -375,7 +376,7 @@ fn auto_followup_prompt_ignores_buffered_manual_input() {
     conversation.input_buffer = "manual prompt".to_string();
 
     let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
+        conversation.decide_auto_followup(&planning_runtime())
     else {
         panic!("buffered manual input should not block auto follow-up");
     };
@@ -445,7 +446,7 @@ fn auto_followup_prompt_uses_selected_template_item() {
     ));
 
     let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
+        conversation.decide_auto_followup(&planning_runtime())
     else {
         panic!("plan queue prompt should render");
     };
@@ -556,7 +557,7 @@ fn auto_followup_stops_when_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -572,7 +573,7 @@ fn auto_followup_stops_when_stop_keyword_case_varies() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -591,7 +592,7 @@ fn auto_followup_stops_when_custom_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
     );
 }
@@ -611,7 +612,7 @@ fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
     );
 }
@@ -638,7 +639,7 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     ));
 
     let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
+        conversation.decide_auto_followup(&planning_runtime())
     else {
         panic!("auto follow-up should continue when file changes exist");
     };
@@ -666,7 +667,7 @@ fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
     ));
 
     let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime_facade_service())
+        conversation.decide_auto_followup(&planning_runtime())
     else {
         panic!("planning-aware auto follow-up prompt should render");
     };
@@ -691,7 +692,7 @@ fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
     );
 }
@@ -712,7 +713,7 @@ fn builtin_next_task_blocks_when_planning_queue_has_no_next_task() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
 }
@@ -733,7 +734,7 @@ fn builtin_next_task_blocks_when_only_proposals_remain() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime_facade_service()),
+        conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
 }
