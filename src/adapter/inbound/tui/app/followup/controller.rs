@@ -2,7 +2,11 @@ use std::time::Instant;
 
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
-use super::super::*;
+use super::super::{
+    ConversationInputEvent, ConversationState, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
+    DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, FollowupControlEvent,
+    FollowupOverlayUiEvent, NativeTuiApp, PlanningInitOverlayStep, ShellChromeEvent, ShellOverlay,
+};
 
 impl NativeTuiApp {
     pub(crate) fn reload_followup_templates(&mut self) {
