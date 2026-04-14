@@ -23,11 +23,11 @@ test("resolvePlatformConfig returns supported mappings", () => {
 
   assert.equal(
     resolvePlatformConfig("linux", "x64")?.packageAlias,
-    "akra-linux-x64",
+    "@refinedstone/akra-linux-x64",
   );
   assert.equal(
     resolvePlatformConfig("darwin", "arm64")?.packageAlias,
-    "akra-darwin-arm64",
+    "@refinedstone/akra-darwin-arm64",
   );
   assert.equal(
     resolvePlatformConfig("win32", "x64")?.binaryName,

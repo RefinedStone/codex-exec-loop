@@ -51,6 +51,7 @@ test("resolveBinaryPath prefers installed optional dependency", () => {
   const packageJsonPath = path.join(
     packageRoot,
     "node_modules",
+    "@refinedstone",
     "akra-linux-x64",
     "package.json",
   );
@@ -71,7 +72,7 @@ test("resolveBinaryPath prefers installed optional dependency", () => {
     platform: "linux",
     arch: "x64",
     resolvePackageJson: (specifier) => {
-      assert.equal(specifier, "akra-linux-x64/package.json");
+      assert.equal(specifier, "@refinedstone/akra-linux-x64/package.json");
       return packageJsonPath;
     },
   });

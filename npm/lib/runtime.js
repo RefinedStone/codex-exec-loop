@@ -5,10 +5,10 @@ import { resolvePlatformConfig } from "./platform.js";
 
 function installCommand(packageManager) {
   if (packageManager === "bun") {
-    return "bun install -g akra@latest";
+    return "bun install -g @refinedstone/akra@latest";
   }
 
-  return "npm install -g akra@latest";
+  return "npm install -g @refinedstone/akra@latest";
 }
 
 export function detectPackageManager({

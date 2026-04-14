@@ -11,6 +11,7 @@ import { PLATFORM_CONFIGS } from "../lib/platform.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "..");
+const publishedPackageName = "@refinedstone/akra";
 
 function parseArgs(argv) {
   const args = {
@@ -135,7 +136,7 @@ function stagePlatformPackage({
     }
 
     writeJson(path.join(packageDir, "package.json"), {
-      name: "akra",
+      name: publishedPackageName,
       version: `${packageVersion}-${config.packageVersionSuffix}`,
       description: `Platform binary for akra (${config.os} ${config.cpu})`,
       os: [config.os],
@@ -184,7 +185,7 @@ function stageMainPackage({ outDir, packageVersion }) {
   basePackageJson.optionalDependencies = Object.fromEntries(
     PLATFORM_CONFIGS.map((config) => [
       config.packageAlias,
-      `npm:akra@${packageVersion}-${config.packageVersionSuffix}`,
+      `npm:${publishedPackageName}@${packageVersion}-${config.packageVersionSuffix}`,
     ]),
   );
 

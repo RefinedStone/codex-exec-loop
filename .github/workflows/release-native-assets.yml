@@ -214,9 +214,9 @@ jobs:
             npm publish "${package_dir}" --access public
           }
 
-          publish_if_missing "npm/dist/publish/platforms/akra-linux-x64"
-          publish_if_missing "npm/dist/publish/platforms/akra-darwin-arm64"
-          publish_if_missing "npm/dist/publish/platforms/akra-win32-x64"
+          publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-linux-x64"
+          publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-darwin-arm64"
+          publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-win32-x64"
 
       - name: Publish main package
         if: ${{ steps.npm_config.outputs.configured == 'true' }}

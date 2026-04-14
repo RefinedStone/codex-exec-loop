@@ -46,7 +46,7 @@ Bundle contents:
 
 The npm distribution uses a Codex-style split:
 
-- main package `akra`
+- main package `@refinedstone/akra`
 - platform packages published as npm optional dependencies
 - a tiny JavaScript launcher that resolves the installed native binary and executes it
 
@@ -170,14 +170,19 @@ The repository can publish native bundles directly to GitHub Release assets from
 - each asset upload includes the archive and matching `.sha256` file
 - asset file names still use the package version declared in `Cargo.toml`
 - when `NPM_TOKEN` exists in repository secrets, the same tag also publishes:
-  - `akra@<tag-version>`
-  - `akra@<tag-version>-linux-x64`
-  - `akra@<tag-version>-darwin-arm64`
-  - `akra@<tag-version>-win32-x64`
+  - `@refinedstone/akra@<tag-version>`
+  - optional dependency aliases:
+    - `@refinedstone/akra-linux-x64`
+    - `@refinedstone/akra-darwin-arm64`
+    - `@refinedstone/akra-win32-x64`
+  - published platform versions:
+    - `@refinedstone/akra@<tag-version>-linux-x64`
+    - `@refinedstone/akra@<tag-version>-darwin-arm64`
+    - `@refinedstone/akra@<tag-version>-win32-x64`
 
 npm publish notes:
 
-- publish platform packages before the main `akra` package
+- publish platform packages before the main `@refinedstone/akra` package
 - npm versions are immutable, so a corrected republish needs a new tag version
 - the npm package ships only the native binary under `vendor/<target>/akra/`
 
