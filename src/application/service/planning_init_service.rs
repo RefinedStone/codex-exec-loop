@@ -155,6 +155,9 @@ impl PlanningInitService {
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> Result<()> {
         if enabled {
+            if !self.has_planning_workspace(workspace_dir)? {
+                anyhow::bail!("planning workspace is unavailable; initialize planning first");
+            }
             return self
                 .planning_workspace_port
                 .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None);
@@ -400,8 +403,8 @@ mod tests {
     };
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::domain::planning::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-        TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
+        RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
 
     #[derive(Default)]
@@ -489,7 +492,19 @@ mod tests {
             &self,
             _workspace_dir: &str,
         ) -> Result<PlanningWorkspaceLoadRecord> {
-            Ok(PlanningWorkspaceLoadRecord::default())
+            let active_file_bodies = self
+                .active_file_bodies
+                .lock()
+                .expect("active_file_bodies mutex should not be poisoned");
+            Ok(PlanningWorkspaceLoadRecord {
+                directions_toml: active_file_bodies.get(DIRECTIONS_FILE_PATH).cloned(),
+                task_ledger_json: active_file_bodies.get(TASK_LEDGER_FILE_PATH).cloned(),
+                task_ledger_schema_json: active_file_bodies
+                    .get(TASK_LEDGER_SCHEMA_FILE_PATH)
+                    .cloned(),
+                queue_snapshot_json: active_file_bodies.get(QUEUE_SNAPSHOT_FILE_PATH).cloned(),
+                result_output_markdown: active_file_bodies.get(RESULT_OUTPUT_FILE_PATH).cloned(),
+            })
         }
 
         fn load_optional_planning_file(

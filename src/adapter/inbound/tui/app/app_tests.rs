@@ -580,6 +580,9 @@ fn empty_draft_prompts_for_first_message() {
 #[test]
 fn planning_init_command_opens_selector_overlay() {
     let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-init-selector");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
 
     app.execute_inline_shell_command_input(
         InlineShellCommandInput::parse(":planning").expect("command should parse"),
@@ -598,6 +601,8 @@ fn planning_init_command_opens_selector_overlay() {
             .status_text
             .contains("opened planning initialization selector")
     );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
@@ -661,6 +666,74 @@ fn planning_off_command_turns_plan_off_and_blocks_directions() {
         conversation.status_text,
         "Plan off - initialize with :planning first"
     );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_on_command_requires_existing_workspace() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-on-command-no-workspace");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning on").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(
+        conversation.status_text,
+        "planning workspace missing; open :planning to initialize it"
+    );
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ModeSelection
+    );
+    let plan_off_path = Path::new(&workspace_dir).join(PLAN_OFF_FILE_PATH);
+    assert!(
+        !plan_off_path.exists(),
+        "Plan off marker should stay absent"
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_existing_workspace_overlay_prompts_to_turn_plan_on_before_directions() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-existing-workspace-turn-on");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    std::fs::write(
+        Path::new(&workspace_dir).join(PLAN_OFF_FILE_PATH),
+        "plan off\n",
+    )
+    .expect("plan off marker should be writable");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning").expect("command should parse"),
+    );
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ExistingWorkspace
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE,)));
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(
+        conversation.status_text,
+        "Plan off - turn Plan on in this menu first"
+    );
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -1326,6 +1399,9 @@ fn planning_detail_overlay_surfaces_llm_assisted_as_disabled() {
 #[test]
 fn planning_mode_selection_uses_vertical_navigation_keys() {
     let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-mode-selection");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
     app.show_planning_init_overlay();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE,)));
@@ -1339,6 +1415,8 @@ fn planning_mode_selection_uses_vertical_navigation_keys() {
         app.planning_init_overlay_ui_state.selected_mode(),
         super::PlanningInitModeSelection::Simple
     );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]

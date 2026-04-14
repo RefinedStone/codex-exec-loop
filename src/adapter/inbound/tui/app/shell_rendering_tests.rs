@@ -332,6 +332,30 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
 fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
+    let workspace_dir = std::env::temp_dir().join(format!(
+        "codex-exec-loop-render-planning-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&workspace_dir).expect("temp workspace should be created");
+    let workspace_dir = workspace_dir.to_string_lossy().to_string();
+    app.startup_state = StartupState::Ready(StartupDiagnostics {
+        cwd: workspace_dir.clone(),
+        codex_binary_ok: true,
+        codex_binary_detail: "codex".to_string(),
+        workspace_ok: true,
+        workspace_path: workspace_dir.clone(),
+        workspace_detail: "workspace found".to_string(),
+        initialize_ok: true,
+        initialize_detail: "app-server initialize ok".to_string(),
+        account_ok: true,
+        account_detail: "account ok".to_string(),
+        warnings: Vec::new(),
+        schema_snapshot: "snapshot.json".to_string(),
+    });
+    app.sync_draft_shell_workspace(&workspace_dir);
     app.show_planning_init_overlay();
 
     terminal
@@ -345,6 +369,8 @@ fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
     assert!(rendered.contains("detail mode"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]

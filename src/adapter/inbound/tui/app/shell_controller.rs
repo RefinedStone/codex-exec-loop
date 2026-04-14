@@ -1431,47 +1431,45 @@ impl NativeTuiApp {
 
         if self.shell_overlay == ShellOverlay::PlanningInit {
             match self.planning_init_overlay_ui_state.step() {
-                PlanningInitOverlayStep::ExistingWorkspace => match key.code {
-                    KeyCode::Enter if key.modifiers.is_empty() => {
-                        let snapshot = self
-                            .load_planning_runtime_snapshot(&self.planning_workspace_directory());
-                        if snapshot.plan_enabled() {
-                            self.close_shell_overlay();
-                            self.show_queue_overlay();
-                        } else {
-                            self.turn_plan_on();
+                PlanningInitOverlayStep::ExistingWorkspace => {
+                    let workspace_directory = self.planning_workspace_directory();
+                    let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+                    match key.code {
+                        KeyCode::Enter if key.modifiers.is_empty() => {
+                            if snapshot.plan_enabled() {
+                                self.close_shell_overlay();
+                                self.show_queue_overlay();
+                            } else {
+                                self.turn_plan_on();
+                            }
                         }
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D')
-                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-                    {
-                        let snapshot = self
-                            .load_planning_runtime_snapshot(&self.planning_workspace_directory());
-                        if snapshot.plan_enabled() {
-                            self.close_shell_overlay();
-                            self.show_directions_maintenance_overlay();
-                        } else {
-                            self.dispatch_conversation_input(
-                                ConversationInputEvent::StatusMessageShown {
-                                    status_text: "Plan off - initialize with :planning first"
-                                        .to_string(),
-                                },
-                            );
+                        KeyCode::Char('d') | KeyCode::Char('D')
+                            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                        {
+                            if snapshot.plan_enabled() {
+                                self.close_shell_overlay();
+                                self.show_directions_maintenance_overlay();
+                            } else {
+                                self.dispatch_conversation_input(
+                                    ConversationInputEvent::StatusMessageShown {
+                                        status_text: "Plan off - turn Plan on in this menu first"
+                                            .to_string(),
+                                    },
+                                );
+                            }
                         }
-                    }
-                    KeyCode::Char('o') | KeyCode::Char('O')
-                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-                    {
-                        let snapshot = self
-                            .load_planning_runtime_snapshot(&self.planning_workspace_directory());
-                        if snapshot.plan_enabled() {
-                            self.turn_plan_off();
-                        } else {
-                            self.turn_plan_on();
+                        KeyCode::Char('o') | KeyCode::Char('O')
+                            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                        {
+                            if snapshot.plan_enabled() {
+                                self.turn_plan_off();
+                            } else {
+                                self.turn_plan_on();
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 PlanningInitOverlayStep::ModeSelection => match key.code {
                     KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                         self.planning_init_overlay_ui_state.move_mode_selection(-1)
