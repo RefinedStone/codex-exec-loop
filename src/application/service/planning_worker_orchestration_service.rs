@@ -195,20 +195,8 @@ fn build_planning_queue_refresh_prompt(
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
 ) -> String {
-    let latest_user_request_section = latest_user_message
-        .map(str::trim)
-        .filter(|message| !message.is_empty())
-        .map(|message| format!("\nlatest operator request:\n{message}\n"))
-        .unwrap_or_default();
-    let previous_handoff_section = previous_handoff_task.map_or_else(String::new, |task| {
-        format!(
-            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
-            task.task_id,
-            task.task_title,
-            task.updated_at,
-            task.status_label
-        )
-    });
+    let latest_user_request_section = latest_user_request_section(latest_user_message);
+    let previous_handoff_section = previous_handoff_section(previous_handoff_task);
 
     format!(
         r#"대리인입니다.
@@ -238,20 +226,8 @@ fn build_planning_queue_idle_derive_prompt(
     previous_handoff_task: Option<&PlanningTaskHandoff>,
     queue_idle_prompt_markdown: &str,
 ) -> String {
-    let latest_user_request_section = latest_user_message
-        .map(str::trim)
-        .filter(|message| !message.is_empty())
-        .map(|message| format!("\nlatest operator request:\n{message}\n"))
-        .unwrap_or_default();
-    let previous_handoff_section = previous_handoff_task.map_or_else(String::new, |task| {
-        format!(
-            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
-            task.task_id,
-            task.task_title,
-            task.updated_at,
-            task.status_label
-        )
-    });
+    let latest_user_request_section = latest_user_request_section(latest_user_message);
+    let previous_handoff_section = previous_handoff_section(previous_handoff_task);
 
     format!(
         r#"대리인입니다.
@@ -277,6 +253,26 @@ queue-idle review prompt:
 main session latest reply:
 {latest_main_reply}"#
     )
+}
+
+fn latest_user_request_section(latest_user_message: Option<&str>) -> String {
+    latest_user_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(|message| format!("\nlatest operator request:\n{message}\n"))
+        .unwrap_or_default()
+}
+
+fn previous_handoff_section(previous_handoff_task: Option<&PlanningTaskHandoff>) -> String {
+    previous_handoff_task.map_or_else(String::new, |task| {
+        format!(
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            task.task_id,
+            task.task_title,
+            task.updated_at,
+            task.status_label
+        )
+    })
 }
 
 fn first_non_empty_line(text: &str) -> Option<&str> {
@@ -311,7 +307,9 @@ mod tests {
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_facade_service::PlanningRuntimeFacadeService;
+    use crate::application::service::planning_runtime_facade_service::{
+        PlanningRuntimeFacadeService, PlanningTaskHandoff,
+    };
     use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
@@ -501,6 +499,38 @@ mod tests {
         assert!(prompt.contains("latest operator request:"));
         assert!(prompt.contains("강의 자료를 이어서 만들되 다음 단계도 계속 진행해줘."));
         assert!(prompt.contains("최우선 follow-up이 명확하면 1개를 `ready`로"));
+    }
+
+    #[test]
+    fn render_refresh_queue_prompt_includes_previous_handoff_context() {
+        let workspace_dir = create_temp_workspace("planning-worker-render-handoff");
+        write_bootstrap_workspace(&workspace_dir);
+        let workspace_port: Arc<dyn PlanningWorkspacePort> =
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
+        let service = service_with_worker(worker);
+        let previous_handoff = PlanningTaskHandoff {
+            task_id: "task-7".to_string(),
+            task_title: "정리된 강의 목차를 실제 슬라이드 초안으로 확장".to_string(),
+            direction_id: "example-direction".to_string(),
+            combined_priority: 90,
+            updated_at: "2026-04-14T00:00:00Z".to_string(),
+            status_label: "ready".to_string(),
+        };
+
+        let prompt = service.render_refresh_queue_prompt(&PlanningQueueRefreshRequest {
+            workspace_directory: &workspace_dir,
+            root_turn_id: "turn-4",
+            latest_user_message: Some("다음 작업도 이어서 진행해줘."),
+            latest_main_reply: "강의 목차를 정리했고 이제 슬라이드 초안을 만들 차례입니다.",
+            previous_handoff_task: Some(&previous_handoff),
+            mode: PlanningQueueRefreshMode::FromLatestReply,
+        });
+
+        assert!(prompt.contains("직전에 main session으로 넘긴 task:"));
+        assert!(prompt.contains("- task_id: task-7"));
+        assert!(prompt.contains("- updated_at: 2026-04-14T00:00:00Z"));
+        assert!(prompt.contains("그대로 `ready` queue head로 다시 선택하지 마세요."));
     }
 
     #[test]
