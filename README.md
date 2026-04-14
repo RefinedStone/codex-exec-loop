@@ -64,7 +64,8 @@ cargo run
 bundle 안에는 `akra` launcher도 함께 들어 있으므로, 압축을 푼 디렉터리를 `PATH`에 추가하면 어느 workspace에서나 `akra`로 실행할 수 있습니다.
 
 태그 기반 자동 배포를 쓰는 경우, GitHub 저장소의 `Releases` 페이지에서 플랫폼별 asset을 바로 받을 수 있습니다.
-릴리스는 `Cargo.toml` 버전과 같은 태그 또는 `v<version>` 태그를 push하면 GitHub Actions가 자동으로 생성합니다.
+아무 tag나 push하면 GitHub Actions가 해당 tag 이름으로 release를 만들고 asset을 업로드합니다.
+asset 파일명 안의 버전 문자열은 현재 `Cargo.toml` 패키지 버전을 그대로 사용합니다.
 
 macOS/Linux:
 

@@ -154,13 +154,14 @@ Markdown summary:
 The repository can publish native bundles directly to GitHub Release assets from a tag push.
 
 - workflow: `.github/workflows/release-native-assets.yml`
-- accepted tags: `<version>` or `v<version>` where `<version>` matches `Cargo.toml`
+- accepted tags: any pushed tag
 - published assets:
   - Linux `x86_64-unknown-linux-gnu`
   - Windows `x86_64-pc-windows-msvc`
   - macOS `x86_64-apple-darwin`
   - macOS `aarch64-apple-darwin`
 - each asset upload includes the archive and matching `.sha256` file
+- asset file names still use the package version declared in `Cargo.toml`
 
 Typical release flow:
 
