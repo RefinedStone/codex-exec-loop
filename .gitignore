@@ -4,3 +4,5 @@ artifacts/
 .idea/
 target/
 dist/
+npm/vendor/
+npm/.staging/

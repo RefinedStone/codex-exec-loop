@@ -1,0 +1,37 @@
+{
+  "name": "akra",
+  "version": "0.0.0-development",
+  "description": "Native-first Rust TUI client for codex app-server.",
+  "bin": {
+    "akra": "bin/akra.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RefinedStone/codex-exec-loop.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/RefinedStone/codex-exec-loop#readme",
+  "bugs": {
+    "url": "https://github.com/RefinedStone/codex-exec-loop/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "akra-linux-x64": "npm:akra@0.0.0-development-linux-x64",
+    "akra-darwin-arm64": "npm:akra@0.0.0-development-darwin-arm64",
+    "akra-win32-x64": "npm:akra@0.0.0-development-win32-x64"
+  },
+  "scripts": {
+    "test": "node --test ./test/*.test.js"
+  }
+}

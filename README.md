@@ -21,7 +21,32 @@
 
 ## 설치와 실행
 
-### 1. 소스에서 실행
+### 1. npm으로 설치
+
+Codex CLI처럼 npm 전역 설치로 관리할 수 있습니다.
+설치 후에는 현재 폴더에 실행 파일이 없어도 어느 workspace에서나 `akra`를 실행할 수 있습니다.
+
+```bash
+npm install -g akra
+
+cd /path/to/your/workspace
+akra
+```
+
+업데이트와 제거도 npm으로 처리합니다.
+
+```bash
+npm update -g akra
+npm uninstall -g akra
+```
+
+현재 npm 배포는 아래 플랫폼을 지원합니다.
+
+- Linux `x64`
+- macOS Apple Silicon `arm64`
+- Windows `x64`
+
+### 2. 소스에서 실행
 
 가장 무난한 방법은 한 번 release 빌드를 한 뒤, 실제 작업할 workspace에서 바이너리를 실행하는 것입니다.
 
@@ -58,13 +83,15 @@ cargo run
 
 현재 작업 디렉터리가 곧 workspace로 인식됩니다.
 
-### 2. 패키징된 바이너리로 실행
+### 3. 패키징된 바이너리로 실행
 
 배포된 native bundle을 받았다면 Rust 없이 바로 실행할 수 있습니다.
 bundle 안에는 `akra` launcher도 함께 들어 있으므로, 압축을 푼 디렉터리를 `PATH`에 추가하면 어느 workspace에서나 `akra`로 실행할 수 있습니다.
 
 태그 기반 자동 배포를 쓰는 경우, GitHub 저장소의 `Releases` 페이지에서 플랫폼별 asset을 바로 받을 수 있습니다.
 아무 tag나 push하면 GitHub Actions가 해당 tag 이름으로 release를 만들고 asset을 업로드합니다.
+`NPM_TOKEN` secret이 설정되어 있으면 같은 tag 버전으로 npm 패키지 `akra`도 함께 publish 합니다.
+npm 버전은 immutable 이므로, 이미 publish 된 버전은 같은 번호로 다시 덮어쓸 수 없습니다.
 asset 파일명 안의 버전 문자열은 현재 `Cargo.toml` 패키지 버전을 그대로 사용합니다.
 
 macOS/Linux:

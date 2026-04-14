@@ -132,3 +132,90 @@ jobs:
           fi
 
           gh release view "${tag}" --repo "${GH_REPO}" --json url --jq '.url'
+
+  publish-npm:
+    name: Publish npm Package
+    needs:
+      - build-native-assets
+      - publish-release
+    if: ${{ secrets.NPM_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: native-release-*
+          merge-multiple: true
+
+      - name: Stage npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node npm/scripts/stage-npm-packages.mjs \
+            --release-assets-dir release-assets \
+            --out-dir npm/dist/publish \
+            --version "${GITHUB_REF_NAME}"
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_name() {
+            node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.name);' "$1"
+          }
+
+          package_version() {
+            node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.version);' "$1"
+          }
+
+          publish_if_missing() {
+            local package_dir="$1"
+            local name
+            local version
+
+            name="$(package_name "${package_dir}")"
+            version="$(package_version "${package_dir}")"
+
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${name}@${version}; version already exists on npm."
+              return 0
+            fi
+
+            npm publish "${package_dir}" --access public
+          }
+
+          publish_if_missing "npm/dist/publish/platforms/akra-linux-x64"
+          publish_if_missing "npm/dist/publish/platforms/akra-darwin-arm64"
+          publish_if_missing "npm/dist/publish/platforms/akra-win32-x64"
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_dir="npm/dist/publish/main"
+          package_name="$(node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.name);' "${package_dir}")"
+          package_version="$(node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.version);' "${package_dir}")"
+
+          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+            echo "Skipping ${package_name}@${package_version}; version already exists on npm."
+            exit 0
+          fi
+
+          npm publish "${package_dir}" --access public
