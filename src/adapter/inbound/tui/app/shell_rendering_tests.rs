@@ -515,6 +515,26 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
 }
 
 #[test]
+fn inline_planning_bootstrap_overlay_renders_close_gate_guidance() {
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning_init_overlay_ui_state
+        .open_bootstrap_gate(super::PlanningInitEntryMode::WorkflowGate, "ship it");
+
+    let view = build_planning_init_overlay_view(&app);
+    let keys = view
+        .key_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(keys.contains("Enter: stage + promote + start first turn"));
+    assert!(keys.contains("Esc/Ctrl+C: close gate"));
+    assert!(!keys.contains("stays blocked"));
+}
+
+#[test]
 fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
     let mut app = make_test_app();
     app.shell_overlay = ShellOverlay::PlanningInit;

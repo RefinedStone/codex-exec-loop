@@ -833,6 +833,8 @@ impl NativeTuiApp {
                         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
                             &workspace_directory,
                         );
+                        self.planning_init_overlay_ui_state
+                            .open_simple_review(stage_result);
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
                                 status_text: format!(
@@ -1054,15 +1056,6 @@ impl NativeTuiApp {
                 self.request_close_directions_manual_editor();
             } else if closing_planning_manual_editor {
                 self.request_close_planning_manual_editor();
-            } else if self.shell_overlay == ShellOverlay::PlanningInit
-                && self.planning_init_overlay_ui_state.step()
-                    == PlanningInitOverlayStep::BootstrapObjective
-            {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text:
-                        "planning-first bootstrap is required before the first turn in this workspace"
-                            .to_string(),
-                });
             } else {
                 self.close_shell_overlay();
             }

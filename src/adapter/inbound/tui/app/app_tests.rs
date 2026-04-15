@@ -4110,6 +4110,28 @@ fn manual_submit_without_planning_opens_bootstrap_gate_and_prefills_objective() 
 }
 
 #[test]
+fn bootstrap_gate_escape_closes_overlay() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.show_planning_workflow_gate(Some("ship it".to_string()));
+
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::BootstrapObjective
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::ModeSelection
+    );
+    assert_eq!(app.planning_init_overlay_ui_state.bootstrap_objective(), "");
+}
+
+#[test]
 fn manual_submit_appends_planning_context_when_ready() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));

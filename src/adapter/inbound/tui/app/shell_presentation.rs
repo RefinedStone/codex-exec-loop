@@ -1067,7 +1067,7 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     Line::from("Type the bootstrap objective directly. Ctrl+j inserts newline."),
                     Line::from("Enter: stage + promote + start first turn"),
                     Line::from("Ctrl+u: clear    Ctrl+w: delete previous word"),
-                    Line::from("Esc/Ctrl+C stays blocked while this planning gate is active."),
+                    Line::from("Esc/Ctrl+C: close gate"),
                 ],
             }
         }
