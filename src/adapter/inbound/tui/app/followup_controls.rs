@@ -1,4 +1,6 @@
-use super::*;
+use super::{AutoFollowState, ConversationViewModel, StopKeywordRule};
+use crate::application::service::followup_template_service::FollowupTemplateReloadResult;
+use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 
 #[derive(Debug, Clone)]
 pub(super) enum FollowupControlEvent {
@@ -172,6 +174,9 @@ pub(super) fn reduce_followup_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::{
+        AutoFollowupSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+    };
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
     };

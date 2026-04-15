@@ -1,4 +1,7 @@
-use super::*;
+use super::{ConversationState, ConversationViewModel};
+use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
+use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone)]
 pub(super) enum ConversationLifecycleEvent {

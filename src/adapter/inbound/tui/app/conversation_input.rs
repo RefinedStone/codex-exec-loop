@@ -1,4 +1,4 @@
-use super::*;
+use super::{ConversationViewModel, InlineShellCommand};
 
 #[derive(Debug, Clone)]
 pub(super) enum ConversationInputEvent {
@@ -103,7 +103,8 @@ fn clear_startup_submit_after_input_change(state: &mut ConversationViewModel) {
 mod tests {
     use super::*;
     use crate::domain::followup_template::{
-        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
+        FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
+        FollowupTemplateSource,
     };
 
     #[test]
