@@ -1,4 +1,8 @@
 #[cfg(test)]
+use super::super::super::planning::{
+    build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
+};
+#[cfg(test)]
 use super::super::{
     Block, Borders, Constraint, ConversationShellFrameView, ConversationShellView, Direction,
     FOOTER_NOTICE_DETAIL_LIMIT, FOOTER_PLANNING_DETAIL_LIMIT, Layout, MAX_SHELL_HEADER_HEIGHT,
@@ -6,10 +10,10 @@ use super::super::{
     ShellFrontendMode, TranscriptPanelView, block_height_for_lines,
     build_conversation_lines_with_context, build_conversation_scroll_offset,
     build_frontend_summary_line, build_input_block_height, build_input_lines_with_context,
-    build_input_title_with_context, build_planner_panel_lines, build_planning_notice_line,
-    build_planning_summary_line, build_shell_footer_height, build_shell_footer_lines_with_context,
-    build_shell_header_lines_with_context, build_shell_title, build_status_title,
-    build_transcript_title_with_context, current_live_agent_lines, current_plan_mode_indicator,
+    build_input_title_with_context, build_shell_footer_height,
+    build_shell_footer_lines_with_context, build_shell_header_lines_with_context,
+    build_shell_title, build_status_title, build_transcript_title_with_context,
+    current_live_agent_lines, current_plan_mode_indicator,
 };
 use super::super::{
     Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, StartupState, Style,
@@ -33,10 +37,6 @@ pub(crate) fn build_startup_banner_lines(
     };
 
     Some(startup_ascii_art_lines(max_height))
-}
-
-pub(crate) fn startup_screen_is_active(app: &NativeTuiApp) -> bool {
-    startup_screen_is_active_in_context(&ShellCorePresentationContext::from_app(app))
 }
 
 fn startup_screen_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {

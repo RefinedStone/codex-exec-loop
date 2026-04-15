@@ -11,10 +11,9 @@ use super::shell_presentation::{
     DirectionsMaintenanceOverlayView, FollowupTemplateOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
     StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_followup_template_overlay_view, build_inline_prompt_cursor_offset,
-    build_inline_tail_lines, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, startup_screen_is_active,
+    build_followup_template_overlay_view, build_inline_tail_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
 };
 use super::*;
 
@@ -31,8 +30,8 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
         return;
     }
 
-    let tail_lines = build_inline_tail_lines(app);
-    let inspection_area = build_inline_terminal_flow_layout(app, area, &tail_lines)[0];
+    let tail_view = build_inline_tail_view(app, area.width);
+    let inspection_area = build_inline_terminal_flow_layout(app, area, &tail_view.lines)[0];
     let editor_content_height = inspection_area
         .height
         .saturating_sub(14)
@@ -46,10 +45,10 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     let _ = mode;
     let frame_area = frame.area();
-    let tail_lines = build_inline_tail_lines(app);
-    let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_lines);
+    let tail_view = build_inline_tail_view(app, frame_area.width);
+    let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_view.lines);
 
-    draw_inline_conversation_shell(frame, app, tail_lines, &layout);
+    draw_inline_conversation_shell(frame, app, tail_view, &layout);
 
     if app.shell_overlay != ShellOverlay::Hidden {
         draw_inline_shell_inspection(frame, app, layout[0]);
@@ -112,30 +111,26 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<
 fn draw_inline_conversation_shell(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
-    tail_lines: Vec<Line<'static>>,
+    tail_view: super::shell_presentation::InlineTailView,
     layout: &Rc<[Rect]>,
 ) {
     let frame_area = frame.area();
     frame.render_widget(Clear, frame_area);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        let tail_area = if startup_screen_is_active(app) {
+        let tail_area = if tail_view.render_from_top {
             frame_area
         } else {
-            inline_body_top_render_area(frame_area, &tail_lines)
+            inline_body_top_render_area(frame_area, &tail_view.lines)
         };
-        render_inline_body(frame, tail_area, tail_lines, false);
-        set_cursor_if_visible(
-            frame,
-            tail_area,
-            build_inline_prompt_cursor_offset(app, tail_area.width),
-        );
+        render_inline_body(frame, tail_area, tail_view.lines, false);
+        set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
         return;
     }
 
     render_inline_body(
         frame,
-        inline_body_render_area(layout[1], &tail_lines),
-        tail_lines,
+        inline_body_render_area(layout[1], &tail_view.lines),
+        tail_view.lines,
         false,
     );
 }
