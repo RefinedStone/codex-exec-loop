@@ -98,8 +98,8 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::PlanningInit,
         primary_name: ":planning",
         aliases: &[":planning", ":planning-init"],
-        suggestion_detail: "planning mode",
-        buffered_hint: "Press Enter to open the planning mode selector.",
+        suggestion_detail: "planning control center",
+        buffered_hint: "Press Enter to open the planning control center.",
         execution_status: None,
         requires_argument: false,
     },
@@ -542,7 +542,7 @@ mod tests {
 
         assert_eq!(
             plain.buffered_hint(),
-            "Press Enter to open the planning mode selector."
+            "Press Enter to open the planning control center."
         );
         assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
         assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");

@@ -984,6 +984,93 @@ pub(super) fn build_directions_maintenance_overlay_view(
 
 pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
+        PlanningInitOverlayStep::BootstrapObjective => {
+            let entry_mode = app.planning_init_overlay_ui_state.entry_mode();
+            let workspace_directory = app.planning_workspace_directory();
+            let objective = app.planning_init_overlay_ui_state.bootstrap_objective();
+            let objective_preview = if objective.trim().is_empty() {
+                vec![Line::from("objective: <required>")]
+            } else {
+                objective
+                    .lines()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        if index == 0 {
+                            Line::from(format!(
+                                "objective: {}",
+                                compact_inline_detail(line, FOOTER_NOTICE_DETAIL_LIMIT)
+                            ))
+                        } else {
+                            Line::from(format!(
+                                "           {}",
+                                compact_inline_detail(line, FOOTER_NOTICE_DETAIL_LIMIT)
+                            ))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut option_lines = vec![
+                Line::from(format!("workspace: {workspace_directory}")),
+                Line::from("bootstrap mode: simple"),
+            ];
+            option_lines.extend(objective_preview);
+
+            let (header_suffix, description) = match entry_mode {
+                PlanningInitEntryMode::CommandCenter => (
+                    " / bootstrap objective",
+                    "Capture the first objective that should seed the planning scaffold.",
+                ),
+                PlanningInitEntryMode::WorkflowGate => (
+                    " / required before first turn",
+                    "Every workspace now starts with a planning bootstrap objective before the first usable turn.",
+                ),
+                PlanningInitEntryMode::ResumeGate => (
+                    " / resume bootstrap",
+                    "This session points at a workspace without planning files. Capture the objective to rebuild planning context first.",
+                ),
+            };
+            let objective_line_count = objective.lines().count().max(1);
+
+            PlanningInitOverlayView {
+                header_lines: vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Planning Bootstrap",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(header_suffix),
+                    ]),
+                    Line::from(description),
+                ],
+                summary_lines: vec![
+                    Line::from(
+                        "The objective becomes the first manual turn after a simple scaffold is staged and promoted.",
+                    ),
+                    Line::from(
+                        "This gate keeps planning workspace state consistent across new drafts and resumed sessions.",
+                    ),
+                ],
+                option_lines,
+                status_lines: vec![
+                    Line::from(format!(
+                        "objective: {} chars / {} lines",
+                        objective.chars().count(),
+                        objective_line_count
+                    )),
+                    Line::from(
+                        "Enter stages + promotes the scaffold, then starts the first planning-aware turn.",
+                    ),
+                ],
+                key_lines: vec![
+                    Line::from("Type the bootstrap objective directly. Ctrl+j inserts newline."),
+                    Line::from("Enter: stage + promote + start first turn"),
+                    Line::from("Ctrl+u: clear    Ctrl+w: delete previous word"),
+                    Line::from("Esc/Ctrl+C stays blocked while this planning gate is active."),
+                ],
+            }
+        }
         PlanningInitOverlayStep::ExistingWorkspace => {
             let workspace_directory = app.planning_workspace_directory();
             let snapshot = match &app.conversation_state {
@@ -1006,38 +1093,10 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             let failure_summary = snapshot
                 .failure_reason()
                 .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
-
-            PlanningInitOverlayView {
-                header_lines: vec![
-                    Line::from(vec![
-                        Span::styled(
-                            "Planning Controls",
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" / existing workspace"),
-                    ]),
-                    Line::from(
-                        "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
-                    ),
-                ],
-                summary_lines: vec![
-                    Line::from(
-                        "Use :directions only after Plan on. Hidden planner sessions still update task-ledger.json only.",
-                    ),
-                    Line::from(
-                        "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
-                    ),
-                ],
-                option_lines: vec![
-                    Line::from(format!("workspace: {workspace_directory}")),
-                    Line::from(format!("state: {plan_state_label}")),
-                    Line::from(format!("queue: {queue_summary}")),
-                    Line::from(format!("policy: {}", snapshot.queue_idle_policy().label())),
-                ],
-                status_lines: {
-                    let mut lines = if snapshot.plan_enabled() {
+            let entry_mode = app.planning_init_overlay_ui_state.entry_mode();
+            let (header_lines, summary_lines, mut status_lines, key_lines) = match entry_mode {
+                PlanningInitEntryMode::CommandCenter => {
+                    let status_lines = if snapshot.plan_enabled() {
                         vec![
                             Line::from(
                                 "Enter opens queue inspection for the existing planning workspace.",
@@ -1052,16 +1111,177 @@ pub(super) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                             Line::from("Directions maintenance stays blocked while Plan off."),
                         ]
                     };
-                    if let Some(failure_summary) = failure_summary {
-                        lines.push(Line::from(format!("failure: {failure_summary}")));
-                    }
-                    lines
-                },
-                key_lines: vec![
-                    Line::from("Enter: open queue or resume Plan on"),
-                    Line::from("D: directions maintenance    O: toggle Plan on/off"),
-                    Line::from("Esc/Ctrl+C: close"),
+                    (
+                        vec![
+                            Line::from(vec![
+                                Span::styled(
+                                    "Planning Controls",
+                                    Style::default()
+                                        .fg(Color::Cyan)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::raw(" / existing workspace"),
+                            ]),
+                            Line::from(
+                                "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
+                            ),
+                        ],
+                        vec![
+                            Line::from(
+                                "Use :directions only after Plan on. Hidden planner sessions still update task-ledger.json only.",
+                            ),
+                            Line::from(
+                                "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
+                            ),
+                        ],
+                        status_lines,
+                        vec![
+                            Line::from("Enter: open queue or resume Plan on"),
+                            Line::from("Q: queue inspection    D: directions maintenance"),
+                            Line::from("O: toggle Plan on/off    Esc/Ctrl+C: close"),
+                        ],
+                    )
+                }
+                PlanningInitEntryMode::WorkflowGate => {
+                    let status_lines = if snapshot.plan_enabled() {
+                        if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+                            vec![
+                                Line::from(
+                                    "Planning files need repair before the next prompt can start.",
+                                ),
+                                Line::from(
+                                    "Use Q to inspect queue context or O to toggle Plan while repairing.",
+                                ),
+                            ]
+                        } else {
+                            vec![
+                                Line::from(
+                                    "Enter continues with the current planning workspace and returns to the draft.",
+                                ),
+                                Line::from(
+                                    "Use Q to inspect queue context before the next manual turn if needed.",
+                                ),
+                            ]
+                        }
+                    } else {
+                        vec![
+                            Line::from("Enter turns Plan on so the next manual prompt can start."),
+                            Line::from(
+                                "Directions maintenance stays blocked until Plan on is restored.",
+                            ),
+                        ]
+                    };
+                    (
+                        vec![
+                            Line::from(vec![
+                                Span::styled(
+                                    "Planning Workflow",
+                                    Style::default()
+                                        .fg(Color::Cyan)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::raw(" / workspace gate"),
+                            ]),
+                            Line::from(
+                                "This workspace already has planning files. Review the current runtime before the next manual turn continues.",
+                            ),
+                        ],
+                        vec![
+                            Line::from(
+                                "Manual prompts stay planning-aware, so the current queue state is part of the default execution context.",
+                            ),
+                            Line::from(
+                                "If this workspace is paused or invalid, resolve it here instead of bypassing the plan.",
+                            ),
+                        ],
+                        status_lines,
+                        vec![
+                            Line::from("Enter: continue once the workspace is ready"),
+                            Line::from("Q: queue inspection    D: directions maintenance"),
+                            Line::from("O: toggle Plan on/off    Esc/Ctrl+C: close"),
+                        ],
+                    )
+                }
+                PlanningInitEntryMode::ResumeGate => {
+                    let status_lines = if snapshot.plan_enabled() {
+                        if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+                            vec![
+                                Line::from(
+                                    "This session resumed, but the workspace plan is invalid and needs repair.",
+                                ),
+                                Line::from(
+                                    "Use Q to inspect queue state before deciding how to repair it.",
+                                ),
+                            ]
+                        } else {
+                            vec![
+                                Line::from(
+                                    "Enter resumes this session under the current planning workspace.",
+                                ),
+                                Line::from(
+                                    "Use Q to inspect queue context first if you want to reorient before typing.",
+                                ),
+                            ]
+                        }
+                    } else {
+                        vec![
+                            Line::from(
+                                "Enter turns Plan on and then returns to the resumed session.",
+                            ),
+                            Line::from(
+                                "Resume stays paused until this workspace is planning-ready again.",
+                            ),
+                        ]
+                    };
+                    (
+                        vec![
+                            Line::from(vec![
+                                Span::styled(
+                                    "Planning Resume",
+                                    Style::default()
+                                        .fg(Color::Cyan)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::raw(" / existing workspace"),
+                            ]),
+                            Line::from(
+                                "This session loaded successfully. Review the workspace plan state before the next prompt resumes.",
+                            ),
+                        ],
+                        vec![
+                            Line::from(
+                                "Planning state is tracked per workspace, not per session, so resume always rechecks the live workspace files.",
+                            ),
+                            Line::from(
+                                "Use the queue and directions tools here if the workspace state needs context before resuming.",
+                            ),
+                        ],
+                        status_lines,
+                        vec![
+                            Line::from("Enter: resume session once planning is ready"),
+                            Line::from("Q: queue inspection    D: directions maintenance"),
+                            Line::from("O: toggle Plan on/off    Esc/Ctrl+C: close"),
+                        ],
+                    )
+                }
+            };
+
+            PlanningInitOverlayView {
+                header_lines,
+                summary_lines,
+                option_lines: vec![
+                    Line::from(format!("workspace: {workspace_directory}")),
+                    Line::from(format!("state: {plan_state_label}")),
+                    Line::from(format!("queue: {queue_summary}")),
+                    Line::from(format!("policy: {}", snapshot.queue_idle_policy().label())),
                 ],
+                status_lines: {
+                    if let Some(failure_summary) = failure_summary {
+                        status_lines.push(Line::from(format!("failure: {failure_summary}")));
+                    }
+                    status_lines
+                },
+                key_lines,
             }
         }
         PlanningInitOverlayStep::ModeSelection => PlanningInitOverlayView {
@@ -2115,6 +2335,12 @@ fn build_inline_ready_prompt_lines(
             lines.push(Line::from(status_line));
             return lines;
         }
+        if shell_action_availability == ShellActionAvailability::Ready
+            && let Some(status_line) = planning_gate_inline_prompt_status_line(conversation)
+        {
+            lines.push(Line::from(status_line));
+            return lines;
+        }
         let line = match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
                 "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
@@ -2186,6 +2412,73 @@ fn inline_thread_label(conversation: &ConversationViewModel) -> String {
     }
 
     compact_inline_detail(&conversation.title, INLINE_TAIL_THREAD_LABEL_LIMIT)
+}
+
+fn planning_gate_inline_prompt_status_line(conversation: &ConversationViewModel) -> Option<String> {
+    if !conversation.input_state.can_submit_now() {
+        return None;
+    }
+
+    let snapshot = &conversation.planning_runtime_snapshot;
+    if !snapshot.workspace_present() {
+        return Some(if conversation.has_active_thread() {
+            "prompt: planning bootstrap required  |  resume gate is waiting".to_string()
+        } else {
+            "prompt: planning bootstrap required  |  capture objective to start".to_string()
+        });
+    }
+    if !snapshot.plan_enabled() {
+        return Some("prompt: Plan off  |  turn Plan on in :planning".to_string());
+    }
+    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+        return Some("prompt: planning repair required  |  review :planning".to_string());
+    }
+
+    None
+}
+
+#[cfg(test)]
+fn planning_gate_ready_prompt_lines(
+    conversation: &ConversationViewModel,
+) -> Option<Vec<Line<'static>>> {
+    if !conversation.input_state.can_submit_now() {
+        return None;
+    }
+
+    let snapshot = &conversation.planning_runtime_snapshot;
+    if !snapshot.workspace_present() {
+        return Some(if conversation.has_active_thread() {
+            vec![
+                Line::from("This session needs a planning bootstrap objective before continuing."),
+                Line::from(
+                    "Finish the resume gate first so the workspace regains a planning scaffold.",
+                ),
+            ]
+        } else {
+            vec![
+                Line::from(
+                    "Planning bootstrap is required before the first turn in this workspace.",
+                ),
+                Line::from(
+                    "Capture the objective in the planning gate, then start the first prompt.",
+                ),
+            ]
+        });
+    }
+    if !snapshot.plan_enabled() {
+        return Some(vec![
+            Line::from("Plan is off for this workspace."),
+            Line::from("Turn Plan on in :planning before sending the next prompt."),
+        ]);
+    }
+    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+        return Some(vec![
+            Line::from("Planning files need repair before another prompt can start."),
+            Line::from("Open :planning and repair the workspace state before continuing."),
+        ]);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -2328,6 +2621,13 @@ pub(super) fn build_ready_input_lines(
 
     if conversation.input_buffer.is_empty() {
         if let Some(status_lines) = auto_follow_prompt_lines(conversation) {
+            lines.extend(status_lines);
+            lines.push(Line::from(InlineShellCommand::command_list_line()));
+            return lines;
+        }
+        if shell_action_availability == ShellActionAvailability::Ready
+            && let Some(status_lines) = planning_gate_ready_prompt_lines(conversation)
+        {
             lines.extend(status_lines);
             lines.push(Line::from(InlineShellCommand::command_list_line()));
             return lines;

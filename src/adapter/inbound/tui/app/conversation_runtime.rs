@@ -8,6 +8,7 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 pub(super) enum ConversationRuntimeEvent {
     SubmitPrompt {
         prompt: String,
+        transcript_text: String,
         origin: PromptOrigin,
     },
     StreamUpdated(ConversationStreamEvent),
@@ -76,7 +77,11 @@ pub(super) fn reduce_conversation_runtime(
     let mut effects = Vec::new();
 
     match event {
-        ConversationRuntimeEvent::SubmitPrompt { prompt, origin } => {
+        ConversationRuntimeEvent::SubmitPrompt {
+            prompt,
+            transcript_text,
+            origin,
+        } => {
             let prompt = prompt.trim().to_string();
             if prompt.is_empty() || state.has_running_turn() {
                 return ConversationRuntimeReduction { state, effects };
@@ -123,7 +128,7 @@ pub(super) fn reduce_conversation_runtime(
                 }
                 _ => ConversationMessage::new(
                     ConversationMessageKind::User,
-                    prompt.clone(),
+                    transcript_text,
                     None,
                     None,
                 ),
@@ -269,6 +274,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "ship it".to_string(),
+                transcript_text: "ship it".to_string(),
                 origin: PromptOrigin::Manual,
             },
         );
@@ -299,6 +305,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "continue from the last result".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
@@ -387,6 +394,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "continue from the last result".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
                     template_label: "builtin next-task".to_string(),
@@ -430,6 +438,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "operator override".to_string(),
+                transcript_text: "operator override".to_string(),
                 origin: PromptOrigin::Manual,
             },
         );
@@ -652,6 +661,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "   \n\t  ".to_string(),
+                transcript_text: "   \n\t  ".to_string(),
                 origin: PromptOrigin::Manual,
             },
         );
@@ -675,6 +685,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "ship it".to_string(),
+                transcript_text: "ship it".to_string(),
                 origin: PromptOrigin::Manual,
             },
         );

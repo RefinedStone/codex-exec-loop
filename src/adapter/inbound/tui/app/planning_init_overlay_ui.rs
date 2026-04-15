@@ -3,11 +3,19 @@ use crate::domain::planning::PlanningValidationReport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanningInitOverlayStep {
+    BootstrapObjective,
     ModeSelection,
     ExistingWorkspace,
     DetailSelection,
     SimpleReview,
     ManualEditor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlanningInitEntryMode {
+    CommandCenter,
+    WorkflowGate,
+    ResumeGate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,18 +59,22 @@ impl PlanningInitSimpleReviewState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PlanningInitOverlayUiState {
     step: PlanningInitOverlayStep,
+    entry_mode: PlanningInitEntryMode,
     mode_selection: PlanningInitModeSelection,
     detail_selection: PlanningInitDetailSelection,
     simple_review: Option<PlanningInitSimpleReviewState>,
+    bootstrap_objective: String,
 }
 
 impl Default for PlanningInitOverlayUiState {
     fn default() -> Self {
         Self {
             step: PlanningInitOverlayStep::ModeSelection,
+            entry_mode: PlanningInitEntryMode::CommandCenter,
             mode_selection: PlanningInitModeSelection::Simple,
             detail_selection: PlanningInitDetailSelection::Manual,
             simple_review: None,
+            bootstrap_objective: String::new(),
         }
     }
 }
@@ -76,6 +88,10 @@ impl PlanningInitOverlayUiState {
         self.step
     }
 
+    pub fn entry_mode(&self) -> PlanningInitEntryMode {
+        self.entry_mode
+    }
+
     pub fn selected_mode(&self) -> PlanningInitModeSelection {
         self.mode_selection
     }
@@ -86,6 +102,30 @@ impl PlanningInitOverlayUiState {
 
     pub fn simple_review(&self) -> Option<&PlanningInitSimpleReviewState> {
         self.simple_review.as_ref()
+    }
+
+    pub fn bootstrap_objective(&self) -> &str {
+        self.bootstrap_objective.as_str()
+    }
+
+    pub fn open_command_center_mode_selection(&mut self) {
+        self.entry_mode = PlanningInitEntryMode::CommandCenter;
+        self.step = PlanningInitOverlayStep::ModeSelection;
+        self.simple_review = None;
+        self.bootstrap_objective.clear();
+    }
+
+    pub fn open_bootstrap_gate(
+        &mut self,
+        entry_mode: PlanningInitEntryMode,
+        bootstrap_objective: impl Into<String>,
+    ) {
+        self.entry_mode = entry_mode;
+        self.step = PlanningInitOverlayStep::BootstrapObjective;
+        self.mode_selection = PlanningInitModeSelection::Simple;
+        self.detail_selection = PlanningInitDetailSelection::Manual;
+        self.simple_review = None;
+        self.bootstrap_objective = bootstrap_objective.into();
     }
 
     pub fn apply_simple_review_validation(&mut self, validation_report: PlanningValidationReport) {
@@ -111,17 +151,21 @@ impl PlanningInitOverlayUiState {
     }
 
     pub fn open_detail_selection(&mut self) {
+        self.entry_mode = PlanningInitEntryMode::CommandCenter;
         self.mode_selection = PlanningInitModeSelection::Detail;
         self.step = PlanningInitOverlayStep::DetailSelection;
         self.simple_review = None;
     }
 
-    pub fn open_existing_workspace(&mut self) {
+    pub fn open_existing_workspace(&mut self, entry_mode: PlanningInitEntryMode) {
+        self.entry_mode = entry_mode;
         self.step = PlanningInitOverlayStep::ExistingWorkspace;
         self.simple_review = None;
+        self.bootstrap_objective.clear();
     }
 
     pub fn open_manual_editor(&mut self) {
+        self.entry_mode = PlanningInitEntryMode::CommandCenter;
         self.mode_selection = PlanningInitModeSelection::Detail;
         self.detail_selection = PlanningInitDetailSelection::Manual;
         self.step = PlanningInitOverlayStep::ManualEditor;
@@ -146,6 +190,7 @@ impl PlanningInitOverlayUiState {
     }
 
     pub fn return_to_mode_selection(&mut self) {
+        self.entry_mode = PlanningInitEntryMode::CommandCenter;
         self.step = PlanningInitOverlayStep::ModeSelection;
         self.simple_review = None;
     }
@@ -163,13 +208,46 @@ impl PlanningInitOverlayUiState {
             (selection, _) => selection,
         };
     }
+
+    pub fn push_bootstrap_objective_character(&mut self, character: char) {
+        self.bootstrap_objective.push(character);
+    }
+
+    pub fn insert_bootstrap_objective_newline(&mut self) {
+        self.bootstrap_objective.push('\n');
+    }
+
+    pub fn pop_bootstrap_objective_character(&mut self) {
+        self.bootstrap_objective.pop();
+    }
+
+    pub fn clear_bootstrap_objective(&mut self) {
+        self.bootstrap_objective.clear();
+    }
+
+    pub fn delete_previous_bootstrap_objective_word(&mut self) {
+        delete_previous_word(&mut self.bootstrap_objective);
+    }
+}
+
+fn delete_previous_word(buffer: &mut String) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    let trimmed = buffer.trim_end_matches(|character: char| character.is_whitespace());
+    let word_start = trimmed
+        .rfind(|character: char| character.is_whitespace())
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    buffer.truncate(word_start);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
-        PlanningInitOverlayUiState,
+        PlanningInitDetailSelection, PlanningInitEntryMode, PlanningInitModeSelection,
+        PlanningInitOverlayStep, PlanningInitOverlayUiState,
     };
     use crate::application::service::planning::PlanningBootstrapMode;
     use crate::application::service::planning::PlanningInitStageResult;
@@ -180,8 +258,20 @@ mod tests {
         let state = PlanningInitOverlayUiState::default();
 
         assert_eq!(state.step(), PlanningInitOverlayStep::ModeSelection);
+        assert_eq!(state.entry_mode(), PlanningInitEntryMode::CommandCenter);
         assert_eq!(state.selected_mode(), PlanningInitModeSelection::Simple);
         assert_eq!(state.selected_detail(), PlanningInitDetailSelection::Manual);
+    }
+
+    #[test]
+    fn opening_bootstrap_gate_tracks_entry_mode_and_prefill() {
+        let mut state = PlanningInitOverlayUiState::default();
+
+        state.open_bootstrap_gate(PlanningInitEntryMode::WorkflowGate, "Ship the first slice");
+
+        assert_eq!(state.step(), PlanningInitOverlayStep::BootstrapObjective);
+        assert_eq!(state.entry_mode(), PlanningInitEntryMode::WorkflowGate);
+        assert_eq!(state.bootstrap_objective(), "Ship the first slice");
     }
 
     #[test]
@@ -198,9 +288,10 @@ mod tests {
     fn opening_existing_workspace_switches_overlay_step() {
         let mut state = PlanningInitOverlayUiState::default();
 
-        state.open_existing_workspace();
+        state.open_existing_workspace(PlanningInitEntryMode::ResumeGate);
 
         assert_eq!(state.step(), PlanningInitOverlayStep::ExistingWorkspace);
+        assert_eq!(state.entry_mode(), PlanningInitEntryMode::ResumeGate);
         assert!(state.simple_review().is_none());
     }
 
@@ -257,8 +348,19 @@ mod tests {
         state.reset();
 
         assert_eq!(state.step(), PlanningInitOverlayStep::ModeSelection);
+        assert_eq!(state.entry_mode(), PlanningInitEntryMode::CommandCenter);
         assert_eq!(state.selected_mode(), PlanningInitModeSelection::Simple);
         assert_eq!(state.selected_detail(), PlanningInitDetailSelection::Manual);
         assert!(state.simple_review().is_none());
+    }
+
+    #[test]
+    fn bootstrap_objective_editor_supports_word_delete() {
+        let mut state = PlanningInitOverlayUiState::default();
+        state.open_bootstrap_gate(PlanningInitEntryMode::WorkflowGate, "ship the first slice");
+
+        state.delete_previous_bootstrap_objective_word();
+
+        assert_eq!(state.bootstrap_objective(), "ship the first ");
     }
 }

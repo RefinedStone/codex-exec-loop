@@ -138,16 +138,63 @@ impl NativeTuiApp {
 
     pub(crate) fn handle_planning_init_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match self.planning_init_overlay_ui_state.step() {
+            PlanningInitOverlayStep::BootstrapObjective => match key.code {
+                KeyCode::Enter if key.modifiers.is_empty() => {
+                    self.submit_planning_bootstrap_objective()
+                }
+                KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => self
+                    .planning_init_overlay_ui_state
+                    .insert_bootstrap_objective_newline(),
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => self
+                    .planning_init_overlay_ui_state
+                    .clear_bootstrap_objective(),
+                KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => self
+                    .planning_init_overlay_ui_state
+                    .delete_previous_bootstrap_objective_word(),
+                KeyCode::Backspace if key.modifiers.is_empty() => self
+                    .planning_init_overlay_ui_state
+                    .pop_bootstrap_objective_character(),
+                KeyCode::Char(character)
+                    if key.modifiers == KeyModifiers::NONE
+                        || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.planning_init_overlay_ui_state
+                        .push_bootstrap_objective_character(character)
+                }
+                _ => {}
+            },
             PlanningInitOverlayStep::ExistingWorkspace => {
                 let workspace_directory = self.planning_workspace_directory();
                 let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+                let entry_mode = self.planning_init_overlay_ui_state.entry_mode();
                 match key.code {
                     KeyCode::Enter if key.modifiers.is_empty() => {
+                        if snapshot.plan_enabled() {
+                            match entry_mode {
+                                PlanningInitEntryMode::CommandCenter => {
+                                    self.close_shell_overlay();
+                                    self.show_queue_overlay();
+                                }
+                                PlanningInitEntryMode::WorkflowGate
+                                | PlanningInitEntryMode::ResumeGate => self.close_shell_overlay(),
+                            }
+                        } else {
+                            self.turn_plan_on();
+                        }
+                    }
+                    KeyCode::Char('q') | KeyCode::Char('Q')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
                         if snapshot.plan_enabled() {
                             self.close_shell_overlay();
                             self.show_queue_overlay();
                         } else {
-                            self.turn_plan_on();
+                            self.dispatch_conversation_input(
+                                ConversationInputEvent::StatusMessageShown {
+                                    status_text: "Plan off - turn Plan on before opening queue"
+                                        .to_string(),
+                                },
+                            );
                         }
                     }
                     KeyCode::Char('d') | KeyCode::Char('D')

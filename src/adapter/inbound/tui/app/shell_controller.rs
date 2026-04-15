@@ -131,9 +131,10 @@ impl NativeTuiApp {
         );
         if snapshot.workspace_present() {
             self.planning_init_overlay_ui_state
-                .open_existing_workspace();
+                .open_existing_workspace(PlanningInitEntryMode::CommandCenter);
         } else {
-            self.planning_init_overlay_ui_state.reset();
+            self.planning_init_overlay_ui_state
+                .open_command_center_mode_selection();
         }
         self.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
@@ -148,6 +149,94 @@ impl NativeTuiApp {
                 "opened planning initialization selector".to_string()
             },
         });
+    }
+
+    pub(super) fn show_planning_workflow_gate(&mut self, bootstrap_objective: Option<String>) {
+        let workspace_directory = self.planning_workspace_directory();
+        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        if snapshot.workspace_present() {
+            self.planning_init_overlay_ui_state
+                .open_existing_workspace(PlanningInitEntryMode::WorkflowGate);
+        } else {
+            self.planning_init_overlay_ui_state.open_bootstrap_gate(
+                PlanningInitEntryMode::WorkflowGate,
+                bootstrap_objective.unwrap_or_default(),
+            );
+        }
+        self.planning_draft_editor_ui_state.reset();
+        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: if snapshot.workspace_present() {
+                if snapshot.plan_enabled() {
+                    "planning-first flow ready / review the current workspace before continuing"
+                        .to_string()
+                } else {
+                    "planning-first flow requires Plan on before continuing".to_string()
+                }
+            } else {
+                "planning-first flow requires a bootstrap objective before the first turn"
+                    .to_string()
+            },
+        });
+    }
+
+    pub(super) fn show_planning_resume_gate(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        if snapshot.workspace_present() {
+            self.planning_init_overlay_ui_state
+                .open_existing_workspace(PlanningInitEntryMode::ResumeGate);
+        } else {
+            self.planning_init_overlay_ui_state
+                .open_bootstrap_gate(PlanningInitEntryMode::ResumeGate, String::new());
+        }
+        self.planning_draft_editor_ui_state.reset();
+        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: if snapshot.workspace_present() {
+                "session loaded / review the planning resume card before continuing".to_string()
+            } else {
+                "session loaded / this workspace still needs a planning bootstrap objective"
+                    .to_string()
+            },
+        });
+    }
+
+    pub(super) fn maybe_show_startup_planning_workflow_gate(&mut self) {
+        if self.shell_action_availability() != ShellActionAvailability::Ready {
+            return;
+        }
+        let should_gate = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.is_blank_draft()
+                    && conversation.input_state.can_submit_now()
+                    && !conversation.startup_submit_armed
+                    && !conversation.has_running_turn()
+                    && self.planning_requires_manual_gate(
+                        &conversation.planning_runtime_snapshot
+                    )
+        );
+        if should_gate {
+            self.show_planning_workflow_gate(None);
+        }
+    }
+
+    pub(super) fn maybe_show_resume_planning_gate(&mut self) {
+        let should_gate = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.has_active_thread() && !conversation.has_running_turn()
+        );
+        if should_gate {
+            self.show_planning_resume_gate();
+        }
     }
 
     pub(super) fn toggle_startup_overlay(&mut self) {
@@ -233,6 +322,7 @@ impl NativeTuiApp {
 
     pub(super) fn turn_plan_on(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
+        let entry_mode = self.planning_init_overlay_ui_state.entry_mode();
         if let Err(error) = self
             .planning
             .workspace
@@ -259,16 +349,25 @@ impl NativeTuiApp {
             &workspace_directory,
         );
         if self.shell_overlay == ShellOverlay::PlanningInit {
-            self.planning_init_overlay_ui_state
-                .open_existing_workspace();
+            if entry_mode == PlanningInitEntryMode::CommandCenter {
+                self.planning_init_overlay_ui_state
+                    .open_existing_workspace(entry_mode);
+            } else {
+                self.close_shell_overlay();
+            }
         }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: "Plan on / using the existing planning workspace".to_string(),
+            status_text: if entry_mode == PlanningInitEntryMode::CommandCenter {
+                "Plan on / using the existing planning workspace".to_string()
+            } else {
+                "Plan on / planning-first flow resumed".to_string()
+            },
         });
     }
 
     pub(super) fn turn_plan_off(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
+        let entry_mode = self.planning_init_overlay_ui_state.entry_mode();
         match self
             .planning
             .workspace
@@ -283,7 +382,7 @@ impl NativeTuiApp {
                     self.close_shell_overlay();
                 } else if self.shell_overlay == ShellOverlay::PlanningInit {
                     self.planning_init_overlay_ui_state
-                        .open_existing_workspace();
+                        .open_existing_workspace(entry_mode);
                 }
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: "Plan off / planning workspace retained for later resume"
@@ -296,6 +395,16 @@ impl NativeTuiApp {
                 })
             }
         }
+    }
+
+    pub(super) fn planning_requires_manual_gate(
+        &self,
+        snapshot: &crate::application::service::planning::PlanningRuntimeSnapshot,
+    ) -> bool {
+        !snapshot.workspace_present()
+            || !snapshot.plan_enabled()
+            || snapshot.workspace_status()
+                == crate::application::service::planning::PlanningRuntimeWorkspaceStatus::Invalid
     }
 
     pub(super) fn open_planning_manual_editor(&mut self) {
@@ -685,6 +794,69 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn submit_planning_bootstrap_objective(&mut self) {
+        let objective = self
+            .planning_init_overlay_ui_state
+            .bootstrap_objective()
+            .trim()
+            .to_string();
+        if objective.is_empty() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "planning bootstrap needs a first objective before the workspace can start"
+                        .to_string(),
+            });
+            return;
+        }
+
+        let workspace_directory = self.planning_workspace_directory();
+        let stage_result = self
+            .planning
+            .workspace
+            .stage_simple_mode_draft(&workspace_directory);
+        match stage_result {
+            Ok(stage_result) => {
+                let draft_name = stage_result.draft_name.clone();
+                match self
+                    .planning
+                    .workspace
+                    .promote_staged_draft(&workspace_directory, &draft_name)
+                {
+                    Ok(result) if result.promoted_file_count > 0 => {
+                        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                            &workspace_directory,
+                        );
+                        self.close_shell_overlay();
+                        self.submit_manual_prompt_from_text(objective.clone());
+                    }
+                    Ok(result) => {
+                        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                            &workspace_directory,
+                        );
+                        self.dispatch_conversation_input(
+                            ConversationInputEvent::StatusMessageShown {
+                                status_text: format!(
+                                    "planning bootstrap promote blocked / draft: {} / validation needs attention",
+                                    result.draft_name
+                                ),
+                            },
+                        );
+                    }
+                    Err(error) => self.dispatch_conversation_input(
+                        ConversationInputEvent::StatusMessageShown {
+                            status_text: format!("planning bootstrap promote failed: {error}"),
+                        },
+                    ),
+                }
+            }
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("planning bootstrap failed: {error}"),
+                })
+            }
+        }
+    }
+
     pub(super) fn open_simple_mode_planning_editor(&mut self) {
         let Some(draft_name) = self
             .planning_init_overlay_ui_state
@@ -882,6 +1054,15 @@ impl NativeTuiApp {
                 self.request_close_directions_manual_editor();
             } else if closing_planning_manual_editor {
                 self.request_close_planning_manual_editor();
+            } else if self.shell_overlay == ShellOverlay::PlanningInit
+                && self.planning_init_overlay_ui_state.step()
+                    == PlanningInitOverlayStep::BootstrapObjective
+            {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text:
+                        "planning-first bootstrap is required before the first turn in this workspace"
+                            .to_string(),
+                });
             } else {
                 self.close_shell_overlay();
             }

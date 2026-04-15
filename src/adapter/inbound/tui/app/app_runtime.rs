@@ -287,6 +287,7 @@ impl NativeTuiApp {
                     stop_keyword: self.current_stop_keyword_value(),
                     max_auto_turns: self.current_max_auto_turns_value().to_string(),
                 });
+                self.maybe_show_startup_planning_workflow_gate();
             }
             ConversationIntentEffect::OpenSession { session } => {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);

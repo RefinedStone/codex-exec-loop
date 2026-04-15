@@ -25,17 +25,17 @@ impl NativeTuiApp {
             return;
         }
 
-        let prompt = match &self.conversation_state {
+        let operator_prompt = match &self.conversation_state {
             ConversationState::Ready(conversation) if conversation.can_submit_prompt() => {
-                self.assemble_manual_prompt(conversation)
+                conversation.input_buffer.clone()
             }
             _ => return,
         };
-        let Some(prompt) = prompt else {
+        if operator_prompt.trim().is_empty() {
             return;
-        };
+        }
 
-        self.submit_prompt(prompt, PromptOrigin::Manual);
+        self.submit_manual_prompt_from_text(operator_prompt);
     }
 
     pub(super) fn execute_conversation_runtime_effect(
@@ -84,10 +84,10 @@ impl NativeTuiApp {
     }
 
     pub(super) fn resolve_startup_submit_queue(&mut self) {
-        let (startup_submit_armed, prompt) = match &self.conversation_state {
+        let (startup_submit_armed, operator_prompt) = match &self.conversation_state {
             ConversationState::Ready(conversation) => (
                 conversation.startup_submit_armed,
-                self.assemble_manual_prompt(conversation),
+                conversation.input_buffer.clone(),
             ),
             ConversationState::Loading | ConversationState::Failed(_) => return,
         };
@@ -96,15 +96,13 @@ impl NativeTuiApp {
         }
 
         match self.shell_action_availability() {
-            super::ShellActionAvailability::Ready if prompt.is_none() => {
+            super::ShellActionAvailability::Ready if operator_prompt.trim().is_empty() => {
                 self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
                     status_text: None,
                 });
             }
             super::ShellActionAvailability::Ready => {
-                let prompt =
-                    prompt.expect("ready startup submit should preserve a non-empty prompt");
-                self.submit_prompt(prompt, PromptOrigin::Manual);
+                self.submit_manual_prompt_from_text(operator_prompt);
             }
             super::ShellActionAvailability::Pending => {}
             super::ShellActionAvailability::Blocked => {
@@ -118,7 +116,40 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn submit_manual_prompt_from_text(&mut self, operator_prompt: String) {
+        let transcript_text = operator_prompt.trim().to_string();
+        if transcript_text.is_empty() {
+            return;
+        }
+
+        let prompt = match &self.conversation_state {
+            ConversationState::Ready(conversation) => self
+                .planning
+                .runtime
+                .build_manual_prompt(&transcript_text, &conversation.planning_runtime_snapshot),
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        };
+        let Some(prompt) = prompt else {
+            return;
+        };
+
+        self.submit_prompt_with_transcript(prompt, transcript_text, PromptOrigin::Manual);
+    }
+
     pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
+        let transcript_text = match &prompt_origin {
+            PromptOrigin::Manual => prompt.trim().to_string(),
+            PromptOrigin::AutoFollow(context) => context.transcript_text.clone(),
+        };
+        self.submit_prompt_with_transcript(prompt, transcript_text, prompt_origin);
+    }
+
+    pub(super) fn submit_prompt_with_transcript(
+        &mut self,
+        prompt: String,
+        transcript_text: String,
+        prompt_origin: PromptOrigin,
+    ) {
         if matches!(prompt_origin, PromptOrigin::Manual)
             && matches!(
                 self.shell_action_availability(),
@@ -138,17 +169,50 @@ impl NativeTuiApp {
             return;
         }
 
+        let manual_gate_snapshot = if matches!(prompt_origin, PromptOrigin::Manual) {
+            match &self.conversation_state {
+                ConversationState::Ready(conversation) => {
+                    Some(conversation.planning_runtime_snapshot.clone())
+                }
+                ConversationState::Loading | ConversationState::Failed(_) => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(snapshot) =
+            manual_gate_snapshot.filter(|snapshot| self.planning_requires_manual_gate(snapshot))
+        {
+            let startup_submit_armed = matches!(
+                &self.conversation_state,
+                ConversationState::Ready(conversation) if conversation.startup_submit_armed
+            );
+            if snapshot.workspace_present() {
+                self.show_planning_workflow_gate(None);
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: if snapshot.plan_enabled() {
+                        "planning files need attention before this prompt can start".to_string()
+                    } else {
+                        "planning-first flow requires Plan on before this prompt can start"
+                            .to_string()
+                    },
+                });
+            } else {
+                self.show_planning_workflow_gate(Some(transcript_text));
+            }
+            if startup_submit_armed {
+                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
+                    status_text: None,
+                });
+            }
+            return;
+        }
+
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
             prompt,
+            transcript_text,
             origin: prompt_origin,
         });
-    }
-
-    fn assemble_manual_prompt(&self, conversation: &ConversationViewModel) -> Option<String> {
-        self.planning.runtime.build_manual_prompt(
-            &conversation.input_buffer,
-            &conversation.planning_runtime_snapshot,
-        )
     }
 
     fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {

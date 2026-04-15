@@ -472,12 +472,12 @@ fn empty_existing_session_prompts_for_next_message() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ready to continue this session."))
+            .any(|line| line.contains("planning bootstrap objective before continuing"))
     );
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ctrl+j for newline"))
+            .any(|line| line.contains("Finish the resume gate first"))
     );
     assert!(
         rendered
@@ -499,9 +499,8 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
         .join("\n");
 
     assert!(rendered.contains("> "));
-    assert!(rendered.contains("prompt: session ready"));
-    assert!(rendered.contains("Ctrl+j nl"));
-    assert!(rendered.contains(":help"));
+    assert!(rendered.contains("prompt: planning bootstrap required"));
+    assert!(rendered.contains("resume gate is waiting"));
     assert!(!rendered.contains(":help commands"));
     assert!(!rendered.contains("Ready to continue this session."));
     assert!(!rendered.contains("Shell commands: :diag"));
@@ -529,9 +528,8 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("starter: start with a task, file path, or bug summary"));
     assert!(rendered.contains("> "));
-    assert!(rendered.contains("prompt: new thread ready"));
-    assert!(rendered.contains("Ctrl+j nl"));
-    assert!(rendered.contains(":help"));
+    assert!(rendered.contains("prompt: planning bootstrap required"));
+    assert!(rendered.contains("capture objective to start"));
     assert!(!rendered.contains(":help commands"));
     assert!(!rendered.contains("thread: new draft  |  turn: idle"));
 }
@@ -570,12 +568,12 @@ fn empty_draft_prompts_for_first_message() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ready to start a new thread."))
+            .any(|line| line.contains("Planning bootstrap is required before the first turn"))
     );
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ctrl+j for newline"))
+            .any(|line| line.contains("Capture the objective in the planning gate"))
     );
 }
 
@@ -3055,6 +3053,10 @@ fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
         panic!("conversation should start ready");
     };
     conversation.thread_id = "thread-123".to_string();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
+    ));
     codex_port
         .turn_stream_behavior
         .lock()
@@ -3196,7 +3198,7 @@ fn command_prefix_buffer_filters_matching_shell_commands() {
         .join("\n");
 
     assert!(rendered.contains("> :p"));
-    assert!(rendered.contains("> :planning  planning mode"));
+    assert!(rendered.contains("> :planning  planning control center"));
     assert!(!rendered.contains(":diag  diagnostics"));
 }
 
@@ -3216,7 +3218,7 @@ fn inline_tail_command_prefix_shows_filtered_matches_while_typing() {
         .join("\n");
 
     assert!(rendered.contains("> :p"));
-    assert!(rendered.contains("> :planning  planning mode"));
+    assert!(rendered.contains("> :planning  planning control center"));
     assert!(!rendered.contains(":diag"));
 }
 
@@ -3632,6 +3634,48 @@ fn background_conversation_loaded_resets_followup_overlay_state() {
 }
 
 #[test]
+fn background_conversation_loaded_opens_planning_resume_gate_when_workspace_is_missing() {
+    let (app, _) = make_test_app();
+    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+
+    runtime
+        .app()
+        .tx
+        .send(BackgroundMessage::ConversationLoaded(Ok(
+            ConversationSnapshot {
+                thread_id: "thread-123".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+        )))
+        .expect("background message should enqueue");
+
+    runtime.poll_background_messages();
+
+    let app = runtime.app();
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::BootstrapObjective
+    );
+    assert_eq!(
+        app.planning_init_overlay_ui_state.entry_mode(),
+        super::PlanningInitEntryMode::ResumeGate
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should become ready");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("workspace still needs a planning bootstrap objective")
+    );
+}
+
+#[test]
 fn opening_new_draft_is_blocked_while_turn_is_streaming() {
     let (mut app, _) = make_test_app();
 
@@ -3654,6 +3698,32 @@ fn opening_new_draft_is_blocked_while_turn_is_streaming() {
         ConversationInputState::StreamingTurn
     );
     assert!(conversation.status_text.contains("turn still running"));
+}
+
+#[test]
+fn opening_new_draft_shows_planning_bootstrap_gate_when_workspace_is_missing() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+    app.open_new_conversation_shell();
+
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::BootstrapObjective
+    );
+    assert_eq!(
+        app.planning_init_overlay_ui_state.entry_mode(),
+        super::PlanningInitEntryMode::WorkflowGate
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("planning-first flow requires a bootstrap objective")
+    );
 }
 
 #[test]
@@ -3929,6 +3999,10 @@ fn manual_submit_while_startup_pending_arms_queue() {
         panic!("app should start with a draft conversation");
     };
     conversation.input_buffer = "ship it".to_string();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
+    ));
 
     app.start_turn_submission();
 
@@ -3960,6 +4034,10 @@ fn startup_ready_submits_armed_prompt() {
         panic!("app should start with a draft conversation");
     };
     conversation.input_buffer = "ship it".to_string();
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
+    ));
 
     app.start_turn_submission();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
@@ -3994,6 +4072,44 @@ fn startup_ready_submits_armed_prompt() {
 }
 
 #[test]
+fn manual_submit_without_planning_opens_bootstrap_gate_and_prefills_objective() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a draft conversation");
+    };
+    conversation.input_buffer = "ship it".to_string();
+
+    app.start_turn_submission();
+
+    assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::BootstrapObjective
+    );
+    assert_eq!(
+        app.planning_init_overlay_ui_state.entry_mode(),
+        super::PlanningInitEntryMode::WorkflowGate
+    );
+    assert_eq!(
+        app.planning_init_overlay_ui_state.bootstrap_objective(),
+        "ship it"
+    );
+    assert!(
+        codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .is_empty()
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert_eq!(conversation.input_buffer, "ship it");
+}
+
+#[test]
 fn manual_submit_appends_planning_context_when_ready() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
@@ -4007,6 +4123,11 @@ fn manual_submit_appends_planning_context_when_ready() {
     ));
 
     app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert_eq!(conversation.messages[0].text, "ship it");
 
     let mut submitted_prompt = None;
     for _ in 0..20 {
@@ -4026,8 +4147,8 @@ fn manual_submit_appends_planning_context_when_ready() {
     let submitted_prompt =
         submitted_prompt.expect("manual submit should reach the codex app-server port");
     assert!(submitted_prompt.starts_with("ship it"));
-    assert!(!submitted_prompt.contains("Planning Context"));
-    assert!(!submitted_prompt.contains("Queue Summary"));
+    assert!(submitted_prompt.contains("Planning Context"));
+    assert!(submitted_prompt.contains("Queue Summary"));
 }
 
 #[test]
