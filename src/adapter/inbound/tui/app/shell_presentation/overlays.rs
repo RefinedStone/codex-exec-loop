@@ -88,7 +88,6 @@ pub(crate) use base::{
 };
 pub(crate) use base::{
     build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
-    startup_screen_is_active,
 };
 pub(crate) use directions::build_directions_maintenance_overlay_view;
 pub(crate) use planning::{
