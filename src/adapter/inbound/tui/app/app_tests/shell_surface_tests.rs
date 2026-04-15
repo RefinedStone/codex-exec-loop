@@ -1,3 +1,41 @@
+use super::super::{github_polling, shell_runtime};
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
+use crate::domain::conversation::{
+    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
+};
+use crate::domain::github_review::{
+    GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
+    GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
+};
+use crate::domain::recent_sessions::RecentSessions;
+use ratatui::style::Modifier;
+
+use super::{
+    AutoFollowRuntimePhase, AutoFollowupSubmitContext, BackgroundMessage, Color,
+    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, Duration,
+    ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP, GithubReviewPollingState,
+    InlineShellCommand, KeyCode, KeyEvent, KeyModifiers, Line, MAX_COMPOSER_HEIGHT, Path,
+    PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus, PlanningExecutionSnapshot,
+    PlanningInitOverlayStep, PlanningRepairRequest, PlanningRepairState, PlanningRuntimeSnapshot,
+    PromptOrigin, RecordedAutoFollowupActivity, Rect, SessionOverlayUiState, SessionState,
+    ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH,
+    TempWorkspace, build_conversation_shell_frame_view, build_conversation_shell_view,
+    build_followup_template_overlay_view, build_followup_template_preview_lines,
+    build_followup_template_status_lines, build_inline_prompt_cursor_offset,
+    build_inline_tail_lines, build_input_prompt_cursor_offset, build_input_title,
+    build_queue_overlay_view, build_ready_input_lines, build_session_overlay_view,
+    build_shell_footer_lines, build_startup_overlay_view, build_status_title,
+    build_transcript_panel_view, build_transcript_title, create_temp_workspace, make_test_app,
+    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
+    sample_proposal_only_planning_runtime_snapshot, sample_session, sample_session_with_workspace,
+    sample_session_with_workspace_at, sample_startup_diagnostics, shell_layout,
+    startup_ascii_art_enabled_from_value, sync_draft_conversation_to_startup_workspace, thread,
+    wait_for_new_thread_prompt,
+};
+
 #[test]
 fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
     let (mut app, codex_port) = make_test_app();
@@ -66,7 +104,7 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
 #[test]
 fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
     let (app, codex_port) = make_test_app();
-    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
     runtime.app_mut().startup_state =
         StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
@@ -357,7 +395,7 @@ fn shell_footer_surfaces_recent_github_review_change_summary() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::ready(ready_conversation());
     app.github_review_polling_state = GithubReviewPollingState::active(
-        super::github_polling::GithubReviewPollingConfig {
+        github_polling::GithubReviewPollingConfig {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
             interval: std::time::Duration::from_secs(30),
         },
@@ -556,7 +594,7 @@ fn draft_workspace_sync_preserves_buffered_input() {
 #[test]
 fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() {
     let (app, _) = make_test_app();
-    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("app should start with a draft conversation");
     };
@@ -585,7 +623,7 @@ fn background_startup_message_updates_startup_state_and_syncs_draft_workspace() 
 #[test]
 fn background_conversation_loaded_resets_followup_overlay_state() {
     let (app, _) = make_test_app();
-    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
     runtime.app_mut().followup_overlay_ui_state.preview_scroll = 12;
     runtime
         .app_mut()
@@ -656,7 +694,7 @@ fn background_conversation_loaded_resets_followup_overlay_state() {
 #[test]
 fn background_conversation_loaded_keeps_chat_shell_visible_when_workspace_is_missing() {
     let (app, _) = make_test_app();
-    let mut runtime = super::shell_runtime::ShellRuntime::new(app);
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
 
     runtime
         .app()
@@ -3124,7 +3162,7 @@ fn followup_template_status_lines_include_github_review_change_summary() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::ready(ready_conversation());
     app.github_review_polling_state = GithubReviewPollingState::active(
-        super::github_polling::GithubReviewPollingConfig {
+        github_polling::GithubReviewPollingConfig {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
             interval: std::time::Duration::from_secs(30),
         },
@@ -3575,7 +3613,7 @@ fn shell_footer_surfaces_auto_follow_working_line_and_completed_progress() {
 fn github_review_poll_result_updates_snapshot_and_recent_changes() {
     let (mut app, _) = make_test_app();
     app.github_review_polling_state = GithubReviewPollingState::active(
-        super::github_polling::GithubReviewPollingConfig {
+        github_polling::GithubReviewPollingConfig {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
             interval: std::time::Duration::from_secs(30),
         },

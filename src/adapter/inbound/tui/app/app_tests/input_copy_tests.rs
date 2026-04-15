@@ -1,3 +1,9 @@
+use super::{
+    ConversationInputState, ConversationState, ShellActionAvailability, StartupState,
+    build_inline_tail_lines, build_ready_input_lines, make_test_app, ready_conversation,
+    sample_startup_diagnostics,
+};
+
 #[test]
 fn running_turn_still_shows_buffered_prompt() {
     let mut conversation = ready_conversation();

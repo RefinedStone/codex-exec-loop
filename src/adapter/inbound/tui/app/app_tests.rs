@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Color;
 use ratatui::text::Line;
 
 use super::conversation_model::PlanningRepairState;
@@ -60,15 +60,9 @@ use crate::application::service::planning_contract::{
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
-};
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::followup_template::{
     FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
-};
-use crate::domain::github_review::{
-    GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
-    GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestTarget,
 };
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -491,8 +485,11 @@ fn ready_conversation() -> ConversationViewModel {
     }
 }
 
-include!("app_tests/input_copy_tests.rs");
+#[path = "app_tests/input_copy_tests.rs"]
+mod input_copy_tests;
 
-include!("app_tests/planning_runtime_tests.rs");
+#[path = "app_tests/planning_runtime_tests.rs"]
+mod planning_runtime_tests;
 
-include!("app_tests/shell_surface_tests.rs");
+#[path = "app_tests/shell_surface_tests.rs"]
+mod shell_surface_tests;

@@ -174,7 +174,21 @@ impl<'a> ShellCorePresentationContext<'a> {
     }
 }
 
-include!("shell_presentation/overlays.rs");
+#[path = "shell_presentation/overlays.rs"]
+mod overlays;
+
+pub(super) use overlays::{
+    DirectionsMaintenanceOverlayView, FollowupTemplateOverlayView, OverlayListEntryView,
+    OverlayListView, PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView,
+    SessionOverlayView, StartupOverlayView, build_directions_maintenance_overlay_view,
+    build_followup_template_overlay_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_banner_lines, build_startup_overlay_view, startup_screen_is_active,
+};
+#[cfg(test)]
+pub(super) use overlays::{
+    build_conversation_shell_frame_view, build_conversation_shell_view, build_transcript_panel_view,
+};
 
 fn current_live_agent_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
     let message = conversation.live_agent_message.as_ref()?;
@@ -231,6 +245,22 @@ fn build_startup_banner_lines_from_context(
     };
 
     Some(startup_ascii_art_lines(max_height))
+}
+
+fn startup_screen_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
+    let Some(conversation) = context.ready_conversation() else {
+        return false;
+    };
+
+    !conversation.has_active_thread()
+        && conversation.messages.is_empty()
+        && conversation.active_turn_id.is_none()
+        && conversation.live_agent_message.is_none()
+}
+
+#[cfg(test)]
+fn startup_banner_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
+    context.show_startup_ascii_art && startup_screen_is_active_in_context(context)
 }
 
 fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
