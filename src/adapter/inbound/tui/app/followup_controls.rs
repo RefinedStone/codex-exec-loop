@@ -100,8 +100,7 @@ pub(super) fn reduce_followup_controls(
         }
         FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
-                state.status_text =
-                    "auto follow-up max turns must be a whole number between 1 and 50".to_string();
+                state.status_text = "auto follow-up max turns must be a whole number greater than 0 or the word infinite".to_string();
                 return FollowupControlReduction { state, effects };
             };
 
@@ -109,10 +108,10 @@ pub(super) fn reduce_followup_controls(
             state.clear_auto_followup_skip();
             state.status_text = format!(
                 "auto follow-up max turns {}",
-                state.auto_follow_state.max_auto_turns_value()
+                state.auto_follow_state.max_auto_turns_label()
             );
             effects.push(FollowupControlEffect::MaxAutoTurnsEditor {
-                value: value.to_string(),
+                value: state.auto_follow_state.max_auto_turns_label(),
             });
         }
         FollowupControlEvent::StopKeywordToggled => {
@@ -176,6 +175,7 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{
         AutoFollowupSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+        INFINITE_AUTO_FOLLOW_MAX_TURNS,
     };
     use crate::domain::followup_template::{
         FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
@@ -565,7 +565,7 @@ mod tests {
             reduced
                 .state
                 .status_text
-                .contains("whole number between 1 and 50")
+                .contains("whole number greater than 0 or the word infinite")
         );
     }
 
@@ -592,12 +592,12 @@ mod tests {
             reduced
                 .state
                 .status_text
-                .contains("whole number between 1 and 50")
+                .contains("whole number greater than 0 or the word infinite")
         );
     }
 
     #[test]
-    fn max_auto_turns_above_limit_keeps_existing_limit() {
+    fn infinite_max_auto_turns_updates_state() {
         let state = ConversationViewModel::new_draft(
             "/tmp/root".to_string(),
             sample_template_load_result("builtin next-task", "follow up"),
@@ -606,20 +606,19 @@ mod tests {
         let reduced = reduce_followup_controls(
             state,
             FollowupControlEvent::MaxAutoTurnsUpdated {
-                value: "51".to_string(),
+                value: "infinite".to_string(),
             },
         );
 
-        assert_eq!(
-            reduced.state.auto_follow_state.max_auto_turns_value(),
-            DEFAULT_AUTO_FOLLOW_MAX_TURNS
-        );
-        assert!(reduced.effects.is_empty());
         assert!(
-            reduced
-                .state
-                .status_text
-                .contains("whole number between 1 and 50")
+            reduced.state.auto_follow_state.max_auto_turns_value()
+                == INFINITE_AUTO_FOLLOW_MAX_TURNS
+        );
+        assert_eq!(
+            reduced.effects,
+            vec![FollowupControlEffect::MaxAutoTurnsEditor {
+                value: "infinite".to_string()
+            }]
         );
     }
 

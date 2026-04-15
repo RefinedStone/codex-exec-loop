@@ -1,3 +1,5 @@
+use super::AutoFollowState;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
     Diagnostics,
@@ -36,8 +38,9 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning  :turns <n>  :new  :help";
-const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning  :turns <n|infinite>  :new  :help";
+const MAX_AUTO_TURNS_USAGE: &str =
+    "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -165,7 +168,9 @@ impl InlineShellCommandInput {
                     format!("Press Enter to set max auto turns to {value}.")
                 }
                 Some(value) => {
-                    format!("Press Enter to apply `:turns {value}`. Max auto turns must be 1-50.")
+                    format!(
+                        "Press Enter to apply `:turns {value}`. Max auto turns must be a whole number greater than 0 or `infinite`."
+                    )
                 }
                 None => MAX_AUTO_TURNS_USAGE.to_string(),
             },
@@ -350,11 +355,7 @@ fn suggestion_prefix_token(input: &str) -> Option<String> {
 }
 
 fn is_valid_max_auto_turn_argument(value: &str) -> bool {
-    value
-        .trim()
-        .parse::<usize>()
-        .map(|candidate| (1..=50).contains(&candidate))
-        .unwrap_or(false)
+    AutoFollowState::normalize_max_auto_turns_candidate(value).is_some()
 }
 
 #[cfg(test)]
@@ -396,6 +397,10 @@ mod tests {
             (
                 ":turns 5",
                 Some((InlineShellCommand::MaxAutoTurns, Some("5"))),
+            ),
+            (
+                ":turns infinite",
+                Some((InlineShellCommand::MaxAutoTurns, Some("infinite"))),
             ),
             (
                 ":auto-turns 12",
@@ -510,8 +515,9 @@ mod tests {
     fn max_auto_turn_command_hint_is_argument_aware() {
         let no_arg = InlineShellCommandInput::parse(":turns").expect("command should parse");
         let valid_arg = InlineShellCommandInput::parse(":turns 7").expect("command should parse");
-        let invalid_arg =
-            InlineShellCommandInput::parse(":turns 70").expect("command should parse");
+        let infinite_arg =
+            InlineShellCommandInput::parse(":turns infinite").expect("command should parse");
+        let invalid_arg = InlineShellCommandInput::parse(":turns 0").expect("command should parse");
 
         assert_eq!(no_arg.buffered_hint(), MAX_AUTO_TURNS_USAGE);
         assert_eq!(
@@ -519,8 +525,12 @@ mod tests {
             "Press Enter to set max auto turns to 7."
         );
         assert_eq!(
+            infinite_arg.buffered_hint(),
+            "Press Enter to set max auto turns to infinite."
+        );
+        assert_eq!(
             invalid_arg.buffered_hint(),
-            "Press Enter to apply `:turns 70`. Max auto turns must be 1-50."
+            "Press Enter to apply `:turns 0`. Max auto turns must be a whole number greater than 0 or `infinite`."
         );
     }
 

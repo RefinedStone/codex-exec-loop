@@ -156,12 +156,21 @@ fn render_template_body(
     stop_keyword: &str,
     last_message: &str,
 ) -> String {
+    let max_auto_turns = render_max_auto_turns(max_auto_turns);
     template_body
         .replace("{auto_turn}", &auto_turn.to_string())
-        .replace("{max_auto_turns}", &max_auto_turns.to_string())
+        .replace("{max_auto_turns}", &max_auto_turns)
         .replace("{session_id}", session_id)
         .replace("{stop_keyword}", stop_keyword)
         .replace("{last_message}", last_message)
+}
+
+fn render_max_auto_turns(max_auto_turns: usize) -> String {
+    if max_auto_turns == usize::MAX {
+        "infinite".to_string()
+    } else {
+        max_auto_turns.to_string()
+    }
 }
 
 fn append_planning_fragment(
@@ -292,6 +301,23 @@ mod tests {
         assert!(prompt.contains("session=draft-thread"));
         assert!(prompt.contains("auto=1/3"));
         assert!(prompt.contains("last=(waiting for next agent reply)"));
+    }
+
+    #[test]
+    fn auto_follow_prompt_renders_infinite_limit_label() {
+        let service = TurnPromptAssemblyService::new();
+
+        let prompt = service.build_auto_follow_prompt(AutoFollowPromptAssemblyRequest {
+            template: &sample_template(),
+            auto_turn: 4,
+            max_auto_turns: usize::MAX,
+            session_id: "thread-1",
+            stop_keyword: "AUTO_STOP",
+            last_message: "latest answer",
+            planning_prompt_fragment: None,
+        });
+
+        assert!(prompt.contains("auto=4/infinite"));
     }
 
     #[test]

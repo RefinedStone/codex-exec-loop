@@ -25,7 +25,8 @@ use crate::domain::session_summary::SessionSummary;
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
-const MAX_AUTO_FOLLOW_MAX_TURNS: usize = 50;
+const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
+const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use super::super::{github_polling, shell_runtime};
+use super::super::{INFINITE_AUTO_FOLLOW_MAX_TURNS, github_polling, shell_runtime};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
 use crate::domain::conversation::{
@@ -1335,6 +1335,38 @@ fn inline_turns_command_updates_max_auto_turns_and_clears_input() {
 }
 
 #[test]
+fn inline_turns_command_accepts_infinite_argument() {
+    let (mut app, codex_port) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("app should start with a ready conversation");
+    };
+    conversation.input_buffer = ":turns infinite".to_string();
+
+    app.start_turn_submission();
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(
+        conversation.auto_follow_state.max_auto_turns_value(),
+        INFINITE_AUTO_FOLLOW_MAX_TURNS
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("auto follow-up max turns infinite")
+    );
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
 fn inline_turns_command_without_argument_shows_usage_and_clears_input() {
     let (mut app, codex_port) = make_test_app();
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
@@ -1355,7 +1387,7 @@ fn inline_turns_command_without_argument_shows_usage_and_clears_input() {
     assert!(
         conversation
             .status_text
-            .contains("usage: :turns <1-50>  |  alias: :auto-turns <1-50>")
+            .contains("usage: :turns <n|infinite>  |  alias: :auto-turns <n|infinite>")
     );
     assert!(
         codex_port
@@ -1372,7 +1404,7 @@ fn inline_turns_command_with_invalid_argument_keeps_validation_message() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("app should start with a ready conversation");
     };
-    conversation.input_buffer = ":turns 70".to_string();
+    conversation.input_buffer = ":turns 0".to_string();
 
     app.start_turn_submission();
 
@@ -1387,7 +1419,7 @@ fn inline_turns_command_with_invalid_argument_keeps_validation_message() {
     assert!(
         conversation
             .status_text
-            .contains("whole number between 1 and 50")
+            .contains("whole number greater than 0 or the word infinite")
     );
     assert!(
         codex_port
@@ -2815,7 +2847,7 @@ fn invalid_max_auto_turns_edit_keeps_editor_open() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_max_auto_turns_edit();
-    app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "51".to_string();
+    app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "0".to_string();
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 
@@ -2830,12 +2862,12 @@ fn invalid_max_auto_turns_edit_keeps_editor_open() {
     assert!(
         conversation
             .status_text
-            .contains("whole number between 1 and 50")
+            .contains("whole number greater than 0 or the word infinite")
     );
 }
 
 #[test]
-fn max_auto_turns_edit_ignores_non_digit_input() {
+fn max_auto_turns_edit_accepts_alphanumeric_input() {
     let (mut app, _) = make_test_app();
     app.conversation_state = ConversationState::ready(ready_conversation());
     app.start_max_auto_turns_edit();
@@ -2845,8 +2877,42 @@ fn max_auto_turns_edit_ignores_non_digit_input() {
 
     assert_eq!(
         app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
-        "34"
+        "34x"
     );
+}
+
+#[test]
+fn max_auto_turns_edit_commit_accepts_infinite_value() {
+    let (mut app, _) = make_test_app();
+    let mut conversation = ready_conversation();
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    app.conversation_state = ConversationState::ready(conversation);
+    app.start_max_auto_turns_edit();
+    app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "infinite".to_string();
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should stay ready");
+    };
+    assert_eq!(
+        conversation.auto_follow_state.max_auto_turns_value(),
+        INFINITE_AUTO_FOLLOW_MAX_TURNS
+    );
+    assert!(!app.is_max_auto_turns_editing());
+
+    let rendered = build_followup_template_status_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("max auto turns: infinite"));
 }
 
 #[test]

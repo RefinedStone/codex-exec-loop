@@ -7,6 +7,7 @@ use super::{
     ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
     TurnActivityState, format_conversation_lines,
 };
+use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
 };
@@ -481,21 +482,21 @@ fn stop_keyword_rule_normalizes_valid_identifier_like_values() {
 }
 
 #[test]
-fn max_auto_turn_candidate_requires_value_between_one_and_fifty() {
+fn max_auto_turn_candidate_accepts_positive_numbers_and_infinite() {
     assert_eq!(
         AutoFollowState::normalize_max_auto_turns_candidate(" 7 "),
         Some(7)
     );
     assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate("50"),
-        Some(50)
+        AutoFollowState::normalize_max_auto_turns_candidate("51"),
+        Some(51)
+    );
+    assert_eq!(
+        AutoFollowState::normalize_max_auto_turns_candidate("infinite"),
+        Some(INFINITE_AUTO_FOLLOW_MAX_TURNS)
     );
     assert_eq!(
         AutoFollowState::normalize_max_auto_turns_candidate("0"),
-        None
-    );
-    assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate("51"),
         None
     );
     assert_eq!(

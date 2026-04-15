@@ -112,8 +112,8 @@ pub(super) fn reduce_conversation_runtime(
                 state
                     .auto_follow_state
                     .active_turn_index()
-                    .unwrap_or_else(|| { state.auto_follow_state.next_auto_turn_index() }),
-                state.auto_follow_state.max_auto_turns_value()
+                    .unwrap_or_else(|| state.auto_follow_state.next_auto_turn_index()),
+                state.auto_follow_state.max_auto_turns_label()
             );
             let transcript_message = match &origin {
                 PromptOrigin::AutoFollow(context) => {

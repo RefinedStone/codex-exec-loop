@@ -274,7 +274,7 @@ pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 )),
                 Line::from(format!(
                     "max auto turns: {}",
-                    conversation.auto_follow_state.max_auto_turns_value()
+                    conversation.auto_follow_state.max_auto_turns_label()
                 )),
                 Line::from(format!(
                     "stop keyword: {}",

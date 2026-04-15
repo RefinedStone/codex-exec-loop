@@ -93,7 +93,7 @@ impl ShellRuntime {
                     self.app
                         .dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                             stop_keyword: self.app.current_stop_keyword_value(),
-                            max_auto_turns: self.app.current_max_auto_turns_value().to_string(),
+                            max_auto_turns: self.app.current_max_auto_turns_label(),
                         });
                 }
                 BackgroundMessage::ConversationStream(event) => {

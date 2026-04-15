@@ -122,8 +122,9 @@ impl NativeTuiApp {
             InlineShellCommand::MaxAutoTurns => {
                 let Some(value) = command_input.argument().map(str::to_string) else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text: "usage: :turns <1-50>  |  alias: :auto-turns <1-50>"
-                            .to_string(),
+                        status_text:
+                            "usage: :turns <n|infinite>  |  alias: :auto-turns <n|infinite>"
+                                .to_string(),
                     });
                     self.clear_input_buffer();
                     return;

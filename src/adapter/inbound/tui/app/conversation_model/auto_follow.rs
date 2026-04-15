@@ -5,7 +5,8 @@ use crate::domain::followup_template::{FollowupTemplateCatalog, FollowupTemplate
 
 use super::turn_activity::TurnActivityState;
 use super::{
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
+    INFINITE_AUTO_FOLLOW_MAX_TURNS, INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,23 +208,36 @@ impl AutoFollowState {
     }
 
     pub(crate) fn progress_label(&self) -> String {
-        format!("{}/{}", self.completed_auto_turns, self.max_auto_turns)
+        format!(
+            "{}/{}",
+            self.completed_auto_turns,
+            self.max_auto_turns_label()
+        )
     }
 
     pub(crate) fn completed_progress_label(&self) -> String {
         format!(
             "{}/{} completed",
-            self.completed_auto_turns, self.max_auto_turns
+            self.completed_auto_turns,
+            self.max_auto_turns_label()
         )
     }
 
     #[cfg(test)]
     pub(crate) fn compact_completed_progress_label(&self) -> String {
-        format!("{}/{} done", self.completed_auto_turns, self.max_auto_turns)
+        format!(
+            "{}/{} done",
+            self.completed_auto_turns,
+            self.max_auto_turns_label()
+        )
     }
 
     pub(crate) fn max_auto_turns_value(&self) -> usize {
         self.max_auto_turns
+    }
+
+    pub(crate) fn max_auto_turns_label(&self) -> String {
+        format_max_auto_turns(self.max_auto_turns)
     }
 
     pub(crate) fn template_label(&self) -> &str {
@@ -277,17 +291,18 @@ impl AutoFollowState {
     }
 
     pub(crate) fn activity_label(&self) -> String {
+        let max_auto_turns = self.max_auto_turns_label();
         match &self.runtime_phase {
             AutoFollowRuntimePhase::Idle => "idle".to_string(),
             AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next turn".to_string(),
             AutoFollowRuntimePhase::Queued { turn_index, .. } => {
-                format!("queued turn {turn_index}/{}", self.max_auto_turns)
+                format!("queued turn {turn_index}/{max_auto_turns}")
             }
             AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-                format!("submitting turn {turn_index}/{}", self.max_auto_turns)
+                format!("submitting turn {turn_index}/{max_auto_turns}")
             }
             AutoFollowRuntimePhase::Running { turn_index, .. } => {
-                format!("running turn {turn_index}/{}", self.max_auto_turns)
+                format!("running turn {turn_index}/{max_auto_turns}")
             }
         }
     }
@@ -421,12 +436,19 @@ impl AutoFollowState {
 
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
         let normalized = candidate.trim();
-        let value = normalized.parse::<usize>().ok()?;
-        if value == 0 || value > MAX_AUTO_FOLLOW_MAX_TURNS {
-            None
-        } else {
-            Some(value)
+        if normalized.eq_ignore_ascii_case(INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN) {
+            return Some(INFINITE_AUTO_FOLLOW_MAX_TURNS);
         }
+        let value = normalized.parse::<usize>().ok()?;
+        if value == 0 { None } else { Some(value) }
+    }
+}
+
+fn format_max_auto_turns(value: usize) -> String {
+    if value == INFINITE_AUTO_FOLLOW_MAX_TURNS {
+        INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string()
+    } else {
+        value.to_string()
     }
 }
 

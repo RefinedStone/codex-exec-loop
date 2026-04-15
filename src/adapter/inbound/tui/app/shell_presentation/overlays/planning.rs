@@ -254,7 +254,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         )),
                         Line::from(format!(
                             "max auto turns: {}",
-                            app.current_max_auto_turns_value()
+                            app.current_max_auto_turns_label()
                         )),
                     ];
                     if app.is_max_auto_turns_editing() {
@@ -279,7 +279,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     vec![
                         Line::from("Type the new max-turn value directly. Backspace deletes."),
                         Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
-                        Line::from("Use a whole number between 1 and 50."),
+                        Line::from("Use a whole number greater than 0, or type infinite."),
                     ]
                 } else {
                     vec![

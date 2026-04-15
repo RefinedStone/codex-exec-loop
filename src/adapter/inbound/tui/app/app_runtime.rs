@@ -285,7 +285,7 @@ impl NativeTuiApp {
                 self.refresh_ready_conversation_planning_runtime_snapshot();
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                     stop_keyword: self.current_stop_keyword_value(),
-                    max_auto_turns: self.current_max_auto_turns_value().to_string(),
+                    max_auto_turns: self.current_max_auto_turns_label(),
                 });
             }
             ConversationIntentEffect::OpenSession { session } => {
@@ -310,7 +310,7 @@ impl NativeTuiApp {
         self.conversation_state = ConversationState::ready(reduction.state);
         if !self.is_max_auto_turns_editing() {
             self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsValueSynced {
-                value: self.current_max_auto_turns_value().to_string(),
+                value: self.current_max_auto_turns_label(),
             });
         }
         if !self.is_stop_keyword_editing() {

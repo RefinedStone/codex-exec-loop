@@ -509,7 +509,7 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
 
     assert!(keys.contains("Type the new max-turn value directly."));
     assert!(keys.contains("Enter: save max turns"));
-    assert!(keys.contains("Use a whole number between 1 and 50."));
+    assert!(keys.contains("Use a whole number greater than 0, or type infinite."));
     assert!(!keys.contains("promote staged scaffold"));
 }
 

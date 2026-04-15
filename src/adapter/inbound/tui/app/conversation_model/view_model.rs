@@ -464,9 +464,9 @@ impl ConversationViewModel {
         self.live_agent_message = None;
         if let Some((turn_index, template_label)) = self.auto_follow_state.mark_auto_turn_started()
         {
+            let max_auto_turns = self.auto_follow_state.max_auto_turns_label();
             let status_text = format!(
-                "auto follow-up running / turn {turn_index}/{} / template: {template_label}",
-                self.auto_follow_state.max_auto_turns_value()
+                "auto follow-up running / turn {turn_index}/{max_auto_turns} / template: {template_label}"
             );
             self.status_text = status_text.clone();
             self.append_status_message(status_text);
@@ -734,7 +734,7 @@ impl ConversationViewModel {
             .mark_auto_turn_submitted(template_label);
         let progress = format!(
             "{turn_index}/{}",
-            self.auto_follow_state.max_auto_turns_value()
+            self.auto_follow_state.max_auto_turns_label()
         );
         self.last_planning_task_handoff = handoff_task.cloned();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
@@ -753,7 +753,7 @@ impl ConversationViewModel {
         let turn_index = self.auto_follow_state.mark_auto_turn_queued(template_label);
         let next_progress = format!(
             "{turn_index}/{}",
-            self.auto_follow_state.max_auto_turns_value()
+            self.auto_follow_state.max_auto_turns_label()
         );
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("queued auto turn {next_progress}"),

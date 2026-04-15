@@ -27,7 +27,7 @@ impl NativeTuiApp {
     pub(crate) fn show_followup_template_overlay(&mut self) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown {
             stop_keyword: self.current_stop_keyword_value(),
-            max_auto_turns: self.current_max_auto_turns_value().to_string(),
+            max_auto_turns: self.current_max_auto_turns_label(),
         });
         self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayShown);
     }
@@ -48,13 +48,13 @@ impl NativeTuiApp {
         self.dispatch_followup_controls(FollowupControlEvent::AutoFollowStopped);
     }
 
-    pub(crate) fn current_max_auto_turns_value(&self) -> usize {
+    pub(crate) fn current_max_auto_turns_label(&self) -> String {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => {
-                conversation.auto_follow_state.max_auto_turns_value()
+                conversation.auto_follow_state.max_auto_turns_label()
             }
             ConversationState::Loading | ConversationState::Failed(_) => {
-                DEFAULT_AUTO_FOLLOW_MAX_TURNS
+                DEFAULT_AUTO_FOLLOW_MAX_TURNS.to_string()
             }
         }
     }
@@ -112,7 +112,7 @@ impl NativeTuiApp {
         }
 
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditStarted {
-            current_value: self.current_max_auto_turns_value().to_string(),
+            current_value: self.current_max_auto_turns_label(),
         });
     }
 
@@ -132,7 +132,7 @@ impl NativeTuiApp {
 
     pub(crate) fn cancel_max_auto_turns_edit(&mut self) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditCanceled {
-            current_value: self.current_max_auto_turns_value().to_string(),
+            current_value: self.current_max_auto_turns_label(),
         });
     }
 
@@ -280,7 +280,7 @@ impl NativeTuiApp {
             KeyCode::Char(character)
                 if (key.modifiers == KeyModifiers::NONE
                     || key.modifiers == KeyModifiers::SHIFT)
-                    && character.is_ascii_digit() =>
+                    && character.is_ascii_alphanumeric() =>
             {
                 self.push_max_auto_turns_character(character);
             }
