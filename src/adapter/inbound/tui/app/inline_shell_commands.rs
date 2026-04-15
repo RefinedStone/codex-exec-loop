@@ -38,7 +38,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning  :turns <n|infinite>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning [on|off|doctor]  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 
@@ -158,8 +158,11 @@ impl InlineShellCommandInput {
                 Some(value) if value.eq_ignore_ascii_case("on") => {
                     "Press Enter to turn Plan on.".to_string()
                 }
+                Some(value) if value.eq_ignore_ascii_case("doctor") => {
+                    "Press Enter to run planning doctor for safe path repairs.".to_string()
+                }
                 Some(value) => format!(
-                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off."
+                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off, doctor."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -391,6 +394,10 @@ mod tests {
                 Some((InlineShellCommand::PlanningInit, Some("on"))),
             ),
             (
+                ":planning doctor",
+                Some((InlineShellCommand::PlanningInit, Some("doctor"))),
+            ),
+            (
                 ":planning-init",
                 Some((InlineShellCommand::PlanningInit, None)),
             ),
@@ -549,6 +556,8 @@ mod tests {
         let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");
         let off = InlineShellCommandInput::parse(":planning off").expect("command should parse");
         let on = InlineShellCommandInput::parse(":planning on").expect("command should parse");
+        let doctor =
+            InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
         assert_eq!(
             plain.buffered_hint(),
@@ -556,6 +565,10 @@ mod tests {
         );
         assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
         assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");
+        assert_eq!(
+            doctor.buffered_hint(),
+            "Press Enter to run planning doctor for safe path repairs."
+        );
     }
 
     #[test]
