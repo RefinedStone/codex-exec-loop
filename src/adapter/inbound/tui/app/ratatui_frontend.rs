@@ -16,7 +16,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::shell_presentation::{
-    build_inline_tail_lines, build_startup_banner_lines, format_conversation_lines_with_debug,
+    build_inline_tail_view, build_startup_banner_lines, format_conversation_lines_with_debug,
 };
 use super::shell_rendering::{draw, prepare_render_state};
 use super::shell_runtime::ShellRuntime;
@@ -134,7 +134,7 @@ impl InlineViewportState {
         let next_signature = InlineTailFrameSignature {
             terminal_width,
             terminal_height,
-            lines: build_inline_tail_lines(app),
+            lines: build_inline_tail_view(app, terminal_width).lines,
         };
         let should_draw = self.last_tail_frame.as_ref() != Some(&next_signature);
         self.last_tail_frame = Some(next_signature);

@@ -27,7 +27,7 @@ pub(crate) fn build_startup_banner_lines(
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
     let context = ShellCorePresentationContext::from_app(app);
-    if !startup_banner_is_active_in_context(&context) {
+    if !context.startup_banner_is_active() {
         return None;
     }
 
@@ -37,21 +37,6 @@ pub(crate) fn build_startup_banner_lines(
     };
 
     Some(startup_ascii_art_lines(max_height))
-}
-
-fn startup_screen_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
-    let Some(conversation) = context.ready_conversation() else {
-        return false;
-    };
-
-    !conversation.has_active_thread()
-        && conversation.messages.is_empty()
-        && conversation.active_turn_id.is_none()
-        && conversation.live_agent_message.is_none()
-}
-
-fn startup_banner_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
-    context.show_startup_ascii_art && startup_screen_is_active_in_context(context)
 }
 
 #[cfg(test)]

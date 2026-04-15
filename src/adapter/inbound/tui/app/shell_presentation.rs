@@ -5,7 +5,6 @@ pub(super) use super::planning::{
 };
 use super::*;
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::session_service::{
     SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
@@ -158,6 +157,21 @@ impl<'a> ShellCorePresentationContext<'a> {
             ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
         }
     }
+
+    fn startup_screen_is_active(&self) -> bool {
+        let Some(conversation) = self.ready_conversation() else {
+            return false;
+        };
+
+        !conversation.has_active_thread()
+            && conversation.messages.is_empty()
+            && conversation.active_turn_id.is_none()
+            && conversation.live_agent_message.is_none()
+    }
+
+    fn startup_banner_is_active(&self) -> bool {
+        self.show_startup_ascii_art && self.startup_screen_is_active()
+    }
 }
 
 #[path = "shell_presentation/overlays.rs"]
@@ -213,10 +227,7 @@ fn current_plan_mode_indicator(app: &NativeTuiApp) -> status_panels::PlanModeInd
     status_panels::current_plan_mode_indicator(app)
 }
 
-fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
-    status_panels::plan_runtime_substate_label(snapshot)
-}
-
+#[cfg(test)]
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     status_panels::build_inline_tail_lines(app)
 }
@@ -251,7 +262,7 @@ fn build_startup_banner_lines_from_context(
     context: &ShellCorePresentationContext<'_>,
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
-    if !startup_banner_is_active_in_context(context) {
+    if !context.startup_banner_is_active() {
         return None;
     }
 
@@ -261,23 +272,6 @@ fn build_startup_banner_lines_from_context(
     };
 
     Some(startup_ascii_art_lines(max_height))
-}
-
-#[cfg(test)]
-fn startup_screen_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
-    let Some(conversation) = context.ready_conversation() else {
-        return false;
-    };
-
-    !conversation.has_active_thread()
-        && conversation.messages.is_empty()
-        && conversation.active_turn_id.is_none()
-        && conversation.live_agent_message.is_none()
-}
-
-#[cfg(test)]
-fn startup_banner_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
-    context.show_startup_ascii_art && startup_screen_is_active_in_context(context)
 }
 
 fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
