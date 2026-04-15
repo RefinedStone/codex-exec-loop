@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -324,6 +324,54 @@ fn create_temp_workspace(prefix: &str) -> String {
     let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
     std::fs::create_dir_all(&path).expect("temp workspace should be created");
     path.display().to_string()
+}
+
+struct TempWorkspace {
+    path: String,
+}
+
+impl TempWorkspace {
+    fn new(prefix: &str) -> Self {
+        Self {
+            path: create_temp_workspace(prefix),
+        }
+    }
+
+    fn path(&self) -> &str {
+        self.path.as_str()
+    }
+}
+
+impl Drop for TempWorkspace {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.path).ok();
+    }
+}
+
+fn wait_for_new_thread_prompt(
+    codex_port: &Arc<FakeCodexAppServerPort>,
+    predicate: impl Fn(&str) -> bool,
+) -> String {
+    let timeout = Duration::from_millis(500);
+    let poll_interval = Duration::from_millis(5);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(prompt) = codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .find(|prompt| predicate(prompt))
+        {
+            return prompt;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "manual submit should reach the codex app-server port within {timeout:?}"
+        );
+        thread::sleep(poll_interval);
+    }
 }
 
 fn bootstrap_active_planning_workspace(workspace_dir: &str) {
@@ -4030,31 +4078,16 @@ fn startup_ready_submits_armed_prompt() {
         conversation.input_state,
         ConversationInputState::SubmittingTurn
     ));
-    let mut submitted_prompt = None;
-    for _ in 0..20 {
-        submitted_prompt = codex_port
-            .new_thread_calls
-            .lock()
-            .expect("new-thread call mutex poisoned")
-            .iter()
-            .find(|(_, prompt)| prompt.starts_with("ship it"))
-            .map(|(_, prompt)| prompt.clone());
-        if submitted_prompt.is_some() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert!(
-        submitted_prompt.is_some(),
-        "queued startup submit should reach the codex app-server port"
-    );
+    let submitted_prompt =
+        wait_for_new_thread_prompt(&codex_port, |prompt| prompt.starts_with("ship it"));
+    assert!(submitted_prompt.starts_with("ship it"));
 }
 
 #[test]
 fn manual_submit_without_planning_bootstraps_silently_and_sends_prompt() {
     let (mut app, codex_port) = make_test_app();
-    let workspace_dir = create_temp_workspace("silent-planning-bootstrap");
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    let workspace = TempWorkspace::new("silent-planning-bootstrap");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(workspace.path(), true));
     sync_draft_conversation_to_startup_workspace(&mut app);
 
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
@@ -4073,45 +4106,29 @@ fn manual_submit_without_planning_bootstraps_silently_and_sends_prompt() {
         conversation.input_state,
         ConversationInputState::SubmittingTurn
     ));
-    let mut submitted_prompt = None;
-    for _ in 0..20 {
-        submitted_prompt = codex_port
-            .new_thread_calls
-            .lock()
-            .expect("new-thread call mutex poisoned")
-            .first()
-            .map(|(_, prompt)| prompt.clone());
-        if submitted_prompt.is_some() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    let submitted_prompt =
-        submitted_prompt.expect("manual submit should reach the codex app-server port");
+    let submitted_prompt = wait_for_new_thread_prompt(&codex_port, |_| true);
     assert_eq!(submitted_prompt, "ship it");
     assert!(
-        Path::new(&workspace_dir)
+        Path::new(workspace.path())
             .join(".codex-exec-loop")
             .join("planning")
             .join("directions.toml")
             .exists()
     );
-
-    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn bootstrap_gate_escape_closes_overlay() {
+fn planning_init_overlay_escape_closes_overlay() {
     let (mut app, _) = make_test_app();
-    let workspace_dir = create_temp_workspace("bootstrap-gate-escape");
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    let workspace = TempWorkspace::new("planning-init-overlay-escape");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(workspace.path(), true));
     sync_draft_conversation_to_startup_workspace(&mut app);
-    app.show_planning_workflow_gate(Some("ship it".to_string()));
+    app.show_planning_init_overlay();
 
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
-        PlanningInitOverlayStep::BootstrapObjective
+        PlanningInitOverlayStep::ModeSelection
     );
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
@@ -4121,9 +4138,6 @@ fn bootstrap_gate_escape_closes_overlay() {
         app.planning_init_overlay_ui_state.step(),
         PlanningInitOverlayStep::ModeSelection
     );
-    assert_eq!(app.planning_init_overlay_ui_state.bootstrap_objective(), "");
-
-    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]

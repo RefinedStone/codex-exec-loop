@@ -180,7 +180,7 @@ impl NativeTuiApp {
         });
     }
 
-    fn ensure_manual_planning_workspace(&mut self, bootstrap_objective: &str) -> bool {
+    fn ensure_manual_planning_workspace(&mut self, manual_prompt: &str) -> bool {
         let workspace_directory = self.planning_workspace_directory();
         let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
         if snapshot.workspace_present() {
@@ -190,8 +190,7 @@ impl NativeTuiApp {
             return true;
         }
 
-        let objective = bootstrap_objective.trim();
-        if objective.is_empty() {
+        if manual_prompt.trim().is_empty() {
             return false;
         }
 
@@ -207,29 +206,27 @@ impl NativeTuiApp {
                     .workspace
                     .promote_staged_draft(&workspace_directory, &draft_name)
                 {
-                    Ok(result) if result.promoted_file_count > 0 => {
-                        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
-                            &workspace_directory,
-                        );
-                        true
-                    }
                     Ok(result) => {
                         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
                             &workspace_directory,
                         );
-                        self.planning_init_overlay_ui_state
-                            .open_simple_review(stage_result);
-                        self.planning_draft_editor_ui_state.reset();
-                        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
-                        self.dispatch_conversation_input(
-                            ConversationInputEvent::StatusMessageShown {
-                                status_text: format!(
-                                    "planning bootstrap promote blocked / draft: {} / validation needs attention",
-                                    result.draft_name
-                                ),
-                            },
-                        );
-                        false
+                        if result.promoted_file_count > 0 {
+                            true
+                        } else {
+                            self.planning_init_overlay_ui_state
+                                .open_simple_review(stage_result);
+                            self.planning_draft_editor_ui_state.reset();
+                            self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+                            self.dispatch_conversation_input(
+                                ConversationInputEvent::StatusMessageShown {
+                                    status_text: format!(
+                                        "planning bootstrap promote blocked / draft: {} / validation needs attention",
+                                        result.draft_name
+                                    ),
+                                },
+                            );
+                            false
+                        }
                     }
                     Err(error) => {
                         self.dispatch_conversation_input(

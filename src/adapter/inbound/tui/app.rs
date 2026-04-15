@@ -145,8 +145,8 @@ use github_polling::GithubReviewPollingState;
 use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
-    PlanningInitDetailSelection, PlanningInitEntryMode, PlanningInitModeSelection,
-    PlanningInitOverlayStep, PlanningInitOverlayUiState,
+    PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
+    PlanningInitOverlayUiState,
 };
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
