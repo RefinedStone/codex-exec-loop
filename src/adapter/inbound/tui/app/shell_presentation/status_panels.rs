@@ -5,12 +5,13 @@ use super::super::planning::{
     build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
 };
 use super::{
-    ConversationInputState, ConversationViewModel, INLINE_LIVE_AGENT_DETAIL_LIMIT,
-    INLINE_LIVE_AGENT_MAX_CONTENT_LINES, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
-    INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
-    INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT, INLINE_TAIL_STATUS_DETAIL_LIMIT,
-    INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, NativeTuiApp,
-    ShellActionAvailability, ShellConversationState, ShellCorePresentationContext,
+    ConversationInputState, ConversationState, ConversationViewModel,
+    INLINE_LIVE_AGENT_DETAIL_LIMIT, INLINE_LIVE_AGENT_MAX_CONTENT_LINES,
+    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+    INLINE_TAIL_PLANNING_DETAIL_LIMIT, INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
+    INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_THREAD_LABEL_LIMIT,
+    INLINE_TAIL_WARNING_DETAIL_LIMIT, NativeTuiApp, ShellActionAvailability,
+    ShellConversationState, ShellCorePresentationContext, StartupState,
     auto_follow_prompt_status_line, build_prompt_cursor_offset, build_working_line,
     compact_inline_detail, inline_input_state_label, turn_status_label, wrapped_row_count,
 };
@@ -185,10 +186,11 @@ pub(crate) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> 
     InlineTailView {
         lines,
         prompt_cursor_offset,
-        render_from_top: startup_screen_is_active_in_context(&context),
+        render_from_top: context.startup_screen_is_active(),
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     build_inline_tail_view(app, 0).lines
 }
@@ -207,7 +209,7 @@ fn build_inline_tail_lines_with_context(
     });
     let planner_panel_lines = build_planner_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
 
-    if startup_screen_is_active_in_context(context) {
+    if context.startup_screen_is_active() {
         let mut lines = build_inline_startup_screen_lines_with_context(context);
         lines.extend(build_inline_tail_prompt_lines_with_context(
             context,
@@ -336,19 +338,19 @@ fn build_inline_startup_screen_lines_with_context(
     ))];
 
     match context.startup_state {
-        crate::adapter::inbound::tui::shell_chrome::StartupState::Idle => {
+        StartupState::Idle => {
             lines.push(Line::from("status: preparing startup checks"));
             if let Some(conversation) = context.ready_conversation() {
                 lines.push(Line::from(format!("workspace: {}", conversation.cwd)));
             }
         }
-        crate::adapter::inbound::tui::shell_chrome::StartupState::Loading => {
+        StartupState::Loading => {
             lines.push(Line::from("status: initializing codex shell"));
             lines.extend(super::build_startup_check_lines_from_state(
                 context.startup_state,
             ));
         }
-        crate::adapter::inbound::tui::shell_chrome::StartupState::Ready(diagnostics) => {
+        StartupState::Ready(diagnostics) => {
             lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
             lines.push(Line::from(format!(
                 "diagnostics: codex {}  |  app-server {}  |  account {}",
@@ -371,7 +373,7 @@ fn build_inline_startup_screen_lines_with_context(
                 inline_starter_copy_in_context(context)
             )));
         }
-        crate::adapter::inbound::tui::shell_chrome::StartupState::Failed(message) => {
+        StartupState::Failed(message) => {
             lines.push(Line::from(format!("status: {message}")));
             for warning_line in super::build_startup_warning_lines_from_state(context.startup_state)
                 .into_iter()
@@ -392,24 +394,12 @@ fn build_inline_startup_screen_lines_with_context(
     lines
 }
 
-fn startup_screen_is_active_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
-    let Some(conversation) = context.ready_conversation() else {
-        return false;
-    };
-
-    !conversation.has_active_thread()
-        && conversation.messages.is_empty()
-        && conversation.active_turn_id.is_none()
-        && conversation.live_agent_message.is_none()
-}
-
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
     match &app.conversation_state {
-        crate::adapter::inbound::tui::app::ConversationState::Ready(conversation) => {
+        ConversationState::Ready(conversation) => {
             plan_mode_indicator_from_snapshot(&conversation.planning_runtime_snapshot)
         }
-        crate::adapter::inbound::tui::app::ConversationState::Loading
-        | crate::adapter::inbound::tui::app::ConversationState::Failed(_) => {
+        ConversationState::Loading | ConversationState::Failed(_) => {
             let workspace_directory = app.current_workspace_directory();
             let snapshot = app.load_planning_runtime_snapshot(&workspace_directory);
             plan_mode_indicator_from_snapshot(&snapshot)

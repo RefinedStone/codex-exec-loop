@@ -1,8 +1,9 @@
 use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
+use super::super::status_panels::plan_runtime_substate_label;
 use super::super::{
     Color, ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, Line, Modifier, NativeTuiApp,
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
-    PlanningValidationSeverity, Span, Style, compact_inline_detail, plan_runtime_substate_label,
+    PlanningValidationSeverity, Span, Style, compact_inline_detail,
 };
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 
