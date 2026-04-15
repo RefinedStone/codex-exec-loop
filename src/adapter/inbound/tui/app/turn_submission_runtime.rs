@@ -8,7 +8,11 @@ use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
 
 use super::planner_debug_preview::build_debug_preview_lines;
-use super::*;
+use super::{
+    AutoFollowupSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
+    ConversationRuntimeEvent, ConversationState, InlineShellCommandInput, NativeTuiApp,
+    PromptOrigin, ShellActionAvailability, ShellChromeEvent,
+};
 
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
 
@@ -96,16 +100,16 @@ impl NativeTuiApp {
         }
 
         match self.shell_action_availability() {
-            super::ShellActionAvailability::Ready if operator_prompt.trim().is_empty() => {
+            ShellActionAvailability::Ready if operator_prompt.trim().is_empty() => {
                 self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
                     status_text: None,
                 });
             }
-            super::ShellActionAvailability::Ready => {
+            ShellActionAvailability::Ready => {
                 self.submit_manual_prompt_from_text(operator_prompt);
             }
-            super::ShellActionAvailability::Pending => {}
-            super::ShellActionAvailability::Blocked => {
+            ShellActionAvailability::Pending => {}
+            ShellActionAvailability::Blocked => {
                 self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
                     status_text: Some(format!(
                         "{}; queued prompt kept in buffer",
@@ -157,7 +161,7 @@ impl NativeTuiApp {
         if matches!(prompt_origin, PromptOrigin::Manual)
             && matches!(
                 self.shell_action_availability(),
-                super::ShellActionAvailability::Pending
+                ShellActionAvailability::Pending
             )
         {
             self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {

@@ -47,6 +47,15 @@ Keep mapping logic in adapters, not domain models.
 - Use `Result` for boundary failures and avoid `panic!`.
 - Keep UI event handling readable even when that means a little more code.
 
+## LLM Context Budget
+
+- Treat `src/adapter/inbound/tui/app/` as an LLM-facing surface: reduce the number of files and types needed for a safe edit.
+- Keep new TUI/controller/presentation files near 600 LOC or less; once a file crosses roughly 800 LOC, split it by subsystem or view concern in the same PR.
+- Do not use `use super::*;` or `use super::super::*;` in app runtime, controller, presentation, or planning modules. Import only the symbols the file actually uses.
+- Do not rely on parent-module wildcard imports for child modules. Child modules should import their own dependencies explicitly so they remain readable in isolation.
+- Keep rendering, presentation projection/builders, controller/event handling, and long integration-style tests in separate files when practical.
+- Split broad shell tests by concern such as planning, session browser, follow-up overlay, or shell surface behavior instead of growing one monolithic test file.
+
 ## Testing
 
 - Place unit tests next to the module with `#[cfg(test)] mod tests`.

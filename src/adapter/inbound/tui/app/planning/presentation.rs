@@ -1,11 +1,13 @@
 use super::super::planner_debug_preview::build_debug_preview_lines;
-use super::super::*;
+use super::super::{ConversationState, ConversationViewModel, NativeTuiApp};
 use crate::application::service::planning::{
     PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
 };
 use crate::application::service::turn_prompt_assembly_service::PREVIEW_THREAD_ID_PLACEHOLDER;
 use crate::domain::text::compact_whitespace_detail;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 
 const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
 const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;

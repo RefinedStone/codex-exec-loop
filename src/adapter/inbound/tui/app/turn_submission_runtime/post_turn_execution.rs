@@ -1,5 +1,6 @@
 use crate::application::service::planning::PlanningProposalPromotionRequest;
 use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
@@ -15,10 +16,16 @@ use crate::domain::planning::QueueIdlePolicy;
 
 #[cfg(not(test))]
 use super::super::app_runtime::BackgroundMessage;
+#[cfg(test)]
+use super::super::conversation_runtime::ConversationRuntimeEvent;
 use super::super::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
-use super::*;
+use super::super::{
+    ActiveTurnPlanningCapture, ActiveTurnPlanningSnapshot, AutoFollowupDecision,
+    AutoFollowupSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
+    PlannerWorkerPanelState, PlannerWorkerStatus,
+};
 
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
@@ -316,7 +323,7 @@ impl PostTurnEvaluationExecutor {
         let Some(latest_main_reply) = conversation
             .latest_agent_message_text()
             .map(str::trim)
-            .filter(|message| !message.is_empty())
+            .filter(|message: &&str| !message.is_empty())
         else {
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,

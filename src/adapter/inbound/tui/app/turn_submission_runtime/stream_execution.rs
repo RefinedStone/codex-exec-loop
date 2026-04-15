@@ -2,7 +2,11 @@ use std::any::Any;
 use std::sync::mpsc;
 use std::thread;
 
-use super::*;
+use crate::adapter::inbound::tui::app::{
+    ActiveTurnPlanningCapture, BackgroundMessage, NativeTuiApp,
+};
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_service::ConversationService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PreparedTurnStreamRequest {
@@ -106,10 +110,10 @@ fn run_stream_request(
     match request.thread_id {
         Some(thread_id) => service
             .run_turn_stream(&thread_id, &request.prompt, event_sender)
-            .map_err(|error| error.to_string()),
+            .map_err(|error: anyhow::Error| error.to_string()),
         None => service
             .run_new_thread_stream(&request.workspace_directory, &request.prompt, event_sender)
-            .map_err(|error| error.to_string()),
+            .map_err(|error: anyhow::Error| error.to_string()),
     }
 }
 

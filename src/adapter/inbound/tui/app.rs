@@ -11,7 +11,6 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::followup_template_service::{
     FollowupTemplateReloadResult, FollowupTemplateService,
