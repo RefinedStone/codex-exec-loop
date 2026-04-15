@@ -149,7 +149,7 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
         app.planner_worker_panel_state
             .last_host_detail
             .as_deref()
-            .is_some_and(|detail| detail.contains("host promoted top follow-up proposal"))
+            .is_some_and(|detail: &str| detail.contains("host promoted top follow-up proposal"))
     );
     assert_eq!(
         conversation.status_text,
@@ -275,19 +275,19 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
         conversation
             .planning_runtime_snapshot
             .auto_followup_pause_reason()
-            .is_some_and(|reason| reason.contains("previously handed-off task"))
+            .is_some_and(|reason: &str| reason.contains("previously handed-off task"))
     );
     assert!(
         app.planner_worker_panel_state
             .last_host_detail
             .as_deref()
-            .is_some_and(|detail| detail.contains("previously handed-off task"))
+            .is_some_and(|detail: &str| detail.contains("previously handed-off task"))
     );
     assert!(
         app.planner_worker_panel_state
             .last_prompt
             .as_deref()
-            .is_some_and(|prompt| prompt.contains("planning worker refresh 입니다."))
+            .is_some_and(|prompt: &str| prompt.contains("planning worker refresh 입니다."))
     );
     assert_eq!(
         app.planner_worker_panel_state

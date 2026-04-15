@@ -12,19 +12,14 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::followup_template_service::{
-    FollowupTemplateReloadResult, FollowupTemplateService,
-};
+use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::domain::conversation::{
-    ConversationMessage, ConversationMessageKind, ConversationSnapshot,
-};
-use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
+use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use crate::domain::session_summary::SessionSummary;
 
 const SESSION_PAGE_SIZE: usize = 10;
@@ -51,7 +46,6 @@ const MAX_COMPOSER_HEIGHT: u16 = 8;
 const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
-const PLANNER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
@@ -142,6 +136,7 @@ use followup_overlay_ui::{
 };
 use github_polling::GithubReviewPollingState;
 use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
+use planning::{PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
@@ -207,104 +202,6 @@ impl ActiveTurnPlanningCapture {
 enum ActiveTurnPlanningSnapshot {
     Ready(PlanningExecutionSnapshot),
     CaptureFailed(String),
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum PlannerWorkerStatus {
-    #[default]
-    Idle,
-    RefreshRunning,
-    RefreshSucceeded,
-    RefreshFailed,
-    RepairRunning,
-    RepairSucceeded,
-    RepairFailed,
-}
-
-impl PlannerWorkerStatus {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::RefreshRunning => "refresh running",
-            Self::RefreshSucceeded => "refresh ok",
-            Self::RefreshFailed => "refresh failed",
-            Self::RepairRunning => "repair running",
-            Self::RepairSucceeded => "repair ok",
-            Self::RepairFailed => "repair failed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum PlannerVisibility {
-    #[default]
-    Normal,
-    Debug,
-}
-
-impl PlannerVisibility {
-    fn from_environment() -> Self {
-        Self::from_env_value(std::env::var(PLANNER_VISIBILITY_ENV_VAR).ok().as_deref())
-    }
-
-    fn from_env_value(value: Option<&str>) -> Self {
-        match value
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("debug") | Some("verbose") | Some("detailed") | Some("1") | Some("true") => {
-                Self::Debug
-            }
-            _ => Self::Normal,
-        }
-    }
-
-    fn toggle(self) -> Self {
-        match self {
-            Self::Normal => Self::Debug,
-            Self::Debug => Self::Normal,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Normal => "normal",
-            Self::Debug => "debug",
-        }
-    }
-
-    fn shows_debug_details(self) -> bool {
-        matches!(self, Self::Debug)
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct PlannerWorkerPanelState {
-    status: PlannerWorkerStatus,
-    last_operation_label: Option<String>,
-    last_summary: Option<String>,
-    last_rejected_summary: Option<String>,
-    last_queue_summary: Option<String>,
-    last_notice_detail: Option<String>,
-    last_prompt: Option<String>,
-    last_response: Option<String>,
-    last_host_detail: Option<String>,
-}
-
-impl PlannerWorkerPanelState {
-    fn has_content(&self) -> bool {
-        !matches!(self.status, PlannerWorkerStatus::Idle)
-            || self.last_operation_label.is_some()
-            || self.last_summary.is_some()
-            || self.last_rejected_summary.is_some()
-            || self.last_queue_summary.is_some()
-            || self.last_notice_detail.is_some()
-            || self.last_prompt.is_some()
-            || self.last_response.is_some()
-            || self.last_host_detail.is_some()
-    }
 }
 
 struct NativeTuiApp {

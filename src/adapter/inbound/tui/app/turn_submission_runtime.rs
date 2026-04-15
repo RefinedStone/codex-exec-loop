@@ -272,7 +272,7 @@ impl NativeTuiApp {
             "planner temp session: {operation_label} / {}",
             planner.status.label()
         )];
-        if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
+        if let Some(summary) = summary.filter(|summary: &&str| !summary.trim().is_empty()) {
             lines.push(format!("planner summary: {summary}"));
         }
         append_debug_detail_preview_block(&mut lines, "planner prompt:", prompt);

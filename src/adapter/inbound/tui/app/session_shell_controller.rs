@@ -1,7 +1,13 @@
-use super::*;
+use crossterm::event::{self, KeyCode, KeyModifiers};
+
+use super::{
+    ConversationIntentEvent, NativeTuiApp, SESSION_PAGE_SIZE, SessionState, ShellChromeEvent,
+    ShellOverlay,
+};
 use crate::application::service::session_service::{
     SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
 };
+use crate::domain::session_summary::SessionSummary;
 
 impl NativeTuiApp {
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {

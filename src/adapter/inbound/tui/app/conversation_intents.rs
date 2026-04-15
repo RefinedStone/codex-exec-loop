@@ -1,4 +1,4 @@
-use super::*;
+use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConversationIntentMode {

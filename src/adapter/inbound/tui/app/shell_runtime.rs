@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use super::*;
+use super::{
+    BackgroundMessage, ConversationLifecycleEvent, ConversationRuntimeEvent,
+    FollowupOverlayUiEvent, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
+};
 
 pub(super) struct ShellRuntime {
     app: NativeTuiApp,
@@ -276,6 +279,10 @@ mod tests {
 
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnEvaluation;
+    use crate::adapter::inbound::tui::app::{
+        ConversationInputState, ConversationState, ConversationViewModel, InlineShellCommand,
+    };
+    use crate::adapter::inbound::tui::shell_chrome::{ShellOverlay, StartupState};
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
