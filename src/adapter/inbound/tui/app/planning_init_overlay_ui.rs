@@ -1,6 +1,7 @@
 use crate::application::service::planning::PlanningInitStageResult;
 use crate::domain::planning::PlanningValidationReport;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanningInitOverlayStep {
     BootstrapObjective,
@@ -11,6 +12,7 @@ pub(super) enum PlanningInitOverlayStep {
     ManualEditor,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanningInitEntryMode {
     CommandCenter,
@@ -115,6 +117,7 @@ impl PlanningInitOverlayUiState {
         self.bootstrap_objective.clear();
     }
 
+    #[allow(dead_code)]
     pub fn open_bootstrap_gate(
         &mut self,
         entry_mode: PlanningInitEntryMode,

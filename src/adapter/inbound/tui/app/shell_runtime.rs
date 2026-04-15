@@ -63,7 +63,6 @@ impl ShellRuntime {
                         self.app.sync_draft_shell_workspace(&workspace_directory);
                     }
                     self.app.resolve_startup_submit_queue();
-                    self.app.maybe_show_startup_planning_workflow_gate();
                 }
                 BackgroundMessage::SessionsLoaded(result) => {
                     self.app
@@ -93,7 +92,6 @@ impl ShellRuntime {
                             stop_keyword: self.app.current_stop_keyword_value(),
                             max_auto_turns: self.app.current_max_auto_turns_value().to_string(),
                         });
-                    self.app.maybe_show_resume_planning_gate();
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.app.dispatch_conversation_runtime(

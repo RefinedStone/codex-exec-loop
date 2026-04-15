@@ -122,6 +122,10 @@ impl NativeTuiApp {
             return;
         }
 
+        if !self.ensure_manual_planning_workspace(&transcript_text) {
+            return;
+        }
+
         let prompt = match &self.conversation_state {
             ConversationState::Ready(conversation) => self
                 .planning
@@ -169,50 +173,81 @@ impl NativeTuiApp {
             return;
         }
 
-        let manual_gate_snapshot = if matches!(prompt_origin, PromptOrigin::Manual) {
-            match &self.conversation_state {
-                ConversationState::Ready(conversation) => {
-                    Some(conversation.planning_runtime_snapshot.clone())
-                }
-                ConversationState::Loading | ConversationState::Failed(_) => None,
-            }
-        } else {
-            None
-        };
-
-        if let Some(snapshot) =
-            manual_gate_snapshot.filter(|snapshot| self.planning_requires_manual_gate(snapshot))
-        {
-            let startup_submit_armed = matches!(
-                &self.conversation_state,
-                ConversationState::Ready(conversation) if conversation.startup_submit_armed
-            );
-            if snapshot.workspace_present() {
-                self.show_planning_workflow_gate(None);
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: if snapshot.plan_enabled() {
-                        "planning files need attention before this prompt can start".to_string()
-                    } else {
-                        "planning-first flow requires Plan on before this prompt can start"
-                            .to_string()
-                    },
-                });
-            } else {
-                self.show_planning_workflow_gate(Some(transcript_text));
-            }
-            if startup_submit_armed {
-                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
-                    status_text: None,
-                });
-            }
-            return;
-        }
-
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
             prompt,
             transcript_text,
             origin: prompt_origin,
         });
+    }
+
+    fn ensure_manual_planning_workspace(&mut self, bootstrap_objective: &str) -> bool {
+        let workspace_directory = self.planning_workspace_directory();
+        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+        if snapshot.workspace_present() {
+            self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                &workspace_directory,
+            );
+            return true;
+        }
+
+        let objective = bootstrap_objective.trim();
+        if objective.is_empty() {
+            return false;
+        }
+
+        match self
+            .planning
+            .workspace
+            .stage_simple_mode_draft(&workspace_directory)
+        {
+            Ok(stage_result) => {
+                let draft_name = stage_result.draft_name.clone();
+                match self
+                    .planning
+                    .workspace
+                    .promote_staged_draft(&workspace_directory, &draft_name)
+                {
+                    Ok(result) if result.promoted_file_count > 0 => {
+                        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                            &workspace_directory,
+                        );
+                        true
+                    }
+                    Ok(result) => {
+                        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                            &workspace_directory,
+                        );
+                        self.planning_init_overlay_ui_state
+                            .open_simple_review(stage_result);
+                        self.planning_draft_editor_ui_state.reset();
+                        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+                        self.dispatch_conversation_input(
+                            ConversationInputEvent::StatusMessageShown {
+                                status_text: format!(
+                                    "planning bootstrap promote blocked / draft: {} / validation needs attention",
+                                    result.draft_name
+                                ),
+                            },
+                        );
+                        false
+                    }
+                    Err(error) => {
+                        self.dispatch_conversation_input(
+                            ConversationInputEvent::StatusMessageShown {
+                                status_text: format!("planning bootstrap promote failed: {error}"),
+                            },
+                        );
+                        false
+                    }
+                }
+            }
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("planning bootstrap failed: {error}"),
+                });
+                false
+            }
+        }
     }
 
     fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {

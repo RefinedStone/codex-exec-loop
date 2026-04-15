@@ -2335,12 +2335,6 @@ fn build_inline_ready_prompt_lines(
             lines.push(Line::from(status_line));
             return lines;
         }
-        if shell_action_availability == ShellActionAvailability::Ready
-            && let Some(status_line) = planning_gate_inline_prompt_status_line(conversation)
-        {
-            lines.push(Line::from(status_line));
-            return lines;
-        }
         let line = match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
                 "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
@@ -2412,73 +2406,6 @@ fn inline_thread_label(conversation: &ConversationViewModel) -> String {
     }
 
     compact_inline_detail(&conversation.title, INLINE_TAIL_THREAD_LABEL_LIMIT)
-}
-
-fn planning_gate_inline_prompt_status_line(conversation: &ConversationViewModel) -> Option<String> {
-    if !conversation.input_state.can_submit_now() {
-        return None;
-    }
-
-    let snapshot = &conversation.planning_runtime_snapshot;
-    if !snapshot.workspace_present() {
-        return Some(if conversation.has_active_thread() {
-            "prompt: planning bootstrap required  |  resume gate is waiting".to_string()
-        } else {
-            "prompt: planning bootstrap required  |  capture objective to start".to_string()
-        });
-    }
-    if !snapshot.plan_enabled() {
-        return Some("prompt: Plan off  |  turn Plan on in :planning".to_string());
-    }
-    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
-        return Some("prompt: planning repair required  |  review :planning".to_string());
-    }
-
-    None
-}
-
-#[cfg(test)]
-fn planning_gate_ready_prompt_lines(
-    conversation: &ConversationViewModel,
-) -> Option<Vec<Line<'static>>> {
-    if !conversation.input_state.can_submit_now() {
-        return None;
-    }
-
-    let snapshot = &conversation.planning_runtime_snapshot;
-    if !snapshot.workspace_present() {
-        return Some(if conversation.has_active_thread() {
-            vec![
-                Line::from("This session needs a planning bootstrap objective before continuing."),
-                Line::from(
-                    "Finish the resume gate first so the workspace regains a planning scaffold.",
-                ),
-            ]
-        } else {
-            vec![
-                Line::from(
-                    "Planning bootstrap is required before the first turn in this workspace.",
-                ),
-                Line::from(
-                    "Capture the objective in the planning gate, then start the first prompt.",
-                ),
-            ]
-        });
-    }
-    if !snapshot.plan_enabled() {
-        return Some(vec![
-            Line::from("Plan is off for this workspace."),
-            Line::from("Turn Plan on in :planning before sending the next prompt."),
-        ]);
-    }
-    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
-        return Some(vec![
-            Line::from("Planning files need repair before another prompt can start."),
-            Line::from("Open :planning and repair the workspace state before continuing."),
-        ]);
-    }
-
-    None
 }
 
 #[cfg(test)]
@@ -2621,13 +2548,6 @@ pub(super) fn build_ready_input_lines(
 
     if conversation.input_buffer.is_empty() {
         if let Some(status_lines) = auto_follow_prompt_lines(conversation) {
-            lines.extend(status_lines);
-            lines.push(Line::from(InlineShellCommand::command_list_line()));
-            return lines;
-        }
-        if shell_action_availability == ShellActionAvailability::Ready
-            && let Some(status_lines) = planning_gate_ready_prompt_lines(conversation)
-        {
             lines.extend(status_lines);
             lines.push(Line::from(InlineShellCommand::command_list_line()));
             return lines;

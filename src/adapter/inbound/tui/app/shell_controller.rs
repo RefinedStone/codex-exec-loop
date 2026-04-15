@@ -151,6 +151,7 @@ impl NativeTuiApp {
         });
     }
 
+    #[allow(dead_code)]
     pub(super) fn show_planning_workflow_gate(&mut self, bootstrap_objective: Option<String>) {
         let workspace_directory = self.planning_workspace_directory();
         let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
@@ -183,6 +184,7 @@ impl NativeTuiApp {
         });
     }
 
+    #[allow(dead_code)]
     pub(super) fn show_planning_resume_gate(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
         let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
@@ -208,6 +210,7 @@ impl NativeTuiApp {
         });
     }
 
+    #[allow(dead_code)]
     pub(super) fn maybe_show_startup_planning_workflow_gate(&mut self) {
         if self.shell_action_availability() != ShellActionAvailability::Ready {
             return;
@@ -228,6 +231,7 @@ impl NativeTuiApp {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn maybe_show_resume_planning_gate(&mut self) {
         let should_gate = matches!(
             &self.conversation_state,
@@ -397,6 +401,7 @@ impl NativeTuiApp {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn planning_requires_manual_gate(
         &self,
         snapshot: &crate::application::service::planning::PlanningRuntimeSnapshot,

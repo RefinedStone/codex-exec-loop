@@ -122,12 +122,12 @@ impl PlanningRuntimeFacadeService {
     pub fn build_manual_prompt(
         &self,
         operator_prompt: &str,
-        snapshot: &PlanningRuntimeSnapshot,
+        _snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<String> {
         self.turn_prompt_assembly_service
             .build_manual_prompt(ManualPromptAssemblyRequest {
                 operator_prompt,
-                planning_prompt_fragment: snapshot.prompt_fragment(),
+                planning_prompt_fragment: None,
             })
     }
 
