@@ -154,10 +154,14 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
         conversation.status_text,
         "automation submitted the next turn / 1/3 / planning queue"
     );
-    assert_eq!(
-        app.planner_worker_panel_state.last_queue_summary.as_deref(),
-        Some("next task: Draft a Korea-specific Chinese-chef job entry guide")
-    );
+    assert!(app
+        .planner_worker_panel_state
+        .last_queue_summary
+        .as_deref()
+        .is_some_and(|summary| {
+            summary.contains("now: Draft a Korea-specific")
+                && !summary.contains("next task:")
+        }));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

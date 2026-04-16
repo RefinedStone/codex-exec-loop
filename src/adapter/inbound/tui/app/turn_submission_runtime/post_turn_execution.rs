@@ -21,6 +21,7 @@ use super::super::conversation_runtime::ConversationRuntimeEvent;
 use super::super::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
+use super::super::planning::build_queue_framing_summary_from_snapshot;
 use super::super::{
     ActiveTurnPlanningCapture, ActiveTurnPlanningSnapshot, AutoFollowupDecision,
     AutoFollowupSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
@@ -30,6 +31,7 @@ use super::super::{
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
     "planner refresh failed; automation stays paused until the next accepted planner refresh";
+const PLANNER_QUEUE_SUMMARY_DETAIL_LIMIT: usize = 48;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
@@ -679,10 +681,7 @@ impl NativeTuiApp {
 }
 
 fn planner_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
-    snapshot
-        .queue_head()
-        .map(|queue_head| format!("next task: {}", queue_head.task_title.trim()))
-        .or_else(|| snapshot.queue_summary().map(str::to_string))
+    build_queue_framing_summary_from_snapshot(snapshot, PLANNER_QUEUE_SUMMARY_DETAIL_LIMIT)
 }
 
 fn planner_notice_detail(notices: &[String]) -> Option<String> {

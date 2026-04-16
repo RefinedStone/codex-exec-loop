@@ -6,7 +6,9 @@ use super::super::{
     QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT,
 };
 use super::{AutomationOverlayView, QueueOverlayView};
-use crate::adapter::inbound::tui::app::planning::build_planning_notice_line;
+use crate::adapter::inbound::tui::app::planning::{
+    build_planning_notice_line, compact_queue_framing_summary,
+};
 use crate::application::service::planning::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjectionRequest,
 };
@@ -154,7 +156,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             {
                 note_lines.push(Line::from(format!(
                     "queued work: {}",
-                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                    compact_queue_framing_summary(
+                        queue_summary,
+                        QUEUE_INSPECTION_NOTE_DETAIL_LIMIT
+                    )
                 )));
             }
             if let Some(detail) = app.planner_worker_panel_state.last_host_detail.as_deref() {

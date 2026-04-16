@@ -371,7 +371,9 @@ fn planner_debug_surfaces_use_operator_facing_labels() {
     assert!(preview.contains("planner session: refresh  |  state: refresh ok"));
     assert!(preview.contains("Submitted Prompt"));
     assert!(preview.contains("Planner Reply"));
-    assert!(status.contains("planner state: refresh ok  |  queued work: next task: task-1"));
+    assert!(status.contains(
+        "planner state: refresh ok  |  queued work: now: task-1  |  next: none  |  proposed: none  |  blocked: none"
+    ));
     assert!(status.contains("planner update: worker promoted the next queued task"));
     assert!(status.contains("operator action: host accepted the refreshed queue"));
 }
@@ -619,6 +621,24 @@ fn queue_overlay_notice_drops_legacy_planning_prefix_duplication() {
 
     assert!(rendered.contains("planning notice: planning repair queued retry 1/2"));
     assert!(!rendered.contains("planning notice: planning:"));
+}
+
+#[test]
+fn queue_overlay_notes_reframe_legacy_queue_summary_strings() {
+    let (mut app, _) = make_test_app();
+    app.planner_worker_panel_state.last_queue_summary = Some("next task: task-1".to_string());
+
+    let rendered = build_queue_overlay_view(&app)
+        .note_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(
+        "queued work: now: task-1  |  next: none  |  proposed: none  |  blocked: none"
+    ));
+    assert!(!rendered.contains("queued work: next task:"));
 }
 
 #[test]

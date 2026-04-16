@@ -16,6 +16,13 @@ const AUTOMATION_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
 const AUTOMATION_PLANNER_DEBUG_MAX_LINES: usize = 256;
 const PREVIEW_THREAD_ID_PLACEHOLDER: &str = "draft-thread";
 
+struct QueueFramingDetails {
+    now_detail: String,
+    next_detail: String,
+    proposed_detail: String,
+    blocked_detail: String,
+}
+
 pub(crate) fn build_planning_summary_line(
     app: &NativeTuiApp,
     conversation: &ConversationViewModel,
@@ -72,13 +79,61 @@ pub(crate) fn build_queue_framing_lines_from_snapshot(
     snapshot: &PlanningRuntimeSnapshot,
     max_detail_len: usize,
 ) -> Vec<Line<'static>> {
+    build_queue_framing_details_from_snapshot(snapshot, max_detail_len)
+        .map(|details| queue_framing_lines_from_details(&details))
+        .unwrap_or_default()
+}
+
+pub(crate) fn build_queue_framing_summary_from_snapshot(
+    snapshot: &PlanningRuntimeSnapshot,
+    max_detail_len: usize,
+) -> Option<String> {
+    build_queue_framing_details_from_snapshot(snapshot, max_detail_len)
+        .map(|details| queue_framing_summary_from_details(&details))
+}
+
+pub(crate) fn compact_queue_framing_summary(summary: &str, max_detail_len: usize) -> String {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        return queue_framing_summary_from_parts("none", "none", "none", "none");
+    }
+
+    if trimmed.contains("now:") && trimmed.contains("proposed:") && trimmed.contains("blocked:") {
+        return trimmed.to_string();
+    }
+
+    if let Some(task_title) = trimmed.strip_prefix("next task: ") {
+        return queue_framing_summary_from_parts(
+            compact_whitespace_detail(task_title, max_detail_len).as_str(),
+            "none",
+            "none",
+            "none",
+        );
+    }
+
+    if trimmed.starts_with("queue idle:") {
+        return queue_framing_summary_from_parts("none", "none", "none", "none");
+    }
+
+    if trimmed.contains("promotable") {
+        let proposed_detail = compact_proposal_summary_detail(trimmed, max_detail_len);
+        return queue_framing_summary_from_parts("none", "none", proposed_detail.as_str(), "none");
+    }
+
+    compact_whitespace_detail(trimmed, max_detail_len)
+}
+
+fn build_queue_framing_details_from_snapshot(
+    snapshot: &PlanningRuntimeSnapshot,
+    max_detail_len: usize,
+) -> Option<QueueFramingDetails> {
     let queue_snapshot = snapshot.queue_snapshot();
     let has_queue_context = snapshot.workspace_present()
         || snapshot.queue_head().is_some()
         || snapshot.proposal_summary().is_some()
         || queue_snapshot.is_some();
     if !has_queue_context {
-        return Vec::new();
+        return None;
     }
 
     let now_detail = queue_snapshot
@@ -147,12 +202,12 @@ pub(crate) fn build_queue_framing_lines_from_snapshot(
         })
         .unwrap_or_else(|| "none".to_string());
 
-    vec![
-        Line::from(format!("now: {now_detail}  |  next: {next_detail}")),
-        Line::from(format!(
-            "proposed: {proposed_detail}  |  blocked: {blocked_detail}"
-        )),
-    ]
+    Some(QueueFramingDetails {
+        now_detail,
+        next_detail,
+        proposed_detail,
+        blocked_detail,
+    })
 }
 
 pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
@@ -169,7 +224,7 @@ pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
     if let Some(queue_summary) = planner.last_queue_summary.as_deref() {
         first_line.push_str(&format!(
             "  |  queued work: {}",
-            compact_whitespace_detail(queue_summary, max_detail_len)
+            compact_queue_framing_summary(queue_summary, max_detail_len)
         ));
     }
 
@@ -503,4 +558,37 @@ fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> Stri
         .map(|(_, detail)| detail)
         .unwrap_or(summary);
     compact_whitespace_detail(detail, max_detail_len)
+}
+
+fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'static>> {
+    vec![
+        Line::from(format!(
+            "now: {}  |  next: {}",
+            details.now_detail, details.next_detail
+        )),
+        Line::from(format!(
+            "proposed: {}  |  blocked: {}",
+            details.proposed_detail, details.blocked_detail
+        )),
+    ]
+}
+
+fn queue_framing_summary_from_details(details: &QueueFramingDetails) -> String {
+    queue_framing_summary_from_parts(
+        details.now_detail.as_str(),
+        details.next_detail.as_str(),
+        details.proposed_detail.as_str(),
+        details.blocked_detail.as_str(),
+    )
+}
+
+fn queue_framing_summary_from_parts(
+    now_detail: &str,
+    next_detail: &str,
+    proposed_detail: &str,
+    blocked_detail: &str,
+) -> String {
+    format!(
+        "now: {now_detail}  |  next: {next_detail}  |  proposed: {proposed_detail}  |  blocked: {blocked_detail}"
+    )
 }
