@@ -48,12 +48,23 @@ impl NativeTuiApp {
         snapshot
     }
 
-    fn sync_parallel_mode_supervisor_snapshot(&mut self) -> ParallelModeSupervisorSnapshot {
-        let snapshot = self.parallel_mode_service().build_supervisor_snapshot(
-            &self.current_workspace_directory(),
-            self.parallel_mode_enabled(),
-            self.parallel_mode_readiness_snapshot(),
-        );
+    fn sync_parallel_mode_supervisor_snapshot(
+        &mut self,
+        execute_pool_actions: bool,
+    ) -> ParallelModeSupervisorSnapshot {
+        let snapshot = if execute_pool_actions {
+            self.parallel_mode_service().reconcile_supervisor_snapshot(
+                &self.current_workspace_directory(),
+                self.parallel_mode_enabled(),
+                self.parallel_mode_readiness_snapshot(),
+            )
+        } else {
+            self.parallel_mode_service().build_supervisor_snapshot(
+                &self.current_workspace_directory(),
+                self.parallel_mode_enabled(),
+                self.parallel_mode_readiness_snapshot(),
+            )
+        };
         self.parallel_mode_supervisor_snapshot = Some(snapshot.clone());
         snapshot
     }
@@ -68,7 +79,7 @@ impl NativeTuiApp {
 
     pub(super) fn inspect_parallel_mode_shell(&mut self) {
         self.refresh_parallel_mode_readiness_snapshot();
-        self.sync_parallel_mode_supervisor_snapshot();
+        self.sync_parallel_mode_supervisor_snapshot(false);
         self.show_supersession_overlay();
     }
 
@@ -76,7 +87,7 @@ impl NativeTuiApp {
         match argument {
             Some(value) if value.eq_ignore_ascii_case("off") => {
                 self.parallel_mode_enabled = false;
-                self.sync_parallel_mode_supervisor_snapshot();
+                self.sync_parallel_mode_supervisor_snapshot(false);
                 if self.shell_overlay == ShellOverlay::Supersession {
                     self.close_shell_overlay();
                 }
@@ -88,7 +99,7 @@ impl NativeTuiApp {
                 let snapshot = self.refresh_parallel_mode_readiness_snapshot();
                 if snapshot.allows_parallel_mode() {
                     self.parallel_mode_enabled = true;
-                    self.sync_parallel_mode_supervisor_snapshot();
+                    self.sync_parallel_mode_supervisor_snapshot(true);
                     self.show_supersession_overlay();
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                         status_text: format!(
@@ -98,7 +109,7 @@ impl NativeTuiApp {
                     });
                 } else {
                     self.parallel_mode_enabled = false;
-                    self.sync_parallel_mode_supervisor_snapshot();
+                    self.sync_parallel_mode_supervisor_snapshot(false);
                     self.show_supersession_overlay();
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                         status_text: format!(
@@ -118,7 +129,7 @@ impl NativeTuiApp {
             }
             None => {
                 let snapshot = self.refresh_parallel_mode_readiness_snapshot();
-                self.sync_parallel_mode_supervisor_snapshot();
+                self.sync_parallel_mode_supervisor_snapshot(false);
                 self.show_supersession_overlay();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
@@ -143,7 +154,7 @@ impl NativeTuiApp {
         match key.code {
             KeyCode::Char('r') if key.modifiers.is_empty() => {
                 let snapshot = self.refresh_parallel_mode_readiness_snapshot();
-                self.sync_parallel_mode_supervisor_snapshot();
+                self.sync_parallel_mode_supervisor_snapshot(self.parallel_mode_enabled());
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
                         "parallel readiness refreshed / state: {}",
