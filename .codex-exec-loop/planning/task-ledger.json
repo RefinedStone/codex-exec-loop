@@ -21,19 +21,38 @@
     {
       "id": "phase1-state-language-taxonomy",
       "direction_id": "operator-state-language",
-      "direction_relation_note": "Primary executable slice because the latest direction summary makes state expression unification the first active stream.",
+      "direction_relation_note": "Completed initial canonical-language rollout for queue, automation overlay, and pause or recovery phrasing, establishing the shared operator projection path.",
       "title": "Make current state, cause, and next action the canonical operator language",
-      "description": "Audit operator-facing status and pause copy across shell presentation, automation overlay, queue overlay, and planning recovery surfaces, then implement one canonical current-state/cause/next-action vocabulary and projection path without changing automation policy semantics in the same slice.",
-      "status": "ready",
+      "description": "Completed the first operator-language slice by adding a shared current-state/cause/next-action projection, switching queue and automation overlays to it, and rewriting key planning preview, status, and pause copy to use operator-facing terms without changing automation policy semantics.",
+      "status": "done",
       "base_priority": 96,
       "dynamic_priority_delta": 15,
-      "priority_reason": "The latest directions summary explicitly puts operator-facing state language first because every later queue and planning improvement depends on it.",
+      "priority_reason": "Finished in main session commit e20c70a and PR #238, so later work should build on this projection instead of reopening the same slice.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "user",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-16T09:40:14Z"
+      "updated_at": "2026-04-16T09:52:16Z"
+    },
+    {
+      "id": "shell-inspection-state-language-rollout",
+      "direction_id": "operator-state-language",
+      "direction_relation_note": "Completed the shell-focused follow-up by landing the canonical one-line summary and aligning planning-control inspection labels with the snapshot preview taxonomy.",
+      "title": "Extend canonical state language to the compact shell summary and remaining inspection surfaces",
+      "description": "Completed the shell-focused rollout by switching the compact shell summary to the canonical current-state/cause/next-action line, aligning inline tail and planning-control labels with snapshot preview states, and updating the related shell/service tests in commit ab90d1c on PR #238.",
+      "status": "done",
+      "base_priority": 95,
+      "dynamic_priority_delta": 14,
+      "priority_reason": "Finished in main session commit ab90d1c and pushed to PR #238, so follow-up work should move to the remaining automation preview surfaces instead of repeating the prior queue head.",
+      "depends_on": [
+        "phase1-state-language-taxonomy"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T10:11:33Z"
     },
     {
       "id": "external-planning-init-command",
@@ -106,19 +125,57 @@
     {
       "id": "automation-pause-recovery-surface",
       "direction_id": "queue-and-automation-trust",
-      "direction_relation_note": "Parallel follow-up inside the same trust stream after queue information architecture is clarified.",
-      "title": "Make automation pause reasons point to one recovery action",
-      "description": "Restructure automation status and controls so every pause category clearly states what paused, why it paused, and which surface or action resumes progress.",
-      "status": "proposed",
-      "base_priority": 89,
-      "dynamic_priority_delta": 6,
-      "priority_reason": "Queue and automation trust is the second active stream, and this slice should follow the queue workboard projection rather than lifecycle command work.",
+      "direction_relation_note": "Completed the automation-preview follow-up by moving preview rendering onto the shared canonical projection and removing the remaining legacy preview labels.",
+      "title": "Align remaining automation preview labels with canonical operator language",
+      "description": "Completed the automation preview rollout by replacing legacy `planning: ...` and `planning detail: ...` labels with direct `current state / cause / next action` rendering, wiring the preview service to reuse the runtime canonical projection, and updating overlay plus service tests in commit d412410 on PR #238.",
+      "status": "done",
+      "base_priority": 94,
+      "dynamic_priority_delta": 13,
+      "priority_reason": "Finished in main session commit d412410 and pushed to PR #238, so the next queue head should move to the remaining legacy trust-surface wording instead of repeating this completed slice.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "user",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-16T09:40:14Z"
+      "updated_at": "2026-04-16T10:22:00Z"
+    },
+    {
+      "id": "remaining-trust-surface-wording-rollout",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Completed the remaining automation trust-surface cleanup by aligning automation metadata, queue notice, inline help, and planning simple review wording to the canonical operator language.",
+      "title": "Audit and align remaining automation metadata and trust-surface legacy wording",
+      "description": "Completed the final automation-focused wording audit by switching automation overlay and status metadata, inline command help, planning simple review, and queue notice copy to the canonical automation state / turn budget / stop keyword rule / thread context / last agent reply / Rendered Next-Turn Prompt language, removing the duplicated `planning notice: planning:` prefix, and updating the affected regression coverage in commit aef13d6 on `feature/native-operator-state-language-canonical-guidance`.",
+      "status": "done",
+      "base_priority": 93,
+      "dynamic_priority_delta": 14,
+      "priority_reason": "Finished in main session commit aef13d6 after `cargo test` passed with 417 tests, so the queue should move to the next explicitly suggested wording expansion instead of repeating this completed head task.",
+      "depends_on": [
+        "automation-pause-recovery-surface"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T10:35:00Z"
+    },
+    {
+      "id": "planner-debug-diagnostic-wording-alignment",
+      "direction_id": "operator-state-language",
+      "direction_relation_note": "Direct follow-up from the latest main-session reply, which says the only remaining expansion worth doing is planner debug and diagnostic wording outside automation.",
+      "title": "Align planner debug and diagnostic wording with the canonical operator language",
+      "description": "Audit planner debug, diagnostic, and adjacent non-automation inspection surfaces for lingering legacy planning terminology, rewrite them to the canonical current state / cause / next action framing where it fits, and update the affected expectations so debugging and diagnosis use the same operator-facing vocabulary as runtime status and trust surfaces.",
+      "status": "ready",
+      "base_priority": 90,
+      "dynamic_priority_delta": 12,
+      "priority_reason": "The latest main-session reply says no automation-scope code remains and names planner debug/diagnostic wording as the next concrete extension, so builtin continuation should promote this single follow-up instead of leaving only proposals.",
+      "depends_on": [
+        "remaining-trust-surface-wording-rollout"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T10:35:00Z"
     },
     {
       "id": "simple-mode-first-success-review",
