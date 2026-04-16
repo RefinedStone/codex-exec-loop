@@ -99,9 +99,16 @@ fn build_summary_lines(
 fn build_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("configured size: {}", pool.configured_size)),
+        Line::from(format!("pool root: {}", pool.pool_root_label)),
         Line::from(format!(
-            "summary: idle {} / leased {} / blocked {} / unavailable {}",
-            pool.idle_slots, pool.leased_slots, pool.blocked_slots, pool.unavailable_slots
+            "summary: idle {} / leased {} / running {} / cleanup {} / blocked {} / missing {} / unavailable {}",
+            pool.idle_slots,
+            pool.leased_slots,
+            pool.running_slots,
+            pool.awaiting_cleanup_slots,
+            pool.blocked_slots,
+            pool.missing_slots,
+            pool.unavailable_slots
         )),
         Line::from(format!("reconcile: {}", pool.reconcile_status)),
     ];

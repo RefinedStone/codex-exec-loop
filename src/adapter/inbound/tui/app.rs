@@ -20,7 +20,7 @@ use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
-use crate::domain::parallel_mode::ParallelModeReadinessSnapshot;
+use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::session_summary::SessionSummary;
 
 const SESSION_PAGE_SIZE: usize = 10;
@@ -214,6 +214,7 @@ struct NativeTuiApp {
     session_state: SessionState,
     parallel_mode_enabled: bool,
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
+    parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
