@@ -5,86 +5,103 @@ policy = "review_and_enqueue"
 prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 
 [[directions]]
-id = "operator-state-language"
-title = "Operator-facing state language"
-summary = "Unify shell, planning, queue, automation, and resume status around one operator-facing vocabulary built from current state, cause, and next action."
+id = "supersession-mode-entry-and-readiness"
+title = "Supersession mode entry and readiness"
+summary = "Turn parallel mode into a supervisor-first shell state that can explain git, planning, push, and GitHub readiness before any agent launches."
 success_criteria = [
-    "The operator can tell whether the system is ready, waiting, running, paused, blocked, or repairing from any primary surface without translating internal jargon.",
-    "Status copy names both the cause and the next action whenever work cannot proceed normally.",
-    "Shell summaries, planning recovery, queue inspection, automation controls, and resumed-session copy use the same state vocabulary.",
+    "The operator can enable parallel mode and immediately see whether supersession is ready, degraded, blocked, or repairing in the current workspace.",
+    "Shell entry surfaces and `:sessions` route to supersession only when parallel mode is on, while normal-mode session browsing stays intact otherwise.",
+    "Capability failures name the cause and next action instead of surfacing as fatal startup ambiguity.",
 ]
 scope_hints = [
-    "Start with shared status projection and compact shell copy before changing behavior.",
-    "Prefer wording and projection seams over automation policy changes in the same slice.",
-    "Treat resumed-session text as part of the same state language, not a separate feature.",
+    "Start with capability snapshots, mode toggles, and shell routing before agent launch.",
+    "Prefer durable readiness projection over one-off command checks or notices.",
+    "Keep degraded-state copy explicit and recoverable from the first slice.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/operator-state-language.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-mode-entry-and-readiness.md"
 state = "active"
 
 [[directions]]
-id = "queue-workboard-projection"
-title = "Queue workboard projection"
-summary = "Make queue inspection read like a work board with now, next, proposed, and blocked sections instead of mixed queue, proposal, and planner-note fragments."
+id = "supersession-agent-control-tower"
+title = "Supersession agent control tower"
+summary = "Replace the single-main-session mental model with a control-tower surface that tracks multiple main-grade agent sessions, their assignments, durations, and completion milestones."
 success_criteria = [
-    "Queue inspection shows one current executable item, near-future queued work, promotable proposals, and blocked or skipped work as separate sections.",
-    "Queue summary lines align with the now, next, proposed, and blocked framing used in resumed-session and shell surfaces.",
-    "Blocked or skipped items surface as operator-readable work framing instead of hidden planner residue.",
+    "The supersession surface shows active agents, selected-agent detail, and a completion feed with explicit lifecycle states.",
+    "Each agent exposes task ownership, slot identity, running duration, and latest summary without opening raw runtime debug state.",
+    "Reported completion is visibly distinct from official completion and merge-queue state.",
 ]
 scope_hints = [
-    "Rework the queue overlay information architecture before adding new queue behavior.",
-    "Keep one actionable queue head and treat alternates as next work or proposals, not duplicate active items.",
-    "Prefer the shared queue framing projection over one-off overlay copy.",
+    "Start with the lifecycle model and one readable control-tower board before richer interactions.",
+    "Prefer operator-visible projections over direct reuse of single-session view models.",
+    "Keep the supervisor operational and non-conversational in every slice.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/queue-workboard-projection.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-agent-control-tower.md"
 state = "active"
 
 [[directions]]
-id = "automation-recovery-language"
-title = "Automation recovery language"
-summary = "Turn automation controls into a recovery surface that explains whether automation continued, paused, or stopped, why, and which action resumes progress."
+id = "supersession-ledger-feedback-loop"
+title = "Supersession ledger feedback loop"
+summary = "Keep `task-ledger.json` authoritative by routing agent completion through hidden planning worker refresh before any new official assignment or follow-up is derived."
 success_criteria = [
-    "Automation surfaces show policy, preview, pause or stop reason, and recovery path without planner jargon.",
-    "Repeated queue head, invalid planning, queue-idle policy, and plan-off states read as recoverable operator states.",
-    "The automation surface points to one primary action or surface when continuation is blocked.",
+    "Agent sessions never update the ledger directly; hidden planning worker refresh remains the only path to official task-state change.",
+    "Completion payloads carry enough provenance for hidden planning worker to refresh official queue state without repeating the same unchanged queue head.",
+    "Supervisor state blocks new official assignment until ledger refresh finishes or fails explicitly.",
 ]
 scope_hints = [
-    "Improve pause and stop explanation before adding more automation capability.",
-    "Keep planner debug detail secondary to operator recovery copy.",
-    "Reuse the shared state vocabulary instead of inventing automation-only terms.",
+    "Start with serialized completion refresh and provenance shape before broader follow-up derivation.",
+    "Treat planning invalidity as a supersession blocker, not a hidden background detail.",
+    "Prefer explicit reported-versus-official state over inferred completion.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/automation-recovery-language.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-ledger-feedback-loop.md"
 state = "active"
 
 [[directions]]
-id = "planning-entry-ergonomics"
-title = "Planning entry ergonomics"
-summary = "Make planning entry low ceremony by treating simple mode as the default path, quieting disabled guided branches, and keeping setup and recovery language predictable."
+id = "supersession-git-worktree-pool"
+title = "Supersession git worktree pool"
+summary = "Manage `akra pool` as a collision-resistant set of git worktree slots that can be leased to agent sessions and returned only after clean `akra` reconcile."
 success_criteria = [
-    "Simple mode is the obvious fastest path to the first accepted planning workspace and first queue-driven continuation.",
-    "First-run and re-entry copy emphasize what becomes active and what action promotes it instead of foregrounding internal planning mechanics.",
-    "Disabled guided paths do not dominate the default planning entry flow.",
+    "The pool reconciles a default of three slots with explicit idle, leased, running, awaiting-cleanup, blocked, and missing states.",
+    "Default pool roots avoid collisions between same-name sibling clones by incorporating stable repo-root identity.",
+    "No new agent is launched when capacity is exhausted or a slot has not returned to clean `akra` state.",
 ]
 scope_hints = [
-    "Focus on simple-mode review, promotion, and entry copy before redesigning already shipped command families.",
-    "Treat `akra` and `:` lifecycle commands as fixed entry and recovery affordances that should read consistently with simple mode.",
-    "Keep the accepted planning contract explicit even while reducing visible ceremony.",
+    "Start with slot reconcile, lease bookkeeping, and cleanliness checks before more dynamic pool behavior.",
+    "Treat blocked-slot recovery and cleanup verification as first-class state, not polish.",
+    "Keep slot identity and worktree-root naming deterministic from the first slice.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/planning-entry-ergonomics.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-git-worktree-pool.md"
 state = "active"
 
 [[directions]]
-id = "architecture-boundaries"
-title = "Architecture boundaries for operator UX"
-summary = "Reduce shell and planning hotspots only when the extracted seam makes operator-facing status, queue, automation, or planning-entry changes easier to ship safely."
+id = "supersession-distributor-merge-queue"
+title = "Supersession distributor merge queue"
+summary = "Move commit-ready agent results through one serial distributor that rebases stale branches, pushes, opens or updates PRs, merges into `akra`, and returns cleaned slots to the pool."
 success_criteria = [
-    "Status projection can change without repeatedly editing unrelated layout and runtime plumbing.",
-    "Queue, automation, planning-entry, and session-state surfaces can evolve in smaller reviewable slices.",
-    "Current hotspot files shrink or split along operator-visible boundaries instead of incidental code ownership.",
+    "Only commit-ready results enter the merge queue and only one queue head is processed at a time.",
+    "The distributor keeps `akra` linear by rebasing stale source branches, updating provenance, and surfacing rebase conflicts as blocked queue-head state.",
+    "Slot return depends on cleanup success rather than merge success alone, and degraded push or GitHub capability states remain operator-readable.",
 ]
 scope_hints = [
-    "Prefer extractions that directly unblock the first four active directions.",
-    "Use operator-visible seams such as status projection, queue framing, and planning entry flow as the split boundary.",
-    "Keep refactors small enough that they can land as support work for visible UX slices.",
+    "Start with queue-head state, local integration sequencing, and rebase strategy before widening GitHub automation depth.",
+    "Prefer explicit blocked and failed queue-head recovery over throughput optimization.",
+    "Keep slot cleanup tied to distributor ownership and state transitions.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/architecture-boundaries.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-distributor-merge-queue.md"
+state = "active"
+
+[[directions]]
+id = "supersession-architecture-boundaries"
+title = "Supersession architecture boundaries"
+summary = "Split supersession into explicit ports, services, and runtime seams so parallel mode can ship without bloating the current single-session shell and planning hotspots."
+success_criteria = [
+    "Parallel mode can evolve through supervisor, agent, pool, and distributor boundaries without widening the current single-session runtime model.",
+    "New outbound boundaries exist for agent session, git workspace, distributor, and GitHub automation while planning authority stays behind the planning facade.",
+    "Hotspot files shrink or split along supersession-visible seams instead of taking on more orchestration responsibility directly.",
+]
+scope_hints = [
+    "Prefer extractions that directly unblock the first five supersession directions.",
+    "Reuse hidden planning worker and planning runtime services through explicit facade seams rather than implicit cross-layer access.",
+    "Keep refactors reviewable and tied to one supersession behavior unlock at a time.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-architecture-boundaries.md"
 state = "active"
