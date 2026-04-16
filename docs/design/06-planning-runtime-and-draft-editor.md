@@ -1,18 +1,20 @@
 # Planning Runtime And Draft Editor
 
-This file records the active planning contract.
+This file records the active planning contract on `prerelease`.
 
-## Workspace Files
+## Planning Artifacts
 
-- `.codex-exec-loop/planning/directions.toml`
-- `.codex-exec-loop/planning/directions/<direction-id>.md`
-- `.codex-exec-loop/planning/task-ledger.json`
-- `.codex-exec-loop/planning/task-ledger.schema.json`
-- `.codex-exec-loop/planning/result-output.md`
-- `.codex-exec-loop/planning/prompts/queue-idle-review.md`
-- `.codex-exec-loop/planning/queue.snapshot.json`
-- `.codex-exec-loop/planning/drafts/<draft>/...`
-- `.codex-exec-loop/planning/rejected/<turn>/...`
+| Path | Ownership | Role |
+| --- | --- | --- |
+| `.codex-exec-loop/planning/directions.toml` | operator-owned through staged drafts | defines directions, detail-doc mapping, and queue-idle policy |
+| `.codex-exec-loop/planning/directions/<direction-id>.md` | operator-owned through staged drafts | long-form direction detail |
+| `.codex-exec-loop/planning/task-ledger.json` | shared operator/runtime contract | task source of truth |
+| `.codex-exec-loop/planning/task-ledger.schema.json` | protected planning contract | task-ledger validation schema |
+| `.codex-exec-loop/planning/result-output.md` | protected planning contract | result-output guidance fragment |
+| `.codex-exec-loop/planning/prompts/queue-idle-review.md` | operator-owned through staged drafts | prompt used when queue-idle review is enabled |
+| `.codex-exec-loop/planning/queue.snapshot.json` | runtime-derived | executable queue projection only |
+| `.codex-exec-loop/planning/drafts/<draft>/...` | staged workspace | inactive edits awaiting validation and promotion |
+| `.codex-exec-loop/planning/rejected/<turn>/...` | runtime archive | rejected planning writes preserved for inspection |
 
 ## Operator Entry
 
@@ -23,21 +25,41 @@ This file records the active planning contract.
 - Detail mode opens the embedded draft editor.
 - Staged drafts stay inactive until explicit promotion.
 
-## Runtime Contract
+## Current Lifecycle Terms
+
+| Term | Meaning |
+| --- | --- |
+| staged draft | inactive planning edits stored under `drafts/` until validation and promotion succeed |
+| active planning | accepted planning files the runtime uses for prompt assembly and queue evaluation |
+| queue head | the single highest-priority executable task derived from accepted planning state |
+| proposed task | a follow-up candidate that is visible but not yet executable |
+| rejected planning write | an invalid planning change restored out of the active workspace and archived under `rejected/` |
+| repair attempt | a bounded hidden worker retry used after invalid planning changes |
+
+## Runtime State Contract
+
+| State | Meaning | Operator consequence |
+| --- | --- | --- |
+| uninitialized | planning workspace has not been promoted for this workspace | queue-driven automation cannot proceed yet |
+| invalid | active planning files fail validation or are incomplete | automation stays paused until the workspace validates again |
+| ready without task | planning is valid but has no actionable queue head | runtime follows `queue_idle.policy` |
+| ready with task | planning is valid and has an executable queue head | manual prompt assembly and queue-driven automation can reference the task |
+
+## Promotion And Execution Rules
 
 - Manual submit and auto follow-up both append the same accepted planning prompt fragment.
-- Runtime state is surfaced as uninitialized, invalid, ready without task, or ready with task.
-- `queue.snapshot.json` is derived state only.
-- Proposed tasks do not enter the executable queue until promoted.
+- `queue.snapshot.json` is derived state only and is not treated as operator-authored source.
+- Proposed tasks do not enter the executable queue until they are promoted or otherwise moved into normal queue state.
+- Builtin `next-task` uses the accepted queue head only.
 - Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
 
-## Reconciliation And Worker Rules
+## Protection And Recovery Rules
 
 - `directions.toml`, `task-ledger.schema.json`, `result-output.md`, and `queue.snapshot.json` are protected during automated execution.
 - Invalid `task-ledger.json` writes are rolled back, archived, and may trigger a bounded repair retry.
 - Queue refresh and repair work run through the planning worker boundary.
-- Builtin `next-task` uses the accepted queue head only.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.
+- If automation sees the same accepted queue head again, queue-driven follow-up pauses until the queue advances.
 
 ## Code Entry
 

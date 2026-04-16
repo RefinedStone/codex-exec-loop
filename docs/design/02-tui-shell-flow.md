@@ -1,40 +1,68 @@
 # TUI Shell Flow
 
-This file describes operator-visible shell behavior. It does not describe how to implement it.
+This file defines operator-visible shell behavior on `prerelease`. It describes the current flow, not the future redesign plan.
 
-## Main Flow
+## Primary Loop
 
-- The shell header shows startup, session, and conversation identity.
-- The transcript panel renders conversation history plus inline status and runtime notices.
-- The composer accepts both free-form prompts and `:` commands in the main buffer.
-- The footer surfaces runtime state, follow-up state, planning state, and planner debug detail when enabled.
+- The shell starts in a startup-aware conversation surface.
+- The operator can type before startup diagnostics finish.
+- Once diagnostics allow submission, the active prompt is submitted and live stream output stays attached to the bottom of the shell.
+- Completed assistant output moves into scrollback history while the live tail keeps the active prompt, transient stream text, and compact notices together.
+- The operator alternates between conversation, inspection overlays, planning authoring, and post-turn automation without leaving the same terminal session.
 
-## Startup And Sessions
+## Current Shell Modes
 
-- Startup diagnostics begin on launch.
-- The shell may render before diagnostics finish, but submit only proceeds when diagnostics allow it.
+| Mode | What the operator is doing | Entry | Exit |
+| --- | --- | --- | --- |
+| Conversation | typing prompts, watching stream output, reading compact status | default shell surface | submit a prompt or open an overlay |
+| Diagnostics | checking startup readiness and failures | `Ctrl+d`, `:diag` | `Esc`, `Ctrl+c`, or toggle again |
+| Sessions | searching and reopening previous threads | `Ctrl+o`, `:sessions` | open a session, start a draft, or close |
+| Automation | editing post-turn automation policy and preview | `Ctrl+f`, `:auto` | close overlay |
+| Queue Inspection | reading executable queue head, proposals, and skip summary | `:queue`, `:q` | close overlay |
+| Planning Controls | staging or reopening planning workspace flows | `:planning` | close overlay or enter editor/review flow |
+| Directions Maintenance | editing supporting direction and queue-idle artifacts | `:directions` | close overlay or enter staged editor flow |
+
+## Startup And Session Flow
+
+- Startup diagnostics begin immediately on launch.
+- The shell can render before diagnostics finish, but submit only proceeds when diagnostics allow it.
 - Queued manual input auto-submits once startup becomes ready.
-- `Ctrl+o` opens recent sessions.
-- Selecting a session loads its snapshot into the main shell.
-- `Ctrl+n` returns to a blank draft shell.
+- `Ctrl+o` opens recent sessions and loads a selected snapshot back into the main shell.
+- `Ctrl+t` returns to a blank draft.
+- When startup is blocked, diagnostics remain the source of truth for why the shell cannot proceed.
 
-## Inline Commands
+## Conversation Turn Flow
 
-- `:diagnostics` toggles startup diagnostics.
-- `:sessions` toggles recent sessions.
-- `:auto` opens automation controls.
-- `:queue` opens planning queue state.
-- `:planning` opens planning workspace controls.
-- `:planning on|off` toggles planning mode for the current workspace.
-- `:directions` opens directions maintenance.
-- `:stop` stops post-turn automation.
+1. The operator types in the main composer or enters a `:` command.
+2. `Enter` submits when startup and runtime state allow it.
+3. Live stream output stays in the inline tail until turn completion.
+4. Tool activity, runtime notices, approval-review state, and warnings update the same shell surface.
+5. When the turn completes, assistant output is committed into normal scrollback history.
+6. Post-turn evaluation decides whether automation continues, pauses, or stops.
 
-## Follow-Up And Planning
+## Planning And Automation Flow
 
-- Automation controls own stop rules, preview rendering, and planner debug visibility.
+- Automation controls own stop rules, max-turn policy, preview rendering, and planner debug visibility.
 - Builtin `next-task` uses accepted planning state only.
-- `:planning` and `:directions` both route through the embedded draft editor.
+- `:planning` and `:directions` both route through staged planning drafts and explicit promotion.
 - Planning state is reflected in the footer, automation overlay, queue overlay, and post-turn automation.
+- When the queue is actionable, automation targets the accepted queue head.
+- When the queue is valid but idle, behavior follows `queue_idle.policy`.
+
+## Pause And Recovery States
+
+- Startup blocked:
+  the shell can render, but submit and session actions may remain gated.
+- Planning invalid:
+  post-turn automation pauses until planning files validate again.
+- Queue idle with `stop`:
+  automation ends after the current turn.
+- Queue idle with `review_and_enqueue`:
+  a hidden planning worker may derive justified follow-up work.
+- Repeated queue head:
+  queue-driven automation pauses until the planning queue advances beyond the previously handed-off task.
+- Manual approval review:
+  approval state is surfaced, but the shell still lacks interactive approve or deny actions.
 
 ## Code Entry
 
