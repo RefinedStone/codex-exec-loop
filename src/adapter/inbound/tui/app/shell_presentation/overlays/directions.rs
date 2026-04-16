@@ -48,7 +48,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 ],
                 summary_lines: vec![
                     Line::from(
-                        "Use Enter to open the staged editor, `d` to create a detail-doc mapping, or `p` to create/edit the queue-idle prompt.",
+                        "next action: Enter opens the staged editor. d stages a detail-doc repair. p stages the queue-idle prompt.",
                     ),
                     Line::from(
                         "The active planning files do not change until you promote the staged draft.",
@@ -94,9 +94,9 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 ],
                 key_lines: vec![
                     Line::from(
-                        "Enter: edit directions    d: create or repair detail doc    p: edit queue-idle prompt",
+                        "Enter edits directions. d creates or repairs a detail doc. p edits the queue-idle prompt.",
                     ),
-                    Line::from("r: reload summary    Esc/Ctrl+C: close"),
+                    Line::from("r reloads this summary. Esc/Ctrl+C closes this surface."),
                 ],
             }
         }
@@ -175,8 +175,8 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                         .unwrap_or("none")
                 ))],
                 key_lines: vec![
-                    Line::from("Up/Down or j/k: move selection"),
-                    Line::from("Enter: continue    Backspace/Left: back    Esc/Ctrl+C: close"),
+                    Line::from("Up/Down or j/k moves selection."),
+                    Line::from("Enter continues. Backspace/Left goes back. Esc/Ctrl+C closes this surface."),
                 ],
             }
         }
@@ -234,8 +234,8 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 ],
                 status_lines: vec![Line::from("confirmation: generate a staged doc file now")],
                 key_lines: vec![
-                    Line::from("Up/Down or j/k: change selection"),
-                    Line::from("Enter: act    Backspace/Left: back    Esc/Ctrl+C: close"),
+                    Line::from("Up/Down or j/k changes selection."),
+                    Line::from("Enter acts. Backspace/Left goes back. Esc/Ctrl+C closes this surface."),
                 ],
             }
         }
@@ -256,10 +256,10 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 "This state renders through the dedicated draft editor view.",
             )],
             option_lines: vec![Line::from(
-                "Use Tab to switch files and Ctrl+S to save + validate.",
+                "next action: Tab switches files. Ctrl+S saves and re-runs validation.",
             )],
             status_lines: vec![Line::from("current state: editing the staged direction draft")],
-            key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+            key_lines: vec![Line::from("Esc/Ctrl+C closes this surface.")],
         },
     }
 }

@@ -33,13 +33,17 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
             let mut status_lines = if snapshot.plan_enabled() {
                 vec![
-                    Line::from("Enter opens queue inspection for the existing planning workspace."),
-                    Line::from("Press D to maintain directions, or O to turn Plan off."),
+                    Line::from(
+                        "next action: Enter opens queue inspection for the existing planning workspace.",
+                    ),
+                    Line::from("other actions: D opens directions maintenance. O turns Plan off."),
                 ]
             } else {
                 vec![
-                    Line::from("Enter turns Plan on and resumes the existing planning workspace."),
-                    Line::from("Directions maintenance stays blocked while Plan off."),
+                    Line::from(
+                        "next action: Enter turns Plan on and resumes the existing planning workspace.",
+                    ),
+                    Line::from("other actions: directions maintenance stays blocked while Plan off."),
                 ]
             };
 
@@ -79,9 +83,9 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     status_lines
                 },
                 key_lines: vec![
-                    Line::from("Enter: open queue or resume Plan on"),
-                    Line::from("Q: queue inspection    D: directions maintenance"),
-                    Line::from("O: toggle Plan on/off    Esc/Ctrl+C: close"),
+                    Line::from("Enter opens queue inspection or resumes Plan on."),
+                    Line::from("Q opens queue inspection. D opens directions maintenance."),
+                    Line::from("O toggles Plan on or off. Esc/Ctrl+C closes this surface."),
                 ],
             }
         }
@@ -135,8 +139,8 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("simple mode is the low-ceremony path for planning-aware execution."),
             ],
             key_lines: vec![
-                Line::from("A/B or arrows: move selection"),
-                Line::from("Enter: continue    Esc/Ctrl+C: cancel"),
+                Line::from("A/B or arrows move selection."),
+                Line::from("Enter continues. Esc/Ctrl+C cancels."),
             ],
         },
         PlanningInitOverlayStep::DetailSelection => PlanningInitOverlayView {
@@ -185,8 +189,8 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("Enter on manual opens the embedded draft editor."),
             ],
             key_lines: vec![
-                Line::from("A/B or arrows: move selection"),
-                Line::from("Backspace/Left: back    Enter: act    Esc/Ctrl+C: cancel"),
+                Line::from("A/B or arrows move selection."),
+                Line::from("Backspace/Left goes back. Enter continues. Esc/Ctrl+C cancels."),
             ],
         },
         PlanningInitOverlayStep::SimpleReview => {
@@ -239,7 +243,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     Line::from(format!("draft dir: {draft_directory}")),
                     Line::from(format!("staged files: {staged_file_count}")),
                     Line::from(
-                        "Use Ctrl+E if you want to inspect or edit the staged files before promote.",
+                        "next action: use Ctrl+E to inspect or edit the staged files before promote.",
                     ),
                 ],
                 status_lines: {
@@ -259,15 +263,15 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     ];
                     if app.is_max_auto_turns_editing() {
                         lines.push(Line::from(format!(
-                            "editing turn budget: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                            "editing turn budget: {}  |  controls: Enter saves, Esc/Ctrl+C cancels",
                             app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                         )));
                     } else {
                         lines.push(Line::from(
-                            "next: Enter or Ctrl+P promotes the staged simple scaffold.",
+                            "next action: Enter or Ctrl+P promotes the staged simple scaffold.",
                         ));
                         lines.push(Line::from(
-                            "next: Esc closes this review and leaves the staged draft on disk.",
+                            "alternate action: Esc closes this review and leaves the staged draft on disk.",
                         ));
                     }
                     if let Some(first_error) = first_error {
@@ -277,15 +281,15 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 },
                 key_lines: if app.is_max_auto_turns_editing() {
                     vec![
-                        Line::from("Type the new turn-budget value directly. Backspace deletes."),
-                        Line::from("Enter: save turn budget    Esc/Ctrl+C: cancel edit"),
-                        Line::from("Use a whole number between 1 and 50."),
+                        Line::from("next action: type the new turn budget directly."),
+                        Line::from("controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes"),
+                        Line::from("validation: use a whole number between 1 and 50."),
                     ]
                 } else {
                     vec![
-                        Line::from("Enter/Ctrl+P: promote staged scaffold"),
-                        Line::from("Ctrl+L: edit turn budget    Ctrl+E: inspect/edit draft"),
-                        Line::from("Esc/Ctrl+C: close review"),
+                        Line::from("Enter or Ctrl+P promotes the staged scaffold."),
+                        Line::from("Ctrl+L edits turn budget. Ctrl+E inspects or edits the draft."),
+                        Line::from("Esc/Ctrl+C closes this review."),
                     ]
                 },
             }
@@ -307,12 +311,12 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 "This state renders through the dedicated planning draft editor view.",
             )],
             option_lines: vec![Line::from(
-                "Use Tab to switch files and Ctrl+S to save + validate.",
+                "next action: Tab switches files. Ctrl+S saves and re-runs validation.",
             )],
             status_lines: vec![Line::from(
                 "current state: editing the staged planning draft",
             )],
-            key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+            key_lines: vec![Line::from("Esc/Ctrl+C closes this surface.")],
         },
     }
 }
@@ -493,9 +497,13 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
         editor_cursor_offset,
         status_lines,
         key_lines: vec![
-            Line::from("Tab/BackTab: switch file    arrows: move cursor"),
-            Line::from("Enter: newline    Backspace: delete    Ctrl+W: delete previous word"),
-            Line::from("Ctrl+S: save + validate    Ctrl+P: save + promote active planning"),
+            Line::from("controls: Tab/BackTab switches files  |  arrows move the cursor"),
+            Line::from(
+                "controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word",
+            ),
+            Line::from(
+                "controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning",
+            ),
             planning_draft_editor_close_key_line(close_risk, pending_close_risk.is_some()),
         ],
     })
@@ -536,14 +544,14 @@ fn planning_draft_editor_close_key_line(
     confirmation_pending: bool,
 ) -> Line<'static> {
     if confirmation_pending {
-        return Line::from("Enter/Esc/Ctrl+C: confirm close    n: keep editing");
+        return Line::from("controls: Enter, Esc, or Ctrl+C confirms close  |  n keeps editing");
     }
 
     if close_risk.is_some() {
-        return Line::from("Esc/Ctrl+C: review close");
+        return Line::from("controls: Esc/Ctrl+C reviews close");
     }
 
-    Line::from("Esc/Ctrl+C: close")
+    Line::from("controls: Esc/Ctrl+C closes this surface")
 }
 
 pub(super) fn planning_init_option_line(

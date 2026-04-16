@@ -184,7 +184,7 @@ pub(crate) fn build_automation_overlay_view(app: &NativeTuiApp) -> AutomationOve
 
 fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
     vec![Line::from(
-        "Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: automation controls",
+        "Esc/Ctrl+C closes this surface. :planning updates planning files. Ctrl+f/Ctrl+a opens automation controls.",
     )]
 }
 

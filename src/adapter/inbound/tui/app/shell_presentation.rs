@@ -686,29 +686,29 @@ fn compact_inline_detail(text: &str, max_len: usize) -> String {
 pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.is_max_auto_turns_editing() {
         return vec![
-            Line::from("Type the new turn-budget value directly. Backspace deletes."),
-            Line::from("Enter: save turn budget    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use a whole number between 1 and 50."),
+            Line::from("next action: type the new turn budget directly."),
+            Line::from("controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes"),
+            Line::from("validation: use a whole number between 1 and 50."),
         ];
     }
 
     if app.is_stop_keyword_editing() {
         return vec![
-            Line::from("Type the new stop keyword directly. Backspace deletes."),
-            Line::from("Enter: save stop keyword    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use letters, numbers, or underscores only."),
+            Line::from("next action: type the new stop keyword directly."),
+            Line::from("controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes"),
+            Line::from("validation: use letters, numbers, or underscores only."),
         ];
     }
 
     vec![
-        Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
+        Line::from("controls: PageUp/PageDown or Ctrl+u/Ctrl+d scrolls the preview"),
         Line::from(
-            "Ctrl+a: automation on/off    Ctrl+l: edit turn budget    Ctrl+g: edit stop keyword",
+            "controls: Ctrl+a toggles automation  |  Ctrl+l edits turn budget  |  Ctrl+g edits stop keyword",
         ),
         Line::from(
-            "Ctrl+k: stop keyword on/off    Ctrl+n: no-file-change rule    Ctrl+b: planner visibility",
+            "controls: Ctrl+k toggles stop keyword  |  Ctrl+n toggles the no-file-change rule  |  Ctrl+b changes planner visibility",
         ),
-        Line::from("Enter/Esc/Ctrl+C: close"),
+        Line::from("controls: Enter, Esc, or Ctrl+C closes this surface"),
     ]
 }
 
@@ -1148,15 +1148,23 @@ fn build_session_browser_summary_lines(
 fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.session_overlay_ui_state.is_search_query_editing() {
         return vec![
-            Line::from("Type the session query directly. Spaces match multiple tokens."),
-            Line::from("Enter: apply query    Esc/Ctrl+C: cancel    Backspace: delete"),
+            Line::from("next action: type the session query directly; spaces match multiple tokens."),
+            Line::from(
+                "controls: Enter applies the query  |  Esc/Ctrl+C keeps the saved browser state  |  Backspace deletes",
+            ),
         ];
     }
 
     vec![
-        Line::from("/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
-        Line::from("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
-        Line::from("n: draft    r: reload    Ctrl+d: startup checks"),
+        Line::from(
+            "controls: / edits query  |  c clears query  |  Tab/BackTab changes filter  |  [ ] or PgUp/PgDn changes page",
+        ),
+        Line::from(
+            "controls: Up/Down, Home/End, or g/G moves selection  |  Enter opens the thread  |  Esc/Ctrl+C closes this surface",
+        ),
+        Line::from(
+            "controls: n opens a new draft  |  r reloads recent sessions  |  Ctrl+d opens startup checks",
+        ),
     ]
 }
 

@@ -255,7 +255,7 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
     assert!(preview.contains("next action:"));
     assert!(preview.contains("Rendered Next-Turn Prompt"));
     assert!(status.contains("automation state: on"));
-    assert!(keys.contains("Ctrl+a: automation on/off"));
+    assert!(keys.contains("Ctrl+a toggles automation"));
 }
 
 #[test]
@@ -718,9 +718,9 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
     );
     assert!(failed_detail.contains("next action: press r to retry, or start a new draft with n"));
     assert!(failed_detail.contains("recent sessions error: request timed out"));
-    assert!(keys.contains("r: reload"));
-    assert!(keys.contains("n: draft"));
-    assert!(keys.contains("Ctrl+d: startup checks"));
+    assert!(keys.contains("r reloads recent sessions"));
+    assert!(keys.contains("n opens a new draft"));
+    assert!(keys.contains("Ctrl+d opens startup checks"));
 }
 
 #[test]

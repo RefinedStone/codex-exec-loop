@@ -406,8 +406,8 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
     assert!(rendered.contains("Operator Status"));
     assert!(rendered.contains("Operator Actions"));
     assert!(rendered.contains("directions.toml"));
-    assert!(rendered.contains("Ctrl+S: save + validate"));
-    assert!(rendered.contains("Ctrl+P: save + promote active planning"));
+    assert!(rendered.contains("Ctrl+S saves and validates"));
+    assert!(rendered.contains("Ctrl+P saves and promotes active planning"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }
@@ -536,9 +536,9 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
     assert!(header.contains("Simple mode review"));
     assert!(options.contains("bootstrap-1"));
     assert!(status.contains("turn budget: 3"));
-    assert!(keys.contains("Enter/Ctrl+P: promote staged scaffold"));
-    assert!(keys.contains("Ctrl+L: edit turn budget"));
-    assert!(keys.contains("Ctrl+E: inspect/edit draft"));
+    assert!(keys.contains("Enter or Ctrl+P promotes the staged scaffold."));
+    assert!(keys.contains("Ctrl+L edits turn budget."));
+    assert!(keys.contains("Ctrl+E inspects or edits the draft."));
 }
 
 #[test]
@@ -565,9 +565,9 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(keys.contains("Type the new turn-budget value directly."));
-    assert!(keys.contains("Enter: save turn budget"));
-    assert!(keys.contains("Use a whole number between 1 and 50."));
+    assert!(keys.contains("next action: type the new turn budget directly."));
+    assert!(keys.contains("controls: Enter saves"));
+    assert!(keys.contains("validation: use a whole number between 1 and 50."));
     assert!(!keys.contains("promote staged scaffold"));
 }
 
@@ -597,8 +597,8 @@ fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
         .join("\n");
 
     assert!(status.contains("close pending"));
-    assert!(keys.contains("Enter/Esc/Ctrl+C: confirm close"));
-    assert!(keys.contains("n: keep editing"));
+    assert!(keys.contains("controls: Enter, Esc, or Ctrl+C confirms close"));
+    assert!(keys.contains("n keeps editing"));
 }
 
 struct FakeCodexAppServerPort;

@@ -38,7 +38,7 @@ struct InlineShellCommandSpec {
 
 const COMMAND_LIST_LINE: &str = "Operator commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
-    "Type `:turns <1-50>` and press Enter to update the automation turn budget.";
+    "next action: type `:turns <1-50>` and press Enter to update the turn budget.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -46,7 +46,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":diag",
         aliases: &[":diag", ":diagnostics"],
         suggestion_detail: "startup checks",
-        buffered_hint: "Press Enter to review startup checks.",
+        buffered_hint: "next action: review startup checks",
         execution_status: Some("operator surface: startup checks"),
         requires_argument: false,
     },
@@ -55,7 +55,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":sessions",
         aliases: &[":session", ":sessions"],
         suggestion_detail: "recent sessions",
-        buffered_hint: "Press Enter to review recent sessions.",
+        buffered_hint: "next action: review recent sessions",
         execution_status: Some("operator surface: recent sessions"),
         requires_argument: false,
     },
@@ -64,7 +64,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":queue",
         aliases: &[":q", ":queue"],
         suggestion_detail: "planning queue",
-        buffered_hint: "Press Enter to review the planning queue.",
+        buffered_hint: "next action: review the planning queue",
         execution_status: Some("operator surface: planning queue"),
         requires_argument: false,
     },
@@ -73,7 +73,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":directions",
         aliases: &[":directions"],
         suggestion_detail: "directions maintenance",
-        buffered_hint: "Press Enter to review or edit planning directions.",
+        buffered_hint: "next action: review or edit planning directions",
         execution_status: None,
         requires_argument: false,
     },
@@ -82,7 +82,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":stop",
         aliases: &[":stop"],
         suggestion_detail: "stop automation",
-        buffered_hint: "Press Enter to stop post-turn automation.",
+        buffered_hint: "next action: stop post-turn automation",
         execution_status: None,
         requires_argument: false,
     },
@@ -91,7 +91,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":auto",
         aliases: &[":auto", ":automation"],
         suggestion_detail: "automation controls",
-        buffered_hint: "Press Enter to review automation controls.",
+        buffered_hint: "next action: review automation controls",
         execution_status: Some("operator surface: automation controls"),
         requires_argument: false,
     },
@@ -100,7 +100,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":planning",
         aliases: &[":planning", ":planning-init"],
         suggestion_detail: "planning setup",
-        buffered_hint: "Press Enter to open planning setup.",
+        buffered_hint: "next action: open planning setup",
         execution_status: None,
         requires_argument: false,
     },
@@ -118,7 +118,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":new",
         aliases: &[":new"],
         suggestion_detail: "new draft",
-        buffered_hint: "Press Enter to open a new draft.",
+        buffered_hint: "next action: open a new draft",
         execution_status: None,
         requires_argument: false,
     },
@@ -127,7 +127,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":help",
         aliases: &[":help"],
         suggestion_detail: "command help",
-        buffered_hint: "Press Enter to show the available operator commands.",
+        buffered_hint: "next action: review the available operator commands",
         execution_status: Some(COMMAND_LIST_LINE),
         requires_argument: false,
     },
@@ -151,26 +151,26 @@ impl InlineShellCommandInput {
         match self.command {
             InlineShellCommand::PlanningInit => match self.argument() {
                 Some(value) if value.eq_ignore_ascii_case("off") => {
-                    "Press Enter to turn Plan off.".to_string()
+                    "next action: turn Plan off".to_string()
                 }
                 Some(value) if value.eq_ignore_ascii_case("on") => {
-                    "Press Enter to turn Plan on.".to_string()
+                    "next action: turn Plan on".to_string()
                 }
                 Some(value) if value.eq_ignore_ascii_case("doctor") => {
-                    "Press Enter to run planning doctor for safe path repairs.".to_string()
+                    "next action: run planning doctor for safe path repairs".to_string()
                 }
                 Some(value) => format!(
-                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off, doctor."
+                    "next action: apply `:planning {value}` / supported arguments: on, off, doctor"
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::MaxAutoTurns => match self.argument() {
                 Some(value) if is_valid_max_auto_turn_argument(value) => {
-                    format!("Press Enter to set the automation turn budget to {value}.")
+                    format!("next action: set the turn budget to {value}")
                 }
                 Some(value) => {
                     format!(
-                        "Press Enter to apply `:turns {value}`. The automation turn budget must be 1-50."
+                        "next action: apply `:turns {value}` / turn budget must be 1-50"
                     )
                 }
                 None => MAX_AUTO_TURNS_USAGE.to_string(),
@@ -523,11 +523,11 @@ mod tests {
         assert_eq!(no_arg.buffered_hint(), MAX_AUTO_TURNS_USAGE);
         assert_eq!(
             valid_arg.buffered_hint(),
-            "Press Enter to set the automation turn budget to 7."
+            "next action: set the turn budget to 7"
         );
         assert_eq!(
             invalid_arg.buffered_hint(),
-            "Press Enter to apply `:turns 70`. The automation turn budget must be 1-50."
+            "next action: apply `:turns 70` / turn budget must be 1-50"
         );
     }
 
@@ -549,15 +549,12 @@ mod tests {
         let doctor =
             InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
-        assert_eq!(
-            plain.buffered_hint(),
-            "Press Enter to open planning setup."
-        );
-        assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
-        assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");
+        assert_eq!(plain.buffered_hint(), "next action: open planning setup");
+        assert_eq!(off.buffered_hint(), "next action: turn Plan off");
+        assert_eq!(on.buffered_hint(), "next action: turn Plan on");
         assert_eq!(
             doctor.buffered_hint(),
-            "Press Enter to run planning doctor for safe path repairs."
+            "next action: run planning doctor for safe path repairs"
         );
     }
 

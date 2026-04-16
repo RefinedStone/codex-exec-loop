@@ -102,8 +102,8 @@ pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
         check_lines: build_startup_check_lines(app),
         warning_lines: build_startup_warning_lines(app),
         key_lines: vec![
-            Line::from("Esc/Ctrl+C: close    r: rerun checks"),
-            Line::from("Ctrl+o: recent sessions"),
+            Line::from("Esc/Ctrl+C closes this surface. r reruns startup checks."),
+            Line::from("Ctrl+o opens recent sessions."),
         ],
     }
 }
