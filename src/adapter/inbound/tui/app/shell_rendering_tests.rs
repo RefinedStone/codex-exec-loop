@@ -272,8 +272,11 @@ fn inline_startup_inspection_replaces_transcript_panel() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Startup Checks / inline inspection"));
-    assert!(rendered.contains("Checks"));
+    assert!(rendered.contains("Startup Checks / operator inspection"));
+    assert!(rendered.contains("Startup Checks"));
+    assert!(rendered.contains("Current State, Cause, and Next Action"));
+    assert!(rendered.contains("Warnings Requiring Review"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(rendered.contains("current state: ready"));
     assert!(rendered.contains("cause: codex, workspace, app-server"));
     assert!(rendered.contains("next action: continue in the shell"));
@@ -301,10 +304,11 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Recent Sessions / inline inspection"));
-    assert!(rendered.contains("Threads"));
-    assert!(rendered.contains("Selected Session"));
-    assert!(rendered.contains("Session Warnings"));
+    assert!(rendered.contains("Recent Sessions / operator inspection"));
+    assert!(rendered.contains("Session List"));
+    assert!(rendered.contains("Selected Session Detail"));
+    assert!(rendered.contains("Warnings Requiring Review"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
@@ -322,9 +326,11 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Automation Controls / inline inspection"));
-    assert!(rendered.contains("Automation"));
-    assert!(rendered.contains("Preview"));
+    assert!(rendered.contains("Automation Controls / operator inspection"));
+    assert!(rendered.contains("Automation Controls"));
+    assert!(rendered.contains("Rendered Next-Turn Prompt"));
+    assert!(rendered.contains("Operator Status"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(rendered.contains("automation state: on"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
@@ -367,7 +373,11 @@ fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Planning / inline inspection"));
+    assert!(rendered.contains("Planning Setup / operator inspection"));
+    assert!(rendered.contains("Current State, Cause, and Next Action"));
+    assert!(rendered.contains("Available Options"));
+    assert!(rendered.contains("Operator Status"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(rendered.contains("simple mode"));
     assert!(rendered.contains("detail mode"));
     assert!(!rendered.contains("Transcript /"));
@@ -391,13 +401,58 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Planning Draft / inline inspection"));
-    assert!(rendered.contains("Files"));
+    assert!(rendered.contains("Planning Draft / operator inspection"));
+    assert!(rendered.contains("Draft Files"));
+    assert!(rendered.contains("Operator Status"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(rendered.contains("directions.toml"));
     assert!(rendered.contains("Ctrl+S: save + validate"));
     assert!(rendered.contains("Ctrl+P: save + promote active planning"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn popup_helper_titles_use_operator_facing_copy() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    terminal
+        .draw(|frame| draw_startup_overlay(frame, &app))
+        .expect("startup popup render succeeds");
+    let startup_rendered = format!("{}", terminal.backend());
+    assert!(startup_rendered.contains("Startup Checks / operator inspection"));
+    assert!(startup_rendered.contains("Current State, Cause, and Next Action"));
+    assert!(startup_rendered.contains("Warnings Requiring Review"));
+    assert!(startup_rendered.contains("Operator Actions"));
+
+    app.session_state = SessionState::Ready(RecentSessions {
+        items: vec![sample_session("thread-1"), sample_session("thread-2")],
+        warnings: vec!["cache is stale".to_string()],
+        next_cursor: None,
+    });
+
+    terminal
+        .draw(|frame| draw_session_overlay(frame, &mut app))
+        .expect("session popup render succeeds");
+    let session_rendered = format!("{}", terminal.backend());
+    assert!(session_rendered.contains("Recent Sessions / operator inspection"));
+    assert!(session_rendered.contains("Session List"));
+    assert!(session_rendered.contains("Selected Session Detail"));
+    assert!(session_rendered.contains("Warnings Requiring Review"));
+    assert!(session_rendered.contains("Operator Actions"));
+
+    app.show_automation_overlay();
+    terminal
+        .draw(|frame| draw_automation_overlay(frame, &mut app))
+        .expect("automation popup render succeeds");
+    let automation_rendered = format!("{}", terminal.backend());
+    assert!(automation_rendered.contains("Automation Controls / operator inspection"));
+    assert!(automation_rendered.contains("Automation Controls"));
+    assert!(automation_rendered.contains("Rendered Next-Turn Prompt"));
+    assert!(automation_rendered.contains("Operator Status"));
+    assert!(automation_rendered.contains("Operator Actions"));
 }
 
 #[test]

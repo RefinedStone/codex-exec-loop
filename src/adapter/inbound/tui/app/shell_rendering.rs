@@ -69,7 +69,7 @@ fn draw_session_list_panel(
 ) {
     if let Some(message_lines) = list_view.message_lines {
         let widget = Paragraph::new(message_lines)
-            .block(Block::default().borders(Borders::ALL).title("Threads"))
+            .block(Block::default().borders(Borders::ALL).title("Session List"))
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
         return;
@@ -81,7 +81,7 @@ fn draw_session_list_panel(
             .into_iter()
             .map(|item| ListItem::new(item.lines)),
     )
-    .block(Block::default().borders(Borders::ALL).title("Threads"))
+    .block(Block::default().borders(Borders::ALL).title("Session List"))
     .highlight_style(
         Style::default()
             .fg(Color::Black)
@@ -102,7 +102,7 @@ fn draw_session_detail_panel(frame: &mut Frame<'_>, area: Rect, lines: Vec<Line<
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Selected Session"),
+                .title("Selected Session Detail"),
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(detail, area);
@@ -332,9 +332,7 @@ fn draw_inline_shell_inspection(
         ShellOverlay::DirectionsMaintenance => {
             draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
         }
-        ShellOverlay::Automation => {
-            draw_inline_automation_inspection(frame, inspection_area, app)
-        }
+        ShellOverlay::Automation => draw_inline_automation_inspection(frame, inspection_area, app),
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
@@ -376,14 +374,38 @@ fn draw_inline_directions_maintenance_inspection(
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Directions / inline inspection"),
+        Line::from("Direction Maintenance / operator inspection"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Current State, Cause, and Next Action"),
+        summary_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Available Options"),
+        option_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Status"),
+        status_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[4],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
@@ -411,20 +433,38 @@ fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Startup Checks / inline inspection"),
+        Line::from("Startup Checks / operator inspection"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Startup"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Checks"), check_lines, false);
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Current State, Cause, and Next Action"),
+        summary_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Startup Checks"),
+        check_lines,
+        false,
+    );
     render_inline_section(
         frame,
         layout[3],
-        Line::from("Warnings"),
+        Line::from("Warnings Requiring Review"),
         warning_lines,
         true,
     );
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[4],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
@@ -450,7 +490,7 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Recent Sessions / inline inspection"),
+        Line::from("Recent Sessions / operator inspection"),
         body_lines,
         true,
     );
@@ -464,7 +504,7 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
     render_inline_section(
         frame,
         content_layout[1],
-        Line::from("Selected Session"),
+        Line::from("Selected Session Detail"),
         detail_lines,
         false,
     );
@@ -472,18 +512,20 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
     render_inline_section(
         frame,
         layout[2],
-        Line::from("Session Warnings"),
+        Line::from("Warnings Requiring Review"),
         warning_lines,
         true,
     );
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
-fn draw_inline_automation_inspection(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &mut NativeTuiApp,
-) {
+fn draw_inline_automation_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let overlay_view = build_automation_overlay_view(app);
     let AutomationOverlayView {
         header_lines,
@@ -506,7 +548,7 @@ fn draw_inline_automation_inspection(
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Automation Controls / inline inspection"),
+        Line::from("Automation Controls / operator inspection"),
         body_lines,
         true,
     );
@@ -528,18 +570,24 @@ fn draw_inline_automation_inspection(
     render_inline_scrolled_section(
         frame,
         content_layout[1],
-        Line::from("Preview"),
+        Line::from("Rendered Next-Turn Prompt"),
         preview_lines,
         preview_scroll,
     );
     render_inline_section(
         frame,
         layout[2],
-        Line::from("Auto Follow-Up State"),
+        Line::from("Operator Status"),
         status_lines,
         false,
     );
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
@@ -576,13 +624,31 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Planning Queue / inline inspection"),
+        Line::from("Planning Queue / operator inspection"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Queue"), content_lines, false);
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Current State, Cause, and Next Action"),
+        summary_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Planning Queue Detail"),
+        content_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
@@ -614,14 +680,38 @@ fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: 
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Planning / inline inspection"),
+        Line::from("Planning Setup / operator inspection"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Current State, Cause, and Next Action"),
+        summary_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Available Options"),
+        option_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Status"),
+        status_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[4],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 fn draw_inline_planning_draft_editor_inspection(
@@ -660,11 +750,17 @@ fn draw_inline_planning_draft_editor_inspection(
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Planning Draft / inline inspection"),
+        Line::from("Planning Draft / operator inspection"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Draft Files"),
+        file_lines,
+        true,
+    );
     render_inline_scrolled_section(
         frame,
         layout[2],
@@ -674,8 +770,20 @@ fn draw_inline_planning_draft_editor_inspection(
     );
     let editor_content_area = split_inline_section(layout[2])[1];
     set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Status"),
+        status_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[4],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 fn draw_inline_directions_draft_editor_inspection(
@@ -714,11 +822,17 @@ fn draw_inline_directions_draft_editor_inspection(
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Directions Draft / inline inspection"),
+        Line::from("Direction Draft / operator inspection"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Draft Files"),
+        file_lines,
+        true,
+    );
     render_inline_scrolled_section(
         frame,
         layout[2],
@@ -728,8 +842,20 @@ fn draw_inline_directions_draft_editor_inspection(
     );
     let editor_content_area = split_inline_section(layout[2])[1];
     set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Operator Status"),
+        status_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[4],
+        Line::from("Operator Actions"),
+        key_lines,
+        true,
+    );
 }
 
 #[cfg(test)]
@@ -758,31 +884,50 @@ fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Startup Checks"));
+    let header = Paragraph::new(header_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Startup Checks / operator inspection"),
+    );
     frame.render_widget(header, layout[0]);
 
     frame.render_widget(
         Paragraph::new(summary_lines)
-            .block(Block::default().borders(Borders::ALL).title("Startup"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Current State, Cause, and Next Action"),
+            )
             .wrap(Wrap { trim: true }),
         layout[1],
     );
 
     frame.render_widget(
-        List::new(check_lines).block(Block::default().borders(Borders::ALL).title("Checks")),
+        List::new(check_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Startup Checks"),
+        ),
         layout[2],
     );
 
     frame.render_widget(
         Paragraph::new(warning_lines)
-            .block(Block::default().borders(Borders::ALL).title("Warnings"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Warnings Requiring Review"),
+            )
             .wrap(Wrap { trim: true }),
         layout[3],
     );
 
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Operator Actions"),
+        ),
         layout[4],
     );
 }
@@ -812,8 +957,11 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Sessions"));
+    let header = Paragraph::new(header_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Recent Sessions / operator inspection"),
+    );
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -829,14 +977,18 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Session Warnings"),
+                    .title("Warnings Requiring Review"),
             )
             .wrap(Wrap { trim: true }),
         layout[2],
     );
 
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Operator Actions"),
+        ),
         layout[3],
     );
 }
@@ -866,8 +1018,11 @@ fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Automation"));
+    let header = Paragraph::new(header_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Automation Controls / operator inspection"),
+    );
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -886,7 +1041,11 @@ fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     draw_automation_list_panel(frame, content_layout[0], app, list_view);
     frame.render_widget(
         Paragraph::new(preview_lines)
-            .block(Block::default().borders(Borders::ALL).title("Preview"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Rendered Next-Turn Prompt"),
+            )
             .scroll((preview_scroll, 0))
             .wrap(Wrap { trim: false }),
         content_layout[1],
@@ -897,14 +1056,18 @@ fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Auto Follow-Up State"),
+                    .title("Operator Status"),
             )
             .wrap(Wrap { trim: false }),
         layout[2],
     );
 
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Operator Actions"),
+        ),
         layout[3],
     );
 }
@@ -941,30 +1104,49 @@ fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
         .split(popup_area);
 
     frame.render_widget(
-        Paragraph::new(header_lines)
-            .block(Block::default().borders(Borders::ALL).title("Planning")),
+        Paragraph::new(header_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Planning Setup / operator inspection"),
+        ),
         layout[0],
     );
     frame.render_widget(
         Paragraph::new(summary_lines)
-            .block(Block::default().borders(Borders::ALL).title("Summary"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Current State, Cause, and Next Action"),
+            )
             .wrap(Wrap { trim: true }),
         layout[1],
     );
     frame.render_widget(
         Paragraph::new(option_lines)
-            .block(Block::default().borders(Borders::ALL).title("Options"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Available Options"),
+            )
             .wrap(Wrap { trim: false }),
         layout[2],
     );
     frame.render_widget(
         Paragraph::new(status_lines)
-            .block(Block::default().borders(Borders::ALL).title("Status"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Operator Status"),
+            )
             .wrap(Wrap { trim: true }),
         layout[3],
     );
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Operator Actions"),
+        ),
         layout[4],
     );
 }
@@ -1004,8 +1186,11 @@ fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
         .split(popup_area);
 
     frame.render_widget(
-        Paragraph::new(header_lines)
-            .block(Block::default().borders(Borders::ALL).title("Planning")),
+        Paragraph::new(header_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Planning Draft / operator inspection"),
+        ),
         layout[0],
     );
 
@@ -1016,7 +1201,7 @@ fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
 
     frame.render_widget(
         Paragraph::new(file_lines)
-            .block(Block::default().borders(Borders::ALL).title("Files"))
+            .block(Block::default().borders(Borders::ALL).title("Draft Files"))
             .wrap(Wrap { trim: false }),
         content_layout[0],
     );
@@ -1034,12 +1219,20 @@ fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
 
     frame.render_widget(
         Paragraph::new(status_lines)
-            .block(Block::default().borders(Borders::ALL).title("Status"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Operator Status"),
+            )
             .wrap(Wrap { trim: false }),
         layout[2],
     );
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Operator Actions"),
+        ),
         layout[3],
     );
 }
@@ -1070,7 +1263,11 @@ fn draw_automation_list_panel(
 ) {
     if let Some(message_lines) = list_view.message_lines {
         let widget = Paragraph::new(message_lines)
-            .block(Block::default().borders(Borders::ALL).title("Automation"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Automation Controls"),
+            )
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
         return;
@@ -1085,7 +1282,7 @@ fn draw_automation_list_panel(
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Automation"),
+            .title("Automation Controls"),
     )
     .highlight_style(
         Style::default()
@@ -1109,7 +1306,7 @@ fn draw_inline_session_list_panel(
 ) {
     let section_layout = split_inline_section(area);
     frame.render_widget(
-        Paragraph::new(vec![Line::from("Threads")]),
+        Paragraph::new(vec![Line::from("Session List")]),
         section_layout[0],
     );
 
@@ -1152,7 +1349,7 @@ fn draw_inline_automation_list_panel(
 ) {
     let section_layout = split_inline_section(area);
     frame.render_widget(
-        Paragraph::new(vec![Line::from("Automation")]),
+        Paragraph::new(vec![Line::from("Automation Controls")]),
         section_layout[0],
     );
 
