@@ -385,7 +385,7 @@ impl ConversationViewModel {
         self.live_agent_message = None;
         if let Some(turn_index) = self.auto_follow_state.mark_auto_turn_started() {
             let status_text = format!(
-                "auto follow-up running / turn {turn_index}/{} / mode: {}",
+                "automation running / turn {turn_index}/{} / {}",
                 self.auto_follow_state.max_auto_turns_value(),
                 self.auto_follow_state.mode_label(),
             );
@@ -635,8 +635,8 @@ impl ConversationViewModel {
 
     pub(crate) fn record_automation_stopped(&mut self) {
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: "stopped: automation off".to_string(),
-            detail: "post-turn automation is off; toggle Ctrl+a to re-enable it".to_string(),
+            summary: "automation off".to_string(),
+            detail: "automation is off; toggle Ctrl+a to re-enable it".to_string(),
         });
     }
 
@@ -656,9 +656,10 @@ impl ConversationViewModel {
         );
         self.last_planning_task_handoff = handoff_task.cloned();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: format!("submitted auto turn {progress}"),
-            detail: "queued after the previous turn completed; submitted planning auto follow-up"
-                .to_string(),
+            summary: format!("submitted turn {progress}"),
+            detail:
+                "queued after the previous turn completed; automation submitted the next queued turn"
+                    .to_string(),
         });
     }
 
@@ -669,9 +670,9 @@ impl ConversationViewModel {
             self.auto_follow_state.max_auto_turns_label()
         );
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: format!("queued auto turn {next_progress}"),
+            summary: format!("queued turn {next_progress}"),
             detail:
-                "queued after the previous turn completed; waiting to submit planning auto follow-up"
+                "queued after the previous turn completed; waiting to submit the next queued turn"
                     .to_string(),
         });
     }
@@ -686,7 +687,7 @@ impl ConversationViewModel {
         }
 
         self.auto_follow_state.begin_post_turn_evaluation();
-        self.status_text = "turn completed / auto follow-up evaluating next turn".to_string();
+        self.status_text = "turn completed / automation is evaluating the next step".to_string();
     }
 
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {

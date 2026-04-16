@@ -287,7 +287,7 @@ fn queue_idle_active_derivation_creates_next_task_and_submits_auto_followup() {
     );
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / mode: planning queue"
+        "automation submitted the next turn / 1/3 / planning queue"
     );
     assert_eq!(
         app.planner_worker_panel_state

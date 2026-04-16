@@ -319,7 +319,7 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
     assert!(rendered.contains("Automation Controls / inline inspection"));
     assert!(rendered.contains("Automation"));
     assert!(rendered.contains("Preview"));
-    assert!(rendered.contains("automation: on"));
+    assert!(rendered.contains("automation state: on"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
@@ -473,9 +473,9 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
 
     assert!(header.contains("simple mode"));
     assert!(options.contains("bootstrap-1"));
-    assert!(status.contains("max auto turns: 3"));
+    assert!(status.contains("turn budget: 3"));
     assert!(keys.contains("Enter/Ctrl+P: promote staged scaffold"));
-    assert!(keys.contains("Ctrl+L: edit max auto turns"));
+    assert!(keys.contains("Ctrl+L: edit turn budget"));
     assert!(keys.contains("Ctrl+E: inspect/edit draft"));
 }
 
@@ -503,8 +503,8 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(keys.contains("Type the new max-turn value directly."));
-    assert!(keys.contains("Enter: save max turns"));
+    assert!(keys.contains("Type the new turn-budget value directly."));
+    assert!(keys.contains("Enter: save turn budget"));
     assert!(keys.contains("Use a whole number between 1 and 50."));
     assert!(!keys.contains("promote staged scaffold"));
 }

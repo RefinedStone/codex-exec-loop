@@ -37,7 +37,8 @@ struct InlineShellCommandSpec {
 }
 
 const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :turns <n>  :new  :help";
-const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
+const MAX_AUTO_TURNS_USAGE: &str =
+    "Type `:turns <1-50>` and press Enter to update the automation turn budget.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -107,7 +108,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::MaxAutoTurns,
         primary_name: ":turns",
         aliases: &[":turn", ":turns", ":auto-turns"],
-        suggestion_detail: "set max auto turns",
+        suggestion_detail: "set turn budget",
         buffered_hint: MAX_AUTO_TURNS_USAGE,
         execution_status: None,
         requires_argument: true,
@@ -165,10 +166,12 @@ impl InlineShellCommandInput {
             },
             InlineShellCommand::MaxAutoTurns => match self.argument() {
                 Some(value) if is_valid_max_auto_turn_argument(value) => {
-                    format!("Press Enter to set max auto turns to {value}.")
+                    format!("Press Enter to set the automation turn budget to {value}.")
                 }
                 Some(value) => {
-                    format!("Press Enter to apply `:turns {value}`. Max auto turns must be 1-50.")
+                    format!(
+                        "Press Enter to apply `:turns {value}`. The automation turn budget must be 1-50."
+                    )
                 }
                 None => MAX_AUTO_TURNS_USAGE.to_string(),
             },
@@ -520,11 +523,11 @@ mod tests {
         assert_eq!(no_arg.buffered_hint(), MAX_AUTO_TURNS_USAGE);
         assert_eq!(
             valid_arg.buffered_hint(),
-            "Press Enter to set max auto turns to 7."
+            "Press Enter to set the automation turn budget to 7."
         );
         assert_eq!(
             invalid_arg.buffered_hint(),
-            "Press Enter to apply `:turns 70`. Max auto turns must be 1-50."
+            "Press Enter to apply `:turns 70`. The automation turn budget must be 1-50."
         );
     }
 

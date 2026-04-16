@@ -77,52 +77,52 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn activity_summary(self) -> &'static str {
         match self {
-            Self::Disabled => "stopped: automation off",
-            Self::LimitReached => "stopped: turn limit reached",
-            Self::NoAgentReply => "skipped: no agent reply",
-            Self::StopKeywordMatched => "stopped: stop keyword matched",
-            Self::NoFileChanges => "stopped: no file changes",
-            Self::PlanningDisabled => "stopped: planning off",
-            Self::PlanningBlocked => "paused: planning needs repair",
-            Self::PlanningQueueIdlePolicyStop => "stopped: queue idle",
-            Self::PlanningQueueHeadRequired => "paused: waiting for next task",
-            Self::PlanningRepeatedQueueHead => "paused: queue did not advance",
+            Self::Disabled => "automation off",
+            Self::LimitReached => "turn limit reached",
+            Self::NoAgentReply => "no agent reply",
+            Self::StopKeywordMatched => "stop keyword matched",
+            Self::NoFileChanges => "no file changes",
+            Self::PlanningDisabled => "planning off",
+            Self::PlanningBlocked => "planning needs repair",
+            Self::PlanningQueueIdlePolicyStop => "queue idle",
+            Self::PlanningQueueHeadRequired => "waiting for next task",
+            Self::PlanningRepeatedQueueHead => "queue did not advance",
         }
     }
 
     pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
         match self {
-            Self::Disabled => "turn completed / automation stopped: off".to_string(),
+            Self::Disabled => "turn completed / automation off".to_string(),
             Self::LimitReached => format!(
-                "turn completed / auto follow-up stopped: turn limit reached ({})",
+                "turn completed / automation stopped at the turn budget ({})",
                 auto_follow_state.progress_label()
             ),
             Self::NoAgentReply => {
-                "turn completed / auto follow-up skipped: no agent reply".to_string()
+                "turn completed / automation skipped because no agent reply is available"
+                    .to_string()
             }
             Self::StopKeywordMatched => format!(
-                "turn completed / auto follow-up stopped: stop keyword matched ({})",
+                "turn completed / automation stopped on the stop keyword ({})",
                 auto_follow_state.stop_rules.stop_keyword.value()
             ),
             Self::NoFileChanges => {
-                "turn completed / auto follow-up stopped: no file changes".to_string()
+                "turn completed / automation stopped because no files changed".to_string()
             }
             Self::PlanningDisabled => {
-                "turn completed / auto follow-up stopped: planning mode is off".to_string()
+                "turn completed / automation stopped because planning mode is off".to_string()
             }
             Self::PlanningBlocked => {
-                "turn completed / auto follow-up paused: planning needs repair".to_string()
+                "turn completed / automation paused because planning needs repair".to_string()
             }
             Self::PlanningQueueIdlePolicyStop => {
-                "turn completed / auto follow-up stopped: planning queue is idle".to_string()
+                "turn completed / automation stopped because the queue is idle".to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "turn completed / auto follow-up paused: planning has no next task yet"
+                "turn completed / automation paused because planning has no next task yet"
                     .to_string()
             }
             Self::PlanningRepeatedQueueHead => {
-                "turn completed / auto follow-up paused: the queue did not advance past the previous task"
-                    .to_string()
+                "turn completed / automation paused because the queue did not advance".to_string()
             }
         }
     }

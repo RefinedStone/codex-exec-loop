@@ -6,6 +6,7 @@ use super::super::{
     build_automation_status_lines, compact_whitespace_detail,
 };
 use super::{AutomationOverlayView, QueueOverlayView};
+use crate::adapter::inbound::tui::app::planning::build_planning_notice_line;
 use crate::application::service::planning::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjectionRequest,
 };
@@ -114,10 +115,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             ];
 
             let mut note_lines = Vec::new();
-            if let Some(summary) =
-                conversation.planning_notice_summary(QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+            if let Some(planning_notice_line) =
+                build_planning_notice_line(conversation, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
             {
-                note_lines.push(Line::from(format!("planning notice: {summary}")));
+                note_lines.push(Line::from(planning_notice_line));
             }
             if let Some(queue_summary) =
                 app.planner_worker_panel_state.last_queue_summary.as_deref()

@@ -29,7 +29,7 @@ use super::super::{
 
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
-    "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
+    "planner refresh failed; automation stays paused until the next accepted planner refresh";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
@@ -193,7 +193,7 @@ impl PostTurnEvaluationExecutor {
             Err(error) => PlanningReconciliationResult {
                 notices: vec![format!("planning reconciliation failed: {error}")],
                 auto_followup_block_reason: Some(
-                    "planning reconciliation failed; auto follow-up stays paused until the planning workspace is repaired"
+                    "planning reconciliation failed; automation stays paused until the planning workspace is repaired"
                         .to_string(),
                 ),
                 ..PlanningReconciliationResult::default()

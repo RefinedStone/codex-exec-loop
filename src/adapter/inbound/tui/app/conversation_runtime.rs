@@ -143,7 +143,7 @@ pub(super) fn reduce_conversation_runtime(
             state.status_text = match origin {
                 PromptOrigin::Manual => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
-                    "auto follow-up submitted / turn {auto_follow_progress} / mode: {}",
+                    "automation submitted the next turn / {auto_follow_progress} / {}",
                     context.mode_label
                 ),
             };
@@ -226,9 +226,8 @@ pub(super) fn reduce_conversation_runtime(
                     } = *queued_prompt;
                     state.clear_auto_followup_skip();
                     state.record_auto_followup_queue(&queued_from_turn_id);
-                    state.status_text = format!(
-                        "turn completed / queued auto follow-up with mode {mode_label}"
-                    );
+                    state.status_text =
+                        format!("turn completed / automation queued the next turn / {mode_label}");
                     state.append_status_message(state.status_text.clone());
                     effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
                         prompt,
@@ -321,7 +320,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.status_text,
-            "auto follow-up submitted / turn 1/3 / mode: planning queue"
+            "automation submitted the next turn / 1/3 / planning queue"
         );
         assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 0);
         assert_eq!(reduced.state.auto_follow_state.active_turn_index(), Some(1));
@@ -331,7 +330,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("submitted auto turn 1/3")
+            Some("submitted turn 1/3")
         );
         assert_eq!(
             reduced
@@ -339,7 +338,9 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.detail.as_str()),
-            Some("queued after the previous turn completed; submitted planning auto follow-up")
+            Some(
+                "queued after the previous turn completed; automation submitted the next queued turn"
+            )
         );
         assert_eq!(
             reduced.state.messages[0].text,
@@ -382,7 +383,7 @@ mod tests {
         ));
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / auto follow-up evaluating next turn"
+            "turn completed / automation is evaluating the next step"
         );
     }
 
@@ -1064,7 +1065,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / queued auto follow-up with mode planning queue"
+            "turn completed / automation queued the next turn / planning queue"
         );
         assert!(
             reduced
@@ -1078,7 +1079,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("queued auto turn 1/3")
+            Some("queued turn 1/3")
         );
     }
 
@@ -1122,7 +1123,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / queued auto follow-up with mode planning queue"
+            "turn completed / automation queued the next turn / planning queue"
         );
         assert_eq!(
             reduced
@@ -1130,7 +1131,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("queued auto turn 1/3")
+            Some("queued turn 1/3")
         );
     }
 
@@ -1174,7 +1175,7 @@ mod tests {
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / queued auto follow-up with mode planning queue"
+            "turn completed / automation queued the next turn / planning queue"
         );
         assert_eq!(
             reduced
@@ -1182,7 +1183,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("queued auto turn 1/3")
+            Some("queued turn 1/3")
         );
     }
 

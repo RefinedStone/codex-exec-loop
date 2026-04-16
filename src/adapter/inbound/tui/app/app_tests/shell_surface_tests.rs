@@ -235,13 +235,15 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
         .join("\n");
 
     assert!(header.contains("Automation Controls"));
-    assert!(list.contains("automation follows the planning queue only"));
-    assert!(preview.contains("mode: planning queue"));
+    assert!(
+        list.contains("automation continues only when the planning queue exposes actionable work")
+    );
+    assert!(preview.contains("automation mode: planning queue"));
     assert!(preview.contains("current state:"));
     assert!(preview.contains("cause:"));
     assert!(preview.contains("next action:"));
-    assert!(preview.contains("Rendered Preview"));
-    assert!(status.contains("automation: on"));
+    assert!(preview.contains("Rendered Next-Turn Prompt"));
+    assert!(status.contains("automation state: on"));
     assert!(keys.contains("Ctrl+a: automation on/off"));
 }
 
@@ -255,8 +257,8 @@ fn automation_preview_uses_placeholder_without_agent_reply() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("preview last_message: placeholder until an agent reply exists"));
-    assert!(rendered.contains("preview thread id: draft-thread"));
+    assert!(rendered.contains("last agent reply: waiting for the first agent reply"));
+    assert!(rendered.contains("thread context: draft-thread"));
 }
 
 #[test]
@@ -296,7 +298,7 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
         panic!("conversation should be ready");
     };
     conversation.status_text =
-        "turn completed / queued auto follow-up with mode planning queue".to_string();
+        "turn completed / automation queued the next turn / planning queue".to_string();
     conversation.base_warnings =
         vec!["planner queue changed shape after reconciliation".to_string()];
     conversation.warnings = conversation.base_warnings.clone();
@@ -308,16 +310,36 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("automation: on"));
+    assert!(rendered.contains("automation state: on"));
     assert!(rendered.contains("current state:"));
     assert!(rendered.contains("cause:"));
     assert!(rendered.contains("next action:"));
     assert!(
         rendered
-            .contains("status: turn completed / queued auto follow-up with mode planning queue")
+            .contains("status: turn completed / automation queued the next turn / planning queue")
     );
     assert!(rendered.contains("warning: planner queue changed shape"));
     assert!(rendered.contains("planning reconciliation completed"));
+}
+
+#[test]
+fn queue_overlay_notice_drops_legacy_planning_prefix_duplication() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.runtime_notices =
+        vec!["planning repair queued retry 1/2 for task-ledger.json".to_string()];
+
+    let rendered = build_queue_overlay_view(&app)
+        .note_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning notice: planning repair queued retry 1/2"));
+    assert!(!rendered.contains("planning notice: planning:"));
 }
 
 #[test]

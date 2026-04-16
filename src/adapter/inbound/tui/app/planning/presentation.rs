@@ -52,7 +52,13 @@ pub(crate) fn build_planning_notice_line(
 ) -> Option<String> {
     conversation
         .planning_notice_summary(max_detail_len)
-        .map(|summary| format!("planning notice: {summary}"))
+        .map(|summary| {
+            if let Some(detail) = summary.strip_prefix("planning: ") {
+                format!("planning notice: {detail}")
+            } else {
+                summary
+            }
+        })
 }
 
 pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
@@ -129,19 +135,19 @@ pub(crate) fn build_automation_preview_lines(app: &NativeTuiApp) -> Vec<Line<'st
 
             let mut lines = vec![
                 Line::from(format!(
-                    "mode: {}",
+                    "automation mode: {}",
                     conversation.auto_follow_state.mode_label()
                 )),
-                Line::from(format!("preview thread id: {preview_thread_id}")),
+                Line::from(format!("thread context: {preview_thread_id}")),
             ];
 
             if conversation.latest_agent_message_text().is_some() {
                 lines.push(Line::from(
-                    "preview last_message: using the latest non-empty agent reply",
+                    "last agent reply: using the latest non-empty reply",
                 ));
             } else {
                 lines.push(Line::from(
-                    "preview last_message: placeholder until an agent reply exists",
+                    "last agent reply: waiting for the first agent reply",
                 ));
             }
             lines.push(Line::from(preview.current_state_line));
@@ -149,7 +155,7 @@ pub(crate) fn build_automation_preview_lines(app: &NativeTuiApp) -> Vec<Line<'st
             lines.push(Line::from(preview.next_action_line));
 
             lines.push(Line::from(""));
-            lines.push(Line::from("Rendered Preview"));
+            lines.push(Line::from("Rendered Next-Turn Prompt"));
             for preview_line in preview.rendered_prompt.lines() {
                 lines.push(Line::raw(preview_line.to_string()));
             }
@@ -257,43 +263,41 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             let current_state_line = planning_projection.current_state_line;
             let cause_line = planning_projection.cause_line;
             let next_action_line = planning_projection.next_action_line;
-            let planning_status_line = planning_projection.planning_status_line;
             let repair_attempt_line = planning_projection.repair_attempt_line;
             let queue_head_line = planning_projection.queue_head_line;
             let proposal_line = planning_projection.proposal_line;
             let failure_line = planning_projection.failure_line;
             let mut lines = vec![
                 Line::from(format!(
-                    "automation: {} / {}",
+                    "automation state: {} / {}",
                     conversation.auto_follow_state.status_label(),
                     conversation.auto_follow_state.activity_label()
                 )),
                 Line::from(format!(
-                    "progress: {}",
+                    "completed auto turns: {}",
                     conversation.auto_follow_state.completed_progress_label()
                 )),
                 Line::from(format!(
-                    "max auto turns: {}",
+                    "turn budget: {}",
                     conversation.auto_follow_state.max_auto_turns_value()
                 )),
                 Line::from(format!(
-                    "stop keyword: {}",
+                    "stop keyword rule: {}",
                     conversation.auto_follow_state.stop_keyword_label()
                 )),
                 Line::from(format!(
-                    "stop on no-file-change: {}",
+                    "stop if no files changed: {}",
                     conversation.auto_follow_state.no_file_change_stop_label()
                 )),
                 Line::from(format!(
-                    "planner detail: {}",
+                    "planner visibility: {}",
                     app.planner_visibility_label()
                 )),
                 Line::from(current_state_line),
                 Line::from(cause_line),
                 Line::from(next_action_line),
-                Line::from(planning_status_line),
                 Line::from(format!(
-                    "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",
+                    "{activity_scope} activity: commands {}  |  file changes {}",
                     conversation
                         .turn_activity
                         .activity_command_count(turn_running),
@@ -303,7 +307,7 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                 )),
                 Line::from({
                     let mut activity_line = format!(
-                        "{activity_scope} tool activity: {}",
+                        "{activity_scope} summary: {}",
                         conversation.turn_activity.activity_summary(turn_running)
                     );
                     if let Some(approval_summary) = approval_summary.as_deref() {
@@ -335,10 +339,10 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             if let Some(failure_line) = failure_line {
                 lines.push(Line::from(failure_line));
             }
-            if let Some(planning_notice_summary) =
-                conversation.planning_notice_summary(AUTOMATION_PLANNING_DETAIL_LIMIT)
+            if let Some(planning_notice_line) =
+                build_planning_notice_line(conversation, AUTOMATION_PLANNING_DETAIL_LIMIT)
             {
-                lines.push(Line::from(planning_notice_summary));
+                lines.push(Line::from(planning_notice_line));
             }
             lines.extend(
                 build_planner_panel_lines(app, AUTOMATION_PLANNER_PANEL_DETAIL_LIMIT)
@@ -348,17 +352,17 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
 
             if app.is_max_auto_turns_editing() {
                 lines.push(Line::from(format!(
-                    "editing max auto turns: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                    "editing turn budget: {}  |  Enter save  |  Esc/Ctrl+C cancel",
                     app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                 )));
             } else if app.is_stop_keyword_editing() {
                 lines.push(Line::from(format!(
-                    "editing stop keyword: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                    "editing stop keyword rule: {}  |  Enter save  |  Esc/Ctrl+C cancel",
                     app.followup_overlay_ui_state.stop_keyword_editor.buffer
                 )));
             } else {
                 lines.push(Line::from(
-                    "edit controls: Ctrl+l max turns  |  Ctrl+g stop keyword  |  Ctrl+b planner detail",
+                    "controls: Ctrl+l turn budget  |  Ctrl+g stop keyword  |  Ctrl+b planner visibility",
                 ));
             }
             lines.push(Line::from(Span::styled(

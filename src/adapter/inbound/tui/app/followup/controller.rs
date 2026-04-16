@@ -186,7 +186,7 @@ impl NativeTuiApp {
     pub(crate) fn toggle_planner_visibility(&mut self) {
         self.planner_visibility = self.planner_visibility.toggle();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: format!("planner detail {}", self.planner_visibility.label()),
+            status_text: format!("planner visibility {}", self.planner_visibility.label()),
         });
     }
 

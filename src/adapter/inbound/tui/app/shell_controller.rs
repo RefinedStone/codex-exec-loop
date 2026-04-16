@@ -46,10 +46,10 @@ impl NativeTuiApp {
                 format!("{}; open diagnostics with Ctrl+d", state.status_text())
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Pending) => {
-                "auto follow-up paused while startup checks are still running".to_string()
+                "automation paused while startup checks are still running".to_string()
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
-                "auto follow-up paused because startup diagnostics need attention".to_string()
+                "automation paused because startup diagnostics need attention".to_string()
             }
         }
     }

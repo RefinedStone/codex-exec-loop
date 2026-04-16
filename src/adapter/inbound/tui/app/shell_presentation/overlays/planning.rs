@@ -253,13 +253,13 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                             }
                         )),
                         Line::from(format!(
-                            "max auto turns: {}",
+                            "turn budget: {}",
                             app.current_max_auto_turns_label()
                         )),
                     ];
                     if app.is_max_auto_turns_editing() {
                         lines.push(Line::from(format!(
-                            "editing max auto turns: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                            "editing turn budget: {}  |  Enter save  |  Esc/Ctrl+C cancel",
                             app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                         )));
                     } else {
@@ -277,14 +277,14 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 },
                 key_lines: if app.is_max_auto_turns_editing() {
                     vec![
-                        Line::from("Type the new max-turn value directly. Backspace deletes."),
-                        Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
+                        Line::from("Type the new turn-budget value directly. Backspace deletes."),
+                        Line::from("Enter: save turn budget    Esc/Ctrl+C: cancel edit"),
                         Line::from("Use a whole number between 1 and 50."),
                     ]
                 } else {
                     vec![
                         Line::from("Enter/Ctrl+P: promote staged scaffold"),
-                        Line::from("Ctrl+L: edit max auto turns    Ctrl+E: inspect/edit draft"),
+                        Line::from("Ctrl+L: edit turn budget    Ctrl+E: inspect/edit draft"),
                         Line::from("Esc/Ctrl+C: close review"),
                     ]
                 },

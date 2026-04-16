@@ -2,18 +2,18 @@ use std::rc::Rc;
 
 use ratatui::layout::Position;
 
+use super::shell_presentation::{
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, build_automation_overlay_view, build_directions_maintenance_overlay_view,
+    build_inline_tail_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view,
+};
 #[cfg(test)]
 use super::shell_presentation::{
     ConversationShellFrameView, build_conversation_shell_frame_view,
     build_input_prompt_cursor_offset,
-};
-use super::shell_presentation::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_automation_overlay_view, build_inline_tail_view,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
 };
 use super::*;
 
@@ -1070,11 +1070,7 @@ fn draw_automation_list_panel(
 ) {
     if let Some(message_lines) = list_view.message_lines {
         let widget = Paragraph::new(message_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Automation"),
-            )
+            .block(Block::default().borders(Borders::ALL).title("Automation"))
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
         return;

@@ -2,18 +2,12 @@ use super::{AutoFollowState, ConversationViewModel, StopKeywordRule};
 
 #[derive(Debug, Clone)]
 pub(super) enum FollowupControlEvent {
-    DraftWorkspaceSynced {
-        workspace_directory: String,
-    },
+    DraftWorkspaceSynced { workspace_directory: String },
     AutoFollowToggled,
     AutoFollowStopped,
-    MaxAutoTurnsUpdated {
-        value: String,
-    },
+    MaxAutoTurnsUpdated { value: String },
     StopKeywordToggled,
-    StopKeywordValueUpdated {
-        value: String,
-    },
+    StopKeywordValueUpdated { value: String },
     NoFileChangeStopToggled,
 }
 
@@ -37,7 +31,9 @@ pub(super) fn reduce_followup_controls(
     let mut effects = Vec::new();
 
     match event {
-        FollowupControlEvent::DraftWorkspaceSynced { workspace_directory } => {
+        FollowupControlEvent::DraftWorkspaceSynced {
+            workspace_directory,
+        } => {
             if state.sync_draft_workspace(workspace_directory) {
                 effects.push(FollowupControlEffect::OverlayUi);
             }
@@ -60,14 +56,14 @@ pub(super) fn reduce_followup_controls(
         }
         FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
-                state.status_text = "auto follow-up max turns must be a whole number greater than 0 or the word infinite".to_string();
+                state.status_text = "automation turn budget must be a whole number greater than 0 or the word infinite".to_string();
                 return FollowupControlReduction { state, effects };
             };
 
             state.auto_follow_state.set_max_auto_turns(value);
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "auto follow-up max turns {}",
+                "automation turn budget {}",
                 state.auto_follow_state.max_auto_turns_label()
             );
             effects.push(FollowupControlEffect::MaxAutoTurnsEditor {
@@ -78,14 +74,14 @@ pub(super) fn reduce_followup_controls(
             state.auto_follow_state.toggle_stop_keyword();
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "auto stop keyword {}",
+                "stop keyword rule {}",
                 state.auto_follow_state.stop_keyword_label()
             );
         }
         FollowupControlEvent::StopKeywordValueUpdated { value } => {
             let Some(value) = StopKeywordRule::normalize_candidate(&value) else {
                 state.status_text =
-                    "auto stop keyword must use only letters, numbers, or underscores".to_string();
+                    "stop keyword must use only letters, numbers, or underscores".to_string();
                 return FollowupControlReduction { state, effects };
             };
 
@@ -94,7 +90,7 @@ pub(super) fn reduce_followup_controls(
                 .set_stop_keyword_value(value.clone());
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "auto stop keyword value {}",
+                "stop keyword value {}",
                 state.auto_follow_state.stop_keyword_label()
             );
             effects.push(FollowupControlEffect::StopKeywordEditor { value });
@@ -103,7 +99,7 @@ pub(super) fn reduce_followup_controls(
             state.auto_follow_state.toggle_no_file_change_stop();
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "auto stop without file changes {}",
+                "stop if no files changed {}",
                 state.auto_follow_state.no_file_change_stop_label()
             );
         }
@@ -117,7 +113,6 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{
         AutoFollowupSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-        INFINITE_AUTO_FOLLOW_MAX_TURNS,
     };
 
     #[test]
@@ -166,7 +161,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("stopped: automation off")
+            Some("automation off")
         );
     }
 
@@ -204,7 +199,10 @@ mod tests {
             },
         );
 
-        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE_NOW");
+        assert_eq!(
+            reduced.state.auto_follow_state.stop_keyword_value(),
+            "DONE_NOW"
+        );
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,

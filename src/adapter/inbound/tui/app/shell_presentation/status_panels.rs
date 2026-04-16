@@ -16,15 +16,13 @@ use super::{
     compact_inline_detail, inline_input_state_label, turn_status_label, wrapped_row_count,
 };
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
-use crate::application::service::planning::{
-    PlanningRuntimeSnapshot,
-};
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 #[cfg(test)]
 use super::{
     FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT,
-    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT,
-    FOOTER_WARNING_DETAIL_LIMIT, INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
+    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT, FOOTER_WARNING_DETAIL_LIMIT,
+    INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
 };
 
 #[derive(Clone)]
@@ -526,7 +524,7 @@ fn build_inline_ready_prompt_lines(
         && conversation.input_state.can_submit_now()
     {
         lines.push(Line::from(
-            "buffered prompt  |  auto follow-up busy  |  Enter when idle",
+            "buffered prompt  |  automation busy  |  Enter when idle",
         ));
         return lines;
     }
@@ -658,7 +656,7 @@ fn build_operator_notice_line(
 
     if let Some(activity) = conversation.last_auto_followup_activity.as_ref() {
         return Some(format!(
-            "auto: {}  |  detail: {}",
+            "automation update: {}  |  detail: {}",
             activity.summary,
             compact_inline_detail(&activity.detail, max_detail_len)
         ));

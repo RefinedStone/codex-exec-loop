@@ -152,7 +152,7 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
     );
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / mode: planning queue"
+        "automation submitted the next turn / 1/3 / planning queue"
     );
     assert_eq!(
         app.planner_worker_panel_state.last_queue_summary.as_deref(),
@@ -267,7 +267,7 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
     );
     assert_eq!(
         conversation.status_text,
-        "turn completed / auto follow-up paused: the queue did not advance past the previous task"
+        "turn completed / automation paused because the queue did not advance"
     );
     assert!(
         conversation
@@ -443,7 +443,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
     assert_eq!(turn_calls.len(), 1);
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / mode: planning queue"
+        "automation submitted the next turn / 1/3 / planning queue"
     );
     assert!(
         conversation

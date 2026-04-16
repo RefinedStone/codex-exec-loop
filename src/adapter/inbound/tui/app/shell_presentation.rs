@@ -1,8 +1,6 @@
 use std::time::{Duration, Instant};
 
-pub(super) use super::planning::{
-    build_automation_preview_lines, build_automation_status_lines,
-};
+pub(super) use super::planning::{build_automation_preview_lines, build_automation_status_lines};
 use super::*;
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 use crate::application::service::session_service::{
@@ -179,12 +177,12 @@ mod overlays;
 mod status_panels;
 
 pub(super) use overlays::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListEntryView,
-    OverlayListView, PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView,
-    SessionOverlayView, StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_automation_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_banner_lines, build_startup_overlay_view,
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListEntryView, OverlayListView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, build_automation_overlay_view, build_directions_maintenance_overlay_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_banner_lines,
+    build_startup_overlay_view,
 };
 #[cfg(test)]
 pub(super) use overlays::{
@@ -423,7 +421,7 @@ pub(super) fn build_ready_input_lines(
         && conversation.input_state.can_submit_now()
     {
         lines.push(Line::from(
-            "Prompt buffered. Ctrl+j inserts a new line. Press Enter when auto follow-up finishes.",
+            "Prompt buffered. Ctrl+j inserts a new line. Press Enter when automation finishes.",
         ));
         return lines;
     }
@@ -613,8 +611,8 @@ fn compact_inline_detail(text: &str, max_len: usize) -> String {
 pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.is_max_auto_turns_editing() {
         return vec![
-            Line::from("Type the new max-turn value directly. Backspace deletes."),
-            Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
+            Line::from("Type the new turn-budget value directly. Backspace deletes."),
+            Line::from("Enter: save turn budget    Esc/Ctrl+C: cancel edit"),
             Line::from("Use a whole number between 1 and 50."),
         ];
     }
@@ -630,10 +628,10 @@ pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static
     vec![
         Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
         Line::from(
-            "Ctrl+a: automation on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword",
+            "Ctrl+a: automation on/off    Ctrl+l: edit turn budget    Ctrl+g: edit stop keyword",
         ),
         Line::from(
-            "Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Ctrl+b: planner detail",
+            "Ctrl+k: stop keyword on/off    Ctrl+n: no-file-change rule    Ctrl+b: planner visibility",
         ),
         Line::from("Enter/Esc/Ctrl+C: close"),
     ]
@@ -1267,8 +1265,12 @@ fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
         },
         ConversationState::Ready(_) => OverlayListView {
             message_lines: Some(vec![
-                Line::from("automation follows the planning queue only"),
-                Line::from("no legacy automation catalogs or workspace prompt files are used"),
+                Line::from(
+                    "automation continues only when the planning queue exposes actionable work",
+                ),
+                Line::from(
+                    "legacy automation catalogs and ad hoc workspace prompt files stay ignored",
+                ),
             ]),
             items: Vec::new(),
             selected_index: None,
@@ -1435,7 +1437,9 @@ fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<St
 fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
     match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => "idle".to_string(),
-        AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
+        AutoFollowRuntimePhase::Evaluating { .. } => {
+            "automation is evaluating the next step".to_string()
+        }
         AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
             "auto turn {turn_index}/{} queued for submission",
             conversation.auto_follow_state.max_auto_turns_value()
@@ -1457,7 +1461,9 @@ fn auto_follow_prompt_status_line(
 ) -> Option<String> {
     let detail = match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => return None,
-        AutoFollowRuntimePhase::Evaluating { .. } => "auto follow-up evaluating".to_string(),
+        AutoFollowRuntimePhase::Evaluating { .. } => {
+            "automation evaluating the next step".to_string()
+        }
         AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
             "auto turn {turn_index}/{} queued",
             conversation.auto_follow_state.max_auto_turns_value()
