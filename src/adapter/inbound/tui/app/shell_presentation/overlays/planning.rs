@@ -1,4 +1,5 @@
 use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
+use super::super::super::planning::build_queue_framing_lines_from_snapshot;
 use super::super::status_panels::plan_runtime_substate_label;
 use super::super::{
     Color, ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, Line, Modifier, NativeTuiApp,
@@ -24,13 +25,26 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             } else {
                 "Plan off".to_string()
             };
-            let queue_summary = snapshot
-                .queue_summary()
-                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
-                .unwrap_or_else(|| "queue state unavailable".to_string());
             let failure_summary = snapshot
                 .failure_reason()
                 .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
+            let queue_framing_lines = build_queue_framing_lines_from_snapshot(
+                &snapshot,
+                FOOTER_NOTICE_DETAIL_LIMIT,
+            );
+            let mut option_lines = vec![
+                Line::from(format!("workspace: {workspace_directory}")),
+                Line::from(format!("planning state: {plan_state_label}")),
+                Line::from(format!(
+                    "queue idle policy: {}",
+                    snapshot.queue_idle_policy().label()
+                )),
+            ];
+            if queue_framing_lines.is_empty() {
+                option_lines.push(Line::from("queue state: unavailable"));
+            } else {
+                option_lines.extend(queue_framing_lines);
+            }
             let mut status_lines = if snapshot.plan_enabled() {
                 vec![
                     Line::from(
@@ -70,15 +84,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
                     ),
                 ],
-                option_lines: vec![
-                    Line::from(format!("workspace: {workspace_directory}")),
-                    Line::from(format!("planning state: {plan_state_label}")),
-                    Line::from(format!("queue summary: {queue_summary}")),
-                    Line::from(format!(
-                        "queue idle policy: {}",
-                        snapshot.queue_idle_policy().label()
-                    )),
-                ],
+                option_lines,
                 status_lines: {
                     if let Some(failure_summary) = failure_summary {
                         status_lines

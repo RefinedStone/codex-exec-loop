@@ -1263,6 +1263,36 @@ fn planning_controls_existing_workspace_uses_canonical_state_label() {
         .join("\n");
 
     assert!(rendered.contains("planning state: Plan on / review needed"));
+    assert!(rendered.contains("now: none"));
+    assert!(rendered.contains("next: none"));
+    assert!(rendered.contains("proposed: Draft queue review"));
+    assert!(rendered.contains("blocked: none"));
+}
+
+#[test]
+fn planning_controls_existing_workspace_reframes_actionable_queue_state() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
+    ));
+    app.planning_init_overlay_ui_state.open_existing_workspace();
+
+    let rendered = build_planning_init_overlay_view(&app)
+        .option_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("planning state: Plan on / ready"));
+    assert!(rendered.contains("now: Implement shell planning status"));
+    assert!(rendered.contains("next: Trim legacy shell code"));
+    assert!(rendered.contains("proposed: none"));
+    assert!(rendered.contains("blocked: Follow blocked review thread"));
 }
 
 #[test]

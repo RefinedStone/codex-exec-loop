@@ -1,7 +1,7 @@
 use super::super::planner_debug_preview::build_debug_preview_lines;
 use super::super::{ConversationState, ConversationViewModel, NativeTuiApp};
 use crate::application::service::planning::{
-    PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
+    PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt, PlanningRuntimeSnapshot,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
 };
 use crate::domain::text::compact_whitespace_detail;
@@ -65,7 +65,13 @@ pub(crate) fn build_queue_framing_lines(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
 ) -> Vec<Line<'static>> {
-    let snapshot = &conversation.planning_runtime_snapshot;
+    build_queue_framing_lines_from_snapshot(&conversation.planning_runtime_snapshot, max_detail_len)
+}
+
+pub(crate) fn build_queue_framing_lines_from_snapshot(
+    snapshot: &PlanningRuntimeSnapshot,
+    max_detail_len: usize,
+) -> Vec<Line<'static>> {
     let queue_snapshot = snapshot.queue_snapshot();
     let has_queue_context = snapshot.workspace_present()
         || snapshot.queue_head().is_some()
