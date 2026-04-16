@@ -289,6 +289,31 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         Ok(())
     }
 
+    fn remove_planning_workspace_entry(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<()> {
+        let relative_path = normalize_workspace_relative_path(
+            relative_path,
+            &format!("invalid planning relative path: {relative_path}"),
+        )?;
+        let path = Self::workspace_path(workspace_dir, &relative_path);
+        if !path.exists() {
+            return Ok(());
+        }
+
+        if path.is_dir() {
+            fs::remove_dir_all(&path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
+        } else {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
+        }
+
+        Ok(())
+    }
+
     fn archive_rejected_planning_file(
         &self,
         workspace_dir: &str,
@@ -658,6 +683,46 @@ mod tests {
             fs::read_to_string(&archived_path).expect("archived file should read"),
             "{\"version\":1}"
         );
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn remove_planning_workspace_entry_removes_file_and_directory_tree() {
+        let workspace_dir = create_temp_workspace("planning-workspace-remove-entry");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let prompt_path = Path::new(&workspace_dir)
+            .join(".codex-exec-loop/planning/prompts/queue-idle-review.md");
+        fs::create_dir_all(
+            prompt_path
+                .parent()
+                .expect("prompt path should have a parent directory"),
+        )
+        .expect("prompt directory should be created");
+        fs::write(&prompt_path, "# prompt").expect("prompt file should write");
+        let directions_path = Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH);
+        fs::create_dir_all(
+            directions_path
+                .parent()
+                .expect("directions path should have a parent directory"),
+        )
+        .expect("directions parent should be created");
+        fs::write(&directions_path, "version = 1").expect("directions file should write");
+
+        adapter
+            .remove_planning_workspace_entry(&workspace_dir, ".codex-exec-loop/planning/prompts")
+            .expect("prompt directory should be removable");
+        adapter
+            .remove_planning_workspace_entry(&workspace_dir, DIRECTIONS_FILE_PATH)
+            .expect("directions file should be removable");
+
+        assert!(!prompt_path.exists());
+        assert!(
+            !Path::new(&workspace_dir)
+                .join(".codex-exec-loop/planning/prompts")
+                .exists()
+        );
+        assert!(!directions_path.exists());
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

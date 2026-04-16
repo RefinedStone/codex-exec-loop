@@ -7,13 +7,14 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus, PlanningServices,
-    PlanningWorkspaceInitResult,
+    PlanningResetTarget, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus, PlanningServices,
+    PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
 };
 use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;
 
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
+const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
 const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +130,16 @@ struct InitReport {
     issue: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResetReport {
+    workspace_path: String,
+    target: Option<&'static str>,
+    rewritten_paths: Vec<String>,
+    removed_paths: Vec<String>,
+    status: Option<String>,
+    issue: Option<String>,
+}
+
 impl InitReport {
     fn path_issue(workspace_path: String, issue: String) -> Self {
         Self {
@@ -172,6 +183,45 @@ impl InitReport {
     }
 }
 
+impl ResetReport {
+    fn path_issue(workspace_path: String, issue: String) -> Self {
+        Self {
+            workspace_path,
+            target: None,
+            rewritten_paths: Vec::new(),
+            removed_paths: Vec::new(),
+            status: None,
+            issue: Some(issue),
+        }
+    }
+
+    fn success(workspace_path: String, result: &PlanningWorkspaceResetResult) -> Self {
+        Self {
+            workspace_path,
+            target: Some(result.target.label()),
+            rewritten_paths: result.rewritten_paths.clone(),
+            removed_paths: result.removed_paths.clone(),
+            status: Some("planning workspace reset".to_string()),
+            issue: None,
+        }
+    }
+
+    fn failure(workspace_path: String, target: PlanningResetTarget, issue: String) -> Self {
+        Self {
+            workspace_path,
+            target: Some(target.label()),
+            rewritten_paths: Vec::new(),
+            removed_paths: Vec::new(),
+            status: None,
+            issue: Some(issue),
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        if self.issue.is_some() { 1 } else { 0 }
+    }
+}
+
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
     run_with_args(std::env::args_os().skip(1), stdout)
 }
@@ -187,6 +237,7 @@ where
         [flag] if is_help_flag(flag) => {
             writeln!(stdout, "{DOCTOR_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
+            writeln!(stdout, "{RESET_USAGE}")?;
             Ok(Some(0))
         }
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
@@ -197,11 +248,22 @@ where
         [command, workspace] if command == OsStr::new("init") => {
             Ok(Some(run_init(Some(workspace.as_os_str()), stdout)?))
         }
+        [command, target] if command == OsStr::new("reset") => {
+            Ok(Some(run_reset(target.as_os_str(), None, stdout)?))
+        }
+        [command, target, workspace] if command == OsStr::new("reset") => Ok(Some(run_reset(
+            target.as_os_str(),
+            Some(workspace.as_os_str()),
+            stdout,
+        )?)),
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
         }
         [command, _, ..] if command == OsStr::new("init") => {
             bail!("{INIT_USAGE}");
+        }
+        [command, _, _, ..] if command == OsStr::new("reset") => {
+            bail!("{RESET_USAGE}");
         }
         [command, ..] => {
             bail!("unsupported command: {}", command.to_string_lossy());
@@ -224,6 +286,18 @@ fn run_init(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i3
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     let report = initialize_workspace(&workspace_path);
     render_init_report(stdout, &report)?;
+    Ok(report.exit_code())
+}
+
+fn run_reset(
+    target_arg: &OsStr,
+    workspace_arg: Option<&OsStr>,
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    let target = parse_reset_target(target_arg)?;
+    let workspace_path = resolve_workspace_path(workspace_arg)?;
+    let report = reset_workspace(&workspace_path, target);
+    render_reset_report(stdout, &report)?;
     Ok(report.exit_code())
 }
 
@@ -314,6 +388,38 @@ fn initialize_workspace(workspace_path: &Path) -> InitReport {
     }
 }
 
+fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetReport {
+    let workspace_label = workspace_path.display().to_string();
+    if !workspace_path.exists() {
+        return ResetReport::path_issue(
+            workspace_label,
+            format!(
+                "workspace path does not exist: {}",
+                workspace_path.display()
+            ),
+        );
+    }
+    if !workspace_path.is_dir() {
+        return ResetReport::path_issue(
+            workspace_label,
+            format!(
+                "workspace path is not a directory: {}",
+                workspace_path.display()
+            ),
+        );
+    }
+
+    let planning =
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    match planning
+        .workspace
+        .reset_workspace(workspace_path.to_string_lossy().as_ref(), target)
+    {
+        Ok(result) => ResetReport::success(workspace_label, &result),
+        Err(error) => ResetReport::failure(workspace_label, target, error.to_string()),
+    }
+}
+
 fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorState {
     match snapshot.workspace_status() {
         PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningDoctorState::Absent,
@@ -379,6 +485,28 @@ fn render_init_report(stdout: &mut impl Write, report: &InitReport) -> Result<()
     Ok(())
 }
 
+fn render_reset_report(stdout: &mut impl Write, report: &ResetReport) -> Result<()> {
+    writeln!(stdout, "workspace: {}", report.workspace_path)?;
+    writeln!(stdout, "command: reset")?;
+    if let Some(target) = report.target {
+        writeln!(stdout, "target: {target}")?;
+    }
+    for rewritten_path in &report.rewritten_paths {
+        writeln!(stdout, "rewritten: {rewritten_path}")?;
+    }
+    for removed_path in &report.removed_paths {
+        writeln!(stdout, "removed: {removed_path}")?;
+    }
+    if let Some(status) = &report.status {
+        writeln!(stdout, "status: {status}")?;
+    }
+    if let Some(issue) = &report.issue {
+        writeln!(stdout, "issue: {issue}")?;
+    }
+
+    Ok(())
+}
+
 fn bootstrap_mode_label(
     mode: crate::application::service::planning::PlanningBootstrapMode,
 ) -> &'static str {
@@ -388,17 +516,34 @@ fn bootstrap_mode_label(
     }
 }
 
+fn parse_reset_target(target: &OsStr) -> Result<PlanningResetTarget> {
+    match target
+        .to_string_lossy()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "queue" => Ok(PlanningResetTarget::Queue),
+        "directions" => Ok(PlanningResetTarget::Directions),
+        "all" => Ok(PlanningResetTarget::All),
+        _ => bail!("{RESET_USAGE}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use anyhow::{Context, Result};
 
     use super::run_with_args;
+    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
     };
@@ -470,6 +615,14 @@ mod tests {
     fn init_args(workspace: &TestWorkspace) -> Vec<OsString> {
         vec![
             OsString::from("init"),
+            workspace.path.as_os_str().to_os_string(),
+        ]
+    }
+
+    fn reset_args(target: &str, workspace: &TestWorkspace) -> Vec<OsString> {
+        vec![
+            OsString::from("reset"),
+            OsString::from(target),
             workspace.path.as_os_str().to_os_string(),
         ]
     }
@@ -561,6 +714,84 @@ mod tests {
                 .join(TASK_LEDGER_FILE_PATH)
                 .exists()
         );
+    }
+
+    #[test]
+    fn reset_queue_rewrites_task_ledger_and_clears_queue_side_runtime_state() {
+        let workspace =
+            TestWorkspace::new("reset-queue").expect("test workspace should be created");
+        let planning = PlanningServices::from_workspace_port(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
+            .expect("planning workspace should initialize");
+        workspace
+            .write_file(
+                TASK_LEDGER_FILE_PATH,
+                r#"{"version":1,"tasks":[{"id":"task-1","direction_id":"general-workstream","direction_relation_note":"keep working","title":"Do work","description":"reset the queue","status":"ready","base_priority":10,"created_by":"user","last_updated_by":"user","updated_at":"2026-04-16T00:00:00Z"}]}"#,
+            )
+            .expect("task ledger should write");
+        workspace
+            .write_file(
+                ".codex-exec-loop/planning/queue.snapshot.json",
+                "{\"next_task\":null}",
+            )
+            .expect("queue snapshot should write");
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args(reset_args("queue", &workspace), &mut stdout)
+            .expect("reset should run")
+            .expect("reset should produce an exit code");
+        let output = String::from_utf8(stdout).expect("reset output should be valid utf-8");
+
+        assert_eq!(exit_code, 0);
+        assert!(output.contains("command: reset"));
+        assert!(output.contains("target: queue"));
+        assert!(output.contains(&format!("rewritten: {TASK_LEDGER_FILE_PATH}")));
+        assert!(output.contains("removed: .codex-exec-loop/planning/queue.snapshot.json"));
+        assert!(output.contains("status: planning workspace reset"));
+        assert_eq!(
+            fs::read_to_string(Path::new(&workspace.path).join(TASK_LEDGER_FILE_PATH))
+                .expect("task ledger should be readable after reset"),
+            "{\n  \"version\": 1,\n  \"tasks\": []\n}"
+        );
+        assert!(
+            !Path::new(&workspace.path)
+                .join(".codex-exec-loop/planning/queue.snapshot.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn reset_directions_refuses_when_live_tasks_exist() {
+        let workspace = TestWorkspace::new("reset-directions-blocked")
+            .expect("test workspace should be created");
+        let planning = PlanningServices::from_workspace_port(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
+            .expect("planning workspace should initialize");
+        workspace
+            .write_file(
+                TASK_LEDGER_FILE_PATH,
+                r#"{"version":1,"tasks":[{"id":"task-1","direction_id":"general-workstream","direction_relation_note":"keep working","title":"Do work","description":"reset directions","status":"ready","base_priority":10,"created_by":"user","last_updated_by":"user","updated_at":"2026-04-16T00:00:00Z"}]}"#,
+            )
+            .expect("task ledger should write");
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args(reset_args("directions", &workspace), &mut stdout)
+            .expect("reset should run")
+            .expect("reset should produce an exit code");
+        let output = String::from_utf8(stdout).expect("reset output should be valid utf-8");
+
+        assert_eq!(exit_code, 1);
+        assert!(output.contains("command: reset"));
+        assert!(output.contains("target: directions"));
+        assert!(output.contains("issue: planning directions reset is blocked by live tasks"));
     }
 
     #[test]

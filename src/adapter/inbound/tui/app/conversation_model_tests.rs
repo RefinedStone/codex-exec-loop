@@ -120,6 +120,14 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
         Err(anyhow!("unused in test"))
     }
 
+    fn remove_planning_workspace_entry(
+        &self,
+        _workspace_dir: &str,
+        _relative_path: &str,
+    ) -> Result<()> {
+        Err(anyhow!("unused in test"))
+    }
+
     fn archive_rejected_planning_file(
         &self,
         _workspace_dir: &str,

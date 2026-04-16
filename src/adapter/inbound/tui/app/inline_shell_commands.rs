@@ -7,6 +7,7 @@ pub(crate) enum InlineShellCommand {
     Stop,
     Automation,
     PlanningInit,
+    Reset,
     MaxAutoTurns,
     NewDraft,
     Help,
@@ -36,9 +37,11 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Operator commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :turns <n>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Operator commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :reset <queue|directions|all>  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "next action: type `:turns <1-50>` and press Enter to update the turn budget.";
+const RESET_USAGE: &str =
+    "next action: type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -105,6 +108,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         requires_argument: false,
     },
     InlineShellCommandSpec {
+        command: InlineShellCommand::Reset,
+        primary_name: ":reset",
+        aliases: &[":reset"],
+        suggestion_detail: "planning reset",
+        buffered_hint: RESET_USAGE,
+        execution_status: None,
+        requires_argument: true,
+    },
+    InlineShellCommandSpec {
         command: InlineShellCommand::MaxAutoTurns,
         primary_name: ":turns",
         aliases: &[":turn", ":turns", ":auto-turns"],
@@ -163,6 +175,27 @@ impl InlineShellCommandInput {
                     "next action: apply `:planning {value}` / supported arguments: on, off, doctor"
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
+            },
+            InlineShellCommand::Reset => match parse_reset_argument(self.argument()) {
+                ResetArgument::None => RESET_USAGE.to_string(),
+                ResetArgument::Queue { .. } => {
+                    "next action: reset queue-side planning state".to_string()
+                }
+                ResetArgument::Directions { confirmed: true } => {
+                    "next action: confirm the directions reset".to_string()
+                }
+                ResetArgument::Directions { confirmed: false } => {
+                    "next action: review `:reset directions confirm` before rewriting directions-side planning files".to_string()
+                }
+                ResetArgument::All { confirmed: true } => {
+                    "next action: confirm the full planning reset".to_string()
+                }
+                ResetArgument::All { confirmed: false } => {
+                    "next action: review `:reset all confirm` before replacing the full planning scaffold".to_string()
+                }
+                ResetArgument::Invalid(value) => format!(
+                    "next action: apply `:reset {value}` / supported arguments: queue, directions, all"
+                ),
             },
             InlineShellCommand::MaxAutoTurns => match self.argument() {
                 Some(value) if is_valid_max_auto_turn_argument(value) => {
@@ -304,6 +337,7 @@ impl InlineShellCommand {
 
     pub(super) fn completion_text(self) -> &'static str {
         match self {
+            InlineShellCommand::Reset => ":reset ",
             InlineShellCommand::MaxAutoTurns => ":turns ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Sessions
@@ -363,11 +397,46 @@ fn is_valid_max_auto_turn_argument(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResetArgument<'a> {
+    None,
+    Queue { confirmed: bool },
+    Directions { confirmed: bool },
+    All { confirmed: bool },
+    Invalid(&'a str),
+}
+
+fn parse_reset_argument(argument: Option<&str>) -> ResetArgument<'_> {
+    let Some(argument) = argument.map(str::trim).filter(|value| !value.is_empty()) else {
+        return ResetArgument::None;
+    };
+    let mut parts = argument.split_whitespace();
+    let Some(target) = parts.next() else {
+        return ResetArgument::None;
+    };
+    let confirmation = parts.next();
+    let confirmed = match confirmation {
+        None => false,
+        Some(value) if value.eq_ignore_ascii_case("confirm") => true,
+        Some(_) => return ResetArgument::Invalid(argument),
+    };
+    if parts.next().is_some() {
+        return ResetArgument::Invalid(argument);
+    }
+
+    match target.to_ascii_lowercase().as_str() {
+        "queue" => ResetArgument::Queue { confirmed },
+        "directions" => ResetArgument::Directions { confirmed },
+        "all" => ResetArgument::All { confirmed },
+        _ => ResetArgument::Invalid(argument),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState,
-        MAX_AUTO_TURNS_USAGE,
+        MAX_AUTO_TURNS_USAGE, RESET_USAGE,
     };
 
     #[test]
@@ -402,6 +471,14 @@ mod tests {
             (
                 ":planning-init",
                 Some((InlineShellCommand::PlanningInit, None)),
+            ),
+            (
+                ":reset queue",
+                Some((InlineShellCommand::Reset, Some("queue"))),
+            ),
+            (
+                ":reset directions confirm",
+                Some((InlineShellCommand::Reset, Some("directions confirm"))),
             ),
             (
                 ":turns 5",
@@ -441,6 +518,7 @@ mod tests {
                 InlineShellCommand::Stop,
                 InlineShellCommand::Automation,
                 InlineShellCommand::PlanningInit,
+                InlineShellCommand::Reset,
                 InlineShellCommand::MaxAutoTurns,
                 InlineShellCommand::NewDraft,
                 InlineShellCommand::Help,
@@ -457,6 +535,10 @@ mod tests {
         assert_eq!(
             InlineShellCommand::suggestions(":q"),
             vec![InlineShellCommand::Queue]
+        );
+        assert_eq!(
+            InlineShellCommand::suggestions(":r"),
+            vec![InlineShellCommand::Reset]
         );
         assert_eq!(
             InlineShellCommand::suggestions(":st"),
@@ -507,6 +589,7 @@ mod tests {
             InlineShellCommand::PlanningInit.completion_text(),
             ":planning"
         );
+        assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
         assert_eq!(
             InlineShellCommand::MaxAutoTurns.completion_text(),
             ":turns "
@@ -559,6 +642,35 @@ mod tests {
     }
 
     #[test]
+    fn reset_command_hint_is_argument_aware() {
+        let plain = InlineShellCommandInput::parse(":reset").expect("command should parse");
+        let queue = InlineShellCommandInput::parse(":reset queue").expect("command should parse");
+        let directions =
+            InlineShellCommandInput::parse(":reset directions").expect("command should parse");
+        let directions_confirm = InlineShellCommandInput::parse(":reset directions confirm")
+            .expect("command should parse");
+        let all = InlineShellCommandInput::parse(":reset all").expect("command should parse");
+
+        assert_eq!(plain.buffered_hint(), RESET_USAGE);
+        assert_eq!(
+            queue.buffered_hint(),
+            "next action: reset queue-side planning state"
+        );
+        assert_eq!(
+            directions.buffered_hint(),
+            "next action: review `:reset directions confirm` before rewriting directions-side planning files"
+        );
+        assert_eq!(
+            directions_confirm.buffered_hint(),
+            "next action: confirm the directions reset"
+        );
+        assert_eq!(
+            all.buffered_hint(),
+            "next action: review `:reset all confirm` before replacing the full planning scaffold"
+        );
+    }
+
+    #[test]
     fn execution_status_stays_alias_neutral() {
         let cases = [
             (":diag", Some("operator surface: startup checks")),
@@ -567,6 +679,7 @@ mod tests {
             (":stop", None),
             (":auto", Some("operator surface: automation controls")),
             (":planning", None),
+            (":reset queue", None),
             (":turns 5", None),
         ];
 

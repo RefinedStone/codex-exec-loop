@@ -11,7 +11,7 @@ use super::super::{
 };
 use crate::application::service::planning::PlanningRuntimeWorkspaceStatus;
 use crate::application::service::planning_contract::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, default_direction_detail_doc_path,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, TASK_LEDGER_FILE_PATH, default_direction_detail_doc_path,
 };
 
 #[test]
@@ -191,6 +191,149 @@ fn planning_doctor_command_repairs_safe_supporting_path_errors() {
 }
 
 #[test]
+fn reset_queue_command_rewrites_task_ledger_immediately() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-reset-queue-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    std::fs::write(
+        Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH),
+        r#"{"version":1,"tasks":[{"id":"task-1","direction_id":"general-workstream","direction_relation_note":"keep moving","title":"Do work","description":"Reset queue state","status":"ready","base_priority":10,"created_by":"user","last_updated_by":"user","updated_at":"2026-04-16T00:00:00Z"}]}"#,
+    )
+    .expect("task ledger should be writable");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":reset queue").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("planning reset applied / target: queue")
+    );
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH))
+            .expect("task ledger should be readable"),
+        "{\n  \"version\": 1,\n  \"tasks\": []\n}"
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn reset_directions_command_requires_confirm_before_rewriting_active_files() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-reset-directions-preview");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    rewrite_active_directions_toml(&workspace_dir, |directions| {
+        directions
+            .replace(
+                r#"detail_doc_path = """#,
+                r#"detail_doc_path = ".codex-exec-loop/planning/directions/custom.md""#,
+            )
+            .replace(
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/custom.md""#,
+            )
+    });
+    std::fs::create_dir_all(Path::new(&workspace_dir).join(".codex-exec-loop/planning/directions"))
+        .expect("directions directory should be created");
+    std::fs::write(
+        Path::new(&workspace_dir).join(".codex-exec-loop/planning/directions/custom.md"),
+        "# custom detail doc\n",
+    )
+    .expect("detail doc should be writable");
+    std::fs::write(
+        Path::new(&workspace_dir).join(".codex-exec-loop/planning/prompts/custom.md"),
+        "# custom prompt\n",
+    )
+    .expect("prompt should be writable");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":reset directions").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("reset directions preview")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains(":reset directions confirm")
+    );
+    assert!(
+        Path::new(&workspace_dir)
+            .join(".codex-exec-loop/planning/directions/custom.md")
+            .exists()
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn reset_directions_confirm_rewrites_default_direction_artifacts() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-reset-directions-confirm");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    std::fs::write(
+        Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH),
+        r#"{"version":1,"tasks":[{"id":"task-1","direction_id":"general-workstream","direction_relation_note":"done work","title":"Done work","description":"The current work is already complete","status":"done","base_priority":10,"created_by":"user","last_updated_by":"user","updated_at":"2026-04-16T00:00:00Z"}]}"#,
+    )
+    .expect("task ledger should be writable");
+    rewrite_active_directions_toml(&workspace_dir, |directions| {
+        directions.replace(
+            r#"detail_doc_path = """#,
+            r#"detail_doc_path = ".codex-exec-loop/planning/directions/custom.md""#,
+        )
+    });
+    std::fs::create_dir_all(Path::new(&workspace_dir).join(".codex-exec-loop/planning/directions"))
+        .expect("directions directory should be created");
+    std::fs::write(
+        Path::new(&workspace_dir).join(".codex-exec-loop/planning/directions/custom.md"),
+        "# custom detail doc\n",
+    )
+    .expect("detail doc should be writable");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":reset directions confirm").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("planning reset applied / target: directions")
+    );
+    let directions = std::fs::read_to_string(
+        Path::new(&workspace_dir).join(".codex-exec-loop/planning/directions.toml"),
+    )
+    .expect("directions should be readable");
+    assert!(directions.contains("general-workstream"));
+    assert!(
+        !Path::new(&workspace_dir)
+            .join(".codex-exec-loop/planning/directions/custom.md")
+            .exists()
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn planning_existing_workspace_overlay_prompts_to_turn_plan_on_before_directions() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-existing-workspace-turn-on");
@@ -246,11 +389,7 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    assert!(
-        conversation
-            .status_text
-            .contains("planning draft: staged")
-    );
+    assert!(conversation.status_text.contains("planning draft: staged"));
     assert!(conversation.status_text.contains("staged draft:"));
     assert!(conversation.status_text.contains("validation state: ok"));
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);

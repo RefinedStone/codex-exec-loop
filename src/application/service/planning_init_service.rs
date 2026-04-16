@@ -604,6 +604,24 @@ mod tests {
             Ok(())
         }
 
+        fn remove_planning_workspace_entry(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<()> {
+            let mut active_file_bodies = self
+                .active_file_bodies
+                .lock()
+                .expect("active_file_bodies mutex should not be poisoned");
+            active_file_bodies.retain(|path, _| {
+                path != relative_path
+                    && !path
+                        .strip_prefix(relative_path)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            });
+            Ok(())
+        }
+
         fn archive_rejected_planning_file(
             &self,
             _workspace_dir: &str,

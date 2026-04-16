@@ -119,6 +119,7 @@ impl NativeTuiApp {
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
             }
+            InlineShellCommand::Reset => self.handle_reset_shell_command(command_input.argument()),
             InlineShellCommand::MaxAutoTurns => {
                 let Some(value) = command_input.argument().map(str::to_string) else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {

@@ -10,6 +10,7 @@ pub(crate) mod planning_init_service;
 pub(crate) mod planning_prompt_service;
 pub(crate) mod planning_proposal_promotion_service;
 pub(crate) mod planning_reconciliation_service;
+pub(crate) mod planning_reset_service;
 pub(crate) mod planning_runtime_facade_service;
 pub(crate) mod planning_runtime_policy_service;
 pub(crate) mod planning_validation_service;

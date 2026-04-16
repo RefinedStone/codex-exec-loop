@@ -8,7 +8,10 @@ use super::super::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     ShellChromeEvent, ShellOverlay,
 };
-use crate::application::service::planning::{PlanningDoctorOutcome, PlanningDraftEditorSession};
+use crate::application::service::planning::{
+    PlanningDoctorOutcome, PlanningDraftEditorSession, PlanningResetTarget,
+    PlanningWorkspaceResetResult,
+};
 
 type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
 
@@ -392,6 +395,65 @@ impl NativeTuiApp {
                     ),
                 },
             ),
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn handle_reset_shell_command(
+        &mut self,
+        argument: Option<&str>,
+    ) {
+        let parsed = match parse_reset_shell_argument(argument) {
+            Ok(parsed) => parsed,
+            Err(usage) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: usage,
+                });
+                return;
+            }
+        };
+
+        if matches!(
+            parsed.target,
+            PlanningResetTarget::Directions | PlanningResetTarget::All
+        ) && !parsed.confirmed
+        {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: planning_reset_preview_text(parsed.target),
+            });
+            return;
+        }
+
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning
+            .workspace
+            .reset_workspace(&workspace_directory, parsed.target)
+        {
+            Ok(result) => {
+                self.stop_post_turn_automation();
+                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                    &workspace_directory,
+                );
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: planning_reset_status_text(&result),
+                });
+            }
+            Err(error) => {
+                let fallback_status = if !self
+                    .planning
+                    .workspace
+                    .has_planning_workspace(&workspace_directory)
+                    .unwrap_or(false)
+                {
+                    self.show_planning_init_overlay();
+                    "planning workspace missing; open :planning to initialize it".to_string()
+                } else {
+                    format!("planning reset failed: {error}")
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: fallback_status,
+                });
+            }
         }
     }
 
@@ -1149,4 +1211,75 @@ fn planning_doctor_status_text(outcome: &PlanningDoctorOutcome) -> String {
     } else {
         format!("{leading_text} / remaining: planning validation failed")
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedResetShellCommand {
+    target: PlanningResetTarget,
+    confirmed: bool,
+}
+
+fn parse_reset_shell_argument(argument: Option<&str>) -> Result<ParsedResetShellCommand, String> {
+    let Some(argument) = argument.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err(
+            "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                .to_string(),
+        );
+    };
+    let mut parts = argument.split_whitespace();
+    let Some(target) = parts.next() else {
+        return Err(
+            "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                .to_string(),
+        );
+    };
+    let confirmation = parts.next();
+    let confirmed = match confirmation {
+        None => false,
+        Some(value) if value.eq_ignore_ascii_case("confirm") => true,
+        Some(_) => {
+            return Err(
+                "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                    .to_string(),
+            );
+        }
+    };
+    if parts.next().is_some() {
+        return Err(
+            "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                .to_string(),
+        );
+    }
+    let target = match target.to_ascii_lowercase().as_str() {
+        "queue" => PlanningResetTarget::Queue,
+        "directions" => PlanningResetTarget::Directions,
+        "all" => PlanningResetTarget::All,
+        _ => {
+            return Err(
+                "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                    .to_string(),
+            );
+        }
+    };
+    Ok(ParsedResetShellCommand { target, confirmed })
+}
+
+fn planning_reset_preview_text(target: PlanningResetTarget) -> String {
+    match target {
+        PlanningResetTarget::Queue => {
+            "reset queue preview: rewrites task-ledger.json and clears derived queue state"
+                .to_string()
+        }
+        PlanningResetTarget::Directions => "reset directions preview: rewrites directions.toml, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue".to_string(),
+        PlanningResetTarget::All => "reset all preview: replaces the full active planning scaffold, clears derived queue state, and turns Plan back on / rerun `:reset all confirm` to continue".to_string(),
+    }
+}
+
+fn planning_reset_status_text(result: &PlanningWorkspaceResetResult) -> String {
+    format!(
+        "planning reset applied / target: {} / rewritten: {} / removed: {}",
+        result.target.label(),
+        result.rewritten_paths.len(),
+        result.removed_paths.len(),
+    )
 }

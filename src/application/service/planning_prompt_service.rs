@@ -984,6 +984,14 @@ mod tests {
             unreachable!("file replacement is not used in planning prompt service tests")
         }
 
+        fn remove_planning_workspace_entry(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<()> {
+            unreachable!("entry removal is not used in planning prompt service tests")
+        }
+
         fn archive_rejected_planning_file(
             &self,
             _workspace_dir: &str,
