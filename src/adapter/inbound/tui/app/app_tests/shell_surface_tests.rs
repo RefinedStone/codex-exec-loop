@@ -247,8 +247,16 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
     assert!(preview.contains("current state:"));
     assert!(preview.contains("cause:"));
     assert!(preview.contains("next action:"));
+    assert!(preview.contains("now: Implement shell planning status"));
+    assert!(preview.contains("next: Trim legacy shell code"));
+    assert!(preview.contains("proposed: none"));
+    assert!(preview.contains("blocked: Follow blocked review thread"));
     assert!(preview.contains("Rendered Next-Turn Prompt"));
     assert!(status.contains("automation state: on"));
+    assert!(status.contains("now: Implement shell planning status"));
+    assert!(status.contains("next: Trim legacy shell code"));
+    assert!(status.contains("proposed: none"));
+    assert!(status.contains("blocked: Follow blocked review thread"));
     assert!(keys.contains("Ctrl+a toggles automation"));
 }
 
@@ -308,6 +316,10 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
         vec!["planner queue changed shape after reconciliation".to_string()];
     conversation.warnings = conversation.base_warnings.clone();
     conversation.runtime_notices = vec!["planning reconciliation completed".to_string()];
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
+    ));
 
     let rendered = build_automation_status_lines(&app)
         .iter()
@@ -319,6 +331,10 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
     assert!(rendered.contains("current state:"));
     assert!(rendered.contains("cause:"));
     assert!(rendered.contains("next action:"));
+    assert!(rendered.contains("now: Implement shell planning status"));
+    assert!(rendered.contains("next: Trim legacy shell code"));
+    assert!(rendered.contains("proposed: none"));
+    assert!(rendered.contains("blocked: Follow blocked review thread"));
     assert!(rendered.contains(
         "operator status: turn completed / automation queued the next turn / planning queue"
     ));
@@ -1194,6 +1210,35 @@ fn inline_tail_uses_canonical_planning_summary_and_plan_badge() {
     assert!(rendered.contains("current state: review needed"));
     assert!(rendered.contains("cause: planning has proposals"));
     assert!(rendered.contains("next action: review the queue"));
+    assert!(rendered.contains("now: none"));
+    assert!(rendered.contains("next: none"));
+    assert!(rendered.contains("proposed: Draft queue review"));
+    assert!(rendered.contains("blocked: none"));
+}
+
+#[test]
+fn inline_tail_surfaces_now_next_proposed_and_blocked_queue_state() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::ready(ready_conversation());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "next task: task-1",
+    ));
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("now: Implement shell planning status"));
+    assert!(rendered.contains("next: Trim legacy shell code"));
+    assert!(rendered.contains("proposed: none"));
+    assert!(rendered.contains("blocked: Follow blocked review thread"));
 }
 
 #[test]

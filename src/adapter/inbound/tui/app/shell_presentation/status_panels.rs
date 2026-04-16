@@ -3,6 +3,7 @@ use ratatui::text::{Line, Span};
 
 use super::super::planning::{
     build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
+    build_queue_framing_lines,
 };
 use super::{
     ConversationInputState, ConversationState, ConversationViewModel,
@@ -137,6 +138,10 @@ pub(super) fn build_shell_footer_lines_with_context(
             if let Some(planning_line) = planning_summary_line {
                 lines.push(Line::from(planning_line));
             }
+            lines.extend(build_queue_framing_lines(
+                conversation,
+                FOOTER_NOTICE_DETAIL_LIMIT,
+            ));
             if let Some(planning_notice_line) = planning_notice_line {
                 lines.push(Line::from(planning_notice_line));
             }
@@ -309,6 +314,10 @@ fn build_inline_tail_lines_with_context(
             if let Some(planning_line) = planning_summary_line {
                 lines.push(Line::from(planning_line));
             }
+            lines.extend(build_queue_framing_lines(
+                conversation,
+                INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+            ));
             if let Some(planning_notice_line) = planning_notice_line {
                 lines.push(Line::from(planning_notice_line));
             }

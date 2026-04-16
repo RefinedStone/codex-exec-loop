@@ -61,6 +61,94 @@ pub(crate) fn build_planning_notice_line(
         })
 }
 
+pub(crate) fn build_queue_framing_lines(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> Vec<Line<'static>> {
+    let snapshot = &conversation.planning_runtime_snapshot;
+    let queue_snapshot = snapshot.queue_snapshot();
+    let has_queue_context = snapshot.workspace_present()
+        || snapshot.queue_head().is_some()
+        || snapshot.proposal_summary().is_some()
+        || queue_snapshot.is_some();
+    if !has_queue_context {
+        return Vec::new();
+    }
+
+    let now_detail = queue_snapshot
+        .and_then(|queue_snapshot| queue_snapshot.next_task.as_ref())
+        .or_else(|| snapshot.queue_head())
+        .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
+        .unwrap_or_else(|| "none".to_string());
+
+    let next_detail = queue_snapshot
+        .map(|queue_snapshot| {
+            let remaining_tasks = queue_snapshot
+                .next_task
+                .as_ref()
+                .map(|current| {
+                    queue_snapshot
+                        .active_tasks
+                        .iter()
+                        .filter(|task| task.task_id != current.task_id)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| queue_snapshot.active_tasks.iter().collect::<Vec<_>>());
+            remaining_tasks
+                .first()
+                .map(|task| {
+                    compact_queue_task_summary(
+                        task.task_title.as_str(),
+                        remaining_tasks.len(),
+                        1,
+                        max_detail_len,
+                    )
+                })
+                .unwrap_or_else(|| "none".to_string())
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    let proposed_detail = queue_snapshot
+        .and_then(|queue_snapshot| {
+            queue_snapshot.proposed_tasks.first().map(|task| {
+                compact_queue_task_summary(
+                    task.task_title.as_str(),
+                    queue_snapshot.proposed_tasks.len(),
+                    1,
+                    max_detail_len,
+                )
+            })
+        })
+        .or_else(|| {
+            snapshot
+                .proposal_summary()
+                .map(|summary| compact_proposal_summary_detail(summary, max_detail_len))
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    let blocked_detail = queue_snapshot
+        .and_then(|queue_snapshot| {
+            queue_snapshot.skipped_tasks.first().map(|task| {
+                let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
+                let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
+                let mut summary = format!("{title} ({reason})");
+                let hidden_count = queue_snapshot.skipped_tasks.len().saturating_sub(1);
+                if hidden_count > 0 {
+                    summary.push_str(&format!(" (+{hidden_count} more)"));
+                }
+                summary
+            })
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    vec![
+        Line::from(format!("now: {now_detail}  |  next: {next_detail}")),
+        Line::from(format!(
+            "proposed: {proposed_detail}  |  blocked: {blocked_detail}"
+        )),
+    ]
+}
+
 pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
     if !app.planner_shows_debug_details() {
         return Vec::new();
@@ -153,6 +241,10 @@ pub(crate) fn build_automation_preview_lines(app: &NativeTuiApp) -> Vec<Line<'st
             lines.push(Line::from(preview.current_state_line));
             lines.push(Line::from(preview.cause_line));
             lines.push(Line::from(preview.next_action_line));
+            lines.extend(build_queue_framing_lines(
+                conversation,
+                AUTOMATION_PLANNING_DETAIL_LIMIT,
+            ));
 
             lines.push(Line::from(""));
             lines.push(Line::from("Rendered Next-Turn Prompt"));
@@ -264,9 +356,9 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             let cause_line = planning_projection.cause_line;
             let next_action_line = planning_projection.next_action_line;
             let repair_attempt_line = planning_projection.repair_attempt_line;
-            let queue_head_line = planning_projection.queue_head_line;
-            let proposal_line = planning_projection.proposal_line;
             let failure_line = planning_projection.failure_line;
+            let queue_framing_lines =
+                build_queue_framing_lines(conversation, AUTOMATION_PLANNING_DETAIL_LIMIT);
             let mut lines = vec![
                 Line::from(format!(
                     "automation state: {} / {}",
@@ -316,9 +408,10 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                     if let Some(github_review_summary) = github_review_summary.as_deref() {
                         activity_line.push_str(&format!("  |  github: {github_review_summary}"));
                     }
-                    activity_line
+                        activity_line
                 }),
             ];
+            lines.extend(queue_framing_lines);
             if let Some(started_at) = conversation.auto_follow_state.active_started_at() {
                 let elapsed = std::time::Instant::now().saturating_duration_since(started_at);
                 let elapsed_label = super::super::shell_presentation::format_elapsed(elapsed);
@@ -329,12 +422,6 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             }
             if let Some(repair_attempt_line) = repair_attempt_line {
                 lines.push(Line::from(repair_attempt_line));
-            }
-            if let Some(queue_head_line) = queue_head_line {
-                lines.push(Line::from(queue_head_line));
-            }
-            if let Some(proposal_line) = proposal_line {
-                lines.push(Line::from(proposal_line));
             }
             if let Some(failure_line) = failure_line {
                 lines.push(Line::from(failure_line));
@@ -388,4 +475,26 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             lines
         }
     }
+}
+
+fn compact_queue_task_summary(
+    task_title: &str,
+    total_count: usize,
+    shown_count: usize,
+    max_detail_len: usize,
+) -> String {
+    let mut summary = compact_whitespace_detail(task_title.trim(), max_detail_len);
+    let hidden_count = total_count.saturating_sub(shown_count);
+    if hidden_count > 0 {
+        summary.push_str(&format!(" (+{hidden_count} more)"));
+    }
+    summary
+}
+
+fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
+    let detail = summary
+        .split_once(": ")
+        .map(|(_, detail)| detail)
+        .unwrap_or(summary);
+    compact_whitespace_detail(detail, max_detail_len)
 }
