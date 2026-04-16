@@ -37,8 +37,10 @@ pub(crate) struct AutomationOverlayView {
 pub(crate) struct QueueOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) summary_lines: Vec<Line<'static>>,
-    pub(crate) queue_lines: Vec<Line<'static>>,
-    pub(crate) proposal_lines: Vec<Line<'static>>,
+    pub(crate) now_lines: Vec<Line<'static>>,
+    pub(crate) next_lines: Vec<Line<'static>>,
+    pub(crate) proposed_lines: Vec<Line<'static>>,
+    pub(crate) blocked_lines: Vec<Line<'static>>,
     pub(crate) note_lines: Vec<Line<'static>>,
     pub(crate) key_lines: Vec<Line<'static>>,
 }

@@ -3,17 +3,17 @@ use std::rc::Rc;
 use ratatui::layout::Position;
 
 use super::shell_presentation::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, build_automation_overlay_view, build_directions_maintenance_overlay_view,
+    build_automation_overlay_view, build_directions_maintenance_overlay_view,
     build_inline_tail_view, build_planning_draft_editor_overlay_view,
     build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view,
+    build_startup_overlay_view, AutomationOverlayView, DirectionsMaintenanceOverlayView,
+    OverlayListView, PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView,
+    SessionOverlayView, StartupOverlayView,
 };
 #[cfg(test)]
 use super::shell_presentation::{
-    ConversationShellFrameView, build_conversation_shell_frame_view,
-    build_input_prompt_cursor_offset,
+    build_conversation_shell_frame_view, build_input_prompt_cursor_offset,
+    ConversationShellFrameView,
 };
 use super::*;
 
@@ -595,20 +595,24 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     let QueueOverlayView {
         header_lines,
         summary_lines,
-        queue_lines,
-        proposal_lines,
+        now_lines,
+        next_lines,
+        proposed_lines,
+        blocked_lines,
         note_lines,
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
-    let mut content_lines = vec![Line::from("Ready Queue")];
-    content_lines.extend(queue_lines);
-    if !proposal_lines.is_empty() {
-        content_lines.push(Line::from("Proposals"));
-        content_lines.extend(proposal_lines);
-    }
+    let mut content_lines = vec![Line::from("Now")];
+    content_lines.extend(now_lines);
+    content_lines.push(Line::from("Next"));
+    content_lines.extend(next_lines);
+    content_lines.push(Line::from("Proposed"));
+    content_lines.extend(proposed_lines);
+    content_lines.push(Line::from("Blocked"));
+    content_lines.extend(blocked_lines);
     if !note_lines.is_empty() {
-        content_lines.push(Line::from("Notes"));
+        content_lines.push(Line::from("Planner Updates"));
         content_lines.extend(note_lines);
     }
     let layout = Layout::default()
@@ -638,7 +642,7 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     render_inline_section(
         frame,
         layout[2],
-        Line::from("Planning Queue Detail"),
+        Line::from("Now, Next, Proposed, and Blocked Work"),
         content_lines,
         false,
     );

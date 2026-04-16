@@ -245,8 +245,10 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Ready Queue"));
-    assert!(rendered.contains("Proposals"));
+    assert!(rendered.contains("Now"));
+    assert!(rendered.contains("Next"));
+    assert!(rendered.contains("Proposed"));
+    assert!(rendered.contains("Blocked"));
 }
 
 fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {

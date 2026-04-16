@@ -16,17 +16,17 @@ use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FI
 use crate::domain::planning::QueueIdlePolicy;
 
 use super::{
-    ConversationInputState, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
-    KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
-    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellFrontendMode,
-    ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines,
+    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
     build_conversation_shell_frame_view, build_conversation_shell_view, build_inline_tail_lines,
     build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
     build_session_overlay_view, build_startup_overlay_view, create_temp_workspace, make_test_app,
     ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
-    sample_startup_diagnostics,
+    sample_proposal_only_planning_runtime_snapshot, sample_startup_diagnostics,
+    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
+    KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
+    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellFrontendMode,
+    ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH,
 };
 
 #[test]
@@ -64,13 +64,11 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
         },
     ));
 
-    assert!(
-        codex_port
-            .turn_calls
-            .lock()
-            .expect("turn call mutex poisoned")
-            .is_empty()
-    );
+    assert!(codex_port
+        .turn_calls
+        .lock()
+        .expect("turn call mutex poisoned")
+        .is_empty());
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
@@ -80,12 +78,10 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
             .preview_status_label(),
         "blocked"
     );
-    assert!(
-        conversation
-            .planning_runtime_snapshot
-            .preview_detail()
-            .is_some_and(|detail| detail.contains("stale planning snapshot"))
-    );
+    assert!(conversation
+        .planning_runtime_snapshot
+        .preview_detail()
+        .is_some_and(|detail| detail.contains("stale planning snapshot")));
     assert!(conversation.runtime_notices.iter().any(|notice| {
         notice.contains(&stale_workspace) && notice.contains(&current_workspace)
     }));
@@ -186,11 +182,9 @@ fn automation_inline_command_opens_overlay() {
     };
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Automation);
     assert!(conversation.input_buffer.is_empty());
-    assert!(
-        conversation
-            .status_text
-            .contains("operator surface: automation controls")
-    );
+    assert!(conversation
+        .status_text
+        .contains("operator surface: automation controls"));
 }
 
 #[test]
@@ -554,8 +548,12 @@ fn directions_maintenance_status_lines_use_canonical_operator_labels() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(overview_status.contains("direction coverage: 1 total / 1 missing docs / 0 broken docs"));
-    assert!(overview_status.contains("queue idle rule: policy review_and_enqueue / prompt state: unset / prompt path: <none>"));
+    assert!(
+        overview_status.contains("direction coverage: 1 total / 1 missing docs / 0 broken docs")
+    );
+    assert!(overview_status.contains(
+        "queue idle rule: policy review_and_enqueue / prompt state: unset / prompt path: <none>"
+    ));
     assert!(overview_status.contains("direction parsing: ok"));
 
     app.directions_maintenance_overlay_ui_state
@@ -629,9 +627,95 @@ fn queue_overlay_uses_current_state_cause_and_next_action_summary() {
 
     assert!(rendered.contains("current state: review needed"));
     assert!(rendered.contains("cause: planning has proposals but no executable next task"));
-    assert!(
-        rendered.contains("next action: review the queue and promote the next actionable task")
-    );
+    assert!(rendered.contains("next action: review the queue and promote the next actionable task"));
+}
+
+#[test]
+fn queue_overlay_reframes_detail_as_now_next_proposed_and_blocked_work() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context",
+        "next task: task-1",
+    ));
+
+    let queue_view = build_queue_overlay_view(&app);
+    let now_lines = queue_view
+        .now_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let next_lines = queue_view
+        .next_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let proposed_lines = queue_view
+        .proposed_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let blocked_lines = queue_view
+        .blocked_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(now_lines.contains("Implement shell planning status"));
+    assert!(next_lines.contains("Trim legacy shell code"));
+    assert!(proposed_lines.contains("No proposed work is waiting for review."));
+    assert!(blocked_lines.contains("Follow blocked review thread"));
+    assert!(blocked_lines.contains("blocked by tasks: task-2(in_progress)"));
+}
+
+#[test]
+fn queue_overlay_shows_proposal_only_state_without_now_or_next_work() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
+        "Planning Context",
+        "queue idle: no executable planning task",
+        "1 promotable follow-up proposal available: Draft a queue inspection overlay",
+    ));
+
+    let queue_view = build_queue_overlay_view(&app);
+    let now_lines = queue_view
+        .now_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let next_lines = queue_view
+        .next_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let proposed_lines = queue_view
+        .proposed_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let blocked_lines = queue_view
+        .blocked_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(now_lines.contains("No work is actionable now."));
+    assert!(next_lines.contains("No additional queued work is next in line."));
+    assert!(proposed_lines.contains("Draft a queue inspection overlay"));
+    assert!(blocked_lines.contains("No blocked work is holding the queue right now."));
 }
 
 #[test]
@@ -698,10 +782,8 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
     assert!(waiting_list.contains("waiting for startup checks"));
     assert!(waiting_detail.contains("current state: waiting"));
     assert!(waiting_detail.contains("cause: startup checks have not finished yet"));
-    assert!(
-        waiting_detail
-            .contains("next action: wait for startup checks to finish, then load recent sessions")
-    );
+    assert!(waiting_detail
+        .contains("next action: wait for startup checks to finish, then load recent sessions"));
 
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", false));
     app.session_state = SessionState::Idle;
@@ -713,10 +795,8 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(blocked_idle_detail.contains("current state: blocked"));
-    assert!(
-        blocked_idle_detail
-            .contains("cause: startup checks must succeed before recent sessions are available")
-    );
+    assert!(blocked_idle_detail
+        .contains("cause: startup checks must succeed before recent sessions are available"));
     assert!(blocked_idle_detail.contains(
         "next action: open startup checks with Ctrl+d, fix them, then reload recent sessions"
     ));
@@ -771,9 +851,7 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
 
     assert!(failed_list.contains("recent sessions blocked"));
     assert!(failed_detail.contains("current state: blocked"));
-    assert!(
-        failed_detail.contains("cause: recent sessions are unavailable because loading failed")
-    );
+    assert!(failed_detail.contains("cause: recent sessions are unavailable because loading failed"));
     assert!(failed_detail.contains("next action: press r to retry, or start a new draft with n"));
     assert!(failed_detail.contains("recent sessions error: request timed out"));
     assert!(keys.contains("r reloads recent sessions"));
@@ -823,11 +901,9 @@ fn selected_session_detail_uses_operator_facing_metadata_labels() {
     assert!(detail.contains("latest preview"));
     assert!(detail.contains("session file: /tmp/root/thread-1.json"));
     assert!(detail.contains("more threads are available in the next cursor"));
-    assert!(
-        !detail_lines
-            .iter()
-            .any(|line| line.starts_with("updated: "))
-    );
+    assert!(!detail_lines
+        .iter()
+        .any(|line| line.starts_with("updated: ")));
     assert!(!detail_lines.iter().any(|line| line.starts_with("source: ")));
     assert!(!detail_lines.iter().any(|line| line.starts_with("status: ")));
     assert!(!detail.contains("\npreview\n"));
@@ -907,9 +983,7 @@ fn loading_and_blocked_shell_views_use_canonical_operator_copy() {
 
     assert!(loading_header.contains("Conversation Shell / waiting"));
     assert!(loading_header.contains("current state: waiting"));
-    assert!(
-        loading_header.contains("cause: thread history is still loading from codex app-server")
-    );
+    assert!(loading_header.contains("cause: thread history is still loading from codex app-server"));
     assert!(loading_header.contains("next action: wait for the thread history to load"));
     assert_eq!(loading_view.input_title.to_string(), "Prompt / waiting");
     assert!(loading_transcript.contains("current state: waiting"));
