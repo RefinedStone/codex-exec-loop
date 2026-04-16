@@ -7,6 +7,7 @@ use crate::application::port::outbound::planning_workspace_port::PlanningWorkspa
 
 use super::planning_bootstrap_service::PlanningBootstrapService;
 use super::planning_directions_service::PlanningDirectionsService;
+use super::planning_doctor_service::PlanningDoctorService;
 use super::planning_init_service::PlanningInitService;
 use super::planning_prompt_service::PlanningPromptService;
 use super::planning_proposal_promotion_service::PlanningProposalPromotionService;
@@ -26,6 +27,7 @@ pub use super::planning_directions_service::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
 };
+pub use super::planning_doctor_service::{PlanningDoctorReport, PlanningDoctorState};
 pub use super::planning_init_service::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
     PlanningDraftSaveResult, PlanningInitStageResult, PlanningWorkspaceInitResult,
@@ -85,6 +87,7 @@ impl PlanningFeature {
             validation_service.clone(),
             priority_queue_service.clone(),
         );
+        let doctor_service = PlanningDoctorService::new(planning_prompt_service.clone());
         let planning_reconciliation_service = PlanningReconciliationService::new(
             planning_workspace_port.clone(),
             validation_service.clone(),
@@ -108,6 +111,7 @@ impl PlanningFeature {
             workspace: PlanningWorkspaceUseCases::new(
                 init_service,
                 reset_service,
+                doctor_service,
                 directions_service.clone(),
             ),
             runtime: PlanningRuntimeUseCases::new(runtime_facade.clone()),
@@ -128,6 +132,7 @@ impl PlanningFeature {
 pub struct PlanningWorkspaceUseCases {
     init_service: PlanningInitService,
     reset_service: PlanningResetService,
+    doctor_service: PlanningDoctorService,
     directions_service: PlanningDirectionsService,
 }
 
@@ -135,11 +140,13 @@ impl PlanningWorkspaceUseCases {
     fn new(
         init_service: PlanningInitService,
         reset_service: PlanningResetService,
+        doctor_service: PlanningDoctorService,
         directions_service: PlanningDirectionsService,
     ) -> Self {
         Self {
             init_service,
             reset_service,
+            doctor_service,
             directions_service,
         }
     }
@@ -161,6 +168,10 @@ impl PlanningWorkspaceUseCases {
         target: PlanningResetTarget,
     ) -> anyhow::Result<PlanningWorkspaceResetResult> {
         self.reset_service.reset_workspace(workspace_dir, target)
+    }
+
+    pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
+        self.doctor_service.inspect_workspace(workspace_dir)
     }
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> anyhow::Result<()> {
@@ -256,10 +267,6 @@ impl PlanningWorkspaceUseCases {
     ) -> anyhow::Result<PlanningDraftEditorSession> {
         self.directions_service
             .stage_queue_idle_prompt_editor_session(workspace_dir)
-    }
-
-    pub fn doctor_workspace(&self, workspace_dir: &str) -> anyhow::Result<PlanningDoctorOutcome> {
-        self.directions_service.doctor_workspace(workspace_dir)
     }
 }
 

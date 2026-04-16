@@ -6,6 +6,7 @@ pub mod planning_auto_follow_copy;
 pub(crate) mod planning_bootstrap_service;
 pub mod planning_contract;
 pub(crate) mod planning_directions_service;
+pub(crate) mod planning_doctor_service;
 pub(crate) mod planning_init_service;
 pub(crate) mod planning_prompt_service;
 pub(crate) mod planning_proposal_promotion_service;
