@@ -243,7 +243,7 @@ impl NativeTuiApp {
             PlanningInitOverlayStep::DetailSelection => match key.code {
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
                     .planning_init_overlay_ui_state
-                    .return_to_mode_selection(),
+                    .return_from_detail_selection(),
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
                     .planning_init_overlay_ui_state
                     .move_detail_selection(-1),
@@ -278,21 +278,31 @@ impl NativeTuiApp {
                 }
                 _ => {}
             },
-            PlanningInitOverlayStep::SimpleReview => match key.code {
-                KeyCode::Enter if key.modifiers.is_empty() => {
-                    self.promote_simple_mode_planning_draft()
+            PlanningInitOverlayStep::SimpleReview => {
+                match key.code {
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        self.promote_simple_mode_planning_draft()
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D')
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.planning_init_overlay_ui_state.open_detail_selection();
+                        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: "planning detail authoring: choose how the advanced draft should open".to_string(),
+                    });
+                    }
+                    KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.start_max_auto_turns_edit()
+                    }
+                    KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.open_simple_mode_planning_editor()
+                    }
+                    KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.promote_simple_mode_planning_draft()
+                    }
+                    _ => {}
                 }
-                KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
-                    self.start_max_auto_turns_edit()
-                }
-                KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
-                    self.open_simple_mode_planning_editor()
-                }
-                KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
-                    self.promote_simple_mode_planning_draft()
-                }
-                _ => {}
-            },
+            }
             PlanningInitOverlayStep::ManualEditor => {
                 if self.handle_planning_manual_editor_close_confirmation_key(key) {
                     return true;
@@ -379,12 +389,41 @@ impl NativeTuiApp {
         });
     }
 
+    pub(in crate::adapter::inbound::tui::app) fn open_first_run_planning_simple_review(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        self.planning_init_overlay_ui_state
+            .open_command_center_mode_selection();
+        self.planning_draft_editor_ui_state.reset();
+        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        self.stage_simple_mode_planning_init_draft();
+    }
+
     pub(in crate::adapter::inbound::tui::app) fn handle_planning_shell_command(
         &mut self,
         argument: Option<&str>,
     ) {
         match argument.map(str::trim).filter(|value| !value.is_empty()) {
-            None => self.show_planning_init_overlay(),
+            None => {
+                let workspace_directory = self.planning_workspace_directory();
+                match self
+                    .planning
+                    .workspace
+                    .has_planning_workspace(&workspace_directory)
+                {
+                    Ok(true) => self.show_planning_init_overlay(),
+                    Ok(false) => self.open_first_run_planning_simple_review(),
+                    Err(error) => {
+                        self.dispatch_conversation_input(
+                            ConversationInputEvent::StatusMessageShown {
+                                status_text: format!("planning setup unavailable: {error}"),
+                            },
+                        );
+                    }
+                }
+            }
             Some(value) if value.eq_ignore_ascii_case("off") => self.turn_plan_off(),
             Some(value) if value.eq_ignore_ascii_case("on") => self.turn_plan_on(),
             Some(value) if value.eq_ignore_ascii_case("doctor") => self.handle_doctor_shell_command(),
@@ -434,11 +473,7 @@ impl NativeTuiApp {
                 });
             }
             Ok(false) => {
-                self.planning_init_overlay_ui_state
-                    .open_command_center_mode_selection();
-                self.planning_draft_editor_ui_state.reset();
-                self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
-                self.stage_simple_mode_planning_init_draft();
+                self.open_first_run_planning_simple_review();
             }
             Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -947,7 +982,7 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state
                     .open_simple_review(stage_result);
                 format!(
-                    "planning draft: staged / staged draft: {} / validation state: {} / next action: Enter or Ctrl+P promotes the staged scaffold. Ctrl+E inspects the draft.",
+                    "planning simple review ready / staged draft: {} / validation state: {} / next action: Enter or Ctrl+P promotes the low-ceremony scaffold. Ctrl+E inspects the draft. D opens detail-mode authoring.",
                     draft_name,
                     if validation_ok {
                         "ok"

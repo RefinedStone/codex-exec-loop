@@ -255,7 +255,7 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
         count_staged_planning_drafts(&startup_workspace_dir),
         startup_draft_count
     );
-    assert_eq!(count_staged_planning_drafts(&workspace_dir), 1);
+    assert_eq!(count_staged_planning_drafts(&workspace_dir), 2);
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));

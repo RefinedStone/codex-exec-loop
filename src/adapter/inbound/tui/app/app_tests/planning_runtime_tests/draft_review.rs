@@ -33,7 +33,11 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
         panic!("app should stay in ready state");
     };
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-    assert!(conversation.status_text.contains("planning draft: promoted"));
+    assert!(
+        conversation
+            .status_text
+            .contains("planning draft: promoted")
+    );
     assert!(conversation.status_text.contains("promoted files:"));
     assert_eq!(
         conversation
@@ -245,8 +249,7 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
     app.execute_inline_shell_command_input(
         InlineShellCommandInput::parse(":planning").expect("command should parse"),
     );
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE,)));
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
         PlanningInitOverlayStep::DetailSelection
@@ -268,5 +271,28 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
     );
     assert!(app.planning_draft_editor_ui_state.is_open());
     assert!(staged_drafts_dir.exists());
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_detail_selection_can_return_to_simple_review() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-detail-return-simple-review");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+
+    open_planning_simple_review(&mut app);
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::DetailSelection
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE,)));
+    assert_eq!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::SimpleReview
+    );
+
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

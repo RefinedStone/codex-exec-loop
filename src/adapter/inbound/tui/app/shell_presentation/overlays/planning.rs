@@ -1,5 +1,5 @@
-use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
 use super::super::super::planning::build_queue_framing_lines_from_snapshot;
+use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
 use super::super::status_panels::plan_runtime_substate_label;
 use super::super::{
     Color, ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, Line, Modifier, NativeTuiApp,
@@ -28,10 +28,8 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             let failure_summary = snapshot
                 .failure_reason()
                 .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
-            let queue_framing_lines = build_queue_framing_lines_from_snapshot(
-                &snapshot,
-                FOOTER_NOTICE_DETAIL_LIMIT,
-            );
+            let queue_framing_lines =
+                build_queue_framing_lines_from_snapshot(&snapshot, FOOTER_NOTICE_DETAIL_LIMIT);
             let mut option_lines = vec![
                 Line::from(format!("workspace: {workspace_directory}")),
                 Line::from(format!("planning state: {plan_state_label}")),
@@ -57,7 +55,9 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     Line::from(
                         "next action: Enter turns Plan on and resumes the existing planning workspace.",
                     ),
-                    Line::from("other actions: directions maintenance stays blocked while Plan off."),
+                    Line::from(
+                        "other actions: directions maintenance stays blocked while Plan off.",
+                    ),
                 ]
             };
 
@@ -208,9 +208,6 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             let draft_name = simple_review
                 .map(|review| review.draft_name().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
-            let draft_directory = simple_review
-                .map(|review| review.draft_directory().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
             let staged_file_count = simple_review
                 .map(|review| review.staged_file_count())
                 .unwrap_or_default();
@@ -234,26 +231,30 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "Simple mode review: inspect the staged generic scaffold before it becomes active planning.",
+                        "Simple mode review: promote the lightest planning baseline before you invest in richer authoring.",
                     ),
                 ],
                 summary_lines: vec![
                     Line::from(
-                        "Simple mode keeps the direction catalog generic and leaves the task ledger empty.",
+                        "After promote, planning starts with one generic direction and no active queue task yet.",
                     ),
                     Line::from(
-                        "It also stages a default queue-idle review prompt so the first reply can seed justified follow-up work.",
+                        "The default queue-idle review prompt is already staged so the first reply can justify follow-up work when needed.",
                     ),
                     Line::from(
-                        "No active planning files change until you explicitly promote this staged draft.",
+                        "No active planning files change until you explicitly promote this review.",
                     ),
                 ],
                 option_lines: vec![
                     Line::from(format!("staged draft: {draft_name}")),
-                    Line::from(format!("draft dir: {draft_directory}")),
-                    Line::from(format!("staged files: {staged_file_count}")),
+                    Line::from(format!(
+                        "reviewed artifacts: {staged_file_count} staged planning files"
+                    )),
                     Line::from(
-                        "next action: use Ctrl+E to inspect or edit the staged files before promote.",
+                        "promote outcome: generic direction catalog, empty task ledger, and default queue-idle review prompt",
+                    ),
+                    Line::from(
+                        "advanced path: press D to branch into detail-mode authoring instead of promoting the simple scaffold",
                     ),
                 ],
                 status_lines: {
@@ -283,6 +284,9 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         lines.push(Line::from(
                             "alternate action: Esc closes this review and leaves the staged draft on disk.",
                         ));
+                        lines.push(Line::from(
+                            "advanced action: D opens detail-mode authoring without promoting the simple scaffold.",
+                        ));
                     }
                     if let Some(first_error) = first_error {
                         lines.push(Line::from(format!("first validation error: {first_error}")));
@@ -292,13 +296,17 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 key_lines: if app.is_max_auto_turns_editing() {
                     vec![
                         Line::from("next action: type the new turn budget directly."),
-                        Line::from("controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes"),
+                        Line::from(
+                            "controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes",
+                        ),
                         Line::from("validation: use a whole number between 1 and 50."),
                     ]
                 } else {
                     vec![
                         Line::from("Enter or Ctrl+P promotes the staged scaffold."),
-                        Line::from("Ctrl+L edits turn budget. Ctrl+E inspects or edits the draft."),
+                        Line::from(
+                            "D opens detail-mode authoring. Ctrl+L edits turn budget. Ctrl+E inspects or edits the draft.",
+                        ),
                         Line::from("Esc/Ctrl+C closes this review."),
                     ]
                 },

@@ -540,8 +540,11 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
     assert!(header.contains("Planning Setup / operator inspection"));
     assert!(header.contains("Simple mode review"));
     assert!(options.contains("bootstrap-1"));
+    assert!(options.contains("advanced path"));
     assert!(status.contains("turn budget: 3"));
+    assert!(status.contains("advanced action: D opens detail-mode authoring"));
     assert!(keys.contains("Enter or Ctrl+P promotes the staged scaffold."));
+    assert!(keys.contains("D opens detail-mode authoring."));
     assert!(keys.contains("Ctrl+L edits turn budget."));
     assert!(keys.contains("Ctrl+E inspects or edits the draft."));
 }

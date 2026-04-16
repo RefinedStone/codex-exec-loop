@@ -123,7 +123,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":planning",
         aliases: &[":planning"],
         suggestion_detail: "planning controls",
-        buffered_hint: "next action: open planning controls",
+        buffered_hint: "next action: open the simple planning review or existing planning controls",
         execution_status: None,
         requires_argument: false,
     },
@@ -669,7 +669,10 @@ mod tests {
         let doctor =
             InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
-        assert_eq!(plain.buffered_hint(), "next action: open planning controls");
+        assert_eq!(
+            plain.buffered_hint(),
+            "next action: open the simple planning review or existing planning controls"
+        );
         assert_eq!(off.buffered_hint(), "next action: turn Plan off");
         assert_eq!(on.buffered_hint(), "next action: turn Plan on");
         assert_eq!(
