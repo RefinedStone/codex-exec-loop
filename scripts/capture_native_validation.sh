@@ -8,6 +8,8 @@ Usage:
 
 Options:
   --frontend <value>   Validation row frontend label. Required.
+  --check-profile <value>
+                       Validation checklist profile. Default: terminal-baseline.
   --terminal <value>   Terminal app/version label. Default: detected from env.
   --shell <value>      Shell label. Default: detected from env.
   --term <value>       TERM value to record. Default: current TERM.
@@ -116,8 +118,45 @@ slugify() {
     | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
 }
 
-repo_root="$(git rev-parse --show-toplevel)"
+render_checks() {
+  local check_profile="$1"
+
+  case "${check_profile}" in
+    terminal-baseline)
+      cat <<'EOF'
+- launch and exit
+- frontend selection
+- input editing
+- overlay flow
+- streaming visibility
+- resize and scrollback
+- failure and recovery
+EOF
+      ;;
+    phase1-operator-surface)
+      cat <<'EOF'
+- launch and exit
+- frontend selection
+- input editing
+- overlay flow
+- streaming visibility
+- resize and scrollback
+- failure and recovery
+- status language and next action
+- resumed session context
+- queue and automation explanation
+- lifecycle command parity
+EOF
+      ;;
+    *)
+      printf 'unsupported --check-profile: %s\n' "${check_profile}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 frontend=""
+check_profile="terminal-baseline"
 terminal=""
 shell_name=""
 term_value="${TERM-}"
@@ -134,6 +173,11 @@ while (($# > 0)); do
     --frontend)
       require_value "$1" "${2-}"
       frontend="$2"
+      shift 2
+      ;;
+    --check-profile)
+      require_value "$1" "${2-}"
+      check_profile="$2"
       shift 2
       ;;
     --terminal)
@@ -218,6 +262,7 @@ if [[ -z "${shell_name}" ]]; then
 fi
 
 if [[ -z "${commit_sha}" ]]; then
+  repo_root="$(git rev-parse --show-toplevel)"
   commit_sha="$(git -C "${repo_root}" rev-parse HEAD)"
 fi
 
@@ -233,6 +278,7 @@ if [[ -n "${output_dir}" ]]; then
   output_path="${output_dir}/${date_value}-$(slugify "${os_value}")-$(slugify "${terminal}")-$(slugify "${shell_name}")-$(slugify "${frontend}").txt"
 fi
 
+checks_block="$(render_checks "${check_profile}")"
 report="$(cat <<EOF
 date: ${date_value}
 commit: ${commit_sha}
@@ -241,14 +287,9 @@ terminal: ${terminal}
 shell: ${shell_name}
 frontend: ${frontend}
 term: ${term_value}
+check_profile: ${check_profile}
 checks:
-- launch and exit
-- frontend selection
-- input editing
-- overlay flow
-- streaming visibility
-- resize and scrollback
-- failure and recovery
+${checks_block}
 result: ${result}
 notes: ${notes}
 EOF

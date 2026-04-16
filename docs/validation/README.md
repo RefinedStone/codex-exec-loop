@@ -6,7 +6,7 @@ This directory stores real terminal-validation results for the matrix in [`../pl
 
 - record only real passes or blockers
 - keep one file per exercised terminal/frontend row
-- preserve the emitted checklist so rows stay comparable
+- preserve the emitted `check_profile` and checklist so rows stay comparable
 - use `./scripts/summarize_native_validation.sh` before calling the matrix complete
 
 ## Filename Shape
@@ -20,6 +20,18 @@ YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>.txt
 ```bash
 ./scripts/capture_native_validation.sh \
   --frontend inline \
+  --check-profile terminal-baseline \
+  --terminal "iTerm2 3.5" \
+  --result pass \
+  --output-dir docs/validation
+```
+
+Phase 1 operator-surface validation:
+
+```bash
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile phase1-operator-surface \
   --terminal "iTerm2 3.5" \
   --result pass \
   --output-dir docs/validation
@@ -30,6 +42,7 @@ Windows PowerShell:
 ```powershell
 .\scripts\capture_native_validation.ps1 `
   -Frontend inline `
+  -CheckProfile terminal-baseline `
   -Terminal "Windows Terminal 1.22" `
   -Result pass `
   -OutputDir docs\validation
