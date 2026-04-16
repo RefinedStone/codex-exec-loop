@@ -1,7 +1,6 @@
+use super::super::planning::build_resumed_session_status_text;
 use super::super::{ConversationState, FollowupControlEvent, NativeTuiApp, StartupState};
 use crate::application::service::planning::PlanningRuntimeSnapshot;
-
-const RESUMED_SESSION_DETAIL_LIMIT: usize = 96;
 
 impl NativeTuiApp {
     pub(crate) fn sync_draft_shell_workspace(&mut self, workspace_directory: &str) {
@@ -72,28 +71,9 @@ impl NativeTuiApp {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        conversation.set_status_with_warnings(resumed_session_status_text(
+        conversation.set_status_with_warnings(build_resumed_session_status_text(
             &conversation.planning_runtime_snapshot,
         ));
         self.conversation_state = ConversationState::ready(conversation);
     }
-}
-
-fn resumed_session_status_text(snapshot: &PlanningRuntimeSnapshot) -> String {
-    let mut status_text = format!(
-        "thread loaded / planning status: {}",
-        snapshot.preview_status_label()
-    );
-
-    if let Some(queue_summary) =
-        snapshot.compact_queue_framing_summary(RESUMED_SESSION_DETAIL_LIMIT)
-    {
-        status_text.push_str(" / queue summary: ");
-        status_text.push_str(&queue_summary);
-    } else if let Some(detail) = snapshot.preview_detail_with_limit(RESUMED_SESSION_DETAIL_LIMIT) {
-        status_text.push_str(" / planning detail: ");
-        status_text.push_str(&detail);
-    }
-
-    status_text
 }

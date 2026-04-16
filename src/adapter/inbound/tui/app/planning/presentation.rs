@@ -1,8 +1,10 @@
 use super::super::planner_debug_preview::build_debug_preview_lines;
 use super::super::{ConversationState, ConversationViewModel, NativeTuiApp};
+use super::status_projection::{
+    build_planning_followup_surface_projection, compact_queue_framing_summary,
+};
 use crate::application::service::planning::{
-    PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
-    PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
+    PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt, PlanningRuntimeSummaryLineRequest,
 };
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::style::{Color, Modifier, Style};
@@ -69,7 +71,7 @@ pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
     if let Some(queue_summary) = planner.last_queue_summary.as_deref() {
         first_line.push_str(&format!(
             "  |  planner queue: {}",
-            compact_whitespace_detail(queue_summary, max_detail_len)
+            compact_queue_framing_summary(queue_summary, max_detail_len)
         ));
     }
 
@@ -230,23 +232,10 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
                 app.github_review_recent_changes_summary(AUTOMATION_GITHUB_REVIEW_DETAIL_LIMIT);
-            let planning_projection = app.planning.runtime.build_followup_status_projection(
-                PlanningRuntimeStatusProjectionRequest {
-                    snapshot: &conversation.planning_runtime_snapshot,
-                    has_running_turn: turn_running,
-                    is_repairing: conversation.planning_repair_state.is_some(),
-                    repair_failure_summary: conversation
-                        .planning_repair_state
-                        .as_ref()
-                        .map(|state| state.latest_request.failure_summary.as_str()),
-                    repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
-                        PlanningRuntimeRepairAttempt {
-                            attempts_used: state.attempts_used,
-                            max_attempts: state.max_attempts,
-                        }
-                    }),
-                    max_detail_len: AUTOMATION_PLANNING_DETAIL_LIMIT,
-                },
+            let planning_projection = build_planning_followup_surface_projection(
+                app,
+                conversation,
+                AUTOMATION_PLANNING_DETAIL_LIMIT,
             );
             let planning_status_line = planning_projection.planning_status_line;
             let repair_attempt_line = planning_projection.repair_attempt_line;
@@ -323,10 +312,8 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
             if let Some(failure_line) = failure_line {
                 lines.push(Line::from(failure_line));
             }
-            if let Some(planning_notice_summary) =
-                conversation.planning_notice_summary(AUTOMATION_PLANNING_DETAIL_LIMIT)
-            {
-                lines.push(Line::from(planning_notice_summary));
+            if let Some(planning_notice_line) = planning_projection.notice_line {
+                lines.push(Line::from(planning_notice_line));
             }
             lines.extend(
                 build_planner_panel_lines(app, AUTOMATION_PLANNER_PANEL_DETAIL_LIMIT)
