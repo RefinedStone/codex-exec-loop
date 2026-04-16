@@ -243,13 +243,13 @@ while (($# > 0)); do
 done
 
 if [[ -z "${frontend}" ]]; then
-  printf '--frontend is required\n' >&2
+  printf '%s\n' '--frontend is required' >&2
   usage >&2
   exit 1
 fi
 
 if [[ -n "${output_path}" && -n "${output_dir}" ]]; then
-  printf '--output and --output-dir cannot be used together\n' >&2
+  printf '%s\n' '--output and --output-dir cannot be used together' >&2
   exit 1
 fi
 
