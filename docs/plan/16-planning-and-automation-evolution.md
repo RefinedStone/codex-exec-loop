@@ -117,6 +117,14 @@ The operator should not need to rediscover:
 - make directions maintenance clearly subordinate to planning authoring rather than a parallel system
 - document queue-idle prompt authoring as an advanced customization path
 
+### Workspace Lifecycle Commands
+
+- add `akra doctor` as a non-interactive planning health check for the current workspace before the TUI starts
+- add `akra init` as a non-interactive planning bootstrap command that defaults to the simple scaffold
+- add `akra reset` as a safe reset command that can target queue-only, directions-only, or the full planning workspace
+- add in-shell counterparts `:doctor`, `:init`, and `:reset`
+- keep command semantics aligned with planning authoring and validation rules instead of creating a second planning model
+
 ### Queue Inspection
 
 - show executable work before structural metadata
@@ -142,12 +150,14 @@ The operator should not need to rediscover:
 - document the operator vocabulary
 - simplify current explanations of queue and pause state
 - reframe repair and queue-idle behavior in the docs and UI copy
+- define the command contract for `akra doctor`, `akra init`, `akra reset`, and their in-shell counterparts
 
 ### Phase 2
 
 - tighten first-run planning flow around simple mode
 - improve queue overlay semantics and proposal visibility
 - reduce the number of places an operator must visit to recover from a paused automation cycle
+- implement workspace lifecycle commands on top of the same planning bootstrap, validation, and reset rules used by the TUI
 
 ### Phase 3
 

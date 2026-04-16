@@ -96,6 +96,16 @@ Own:
 
 They should be treated as authoring flows, not generic inspection overlays.
 
+### Pre-Launch And In-Shell Lifecycle Commands
+
+Own:
+
+- non-interactive planning bootstrap before entering the TUI
+- read-only planning health inspection before entering the TUI
+- safe reset flows for queue-only, directions-only, or full planning workspace reset
+
+The external `akra` command surface and the in-shell `:` command surface should use the same underlying planning lifecycle concepts even if the interaction style differs.
+
 ## Chosen Overlay Purpose Map
 
 | Surface | Primary job | Secondary job | Should avoid |
@@ -107,6 +117,7 @@ They should be treated as authoring flows, not generic inspection overlays.
 | queue | work explanation | proposal visibility | authoring |
 | planning | setup and editing | promote accepted state | runtime debugging |
 | directions | supporting planning maintenance | create detail docs and queue-idle prompt | full queue inspection |
+| doctor/init/reset commands | workspace lifecycle management | safe entry and recovery before or during interactive use | replacing the main authoring and inspection flows |
 
 ## Canonical Journeys
 
@@ -207,6 +218,8 @@ For example:
 - The matching overlay should carry the full explanation.
 - Recovery actions should be named as verbs:
   reopen planning, review queue, rerun diagnostics, resume manually.
+- Lifecycle commands should also be verbs:
+  initialize workspace, inspect health, reset queue, reset directions.
 - Expert detail such as planner debug output should remain behind explicit toggles.
 
 ## Acceptance Criteria

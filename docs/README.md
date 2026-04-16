@@ -19,6 +19,7 @@ This repository keeps current-state contracts and future work plans side by side
 - [plan/15-ux-flow-rearchitecture.md](plan/15-ux-flow-rearchitecture.md): operator flow and status-language redesign
 - [plan/16-planning-and-automation-evolution.md](plan/16-planning-and-automation-evolution.md): planning, queue, and automation evolution path
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): structural debt map tied to operator impact
+- [plan/18-planning-workspace-lifecycle-commands.md](plan/18-planning-workspace-lifecycle-commands.md): external and in-shell planning lifecycle commands
 
 ## Open When Relevant
 
