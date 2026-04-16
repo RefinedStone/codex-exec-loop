@@ -147,3 +147,321 @@ impl ParallelModeReadinessSnapshot {
             .find(|capability| capability.key == key)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeSupervisorState {
+    Prepare,
+    Supervise,
+    Recover,
+}
+
+impl ParallelModeSupervisorState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::Supervise => "supervise",
+            Self::Recover => "recover",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModePoolSlotState {
+    Idle,
+    Leased,
+    Blocked,
+    Unavailable,
+}
+
+impl ParallelModePoolSlotState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Leased => "leased",
+            Self::Blocked => "blocked",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModePoolSlotSnapshot {
+    pub slot_id: String,
+    pub state: ParallelModePoolSlotState,
+    pub branch_name: String,
+    pub worktree_label: String,
+    pub owner_label: String,
+}
+
+impl ParallelModePoolSlotSnapshot {
+    pub fn new(
+        slot_id: impl Into<String>,
+        state: ParallelModePoolSlotState,
+        branch_name: impl Into<String>,
+        worktree_label: impl Into<String>,
+        owner_label: impl Into<String>,
+    ) -> Self {
+        Self {
+            slot_id: slot_id.into(),
+            state,
+            branch_name: branch_name.into(),
+            worktree_label: worktree_label.into(),
+            owner_label: owner_label.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModePoolBoardSnapshot {
+    pub configured_size: usize,
+    pub idle_slots: usize,
+    pub leased_slots: usize,
+    pub blocked_slots: usize,
+    pub unavailable_slots: usize,
+    pub exhausted: bool,
+    pub reconcile_status: String,
+    pub slots: Vec<ParallelModePoolSlotSnapshot>,
+}
+
+impl ParallelModePoolBoardSnapshot {
+    pub fn new(
+        configured_size: usize,
+        reconcile_status: impl Into<String>,
+        slots: Vec<ParallelModePoolSlotSnapshot>,
+    ) -> Self {
+        let idle_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
+            .count();
+        let leased_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Leased)
+            .count();
+        let blocked_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Blocked)
+            .count();
+        let unavailable_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Unavailable)
+            .count();
+        let exhausted = configured_size > 0 && idle_slots == 0;
+
+        Self {
+            configured_size,
+            idle_slots,
+            leased_slots,
+            blocked_slots,
+            unavailable_slots,
+            exhausted,
+            reconcile_status: reconcile_status.into(),
+            slots,
+        }
+    }
+
+    pub fn compact_summary(&self) -> String {
+        if self.unavailable_slots > 0 {
+            return format!(
+                "idle {}/{} / blocked {} / unavailable {}",
+                self.idle_slots, self.configured_size, self.blocked_slots, self.unavailable_slots
+            );
+        }
+
+        format!(
+            "idle {}/{} / blocked {}",
+            self.idle_slots, self.configured_size, self.blocked_slots
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeAgentRosterEntry {
+    pub agent_id: String,
+    pub task_title: String,
+    pub slot_id: String,
+    pub branch_name: String,
+    pub state_label: String,
+    pub duration_label: String,
+    pub latest_summary: String,
+}
+
+impl ParallelModeAgentRosterEntry {
+    pub fn new(
+        agent_id: impl Into<String>,
+        task_title: impl Into<String>,
+        slot_id: impl Into<String>,
+        branch_name: impl Into<String>,
+        state_label: impl Into<String>,
+        duration_label: impl Into<String>,
+        latest_summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            task_title: task_title.into(),
+            slot_id: slot_id.into(),
+            branch_name: branch_name.into(),
+            state_label: state_label.into(),
+            duration_label: duration_label.into(),
+            latest_summary: latest_summary.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeAgentRosterSnapshot {
+    pub entries: Vec<ParallelModeAgentRosterEntry>,
+    pub empty_state: String,
+}
+
+impl ParallelModeAgentRosterSnapshot {
+    pub fn new(entries: Vec<ParallelModeAgentRosterEntry>, empty_state: impl Into<String>) -> Self {
+        Self {
+            entries,
+            empty_state: empty_state.into(),
+        }
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn compact_summary(&self) -> String {
+        format!("{} active", self.active_count())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeQueueItemState {
+    Idle,
+    Queued,
+    Integrating,
+    Blocked,
+    Merged,
+}
+
+impl ParallelModeQueueItemState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Queued => "queued",
+            Self::Integrating => "integrating",
+            Self::Blocked => "blocked",
+            Self::Merged => "merged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeCompletionFeedEntry {
+    pub stage_label: String,
+    pub summary: String,
+}
+
+impl ParallelModeCompletionFeedEntry {
+    pub fn new(stage_label: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            stage_label: stage_label.into(),
+            summary: summary.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeDistributorQueueItem {
+    pub source_agent: String,
+    pub task_title: String,
+    pub queue_state: ParallelModeQueueItemState,
+    pub branch_name: String,
+    pub commit_short_sha: String,
+    pub integration_note: String,
+}
+
+impl ParallelModeDistributorQueueItem {
+    pub fn new(
+        source_agent: impl Into<String>,
+        task_title: impl Into<String>,
+        queue_state: ParallelModeQueueItemState,
+        branch_name: impl Into<String>,
+        commit_short_sha: impl Into<String>,
+        integration_note: impl Into<String>,
+    ) -> Self {
+        Self {
+            source_agent: source_agent.into(),
+            task_title: task_title.into(),
+            queue_state,
+            branch_name: branch_name.into(),
+            commit_short_sha: commit_short_sha.into(),
+            integration_note: integration_note.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeDistributorSnapshot {
+    pub queue_items: Vec<ParallelModeDistributorQueueItem>,
+    pub completion_feed: Vec<ParallelModeCompletionFeedEntry>,
+    pub head_summary: String,
+    pub note: String,
+}
+
+impl ParallelModeDistributorSnapshot {
+    pub fn new(
+        queue_items: Vec<ParallelModeDistributorQueueItem>,
+        completion_feed: Vec<ParallelModeCompletionFeedEntry>,
+        head_summary: impl Into<String>,
+        note: impl Into<String>,
+    ) -> Self {
+        Self {
+            queue_items,
+            completion_feed,
+            head_summary: head_summary.into(),
+            note: note.into(),
+        }
+    }
+
+    pub fn queue_depth(&self) -> usize {
+        self.queue_items.len()
+    }
+
+    pub fn compact_summary(&self) -> String {
+        if self.queue_items.is_empty() {
+            return self.head_summary.clone();
+        }
+
+        format!("{} / depth {}", self.head_summary, self.queue_depth())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeSupervisorSnapshot {
+    pub state: ParallelModeSupervisorState,
+    pub workspace_path: String,
+    pub pool: ParallelModePoolBoardSnapshot,
+    pub roster: ParallelModeAgentRosterSnapshot,
+    pub distributor: ParallelModeDistributorSnapshot,
+    pub top_notice: Option<String>,
+}
+
+impl ParallelModeSupervisorSnapshot {
+    pub fn new(
+        state: ParallelModeSupervisorState,
+        workspace_path: impl Into<String>,
+        pool: ParallelModePoolBoardSnapshot,
+        roster: ParallelModeAgentRosterSnapshot,
+        distributor: ParallelModeDistributorSnapshot,
+        top_notice: Option<String>,
+    ) -> Self {
+        Self {
+            state,
+            workspace_path: workspace_path.into(),
+            pool,
+            roster,
+            distributor,
+            top_notice,
+        }
+    }
+
+    pub fn state_label(&self) -> &'static str {
+        self.state.label()
+    }
+}

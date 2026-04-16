@@ -615,18 +615,27 @@ fn inline_mode_label(conversation: &ConversationViewModel) -> String {
 
 pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
     match app.parallel_mode_readiness_snapshot() {
-        Some(snapshot) if app.parallel_mode_enabled() => format!(
-            "parallel: {}  |  mode: parallel  |  pool: pending reconcile  |  queue: distributor idle",
-            snapshot.readiness_label()
-        ),
-        Some(snapshot) => format!(
-            "parallel: last {}  |  mode: normal  |  pool: inactive  |  queue: inactive",
-            snapshot.readiness_label()
-        ),
-        None if app.parallel_mode_enabled() => {
-            "parallel: preparing  |  mode: parallel  |  pool: pending reconcile  |  queue: distributor idle".to_string()
+        Some(snapshot) => {
+            let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
+            format!(
+                "parallel: {}  |  mode: {}  |  pool: {}  |  agents: {}  |  queue: {}",
+                snapshot.readiness_label(),
+                if app.parallel_mode_enabled() {
+                    "parallel"
+                } else {
+                    "normal"
+                },
+                supervisor_snapshot.pool.compact_summary(),
+                supervisor_snapshot.roster.compact_summary(),
+                supervisor_snapshot.distributor.compact_summary(),
+            )
         }
-        None => "parallel: off  |  mode: normal  |  pool: inactive  |  queue: inactive".to_string(),
+        None if app.parallel_mode_enabled() => {
+            "parallel: preparing  |  mode: parallel  |  pool: pending reconcile  |  agents: 0 active  |  queue: pending".to_string()
+        }
+        None => {
+            "parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |  queue: inactive".to_string()
+        }
     }
 }
 

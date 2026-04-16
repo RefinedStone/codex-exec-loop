@@ -2,7 +2,7 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 use crate::application::service::parallel_mode_service::ParallelModeService;
-use crate::domain::parallel_mode::ParallelModeReadinessSnapshot;
+use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 use super::{ConversationInputEvent, NativeTuiApp};
 
@@ -19,6 +19,14 @@ impl NativeTuiApp {
 
     pub(crate) fn parallel_mode_service(&self) -> &ParallelModeService {
         &self.parallel_mode_service
+    }
+
+    pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
+        self.parallel_mode_service().build_supervisor_snapshot(
+            &self.current_workspace_directory(),
+            self.parallel_mode_enabled(),
+            self.parallel_mode_readiness_snapshot(),
+        )
     }
 
     pub(crate) fn refresh_parallel_mode_readiness_snapshot(
