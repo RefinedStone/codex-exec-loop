@@ -20,7 +20,7 @@ use crate::application::service::planning_init_service::{
 };
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionDefinition, PlanningValidationReport, QueueIdlePolicy,
+    DirectionCatalogDocument, PlanningValidationReport, QueueIdlePolicy,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +299,7 @@ impl PlanningDirectionsService {
         )
     }
 
+    #[cfg(test)]
     pub fn doctor_workspace(&self, workspace_dir: &str) -> Result<PlanningDoctorOutcome> {
         let workspace = self.load_complete_workspace(workspace_dir)?;
         let directions: DirectionCatalogDocument = toml::from_str(&workspace.directions_toml)
@@ -502,6 +503,7 @@ impl PlanningDirectionsService {
         Ok(active_workspace)
     }
 
+    #[cfg(test)]
     fn validate_active_workspace(&self, workspace_dir: &str) -> Result<PlanningValidationReport> {
         let workspace = self
             .planning_workspace_port
@@ -651,7 +653,10 @@ fn build_maintenance_draft_name() -> String {
     )
 }
 
-fn build_default_detail_doc_markdown(direction: &DirectionDefinition) -> String {
+#[cfg(test)]
+fn build_default_detail_doc_markdown(
+    direction: &crate::domain::planning::DirectionDefinition,
+) -> String {
     let mut lines = vec![
         format!("# {}", direction.title.trim()),
         String::new(),
@@ -686,6 +691,7 @@ fn build_default_detail_doc_markdown(direction: &DirectionDefinition) -> String 
     lines.join("\n")
 }
 
+#[cfg(test)]
 fn default_validated_direction_detail_doc_path(direction_id: &str) -> Result<String> {
     let fallback_path = default_direction_detail_doc_path(direction_id);
     if is_valid_planning_markdown_path(&fallback_path, PLANNING_DIRECTION_DOCS_DIRECTORY) {

@@ -9,7 +9,7 @@ use super::super::{
     ShellChromeEvent, ShellOverlay,
 };
 use crate::application::service::planning::{
-    PlanningDoctorOutcome, PlanningDraftEditorSession, PlanningResetTarget,
+    PlanningDoctorReport, PlanningDoctorState, PlanningDraftEditorSession, PlanningResetTarget,
     PlanningWorkspaceResetResult,
 };
 
@@ -387,14 +387,64 @@ impl NativeTuiApp {
             None => self.show_planning_init_overlay(),
             Some(value) if value.eq_ignore_ascii_case("off") => self.turn_plan_off(),
             Some(value) if value.eq_ignore_ascii_case("on") => self.turn_plan_on(),
-            Some(value) if value.eq_ignore_ascii_case("doctor") => self.run_planning_doctor(),
+            Some(value) if value.eq_ignore_ascii_case("doctor") => self.handle_doctor_shell_command(),
             Some(value) => self.dispatch_conversation_input(
                 ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "unsupported :planning argument `{value}` / supported: :planning, :planning on, :planning off, :planning doctor"
+                        "unsupported :planning argument `{value}` / supported: :planning, :planning on, :planning off, :doctor"
                     ),
                 },
             ),
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn handle_doctor_shell_command(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        let report = self
+            .planning
+            .workspace
+            .inspect_workspace(&workspace_directory);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+
+        if report.planning_state() == PlanningDoctorState::Absent {
+            self.show_planning_init_overlay();
+        } else if self.shell_overlay == ShellOverlay::PlanningInit {
+            self.planning_init_overlay_ui_state
+                .open_existing_workspace();
+        }
+
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: planning_doctor_report_status_text(&report),
+        });
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn handle_init_shell_command(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning
+            .workspace
+            .has_planning_workspace(&workspace_directory)
+        {
+            Ok(true) => {
+                self.show_planning_init_overlay();
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: "planning workspace already exists / next action: review existing controls or use :reset before replacing it".to_string(),
+                });
+            }
+            Ok(false) => {
+                self.planning_init_overlay_ui_state
+                    .open_command_center_mode_selection();
+                self.planning_draft_editor_ui_state.reset();
+                self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+                self.stage_simple_mode_planning_init_draft();
+            }
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("planning init unavailable: {error}"),
+                });
+            }
         }
     }
 
@@ -524,52 +574,6 @@ impl NativeTuiApp {
                 })
             }
         }
-    }
-
-    pub(super) fn run_planning_doctor(&mut self) {
-        let workspace_directory = self.planning_workspace_directory();
-        let outcome = match self
-            .planning
-            .workspace
-            .doctor_workspace(&workspace_directory)
-        {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                let fallback_status = if !self
-                    .planning
-                    .workspace
-                    .has_planning_workspace(&workspace_directory)
-                    .unwrap_or(false)
-                {
-                    self.show_planning_init_overlay();
-                    "planning workspace missing; open :planning to initialize it".to_string()
-                } else {
-                    format!("planning doctor failed: {error}")
-                };
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: fallback_status,
-                });
-                return;
-            }
-        };
-
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
-            &workspace_directory,
-        );
-        if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
-            self.present_directions_maintenance_overview(
-                planning_doctor_status_text(&outcome),
-                false,
-            );
-            return;
-        }
-        if self.shell_overlay == ShellOverlay::PlanningInit {
-            self.planning_init_overlay_ui_state
-                .open_existing_workspace();
-        }
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: planning_doctor_status_text(&outcome),
-        });
     }
 
     pub(super) fn open_planning_manual_editor(&mut self) {
@@ -1173,44 +1177,34 @@ fn directions_manual_editor_closed_status(risk: PlanningDraftEditorCloseRisk) ->
     }
 }
 
-fn planning_doctor_status_text(outcome: &PlanningDoctorOutcome) -> String {
-    let mut applied = Vec::new();
-    if outcome.repaired_detail_doc_mappings > 0 {
-        applied.push(format!(
-            "repaired {} detail-doc mapping(s)",
-            outcome.repaired_detail_doc_mappings
-        ));
+fn planning_doctor_report_status_text(report: &PlanningDoctorReport) -> String {
+    let mut parts = vec![format!(
+        "planning state: {}",
+        report.planning_state().label()
+    )];
+
+    if let Some(queue_idle_policy) = report.queue_idle_policy() {
+        parts.push(format!("queue-idle: {queue_idle_policy}"));
     }
-    if outcome.created_detail_doc_files > 0 {
-        applied.push(format!(
-            "created {} detail doc file(s)",
-            outcome.created_detail_doc_files
-        ));
+    if let Some(queue_summary) = report.queue_summary() {
+        parts.push(format!("queue: {queue_summary}"));
     }
-    if outcome.repaired_queue_idle_prompt_mapping {
-        applied.push("repaired queue-idle prompt mapping".to_string());
+    if let Some(proposal_summary) = report.proposal_summary() {
+        parts.push(format!("proposals: {proposal_summary}"));
     }
-    if outcome.created_queue_idle_prompt_file {
-        applied.push("created queue-idle prompt file".to_string());
+    if let Some(issue) = report.issue() {
+        parts.push(format!("issue: {issue}"));
+    } else if let Some(health) = report.health() {
+        parts.push(format!("health: {health}"));
+    }
+    if let Some(note) = report.note() {
+        parts.push(format!("note: {note}"));
+    }
+    if report.planning_state() == PlanningDoctorState::Absent {
+        parts.push("next action: run :init to stage the default planning scaffold".to_string());
     }
 
-    let leading_text = if applied.is_empty() {
-        "planning doctor found no safe fixes".to_string()
-    } else {
-        format!(
-            "planning doctor applied {} safe fix(es): {}",
-            outcome.applied_fix_count(),
-            applied.join(", ")
-        )
-    };
-
-    if outcome.validation_report.is_valid() {
-        format!("{leading_text} / validation: ok")
-    } else if let Some(first_error) = outcome.validation_report.errors().first() {
-        format!("{leading_text} / remaining: {}", first_error.message)
-    } else {
-        format!("{leading_text} / remaining: planning validation failed")
-    }
+    parts.join(" / ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

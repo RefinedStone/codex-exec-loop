@@ -7,116 +7,37 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
-    PlanningResetTarget, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus, PlanningServices,
+    PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
     PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
 };
-use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;
 
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
-const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlanningDoctorState {
-    Absent,
-    Incomplete,
-    Invalid,
-    ReadyWithoutTask,
-    ReadyWithTask,
-}
-
-impl PlanningDoctorState {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Absent => "absent",
-            Self::Incomplete => "incomplete",
-            Self::Invalid => "invalid",
-            Self::ReadyWithoutTask => "ready_without_task",
-            Self::ReadyWithTask => "ready_with_task",
-        }
-    }
-
-    fn exit_code(self) -> i32 {
-        match self {
-            Self::Absent | Self::ReadyWithoutTask | Self::ReadyWithTask => 0,
-            Self::Incomplete | Self::Invalid => 1,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoctorReport {
     workspace_path: String,
-    planning_state: PlanningDoctorState,
-    queue_idle_policy: Option<String>,
-    queue_summary: Option<String>,
-    proposal_summary: Option<String>,
-    health: Option<String>,
-    issue: Option<String>,
-    note: Option<String>,
+    report: PlanningDoctorReport,
 }
 
 impl DoctorReport {
     fn path_issue(workspace_path: String, issue: String) -> Self {
         Self {
             workspace_path,
-            planning_state: PlanningDoctorState::Invalid,
-            queue_idle_policy: None,
-            queue_summary: None,
-            proposal_summary: None,
-            health: None,
-            issue: Some(issue),
-            note: None,
+            report: PlanningDoctorReport::path_issue(issue),
         }
     }
 
-    fn from_snapshot(workspace_path: String, snapshot: &PlanningRuntimeSnapshot) -> Self {
-        let planning_state = classify_doctor_state(snapshot);
-        let is_ready = matches!(
-            planning_state,
-            PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask
-        );
-        let note = if snapshot.workspace_present() && !snapshot.plan_enabled() {
-            Some(format!(
-                "queue-driven continuation is disabled by {PLAN_OFF_FILE_PATH}"
-            ))
-        } else {
-            None
-        };
-        let health = match planning_state {
-            PlanningDoctorState::Absent => {
-                Some("planning workspace is not initialized".to_string())
-            }
-            PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask => {
-                Some("planning workspace is healthy".to_string())
-            }
-            PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid => None,
-        };
-
+    fn from_service_report(workspace_path: String, report: PlanningDoctorReport) -> Self {
         Self {
             workspace_path,
-            planning_state,
-            queue_idle_policy: is_ready.then(|| snapshot.queue_idle_policy().label().to_string()),
-            queue_summary: is_ready
-                .then(|| snapshot.queue_summary().map(str::to_string))
-                .flatten(),
-            proposal_summary: is_ready
-                .then(|| snapshot.proposal_summary().map(str::to_string))
-                .flatten(),
-            health,
-            issue: matches!(
-                planning_state,
-                PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid
-            )
-            .then(|| snapshot.failure_reason().map(str::to_string))
-            .flatten(),
-            note,
+            report,
         }
     }
 
     fn exit_code(&self) -> i32 {
-        self.planning_state.exit_code()
+        self.report.exit_code()
     }
 }
 
@@ -345,10 +266,10 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
 
     let planning =
         PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
-    let snapshot = planning
-        .runtime
-        .load_runtime_snapshot_or_invalid(workspace_path.to_string_lossy().as_ref());
-    DoctorReport::from_snapshot(workspace_label, &snapshot)
+    let report = planning
+        .workspace
+        .inspect_workspace(workspace_path.to_string_lossy().as_ref());
+    DoctorReport::from_service_report(workspace_label, report)
 }
 
 fn initialize_workspace(workspace_path: &Path) -> InitReport {
@@ -420,44 +341,30 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
     }
 }
 
-fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorState {
-    match snapshot.workspace_status() {
-        PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningDoctorState::Absent,
-        PlanningRuntimeWorkspaceStatus::Invalid => {
-            if snapshot
-                .failure_reason()
-                .is_some_and(|reason| reason.starts_with(INCOMPLETE_PREFIX))
-            {
-                PlanningDoctorState::Incomplete
-            } else {
-                PlanningDoctorState::Invalid
-            }
-        }
-        PlanningRuntimeWorkspaceStatus::ReadyNoTask => PlanningDoctorState::ReadyWithoutTask,
-        PlanningRuntimeWorkspaceStatus::ReadyWithTask => PlanningDoctorState::ReadyWithTask,
-    }
-}
-
 fn render_doctor_report(stdout: &mut impl Write, report: &DoctorReport) -> Result<()> {
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
-    writeln!(stdout, "planning state: {}", report.planning_state.label())?;
+    writeln!(
+        stdout,
+        "planning state: {}",
+        report.report.planning_state().label()
+    )?;
 
-    if let Some(queue_idle_policy) = &report.queue_idle_policy {
+    if let Some(queue_idle_policy) = report.report.queue_idle_policy() {
         writeln!(stdout, "queue-idle policy: {queue_idle_policy}")?;
     }
-    if let Some(queue_summary) = &report.queue_summary {
+    if let Some(queue_summary) = report.report.queue_summary() {
         writeln!(stdout, "queue summary: {queue_summary}")?;
     }
-    if let Some(proposal_summary) = &report.proposal_summary {
+    if let Some(proposal_summary) = report.report.proposal_summary() {
         writeln!(stdout, "proposal summary: {proposal_summary}")?;
     }
-    if let Some(health) = &report.health {
+    if let Some(health) = report.report.health() {
         writeln!(stdout, "health: {health}")?;
     }
-    if let Some(issue) = &report.issue {
+    if let Some(issue) = report.report.issue() {
         writeln!(stdout, "issue: {issue}")?;
     }
-    if let Some(note) = &report.note {
+    if let Some(note) = report.report.note() {
         writeln!(stdout, "note: {note}")?;
     }
 

@@ -116,6 +116,8 @@ impl NativeTuiApp {
             InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Automation => self.show_automation_overlay(),
+            InlineShellCommand::Doctor => self.handle_doctor_shell_command(),
+            InlineShellCommand::Init => self.handle_init_shell_command(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
             }

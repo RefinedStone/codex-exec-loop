@@ -6,6 +6,8 @@ pub(crate) enum InlineShellCommand {
     Directions,
     Stop,
     Automation,
+    Doctor,
+    Init,
     PlanningInit,
     Reset,
     MaxAutoTurns,
@@ -37,7 +39,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Operator commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :reset <queue|directions|all>  :turns <n>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Operator commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off]  :doctor  :init  :reset <queue|directions|all>  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "next action: type `:turns <1-50>` and press Enter to update the turn budget.";
 const RESET_USAGE: &str =
@@ -99,11 +101,29 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         requires_argument: false,
     },
     InlineShellCommandSpec {
+        command: InlineShellCommand::Doctor,
+        primary_name: ":doctor",
+        aliases: &[":doctor"],
+        suggestion_detail: "planning health",
+        buffered_hint: "next action: inspect planning health",
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Init,
+        primary_name: ":init",
+        aliases: &[":init"],
+        suggestion_detail: "planning scaffold",
+        buffered_hint: "next action: stage the default planning scaffold for review",
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
         command: InlineShellCommand::PlanningInit,
         primary_name: ":planning",
-        aliases: &[":planning", ":planning-init"],
-        suggestion_detail: "planning setup",
-        buffered_hint: "next action: open planning setup",
+        aliases: &[":planning"],
+        suggestion_detail: "planning controls",
+        buffered_hint: "next action: open planning controls",
         execution_status: None,
         requires_argument: false,
     },
@@ -169,7 +189,7 @@ impl InlineShellCommandInput {
                     "next action: turn Plan on".to_string()
                 }
                 Some(value) if value.eq_ignore_ascii_case("doctor") => {
-                    "next action: run planning doctor for safe path repairs".to_string()
+                    "next action: inspect planning health".to_string()
                 }
                 Some(value) => format!(
                     "next action: apply `:planning {value}` / supported arguments: on, off, doctor"
@@ -295,6 +315,10 @@ impl InlineShellCommand {
     }
 
     fn from_alias(alias: &str) -> Option<Self> {
+        if alias == ":planning-init" {
+            return Some(Self::Init);
+        }
+
         INLINE_SHELL_COMMAND_SPECS
             .iter()
             .find(|spec| spec.aliases.contains(&alias))
@@ -345,6 +369,8 @@ impl InlineShellCommand {
             | InlineShellCommand::Directions
             | InlineShellCommand::Stop
             | InlineShellCommand::Automation
+            | InlineShellCommand::Doctor
+            | InlineShellCommand::Init
             | InlineShellCommand::PlanningInit
             | InlineShellCommand::NewDraft
             | InlineShellCommand::Help => self.command_name(),
@@ -455,6 +481,8 @@ mod tests {
             (":stop", Some((InlineShellCommand::Stop, None))),
             (":auto", Some((InlineShellCommand::Automation, None))),
             (":automation", Some((InlineShellCommand::Automation, None))),
+            (":doctor", Some((InlineShellCommand::Doctor, None))),
+            (":init", Some((InlineShellCommand::Init, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
             (
                 ":planning off",
@@ -468,10 +496,7 @@ mod tests {
                 ":planning doctor",
                 Some((InlineShellCommand::PlanningInit, Some("doctor"))),
             ),
-            (
-                ":planning-init",
-                Some((InlineShellCommand::PlanningInit, None)),
-            ),
+            (":planning-init", Some((InlineShellCommand::Init, None))),
             (
                 ":reset queue",
                 Some((InlineShellCommand::Reset, Some("queue"))),
@@ -517,6 +542,8 @@ mod tests {
                 InlineShellCommand::Directions,
                 InlineShellCommand::Stop,
                 InlineShellCommand::Automation,
+                InlineShellCommand::Doctor,
+                InlineShellCommand::Init,
                 InlineShellCommand::PlanningInit,
                 InlineShellCommand::Reset,
                 InlineShellCommand::MaxAutoTurns,
@@ -531,6 +558,14 @@ mod tests {
         assert_eq!(
             InlineShellCommand::suggestions(":p"),
             vec![InlineShellCommand::PlanningInit]
+        );
+        assert_eq!(
+            InlineShellCommand::suggestions(":do"),
+            vec![InlineShellCommand::Doctor]
+        );
+        assert_eq!(
+            InlineShellCommand::suggestions(":i"),
+            vec![InlineShellCommand::Init]
         );
         assert_eq!(
             InlineShellCommand::suggestions(":q"),
@@ -568,7 +603,7 @@ mod tests {
     fn palette_state_keeps_selected_command_when_input_refines() {
         let mut state = InlineShellCommandPaletteState::default();
         state.sync_to_input(":", None);
-        assert!(state.move_selection(6));
+        assert!(state.move_selection(8));
         assert_eq!(
             state.selected_command(),
             Some(InlineShellCommand::PlanningInit)
@@ -585,6 +620,8 @@ mod tests {
     #[test]
     fn completion_text_uses_canonical_argument_ready_command_forms() {
         assert_eq!(InlineShellCommand::Diagnostics.completion_text(), ":diag");
+        assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
+        assert_eq!(InlineShellCommand::Init.completion_text(), ":init");
         assert_eq!(
             InlineShellCommand::PlanningInit.completion_text(),
             ":planning"
@@ -632,12 +669,27 @@ mod tests {
         let doctor =
             InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
-        assert_eq!(plain.buffered_hint(), "next action: open planning setup");
+        assert_eq!(plain.buffered_hint(), "next action: open planning controls");
         assert_eq!(off.buffered_hint(), "next action: turn Plan off");
         assert_eq!(on.buffered_hint(), "next action: turn Plan on");
         assert_eq!(
             doctor.buffered_hint(),
-            "next action: run planning doctor for safe path repairs"
+            "next action: inspect planning health"
+        );
+    }
+
+    #[test]
+    fn doctor_and_init_command_hints_use_lifecycle_language() {
+        let doctor = InlineShellCommandInput::parse(":doctor").expect("command should parse");
+        let init = InlineShellCommandInput::parse(":init").expect("command should parse");
+
+        assert_eq!(
+            doctor.buffered_hint(),
+            "next action: inspect planning health"
+        );
+        assert_eq!(
+            init.buffered_hint(),
+            "next action: stage the default planning scaffold for review"
         );
     }
 
@@ -678,6 +730,8 @@ mod tests {
             (":queue", Some("operator surface: planning queue")),
             (":stop", None),
             (":auto", Some("operator surface: automation controls")),
+            (":doctor", None),
+            (":init", None),
             (":planning", None),
             (":reset queue", None),
             (":turns 5", None),
