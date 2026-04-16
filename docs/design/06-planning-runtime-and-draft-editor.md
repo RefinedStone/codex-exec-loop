@@ -21,7 +21,7 @@ This file records the active planning contract on `prerelease`.
 - `:planning` opens planning workspace controls.
 - `:planning on|off` toggles plan execution without deleting the workspace.
 - `:directions` opens directions maintenance.
-- Simple mode stages a minimal planning workspace and can promote immediately or open the draft editor.
+- Simple mode stages a minimal planning workspace, explains that it starts without a next task, and can promote immediately or open the draft editor.
 - Detail mode opens the embedded draft editor.
 - Staged drafts stay inactive until explicit promotion.
 

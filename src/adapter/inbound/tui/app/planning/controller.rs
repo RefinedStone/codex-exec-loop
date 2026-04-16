@@ -982,7 +982,7 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state
                     .open_simple_review(stage_result);
                 format!(
-                    "planning simple review ready / staged draft: {} / validation state: {} / next action: Enter or Ctrl+P promotes the low-ceremony scaffold. Ctrl+E inspects the draft. D opens detail-mode authoring.",
+                    "planning simple review ready / staged draft: {} / validation state: {} / simple behavior: no next task yet; queue-idle review stays enabled / next action: Enter or Ctrl+P promotes the low-ceremony scaffold. Ctrl+E inspects the draft. D opens detail-mode authoring.",
                     draft_name,
                     if validation_ok {
                         "ok"

@@ -524,6 +524,12 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
+    let summary = view
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     let status = view
         .status_lines
         .iter()
@@ -539,9 +545,15 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
 
     assert!(header.contains("Planning Setup / operator inspection"));
     assert!(header.contains("Simple mode review"));
+    assert!(summary.contains("there is no next task yet"));
+    assert!(summary.contains("accepted queue work as the next task"));
+    assert!(summary.contains("Queue-idle review is already staged"));
     assert!(options.contains("bootstrap-1"));
+    assert!(options.contains("queue-idle review ready for no-next-task turns"));
     assert!(options.contains("advanced path"));
     assert!(status.contains("turn budget: 3"));
+    assert!(status.contains("simple behavior: no next task yet"));
+    assert!(status.contains("queue-idle review stays enabled after promote"));
     assert!(status.contains("advanced action: D opens detail-mode authoring"));
     assert!(keys.contains("Enter or Ctrl+P promotes the staged scaffold."));
     assert!(keys.contains("D opens detail-mode authoring."));
