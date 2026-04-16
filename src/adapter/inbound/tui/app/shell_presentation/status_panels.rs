@@ -108,7 +108,7 @@ pub(super) fn build_shell_footer_lines_with_context(
             ];
 
             let mut status_segments = vec![format!(
-                "status: {}",
+                "operator status: {}",
                 compact_inline_detail(&conversation.status_text, FOOTER_STATUS_DETAIL_LIMIT)
             )];
             if warning_summary != "clear" {
@@ -147,7 +147,7 @@ pub(super) fn build_shell_footer_lines_with_context(
                 conversation,
                 FOOTER_NOTICE_DETAIL_LIMIT,
             ) {
-                lines.push(Line::from(format!("notice: {notice_line}")));
+                lines.push(Line::from(format!("operator notice: {notice_line}")));
             }
 
             lines
@@ -282,7 +282,7 @@ fn build_inline_tail_lines_with_context(
                 plan_mode_indicator,
             )));
             let mut status_segments = vec![format!(
-                "status: {}",
+                "operator status: {}",
                 compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT)
             )];
             if warning_summary != "clear" {
@@ -321,7 +321,7 @@ fn build_inline_tail_lines_with_context(
                 conversation,
                 INLINE_TAIL_NOTICE_DETAIL_LIMIT,
             ) {
-                lines.push(Line::from(format!("notice: {notice_line}")));
+                lines.push(Line::from(format!("operator notice: {notice_line}")));
             }
         }
     }
@@ -495,10 +495,12 @@ fn build_inline_tail_prompt_lines_with_context(
 ) -> Vec<Line<'static>> {
     match context.conversation_state {
         ShellConversationState::Loading => {
-            vec![Line::from("prompt: waiting while thread history loads")]
+            vec![Line::from(
+                "operator prompt: waiting while thread history loads",
+            )]
         }
         ShellConversationState::Failed(_) => vec![Line::from(
-            "prompt: blocked until you reload the session or open a new draft",
+            "operator prompt: blocked until you reload the session or open a new draft",
         )],
         ShellConversationState::Ready(conversation) => {
             build_inline_ready_prompt_lines(conversation, shell_action_availability)
@@ -520,22 +522,26 @@ fn build_inline_ready_prompt_lines(
         }
         let line = match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
-                "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
+                "operator prompt: waiting for startup  |  type now, Enter sends when ready"
+                    .to_string()
             }
             (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
-                "prompt: blocked while startup checks need attention  |  Ctrl+d inspect".to_string()
+                "operator prompt: blocked while startup checks need attention  |  Ctrl+d inspects"
+                    .to_string()
             }
             (ConversationInputState::DraftReady, _) => {
-                "prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
+                "operator prompt: new thread ready  |  Enter sends  |  Ctrl+j newline  |  :help"
+                    .to_string()
             }
             (ConversationInputState::ReadyToContinue, _) => {
-                "prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
+                "operator prompt: session ready  |  Enter sends  |  Ctrl+j newline  |  :help"
+                    .to_string()
             }
             (ConversationInputState::SubmittingTurn, _) => {
-                "prompt: sending  |  wait for turn start".to_string()
+                "operator prompt: sending  |  wait for turn start".to_string()
             }
             (ConversationInputState::StreamingTurn, _) => {
-                "prompt: turn running  |  type now, Enter when idle".to_string()
+                "operator prompt: turn running  |  type now, Enter sends when idle".to_string()
             }
         };
         lines.push(Line::from(line));
@@ -556,7 +562,7 @@ fn build_inline_ready_prompt_lines(
         && conversation.input_state.can_submit_now()
     {
         lines.push(Line::from(
-            "buffered prompt  |  automation busy  |  Enter when idle",
+            "operator prompt: buffered  |  automation busy  |  Enter sends when idle",
         ));
         return lines;
     }
@@ -571,12 +577,12 @@ fn build_inline_ready_prompt_lines(
         (
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Ready,
-        ) => "buffered prompt  |  Enter send  |  Ctrl+j nl",
+        ) => "operator prompt: buffered  |  Enter sends  |  Ctrl+j newline",
         (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
-            "buffered prompt  |  Enter when ready  |  Ctrl+j nl"
+            "operator prompt: buffered  |  Enter sends when ready  |  Ctrl+j newline"
         }
         (ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn, _) => {
-            "buffered prompt  |  Enter when idle  |  Ctrl+j nl"
+            "operator prompt: buffered  |  Enter sends when idle  |  Ctrl+j newline"
         }
     };
     lines.push(Line::from(hint));

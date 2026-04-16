@@ -325,10 +325,9 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
     assert!(rendered.contains("current state:"));
     assert!(rendered.contains("cause:"));
     assert!(rendered.contains("next action:"));
-    assert!(
-        rendered
-            .contains("status: turn completed / automation queued the next turn / planning queue")
-    );
+    assert!(rendered.contains(
+        "operator status: turn completed / automation queued the next turn / planning queue"
+    ));
     assert!(rendered.contains("warning: planner queue changed shape"));
     assert!(rendered.contains("planning reconciliation completed"));
 }
@@ -1034,7 +1033,7 @@ fn inline_notice_uses_operator_action_label_for_recent_auto_follow_activity() {
         .join("\n");
 
     assert!(rendered.contains(
-        "notice: automation update: queued the next turn  |  operator action: host accepted the refreshed queue"
+        "operator notice: automation update: queued the next turn  |  operator action: host accepted the refreshed queue"
     ));
 }
 

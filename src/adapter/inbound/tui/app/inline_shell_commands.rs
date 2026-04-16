@@ -36,7 +36,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :turns <n>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Operator commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :turns <n>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <1-50>` and press Enter to update the automation turn budget.";
 
@@ -46,7 +46,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":diag",
         aliases: &[":diag", ":diagnostics"],
         suggestion_detail: "startup checks",
-        buffered_hint: "Press Enter to open the startup checks.",
+        buffered_hint: "Press Enter to review startup checks.",
         execution_status: Some("opened startup checks"),
         requires_argument: false,
     },
@@ -55,7 +55,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":sessions",
         aliases: &[":session", ":sessions"],
         suggestion_detail: "recent sessions",
-        buffered_hint: "Press Enter to open the recent-sessions inspection.",
+        buffered_hint: "Press Enter to review recent sessions.",
         execution_status: Some("opened recent sessions inspection"),
         requires_argument: false,
     },
@@ -64,7 +64,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":queue",
         aliases: &[":q", ":queue"],
         suggestion_detail: "planning queue",
-        buffered_hint: "Press Enter to open the planning queue inspection.",
+        buffered_hint: "Press Enter to review the planning queue.",
         execution_status: Some("opened planning queue inspection"),
         requires_argument: false,
     },
@@ -91,7 +91,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":auto",
         aliases: &[":auto", ":automation"],
         suggestion_detail: "automation controls",
-        buffered_hint: "Press Enter to open the automation controls.",
+        buffered_hint: "Press Enter to review automation controls.",
         execution_status: Some("opened automation controls"),
         requires_argument: false,
     },
@@ -99,8 +99,8 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::PlanningInit,
         primary_name: ":planning",
         aliases: &[":planning", ":planning-init"],
-        suggestion_detail: "planning control center",
-        buffered_hint: "Press Enter to open the planning control center.",
+        suggestion_detail: "planning setup",
+        buffered_hint: "Press Enter to open planning setup.",
         execution_status: None,
         requires_argument: false,
     },
@@ -118,7 +118,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":new",
         aliases: &[":new"],
         suggestion_detail: "new draft",
-        buffered_hint: "Press Enter to open a new draft in the shell.",
+        buffered_hint: "Press Enter to open a new draft.",
         execution_status: None,
         requires_argument: false,
     },
@@ -127,7 +127,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":help",
         aliases: &[":help"],
         suggestion_detail: "command help",
-        buffered_hint: "Press Enter to show the available shell commands.",
+        buffered_hint: "Press Enter to show the available operator commands.",
         execution_status: Some(COMMAND_LIST_LINE),
         requires_argument: false,
     },
@@ -551,7 +551,7 @@ mod tests {
 
         assert_eq!(
             plain.buffered_hint(),
-            "Press Enter to open the planning control center."
+            "Press Enter to open planning setup."
         );
         assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
         assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");

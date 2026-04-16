@@ -362,7 +362,7 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                 )));
             } else {
                 lines.push(Line::from(
-                    "controls: Ctrl+l turn budget  |  Ctrl+g stop keyword  |  Ctrl+b planner visibility",
+                    "operator actions: Ctrl+l turn budget  |  Ctrl+g stop keyword  |  Ctrl+b planner visibility",
                 ));
             }
             lines.push(Line::from(Span::styled(
@@ -371,13 +371,13 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                     .as_deref()
                 {
                     Some(runtime_notice_summary) => format!(
-                        "status: {}  |  {}  |  {}",
+                        "operator status: {}  |  {}  |  {}",
                         conversation.status_text,
                         conversation.warning_summary(AUTOMATION_WARNING_DETAIL_LIMIT),
                         runtime_notice_summary,
                     ),
                     None => format!(
-                        "status: {}  |  {}",
+                        "operator status: {}  |  {}",
                         conversation.status_text,
                         conversation.warning_summary(AUTOMATION_WARNING_DETAIL_LIMIT),
                     ),

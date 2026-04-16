@@ -827,12 +827,12 @@ fn build_primary_submit_hint_with_context(
             "queued until ready"
         }
         ShellConversationState::Ready(conversation) if conversation.has_running_turn() => {
-            "Enter send when idle"
+            "Enter sends when idle"
         }
         ShellConversationState::Ready(_) if !context.shell_action_availability.allows_actions() => {
-            "Enter send when ready"
+            "Enter sends when ready"
         }
-        ShellConversationState::Ready(_) => "Enter send",
+        ShellConversationState::Ready(_) => "Enter sends",
         _ => "",
     }
 }
@@ -1699,7 +1699,7 @@ fn auto_follow_prompt_status_line(
     };
 
     Some(if inline {
-        format!("prompt: {detail}  |  type now, Enter when idle")
+        format!("operator prompt: {detail}  |  type now, Enter sends when idle")
     } else {
         detail
     })
@@ -1709,8 +1709,11 @@ fn auto_follow_prompt_status_line(
 fn auto_follow_prompt_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
     let detail = auto_follow_prompt_status_line(conversation, false)?;
     Some(vec![
-        Line::from(format!("Auto follow-up is {detail}.")),
-        Line::from("Type now; press Enter after the shell returns idle."),
+        Line::from("current state: waiting"),
+        Line::from(format!("cause: {detail}")),
+        Line::from(
+            "next action: type now if needed, then press Enter after the shell returns idle",
+        ),
     ])
 }
 

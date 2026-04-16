@@ -45,7 +45,7 @@ fn empty_existing_session_prompts_for_next_message() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Shell commands: :diag"))
+            .any(|line| line.contains("Operator commands: :diag"))
     );
 }
 #[test]
@@ -61,12 +61,12 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
         .join("\n");
 
     assert!(rendered.contains("> "));
-    assert!(rendered.contains("prompt: session ready"));
-    assert!(rendered.contains("Ctrl+j nl"));
+    assert!(rendered.contains("operator prompt: session ready"));
+    assert!(rendered.contains("Ctrl+j newline"));
     assert!(rendered.contains(":help"));
     assert!(!rendered.contains(":help commands"));
     assert!(!rendered.contains("this session is ready for the next prompt"));
-    assert!(!rendered.contains("Shell commands: :diag"));
+    assert!(!rendered.contains("Operator commands: :diag"));
 }
 #[test]
 fn inline_tail_compacts_empty_draft_prompt_copy() {
@@ -94,8 +94,8 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("starter: start with a task, file path, or bug summary"));
     assert!(rendered.contains("> "));
-    assert!(rendered.contains("prompt: new thread ready"));
-    assert!(rendered.contains("Ctrl+j nl"));
+    assert!(rendered.contains("operator prompt: new thread ready"));
+    assert!(rendered.contains("Ctrl+j newline"));
     assert!(rendered.contains(":help"));
     assert!(!rendered.contains(":help commands"));
     assert!(!rendered.contains("thread: new draft  |  turn: idle"));
@@ -117,7 +117,7 @@ fn inline_tail_loading_conversation_uses_operator_state_language() {
     assert!(rendered.contains("current state: waiting"));
     assert!(rendered.contains("cause: thread history is still loading from codex app-server"));
     assert!(rendered.contains("next action: wait for the thread history to load"));
-    assert!(rendered.contains("prompt: waiting while thread history loads"));
+    assert!(rendered.contains("operator prompt: waiting while thread history loads"));
 }
 
 #[test]
@@ -137,7 +137,10 @@ fn inline_tail_failed_conversation_uses_operator_state_language() {
     assert!(rendered.contains("cause: thread history is unavailable because loading failed"));
     assert!(rendered.contains("next action: reload the session or open a new draft"));
     assert!(rendered.contains("conversation error: transport closed"));
-    assert!(rendered.contains("prompt: blocked until you reload the session or open a new draft"));
+    assert!(
+        rendered
+            .contains("operator prompt: blocked until you reload the session or open a new draft")
+    );
 }
 
 #[test]
