@@ -30,7 +30,9 @@ fn planning_manual_editor_save_writes_staged_draft_file_and_clears_dirty_state()
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    assert!(conversation.status_text.contains("planning draft saved"));
+    assert!(conversation.status_text.contains("planning draft: saved"));
+    assert!(conversation.status_text.contains("staged draft:"));
+    assert!(conversation.status_text.contains("validation state: ok"));
     assert!(conversation.status_text.contains("Ctrl+P"));
     assert!(!app.planning_draft_editor_ui_state.has_dirty_buffers());
 
@@ -206,12 +208,17 @@ fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_conte
         panic!("app should stay in ready state");
     };
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-    assert!(conversation.status_text.contains("planning draft promoted"));
+    assert!(
+        conversation
+            .status_text
+            .contains("planning draft: promoted")
+    );
+    assert!(conversation.status_text.contains("promoted files:"));
     assert_eq!(
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "ready"
+        "waiting"
     );
 
     let planning_dir = std::path::Path::new(&workspace_dir)
@@ -240,17 +247,15 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
         panic!("app should stay in ready state");
     };
     conversation.cwd = workspace_dir.clone();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "planning context",
-        "queue ready",
-    ));
+    conversation
+        .replace_planning_runtime_snapshot(sample_planning_runtime_snapshot("planning context"));
 
     open_planning_manual_editor(&mut app);
     assert_eq!(
         count_staged_planning_drafts(&startup_workspace_dir),
         startup_draft_count
     );
-    assert_eq!(count_staged_planning_drafts(&workspace_dir), 1);
+    assert_eq!(count_staged_planning_drafts(&workspace_dir), 2);
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));
@@ -269,13 +274,14 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
     assert!(
         conversation
             .status_text
-            .contains("planning draft promote blocked")
+            .contains("planning draft: promote blocked")
     );
+    assert!(conversation.status_text.contains("validation state:"));
     assert_eq!(
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "inactive"
+        "waiting"
     );
     assert!(
         !std::path::Path::new(&workspace_dir)

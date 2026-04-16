@@ -25,7 +25,6 @@ pub(super) enum PlanningInitDetailSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PlanningInitSimpleReviewState {
     draft_name: String,
-    draft_directory: String,
     staged_file_count: usize,
     validation_report: PlanningValidationReport,
 }
@@ -33,10 +32,6 @@ pub(super) struct PlanningInitSimpleReviewState {
 impl PlanningInitSimpleReviewState {
     pub fn draft_name(&self) -> &str {
         self.draft_name.as_str()
-    }
-
-    pub fn draft_directory(&self) -> &str {
-        self.draft_directory.as_str()
     }
 
     pub fn staged_file_count(&self) -> usize {
@@ -118,7 +113,6 @@ impl PlanningInitOverlayUiState {
     pub fn open_detail_selection(&mut self) {
         self.mode_selection = PlanningInitModeSelection::Detail;
         self.step = PlanningInitOverlayStep::DetailSelection;
-        self.simple_review = None;
     }
 
     pub fn open_existing_workspace(&mut self) {
@@ -144,15 +138,18 @@ impl PlanningInitOverlayUiState {
         self.step = PlanningInitOverlayStep::SimpleReview;
         self.simple_review = Some(PlanningInitSimpleReviewState {
             draft_name: staged.draft_name,
-            draft_directory: staged.draft_directory,
             staged_file_count: staged.staged_file_count,
             validation_report: staged.validation_report,
         });
     }
 
-    pub fn return_to_mode_selection(&mut self) {
-        self.step = PlanningInitOverlayStep::ModeSelection;
-        self.simple_review = None;
+    pub fn return_from_detail_selection(&mut self) {
+        if self.simple_review.is_some() {
+            self.mode_selection = PlanningInitModeSelection::Simple;
+            self.step = PlanningInitOverlayStep::SimpleReview;
+        } else {
+            self.step = PlanningInitOverlayStep::ModeSelection;
+        }
     }
 
     pub fn select_detail(&mut self, selection: PlanningInitDetailSelection) {
@@ -265,5 +262,28 @@ mod tests {
         assert_eq!(state.selected_mode(), PlanningInitModeSelection::Simple);
         assert_eq!(state.selected_detail(), PlanningInitDetailSelection::Manual);
         assert!(state.simple_review().is_none());
+    }
+
+    #[test]
+    fn returning_from_detail_selection_restores_simple_review_when_present() {
+        let mut state = PlanningInitOverlayUiState::default();
+        state.open_simple_review(PlanningInitStageResult {
+            mode: PlanningBootstrapMode::Simple,
+            draft_name: "bootstrap-1".to_string(),
+            draft_directory: "/tmp/bootstrap-1".to_string(),
+            staged_files: Vec::new(),
+            staged_file_count: 4,
+            validation_report: PlanningValidationReport::default(),
+        });
+        state.open_detail_selection();
+
+        state.return_from_detail_selection();
+
+        assert_eq!(state.step(), PlanningInitOverlayStep::SimpleReview);
+        assert_eq!(state.selected_mode(), PlanningInitModeSelection::Simple);
+        assert_eq!(
+            state.simple_review().map(|review| review.draft_name()),
+            Some("bootstrap-1")
+        );
     }
 }

@@ -12,7 +12,7 @@ use super::super::{
 use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
 
 #[test]
-fn planning_init_command_opens_selector_overlay() {
+fn planning_command_opens_first_run_simple_review() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-init-selector");
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
@@ -28,12 +28,12 @@ fn planning_init_command_opens_selector_overlay() {
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
-        PlanningInitOverlayStep::ModeSelection
+        PlanningInitOverlayStep::SimpleReview
     );
     assert!(
         conversation
             .status_text
-            .contains("operator surface: planning setup / workspace: not initialized")
+            .contains("planning simple review ready")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -224,7 +224,11 @@ fn init_command_stages_simple_review_immediately() {
         app.planning_init_overlay_ui_state.step(),
         PlanningInitOverlayStep::SimpleReview
     );
-    assert!(conversation.status_text.contains("planning draft: staged"));
+    assert!(
+        conversation
+            .status_text
+            .contains("planning simple review ready")
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -452,12 +456,15 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
         InlineShellCommandInput::parse(":planning").expect("command should parse"),
     );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    assert!(conversation.status_text.contains("planning draft: staged"));
+    assert!(
+        conversation
+            .status_text
+            .contains("planning simple review ready")
+    );
     assert!(conversation.status_text.contains("staged draft:"));
     assert!(conversation.status_text.contains("validation state: ok"));
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);

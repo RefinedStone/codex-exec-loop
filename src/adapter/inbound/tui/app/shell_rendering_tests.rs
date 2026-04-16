@@ -46,24 +46,24 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
         None,
     )
     .with_display_label("Auto Follow-up")
-    .with_debug_detail("planner temp session: refresh / refresh ok");
+    .with_debug_detail("planner session: refresh  |  state: refresh ok");
 
     let without_debug = format_conversation_lines(std::slice::from_ref(&message));
     assert!(
         !without_debug
             .iter()
-            .any(|line| line.to_string().contains("planner temp session"))
+            .any(|line| line.to_string().contains("planner session"))
     );
 
     let with_debug = format_conversation_lines_with_debug(&[message], true);
     let detail_line = with_debug
         .iter()
-        .find(|line: &&Line<'static>| line.to_string().contains("planner temp session"))
+        .find(|line: &&Line<'static>| line.to_string().contains("planner session"))
         .expect("debug transcript should include the planner detail line");
 
     assert_eq!(
         detail_line.to_string(),
-        "  planner temp session: refresh / refresh ok"
+        "  planner session: refresh  |  state: refresh ok"
     );
     assert_eq!(detail_line.spans[0].style.fg, Some(Color::Gray));
 }
@@ -128,12 +128,15 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
-    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("startup: startup checks ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("current state: ready"));
+    assert!(rendered.contains("startup checks: codex ready"));
+    assert!(rendered.contains("workspace ready"));
+    assert!(rendered.contains("app-server ready"));
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
-    assert!(rendered.contains("prompt: new thread ready"));
+    assert!(rendered.contains("operator prompt: ready for the opening prompt"));
 }
 
 #[test]
@@ -226,7 +229,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 7));
+        .assert_cursor_position(Position::new(2, 11));
 }
 
 #[test]
@@ -242,8 +245,10 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Ready Queue"));
-    assert!(rendered.contains("Proposals"));
+    assert!(rendered.contains("Now"));
+    assert!(rendered.contains("Next"));
+    assert!(rendered.contains("Proposed"));
+    assert!(rendered.contains("Blocked"));
 }
 
 fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
@@ -269,8 +274,14 @@ fn inline_startup_inspection_replaces_transcript_panel() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Diagnostics / inline inspection"));
-    assert!(rendered.contains("Checks"));
+    assert!(rendered.contains("Startup Checks / operator inspection"));
+    assert!(rendered.contains("Startup Checks"));
+    assert!(rendered.contains("Current State, Cause, and Next Action"));
+    assert!(rendered.contains("Warnings Requiring Review"));
+    assert!(rendered.contains("Operator Actions"));
+    assert!(rendered.contains("current state: ready"));
+    assert!(rendered.contains("cause: codex, workspace, app-server"));
+    assert!(rendered.contains("next action: continue in the shell"));
     assert!(rendered.contains("schema snapshot: snapshot.json"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
@@ -295,10 +306,11 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Recent Sessions / inline inspection"));
-    assert!(rendered.contains("Threads"));
-    assert!(rendered.contains("Selected Session"));
-    assert!(rendered.contains("Session Warnings"));
+    assert!(rendered.contains("Recent Sessions / operator inspection"));
+    assert!(rendered.contains("Session List"));
+    assert!(rendered.contains("Selected Session Detail"));
+    assert!(rendered.contains("Warnings Requiring Review"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
@@ -316,10 +328,12 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Automation Controls / inline inspection"));
-    assert!(rendered.contains("Automation"));
-    assert!(rendered.contains("Preview"));
-    assert!(rendered.contains("automation: on"));
+    assert!(rendered.contains("Automation Controls / operator inspection"));
+    assert!(rendered.contains("Automation Controls"));
+    assert!(rendered.contains("Rendered Next-Turn Prompt"));
+    assert!(rendered.contains("Operator Status"));
+    assert!(rendered.contains("Operator Actions"));
+    assert!(rendered.contains("automation state: on"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
@@ -361,7 +375,11 @@ fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Planning / inline inspection"));
+    assert!(rendered.contains("Planning Setup / operator inspection"));
+    assert!(rendered.contains("Current State, Cause, and Next Action"));
+    assert!(rendered.contains("Available Options"));
+    assert!(rendered.contains("Operator Status"));
+    assert!(rendered.contains("Operator Actions"));
     assert!(rendered.contains("simple mode"));
     assert!(rendered.contains("detail mode"));
     assert!(!rendered.contains("Transcript /"));
@@ -385,13 +403,61 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Planning Draft / inline inspection"));
-    assert!(rendered.contains("Files"));
+    assert!(rendered.contains("Planning Draft / operator inspection"));
+    assert!(rendered.contains("Draft Files"));
+    assert!(rendered.contains("Operator Status"));
+    assert!(rendered.contains("Operator Actions"));
+    assert!(rendered.contains("staged draft:"));
+    assert!(rendered.contains("current file:"));
+    assert!(rendered.contains("validation state: ok"));
     assert!(rendered.contains("directions.toml"));
-    assert!(rendered.contains("Ctrl+S: save + validate"));
-    assert!(rendered.contains("Ctrl+P: save + promote active planning"));
+    assert!(rendered.contains("Ctrl+S saves and validates"));
+    assert!(rendered.contains("Ctrl+P saves and promotes active planning"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn popup_helper_titles_use_operator_facing_copy() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    terminal
+        .draw(|frame| draw_startup_overlay(frame, &app))
+        .expect("startup popup render succeeds");
+    let startup_rendered = format!("{}", terminal.backend());
+    assert!(startup_rendered.contains("Startup Checks / operator inspection"));
+    assert!(startup_rendered.contains("Current State, Cause, and Next Action"));
+    assert!(startup_rendered.contains("Warnings Requiring Review"));
+    assert!(startup_rendered.contains("Operator Actions"));
+
+    app.session_state = SessionState::Ready(RecentSessions {
+        items: vec![sample_session("thread-1"), sample_session("thread-2")],
+        warnings: vec!["cache is stale".to_string()],
+        next_cursor: None,
+    });
+
+    terminal
+        .draw(|frame| draw_session_overlay(frame, &mut app))
+        .expect("session popup render succeeds");
+    let session_rendered = format!("{}", terminal.backend());
+    assert!(session_rendered.contains("Recent Sessions / operator inspection"));
+    assert!(session_rendered.contains("Session List"));
+    assert!(session_rendered.contains("Selected Session Detail"));
+    assert!(session_rendered.contains("Warnings Requiring Review"));
+    assert!(session_rendered.contains("Operator Actions"));
+
+    app.show_automation_overlay();
+    terminal
+        .draw(|frame| draw_automation_overlay(frame, &mut app))
+        .expect("automation popup render succeeds");
+    let automation_rendered = format!("{}", terminal.backend());
+    assert!(automation_rendered.contains("Automation Controls / operator inspection"));
+    assert!(automation_rendered.contains("Automation Controls"));
+    assert!(automation_rendered.contains("Rendered Next-Turn Prompt"));
+    assert!(automation_rendered.contains("Operator Status"));
+    assert!(automation_rendered.contains("Operator Actions"));
 }
 
 #[test]
@@ -471,12 +537,16 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(header.contains("simple mode"));
+    assert!(header.contains("Planning Setup / operator inspection"));
+    assert!(header.contains("Simple mode review"));
     assert!(options.contains("bootstrap-1"));
-    assert!(status.contains("max auto turns: 3"));
-    assert!(keys.contains("Enter/Ctrl+P: promote staged scaffold"));
-    assert!(keys.contains("Ctrl+L: edit max auto turns"));
-    assert!(keys.contains("Ctrl+E: inspect/edit draft"));
+    assert!(options.contains("advanced path"));
+    assert!(status.contains("turn budget: 3"));
+    assert!(status.contains("advanced action: D opens detail-mode authoring"));
+    assert!(keys.contains("Enter or Ctrl+P promotes the staged scaffold."));
+    assert!(keys.contains("D opens detail-mode authoring."));
+    assert!(keys.contains("Ctrl+L edits turn budget."));
+    assert!(keys.contains("Ctrl+E inspects or edits the draft."));
 }
 
 #[test]
@@ -503,9 +573,9 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(keys.contains("Type the new max-turn value directly."));
-    assert!(keys.contains("Enter: save max turns"));
-    assert!(keys.contains("Use a whole number between 1 and 50."));
+    assert!(keys.contains("next action: type the new turn budget directly."));
+    assert!(keys.contains("controls: Enter saves"));
+    assert!(keys.contains("validation: use a whole number between 1 and 50."));
     assert!(!keys.contains("promote staged scaffold"));
 }
 
@@ -535,8 +605,8 @@ fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
         .join("\n");
 
     assert!(status.contains("close pending"));
-    assert!(keys.contains("Enter/Esc/Ctrl+C: confirm close"));
-    assert!(keys.contains("n: keep editing"));
+    assert!(keys.contains("controls: Enter, Esc, or Ctrl+C confirms close"));
+    assert!(keys.contains("n keeps editing"));
 }
 
 struct FakeCodexAppServerPort;

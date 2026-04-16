@@ -1,3 +1,4 @@
+use super::super::super::planning::build_queue_framing_lines_from_snapshot;
 use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
 use super::super::status_panels::plan_runtime_substate_label;
 use super::super::{
@@ -24,22 +25,39 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             } else {
                 "Plan off".to_string()
             };
-            let queue_summary = snapshot
-                .queue_summary()
-                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
-                .unwrap_or_else(|| "queue state unavailable".to_string());
             let failure_summary = snapshot
                 .failure_reason()
                 .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
+            let queue_framing_lines =
+                build_queue_framing_lines_from_snapshot(&snapshot, FOOTER_NOTICE_DETAIL_LIMIT);
+            let mut option_lines = vec![
+                Line::from(format!("workspace: {workspace_directory}")),
+                Line::from(format!("planning state: {plan_state_label}")),
+                Line::from(format!(
+                    "queue idle policy: {}",
+                    snapshot.queue_idle_policy().label()
+                )),
+            ];
+            if queue_framing_lines.is_empty() {
+                option_lines.push(Line::from("queue state: unavailable"));
+            } else {
+                option_lines.extend(queue_framing_lines);
+            }
             let mut status_lines = if snapshot.plan_enabled() {
                 vec![
-                    Line::from("Enter opens queue inspection for the existing planning workspace."),
-                    Line::from("Press D to maintain directions, or O to turn Plan off."),
+                    Line::from(
+                        "next action: Enter opens queue inspection for the existing planning workspace.",
+                    ),
+                    Line::from("other actions: D opens directions maintenance. O turns Plan off."),
                 ]
             } else {
                 vec![
-                    Line::from("Enter turns Plan on and resumes the existing planning workspace."),
-                    Line::from("Directions maintenance stays blocked while Plan off."),
+                    Line::from(
+                        "next action: Enter turns Plan on and resumes the existing planning workspace.",
+                    ),
+                    Line::from(
+                        "other actions: directions maintenance stays blocked while Plan off.",
+                    ),
                 ]
             };
 
@@ -47,15 +65,15 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Planning Controls",
+                            "Planning Setup",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / existing workspace"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
+                        "Existing workspace: manage the current planning runtime instead of staging a new scaffold.",
                     ),
                 ],
                 summary_lines: vec![
@@ -66,22 +84,18 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
                     ),
                 ],
-                option_lines: vec![
-                    Line::from(format!("workspace: {workspace_directory}")),
-                    Line::from(format!("state: {plan_state_label}")),
-                    Line::from(format!("queue: {queue_summary}")),
-                    Line::from(format!("policy: {}", snapshot.queue_idle_policy().label())),
-                ],
+                option_lines,
                 status_lines: {
                     if let Some(failure_summary) = failure_summary {
-                        status_lines.push(Line::from(format!("failure: {failure_summary}")));
+                        status_lines
+                            .push(Line::from(format!("planning failure: {failure_summary}")));
                     }
                     status_lines
                 },
                 key_lines: vec![
-                    Line::from("Enter: open queue or resume Plan on"),
-                    Line::from("Q: queue inspection    D: directions maintenance"),
-                    Line::from("O: toggle Plan on/off    Esc/Ctrl+C: close"),
+                    Line::from("Enter opens queue inspection or resumes Plan on."),
+                    Line::from("Q opens queue inspection. D opens directions maintenance."),
+                    Line::from("O toggles Plan on or off. Esc/Ctrl+C closes this surface."),
                 ],
             }
         }
@@ -89,12 +103,12 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Planning Initialization",
+                        "Planning Setup",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / shell guidance"),
+                    Span::raw(" / operator inspection"),
                 ]),
                 Line::from("Pick the planning entry path before any files are staged."),
             ],
@@ -126,7 +140,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             ],
             status_lines: vec![
                 Line::from(format!(
-                    "selected: {}",
+                    "current selection: {}",
                     match app.planning_init_overlay_ui_state.selected_mode() {
                         PlanningInitModeSelection::Simple => "simple mode",
                         PlanningInitModeSelection::Detail => "detail mode",
@@ -135,22 +149,22 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("simple mode is the low-ceremony path for planning-aware execution."),
             ],
             key_lines: vec![
-                Line::from("A/B or arrows: move selection"),
-                Line::from("Enter: continue    Esc/Ctrl+C: cancel"),
+                Line::from("A/B or arrows move selection."),
+                Line::from("Enter continues. Esc/Ctrl+C cancels."),
             ],
         },
         PlanningInitOverlayStep::DetailSelection => PlanningInitOverlayView {
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Planning Initialization",
+                        "Planning Setup",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / detail mode"),
+                    Span::raw(" / operator inspection"),
                 ]),
-                Line::from("Choose how detail-mode drafts should be prepared."),
+                Line::from("Current step: choose how detail-mode drafts should be prepared."),
             ],
             summary_lines: vec![
                 Line::from("Manual opens the staged draft editor inside the shell."),
@@ -176,7 +190,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             ],
             status_lines: vec![
                 Line::from(format!(
-                    "selected: {}",
+                    "current selection: {}",
                     match app.planning_init_overlay_ui_state.selected_detail() {
                         PlanningInitDetailSelection::Manual => "manual",
                         PlanningInitDetailSelection::LlmAssisted => "llm-assisted (disabled)",
@@ -185,17 +199,14 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("Enter on manual opens the embedded draft editor."),
             ],
             key_lines: vec![
-                Line::from("A/B or arrows: move selection"),
-                Line::from("Backspace/Left: back    Enter: act    Esc/Ctrl+C: cancel"),
+                Line::from("A/B or arrows move selection."),
+                Line::from("Backspace/Left goes back. Enter continues. Esc/Ctrl+C cancels."),
             ],
         },
         PlanningInitOverlayStep::SimpleReview => {
             let simple_review = app.planning_init_overlay_ui_state.simple_review();
             let draft_name = simple_review
                 .map(|review| review.draft_name().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let draft_directory = simple_review
-                .map(|review| review.draft_directory().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
             let staged_file_count = simple_review
                 .map(|review| review.staged_file_count())
@@ -212,40 +223,44 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Planning Initialization",
+                            "Planning Setup",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / simple mode"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "Review the staged generic scaffold before it becomes active planning.",
+                        "Simple mode review: promote the lightest planning baseline before you invest in richer authoring.",
                     ),
                 ],
                 summary_lines: vec![
                     Line::from(
-                        "Simple mode keeps the direction catalog generic and leaves the task ledger empty.",
+                        "After promote, planning starts with one generic direction and no active queue task yet.",
                     ),
                     Line::from(
-                        "It also stages a default queue-idle review prompt so the first reply can seed justified follow-up work.",
+                        "The default queue-idle review prompt is already staged so the first reply can justify follow-up work when needed.",
                     ),
                     Line::from(
-                        "No active planning files change until you explicitly promote this staged draft.",
+                        "No active planning files change until you explicitly promote this review.",
                     ),
                 ],
                 option_lines: vec![
-                    Line::from(format!("draft: {draft_name}")),
-                    Line::from(format!("draft dir: {draft_directory}")),
-                    Line::from(format!("staged files: {staged_file_count}")),
+                    Line::from(format!("staged draft: {draft_name}")),
+                    Line::from(format!(
+                        "reviewed artifacts: {staged_file_count} staged planning files"
+                    )),
                     Line::from(
-                        "Use Ctrl+E if you want to inspect or edit the staged files before promote.",
+                        "promote outcome: generic direction catalog, empty task ledger, and default queue-idle review prompt",
+                    ),
+                    Line::from(
+                        "advanced path: press D to branch into detail-mode authoring instead of promoting the simple scaffold",
                     ),
                 ],
                 status_lines: {
                     let mut lines = vec![
                         Line::from(format!(
-                            "validation: {}",
+                            "validation state: {}",
                             if validation_ok {
                                 "ok"
                             } else {
@@ -253,21 +268,24 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                             }
                         )),
                         Line::from(format!(
-                            "max auto turns: {}",
+                            "turn budget: {}",
                             app.current_max_auto_turns_label()
                         )),
                     ];
                     if app.is_max_auto_turns_editing() {
                         lines.push(Line::from(format!(
-                            "editing max auto turns: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                            "current state: editing turn budget / value: {} / controls: Enter saves, Esc/Ctrl+C cancels",
                             app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                         )));
                     } else {
                         lines.push(Line::from(
-                            "next: Enter or Ctrl+P promotes the staged simple scaffold.",
+                            "next action: Enter or Ctrl+P promotes the staged simple scaffold.",
                         ));
                         lines.push(Line::from(
-                            "next: Esc closes this review and leaves the staged draft on disk.",
+                            "alternate action: Esc closes this review and leaves the staged draft on disk.",
+                        ));
+                        lines.push(Line::from(
+                            "advanced action: D opens detail-mode authoring without promoting the simple scaffold.",
                         ));
                     }
                     if let Some(first_error) = first_error {
@@ -277,15 +295,19 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 },
                 key_lines: if app.is_max_auto_turns_editing() {
                     vec![
-                        Line::from("Type the new max-turn value directly. Backspace deletes."),
-                        Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
-                        Line::from("Use a whole number between 1 and 50."),
+                        Line::from("next action: type the new turn budget directly."),
+                        Line::from(
+                            "controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes",
+                        ),
+                        Line::from("validation: use a whole number between 1 and 50."),
                     ]
                 } else {
                     vec![
-                        Line::from("Enter/Ctrl+P: promote staged scaffold"),
-                        Line::from("Ctrl+L: edit max auto turns    Ctrl+E: inspect/edit draft"),
-                        Line::from("Esc/Ctrl+C: close review"),
+                        Line::from("Enter or Ctrl+P promotes the staged scaffold."),
+                        Line::from(
+                            "D opens detail-mode authoring. Ctrl+L edits turn budget. Ctrl+E inspects or edits the draft.",
+                        ),
+                        Line::from("Esc/Ctrl+C closes this review."),
                     ]
                 },
             }
@@ -294,12 +316,12 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Planning Draft Editor",
+                        "Planning Draft",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / staged detail draft"),
+                    Span::raw(" / operator inspection"),
                 ]),
                 Line::from("Edit the staged planning draft and save to re-run validation."),
             ],
@@ -307,10 +329,12 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 "This state renders through the dedicated planning draft editor view.",
             )],
             option_lines: vec![Line::from(
-                "Use Tab to switch files and Ctrl+S to save + validate.",
+                "next action: Tab switches files. Ctrl+S saves and re-runs validation.",
             )],
-            status_lines: vec![Line::from("editor ready")],
-            key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+            status_lines: vec![Line::from(
+                "current state: editing the staged planning draft",
+            )],
+            key_lines: vec![Line::from("Esc/Ctrl+C closes this surface.")],
         },
     }
 }
@@ -378,19 +402,19 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
 
     let mut status_lines = vec![
         Line::from(format!(
-            "draft: {}",
+            "staged draft: {}",
             app.planning_draft_editor_ui_state
                 .draft_name()
                 .unwrap_or("unknown")
         )),
         Line::from(format!(
-            "file: {} ({}/{})",
+            "current file: {} ({}/{})",
             selected_buffer.active_path(),
             selected_index + 1,
             buffers.len()
         )),
         Line::from(vec![
-            Span::styled("validation: ", Style::default().fg(Color::Gray)),
+            Span::styled("validation state: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 if validation_report.is_valid() {
                     "ok"
@@ -491,9 +515,13 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
         editor_cursor_offset,
         status_lines,
         key_lines: vec![
-            Line::from("Tab/BackTab: switch file    arrows: move cursor"),
-            Line::from("Enter: newline    Backspace: delete    Ctrl+W: delete previous word"),
-            Line::from("Ctrl+S: save + validate    Ctrl+P: save + promote active planning"),
+            Line::from("controls: Tab/BackTab switches files  |  arrows move the cursor"),
+            Line::from(
+                "controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word",
+            ),
+            Line::from(
+                "controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning",
+            ),
             planning_draft_editor_close_key_line(close_risk, pending_close_risk.is_some()),
         ],
     })
@@ -534,14 +562,14 @@ fn planning_draft_editor_close_key_line(
     confirmation_pending: bool,
 ) -> Line<'static> {
     if confirmation_pending {
-        return Line::from("Enter/Esc/Ctrl+C: confirm close    n: keep editing");
+        return Line::from("controls: Enter, Esc, or Ctrl+C confirms close  |  n keeps editing");
     }
 
     if close_risk.is_some() {
-        return Line::from("Esc/Ctrl+C: review close");
+        return Line::from("controls: Esc/Ctrl+C reviews close");
     }
 
-    Line::from("Esc/Ctrl+C: close")
+    Line::from("controls: Esc/Ctrl+C closes this surface")
 }
 
 pub(super) fn planning_init_option_line(

@@ -26,7 +26,6 @@ fn open_planning_simple_review(app: &mut NativeTuiApp) {
     app.execute_inline_shell_command_input(
         InlineShellCommandInput::parse(":planning").expect("command should parse"),
     );
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
         PlanningInitOverlayStep::SimpleReview
@@ -38,8 +37,7 @@ fn open_planning_manual_editor(app: &mut NativeTuiApp) {
     app.execute_inline_shell_command_input(
         InlineShellCommandInput::parse(":planning").expect("command should parse"),
     );
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE,)));
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),
