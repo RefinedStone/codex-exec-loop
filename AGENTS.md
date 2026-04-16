@@ -1,3 +1,6 @@
+## Work Rules
+- 모든 의미있는 작업단위로 commit -> push -> rebase merge(prerelease) 과정을 거치세요
+
 ## Review guidelines
 
 - Using Korean language when you're reviewing except code-block
