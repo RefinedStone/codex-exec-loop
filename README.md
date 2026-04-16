@@ -16,7 +16,7 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 
 ## What Changed Since `v1.2.9`
 
-The current `prerelease` branch at `cb8a66c` adds a focused Phase 1 operator-surface upgrade over `v1.2.9` (`b0413ee`):
+The current `prerelease` line adds a focused Phase 1 operator-surface upgrade over `v1.2.9` (`b0413ee`):
 
 - Planning lifecycle commands are now shipped outside and inside the shell: `akra doctor`, `akra init`, `akra reset`, `:doctor`, `:init`, and `:reset`.
 - First-run planning now defaults to the simple happy path instead of pushing the operator straight into detail-mode authoring.
