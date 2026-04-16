@@ -61,7 +61,7 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
         .join("\n");
 
     assert!(rendered.contains("> "));
-    assert!(rendered.contains("operator prompt: session ready"));
+    assert!(rendered.contains("operator prompt: ready for the next prompt"));
     assert!(rendered.contains("Ctrl+j newline"));
     assert!(rendered.contains(":help"));
     assert!(!rendered.contains(":help commands"));
@@ -83,7 +83,7 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("startup: startup checks ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
     assert!(rendered.contains("current state: ready"));
     assert!(rendered.contains("cause: codex, workspace, app-server, and account access are ready"));
@@ -94,7 +94,7 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("starter: start with a task, file path, or bug summary"));
     assert!(rendered.contains("> "));
-    assert!(rendered.contains("operator prompt: new thread ready"));
+    assert!(rendered.contains("operator prompt: ready for the opening prompt"));
     assert!(rendered.contains("Ctrl+j newline"));
     assert!(rendered.contains(":help"));
     assert!(!rendered.contains(":help commands"));

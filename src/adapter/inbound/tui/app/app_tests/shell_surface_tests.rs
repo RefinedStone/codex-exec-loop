@@ -189,7 +189,7 @@ fn automation_inline_command_opens_overlay() {
     assert!(
         conversation
             .status_text
-            .contains("opened automation controls")
+            .contains("operator surface: automation controls")
     );
 }
 

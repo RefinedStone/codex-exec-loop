@@ -171,8 +171,9 @@ impl NativeTuiApp {
                         } else {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
-                                    status_text: "Plan off - turn Plan on before opening queue"
-                                        .to_string(),
+                                    status_text:
+                                        "planning mode: off / next action: turn Plan on before opening queue"
+                                            .to_string(),
                                 },
                             );
                         }
@@ -186,8 +187,9 @@ impl NativeTuiApp {
                         } else {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
-                                    status_text: "Plan off - turn Plan on in this menu first"
-                                        .to_string(),
+                                    status_text:
+                                        "planning mode: off / next action: turn Plan on in this menu first"
+                                            .to_string(),
                                 },
                             );
                         }
@@ -308,12 +310,14 @@ impl NativeTuiApp {
         let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
         if !snapshot.plan_enabled() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "Plan off - initialize with :planning first".to_string(),
+                status_text:
+                    "planning mode: off / next action: open :planning to initialize the workspace"
+                        .to_string(),
             });
             return;
         }
         self.present_directions_maintenance_overview(
-            "opened directions maintenance".to_string(),
+            "operator surface: direction maintenance".to_string(),
             true,
         );
     }
@@ -362,12 +366,12 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: if snapshot.workspace_present() {
                 if snapshot.plan_enabled() {
-                    "opened planning workspace controls".to_string()
+                    "operator surface: planning setup / planning mode: on".to_string()
                 } else {
-                    "opened planning workspace controls / Plan off".to_string()
+                    "operator surface: planning setup / planning mode: off".to_string()
                 }
             } else {
-                "opened planning initialization selector".to_string()
+                "operator surface: planning setup / workspace: not initialized".to_string()
             },
         });
     }
@@ -405,9 +409,10 @@ impl NativeTuiApp {
                 .unwrap_or(false)
             {
                 self.show_planning_init_overlay();
-                "planning workspace missing; open :planning to initialize it".to_string()
+                "planning workspace: missing / next action: open :planning to initialize it"
+                    .to_string()
             } else {
-                format!("failed to enable planning mode: {error}")
+                format!("planning mode: failed to turn on / cause: {error}")
             };
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: fallback_status,
@@ -423,7 +428,8 @@ impl NativeTuiApp {
                 .open_existing_workspace();
         }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: "Plan on / using the existing planning workspace".to_string(),
+            status_text: "planning mode: on / workspace: using the existing planning workspace"
+                .to_string(),
         });
     }
 
@@ -446,13 +452,13 @@ impl NativeTuiApp {
                         .open_existing_workspace();
                 }
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: "Plan off / planning workspace retained for later resume"
+                    status_text: "planning mode: off / workspace: retained for later resume"
                         .to_string(),
                 });
             }
             Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("failed to turn Plan off: {error}"),
+                    status_text: format!("planning mode: failed to turn off / cause: {error}"),
                 })
             }
         }
@@ -510,7 +516,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_manual_editor_session(&workspace_directory),
-            "planning draft editor ready",
+            "operator surface: planning draft",
             PlanningInitModeSelection::Detail,
         );
     }
@@ -521,7 +527,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_editor_session(&workspace_directory),
-            "directions editor ready",
+            "operator surface: direction draft",
         );
     }
 
@@ -531,7 +537,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_detail_doc_editor_session(&workspace_directory, direction_id),
-            "directions detail doc editor ready",
+            "operator surface: direction detail doc draft",
         );
     }
 
@@ -541,7 +547,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_queue_idle_prompt_editor_session(&workspace_directory),
-            "queue-idle prompt editor ready",
+            "operator surface: queue-idle prompt draft",
         );
     }
 
@@ -904,7 +910,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .load_manual_editor_session(&workspace_directory, &draft_name),
-            "planning simple draft editor ready",
+            "operator surface: planning draft",
             PlanningInitModeSelection::Simple,
         );
     }

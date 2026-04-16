@@ -77,12 +77,12 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn activity_summary(self) -> &'static str {
         match self {
-            Self::Disabled => "automation off",
+            Self::Disabled => "automation state: off",
             Self::LimitReached => "turn limit reached",
             Self::NoAgentReply => "no agent reply",
             Self::StopKeywordMatched => "stop keyword matched",
             Self::NoFileChanges => "no file changes",
-            Self::PlanningDisabled => "planning off",
+            Self::PlanningDisabled => "planning mode: off",
             Self::PlanningBlocked => "planning needs repair",
             Self::PlanningQueueIdlePolicyStop => "queue idle",
             Self::PlanningQueueHeadRequired => "waiting for next task",
@@ -92,7 +92,7 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
         match self {
-            Self::Disabled => "turn completed / automation off".to_string(),
+            Self::Disabled => "turn completed / automation state: off".to_string(),
             Self::LimitReached => format!(
                 "turn completed / automation stopped at the turn budget ({})",
                 auto_follow_state.progress_label()

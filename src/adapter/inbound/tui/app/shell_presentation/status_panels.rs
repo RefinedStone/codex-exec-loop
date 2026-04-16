@@ -522,7 +522,7 @@ fn build_inline_ready_prompt_lines(
         }
         let line = match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
-                "operator prompt: waiting for startup  |  type now, Enter sends when ready"
+                "operator prompt: waiting for startup checks  |  type now, Enter sends when ready"
                     .to_string()
             }
             (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
@@ -530,11 +530,11 @@ fn build_inline_ready_prompt_lines(
                     .to_string()
             }
             (ConversationInputState::DraftReady, _) => {
-                "operator prompt: new thread ready  |  Enter sends  |  Ctrl+j newline  |  :help"
+                "operator prompt: ready for the opening prompt  |  Enter sends  |  Ctrl+j newline  |  :help"
                     .to_string()
             }
             (ConversationInputState::ReadyToContinue, _) => {
-                "operator prompt: session ready  |  Enter sends  |  Ctrl+j newline  |  :help"
+                "operator prompt: ready for the next prompt  |  Enter sends  |  Ctrl+j newline  |  :help"
                     .to_string()
             }
             (ConversationInputState::SubmittingTurn, _) => {

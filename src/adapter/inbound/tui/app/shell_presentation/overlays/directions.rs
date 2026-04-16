@@ -258,7 +258,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
             option_lines: vec![Line::from(
                 "Use Tab to switch files and Ctrl+S to save + validate.",
             )],
-            status_lines: vec![Line::from("editor ready")],
+            status_lines: vec![Line::from("current state: editing the staged direction draft")],
             key_lines: vec![Line::from("Esc/Ctrl+C: close")],
         },
     }

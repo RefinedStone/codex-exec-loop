@@ -466,7 +466,7 @@ mod tests {
             panic!("expected ready conversation state");
         };
         conversation.thread_id = "thread-1".to_string();
-        conversation.status_text = "session ready".to_string();
+        conversation.status_text = "ready for the next prompt".to_string();
         conversation.turn_activity.last_completed_turn_id = Some("turn-2".to_string());
 
         runtime
@@ -504,7 +504,7 @@ mod tests {
         let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
             panic!("expected ready conversation state");
         };
-        assert_eq!(conversation.status_text, "session ready");
+        assert_eq!(conversation.status_text, "ready for the next prompt");
         assert!(conversation.runtime_notices.is_empty());
         assert!(
             runtime
@@ -549,7 +549,11 @@ mod tests {
         };
         assert_eq!(runtime.app().shell_overlay, ShellOverlay::Startup);
         assert!(conversation.input_buffer.is_empty());
-        assert!(conversation.status_text.contains("opened startup checks"));
+        assert!(
+            conversation
+                .status_text
+                .contains("operator surface: startup checks")
+        );
     }
 
     #[test]

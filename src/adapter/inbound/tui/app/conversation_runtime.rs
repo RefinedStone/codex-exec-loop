@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(reduced.state.thread_id, "thread-2");
         assert_eq!(reduced.state.title, "Loaded thread");
         assert_eq!(reduced.state.cwd, "/tmp/loaded");
-        assert_eq!(reduced.state.status_text, "thread started");
+        assert_eq!(reduced.state.status_text, "thread state: ready");
         assert_eq!(
             reduced.state.messages.last().map(|message| message.kind),
             Some(ConversationMessageKind::Status)
@@ -647,7 +647,7 @@ mod tests {
                 .messages
                 .last()
                 .map(|message| message.text.as_str()),
-            Some("thread opened / Loaded thread")
+            Some("current thread: Loaded thread")
         );
         assert_eq!(
             reduced.state.cached_conversation_lines,

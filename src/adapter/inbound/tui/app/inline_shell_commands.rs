@@ -47,7 +47,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":diag", ":diagnostics"],
         suggestion_detail: "startup checks",
         buffered_hint: "Press Enter to review startup checks.",
-        execution_status: Some("opened startup checks"),
+        execution_status: Some("operator surface: startup checks"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -56,7 +56,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":session", ":sessions"],
         suggestion_detail: "recent sessions",
         buffered_hint: "Press Enter to review recent sessions.",
-        execution_status: Some("opened recent sessions inspection"),
+        execution_status: Some("operator surface: recent sessions"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -65,7 +65,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":q", ":queue"],
         suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to review the planning queue.",
-        execution_status: Some("opened planning queue inspection"),
+        execution_status: Some("operator surface: planning queue"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -92,7 +92,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":auto", ":automation"],
         suggestion_detail: "automation controls",
         buffered_hint: "Press Enter to review automation controls.",
-        execution_status: Some("opened automation controls"),
+        execution_status: Some("operator surface: automation controls"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -564,11 +564,11 @@ mod tests {
     #[test]
     fn execution_status_stays_alias_neutral() {
         let cases = [
-            (":diag", Some("opened startup checks")),
-            (":sessions", Some("opened recent sessions inspection")),
-            (":queue", Some("opened planning queue inspection")),
+            (":diag", Some("operator surface: startup checks")),
+            (":sessions", Some("operator surface: recent sessions")),
+            (":queue", Some("operator surface: planning queue")),
             (":stop", None),
-            (":auto", Some("opened automation controls")),
+            (":auto", Some("operator surface: automation controls")),
             (":planning", None),
             (":turns 5", None),
         ];

@@ -80,7 +80,11 @@ fn directions_editor_still_opens_when_supporting_paths_are_invalid() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    assert!(conversation.status_text.contains("directions editor ready"));
+    assert!(
+        conversation
+            .status_text
+            .contains("operator surface: direction draft")
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -185,7 +189,7 @@ fn planning_simple_mode_review_can_open_embedded_editor() {
     assert!(
         conversation
             .status_text
-            .contains("planning simple draft editor ready")
+            .contains("operator surface: planning draft")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -254,7 +258,7 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
     assert!(
         conversation
             .status_text
-            .contains("planning draft editor ready")
+            .contains("operator surface: planning draft")
     );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(

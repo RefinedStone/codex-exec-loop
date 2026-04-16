@@ -36,7 +36,7 @@ fn planning_init_command_opens_selector_overlay() {
     assert!(
         conversation
             .status_text
-            .contains("opened planning initialization selector")
+            .contains("operator surface: planning setup / workspace: not initialized")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -65,7 +65,7 @@ fn planning_command_opens_existing_workspace_controls_when_workspace_is_present(
     assert!(
         conversation
             .status_text
-            .contains("opened planning workspace controls")
+            .contains("operator surface: planning setup / planning mode: on")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -90,7 +90,7 @@ fn planning_off_command_turns_plan_off_and_blocks_directions() {
         panic!("app should stay in ready state");
     };
     assert!(!conversation.planning_runtime_snapshot.plan_enabled());
-    assert!(conversation.status_text.contains("Plan off"));
+    assert!(conversation.status_text.contains("planning mode: off"));
 
     app.execute_inline_shell_command_input(
         InlineShellCommandInput::parse(":directions").expect("command should parse"),
@@ -101,7 +101,7 @@ fn planning_off_command_turns_plan_off_and_blocks_directions() {
     };
     assert_eq!(
         conversation.status_text,
-        "Plan off - initialize with :planning first"
+        "planning mode: off / next action: open :planning to initialize the workspace"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -123,7 +123,7 @@ fn planning_on_command_requires_existing_workspace() {
     };
     assert_eq!(
         conversation.status_text,
-        "planning workspace missing; open :planning to initialize it"
+        "planning workspace: missing / next action: open :planning to initialize it"
     );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(
@@ -219,7 +219,7 @@ fn planning_existing_workspace_overlay_prompts_to_turn_plan_on_before_directions
     };
     assert_eq!(
         conversation.status_text,
-        "Plan off - turn Plan on in this menu first"
+        "planning mode: off / next action: turn Plan on in this menu first"
     );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
 

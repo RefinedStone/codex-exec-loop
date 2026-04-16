@@ -353,7 +353,7 @@ impl ConversationViewModel {
         self.base_warnings.clear();
         self.warnings.clear();
         self.clear_auto_followup_skip();
-        self.set_status_with_warnings("draft workspace synced".to_string());
+        self.set_status_with_warnings("draft workspace: synced".to_string());
 
         true
     }
@@ -376,8 +376,8 @@ impl ConversationViewModel {
         self.thread_id = thread_id;
         self.title = title.clone();
         self.cwd = cwd;
-        self.status_text = "thread started".to_string();
-        self.append_status_message("thread opened / ".to_string() + &title);
+        self.status_text = "thread state: ready".to_string();
+        self.append_status_message("current thread: ".to_string() + &title);
     }
 
     pub(crate) fn record_turn_started(&mut self, turn_id: String) {
@@ -635,8 +635,8 @@ impl ConversationViewModel {
 
     pub(crate) fn record_automation_stopped(&mut self) {
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: "automation off".to_string(),
-            detail: "automation is off; toggle Ctrl+a to re-enable it".to_string(),
+            summary: "automation state: off".to_string(),
+            detail: "automation state is off; toggle Ctrl+a to turn it on again".to_string(),
         });
     }
 

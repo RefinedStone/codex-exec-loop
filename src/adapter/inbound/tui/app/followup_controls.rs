@@ -42,28 +42,30 @@ pub(super) fn reduce_followup_controls(
             if state.auto_follow_state.enabled {
                 state.auto_follow_state.stop();
                 state.record_automation_stopped();
-                state.status_text = "automation off".to_string();
+                state.status_text = "automation state: off".to_string();
             } else {
                 state.auto_follow_state.enable();
                 state.clear_auto_followup_skip();
-                state.status_text = "automation on".to_string();
+                state.status_text = "automation state: on".to_string();
             }
         }
         FollowupControlEvent::AutoFollowStopped => {
             state.auto_follow_state.stop();
             state.record_automation_stopped();
-            state.status_text = "automation off".to_string();
+            state.status_text = "automation state: off".to_string();
         }
         FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
-                state.status_text = "automation turn budget must be a whole number greater than 0 or the word infinite".to_string();
+                state.status_text =
+                    "turn budget: invalid / enter a whole number greater than 0 or the word infinite"
+                        .to_string();
                 return FollowupControlReduction { state, effects };
             };
 
             state.auto_follow_state.set_max_auto_turns(value);
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "automation turn budget {}",
+                "turn budget: {}",
                 state.auto_follow_state.max_auto_turns_label()
             );
             effects.push(FollowupControlEffect::MaxAutoTurnsEditor {
@@ -74,7 +76,7 @@ pub(super) fn reduce_followup_controls(
             state.auto_follow_state.toggle_stop_keyword();
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "stop keyword rule {}",
+                "stop keyword rule: {}",
                 state.auto_follow_state.stop_keyword_label()
             );
         }
@@ -90,7 +92,7 @@ pub(super) fn reduce_followup_controls(
                 .set_stop_keyword_value(value.clone());
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "stop keyword value {}",
+                "stop keyword value: {}",
                 state.auto_follow_state.stop_keyword_label()
             );
             effects.push(FollowupControlEffect::StopKeywordEditor { value });
@@ -99,7 +101,7 @@ pub(super) fn reduce_followup_controls(
             state.auto_follow_state.toggle_no_file_change_stop();
             state.clear_auto_followup_skip();
             state.status_text = format!(
-                "stop if no files changed {}",
+                "stop if no files changed: {}",
                 state.auto_follow_state.no_file_change_stop_label()
             );
         }
@@ -127,7 +129,7 @@ mod tests {
         );
 
         assert_eq!(reduced.state.cwd, "/tmp/alt");
-        assert!(reduced.state.status_text.contains("draft workspace synced"));
+        assert_eq!(reduced.state.status_text, "draft workspace: synced");
         assert_eq!(reduced.effects, vec![FollowupControlEffect::OverlayUi]);
     }
 
@@ -154,14 +156,14 @@ mod tests {
         let reduced = reduce_followup_controls(state, FollowupControlEvent::AutoFollowToggled);
 
         assert!(!reduced.state.auto_follow_state.enabled);
-        assert_eq!(reduced.state.status_text, "automation off");
+        assert_eq!(reduced.state.status_text, "automation state: off");
         assert_eq!(
             reduced
                 .state
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("automation off")
+            Some("automation state: off")
         );
     }
 
