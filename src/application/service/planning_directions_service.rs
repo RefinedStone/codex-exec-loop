@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -498,6 +499,9 @@ fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
         || normalized.starts_with('/')
         || normalized.contains("../")
         || normalized.contains("/..")
+        || Path::new(&normalized)
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
     {
         return false;
     }
@@ -900,6 +904,43 @@ mod tests {
     }
 
     #[test]
+    fn stage_detail_doc_editor_session_recovers_from_parent_dir_component_path() {
+        let workspace_dir = create_temp_workspace("planning-directions-parent-dir-detail-doc");
+        write_bootstrap_workspace(&workspace_dir);
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"detail_doc_path = """#,
+                r#"detail_doc_path = ".codex-exec-loop/planning/directions/../escape.md""#,
+            )
+        });
+
+        let session = sample_service()
+            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
+            .expect("detail doc editor should recover from parent-dir component path");
+        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .expect("directions.toml should be editable");
+
+        assert!(
+            directions
+                .body
+                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
+        );
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .all(|file| file.active_path != ".codex-exec-loop/planning/directions/../escape.md")
+        );
+        assert!(session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
     fn stage_queue_idle_prompt_editor_session_recovers_from_invalid_prompt_path() {
         let workspace_dir = create_temp_workspace("planning-directions-invalid-queue-idle");
         write_bootstrap_workspace(&workspace_dir);
@@ -972,6 +1013,40 @@ mod tests {
                 .editable_files
                 .iter()
                 .all(|file| file.active_path != "README.md")
+        );
+        assert!(session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn stage_queue_idle_prompt_editor_session_recovers_from_parent_dir_component_path() {
+        let workspace_dir = create_temp_workspace("planning-directions-parent-dir-queue-idle");
+        write_bootstrap_workspace(&workspace_dir);
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/../escape.md""#,
+            )
+        });
+
+        let session = sample_service()
+            .stage_queue_idle_prompt_editor_session(&workspace_dir)
+            .expect("queue-idle prompt editor should recover from parent-dir component path");
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .expect("directions.toml should be editable");
+
+        assert!(directions.body.contains(&format!(
+            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
+        )));
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .all(|file| file.active_path != ".codex-exec-loop/planning/prompts/../escape.md")
         );
         assert!(session.validation_report.is_valid());
 
