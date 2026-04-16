@@ -8,6 +8,8 @@ use crate::application::service::planning_prompt_service::{
 use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
 
+const INTERNAL_QUEUE_METADATA_DETAIL_LIMIT: usize = 96;
+
 #[derive(Debug, Clone, Default)]
 pub struct PlanningRuntimePolicyService;
 
@@ -197,8 +199,14 @@ impl PlanningRuntimePolicyService {
 
         PlanningRuntimeSummaryView {
             status_label: workspace_status_label(request.snapshot, workspace_state),
-            queue_summary: request.snapshot.queue_summary().map(str::to_string),
-            proposal_summary: request.snapshot.proposal_summary().map(str::to_string),
+            queue_summary: build_queue_framing_summary(
+                request.snapshot,
+                INTERNAL_QUEUE_METADATA_DETAIL_LIMIT,
+            ),
+            proposal_summary: request
+                .snapshot
+                .proposal_summary()
+                .map(|summary| compact_proposal_summary_detail(summary, INTERNAL_QUEUE_METADATA_DETAIL_LIMIT)),
             failure_summary: request
                 .repair_failure_summary
                 .or_else(|| request.snapshot.auto_followup_pause_reason())
@@ -333,16 +341,10 @@ impl PlanningRuntimePolicyService {
                 } else {
                     "planning queue"
                 };
-                format!(
-                    "{queue_label}: {}",
-                    compact_queue_summary(request.snapshot, queue_summary, request.max_detail_len)
-                )
+                format!("{queue_label}: {queue_summary}")
             }),
             proposal_line: summary.proposal_summary.as_deref().map(|proposal_summary| {
-                format!(
-                    "planning proposals: {}",
-                    compact_projection_detail(proposal_summary, request.max_detail_len)
-                )
+                format!("planning proposals: {proposal_summary}")
             }),
             failure_line: summary.failure_summary.as_deref().map(|failure_summary| {
                 format!(
@@ -354,19 +356,110 @@ impl PlanningRuntimePolicyService {
     }
 }
 
-fn compact_queue_summary(
+fn build_queue_framing_summary(
     snapshot: &PlanningRuntimeSnapshot,
-    queue_summary: &str,
+    max_detail_len: usize,
+) -> Option<String> {
+    let queue_snapshot = snapshot.queue_snapshot();
+    let has_queue_context = snapshot.workspace_present()
+        || snapshot.queue_head().is_some()
+        || snapshot.proposal_summary().is_some()
+        || queue_snapshot.is_some();
+    if !has_queue_context {
+        return None;
+    }
+
+    let now_detail = queue_snapshot
+        .and_then(|queue_snapshot| queue_snapshot.next_task.as_ref())
+        .or_else(|| snapshot.queue_head())
+        .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
+        .unwrap_or_else(|| "none".to_string());
+
+    let next_detail = queue_snapshot
+        .map(|queue_snapshot| {
+            let remaining_tasks = queue_snapshot
+                .next_task
+                .as_ref()
+                .map(|current| {
+                    queue_snapshot
+                        .active_tasks
+                        .iter()
+                        .filter(|task| task.task_id != current.task_id)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| queue_snapshot.active_tasks.iter().collect::<Vec<_>>());
+            remaining_tasks
+                .first()
+                .map(|task| {
+                    compact_queue_task_summary(
+                        task.task_title.as_str(),
+                        remaining_tasks.len(),
+                        1,
+                        max_detail_len,
+                    )
+                })
+                .unwrap_or_else(|| "none".to_string())
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    let proposed_detail = queue_snapshot
+        .and_then(|queue_snapshot| {
+            queue_snapshot.proposed_tasks.first().map(|task| {
+                compact_queue_task_summary(
+                    task.task_title.as_str(),
+                    queue_snapshot.proposed_tasks.len(),
+                    1,
+                    max_detail_len,
+                )
+            })
+        })
+        .or_else(|| {
+            snapshot
+                .proposal_summary()
+                .map(|summary| compact_proposal_summary_detail(summary, max_detail_len))
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    let blocked_detail = queue_snapshot
+        .and_then(|queue_snapshot| {
+            queue_snapshot.skipped_tasks.first().map(|task| {
+                let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
+                let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
+                let mut summary = format!("{title} ({reason})");
+                let hidden_count = queue_snapshot.skipped_tasks.len().saturating_sub(1);
+                if hidden_count > 0 {
+                    summary.push_str(&format!(" (+{hidden_count} more)"));
+                }
+                summary
+            })
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    Some(format!(
+        "now: {now_detail}  |  next: {next_detail}  |  proposed: {proposed_detail}  |  blocked: {blocked_detail}"
+    ))
+}
+
+fn compact_queue_task_summary(
+    task_title: &str,
+    total_count: usize,
+    shown_count: usize,
     max_detail_len: usize,
 ) -> String {
-    let mut detail = compact_projection_detail(queue_summary, max_detail_len);
-    if snapshot.queue_head().is_none() {
-        detail.push_str(&format!(
-            " / policy {}",
-            snapshot.queue_idle_policy().label()
-        ));
+    let mut summary = compact_whitespace_detail(task_title.trim(), max_detail_len);
+    let hidden_count = total_count.saturating_sub(shown_count);
+    if hidden_count > 0 {
+        summary.push_str(&format!(" (+{hidden_count} more)"));
     }
-    detail
+    summary
+}
+
+fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
+    let detail = summary
+        .split_once(": ")
+        .map(|(_, detail)| detail)
+        .unwrap_or(summary);
+    compact_whitespace_detail(detail, max_detail_len)
 }
 
 fn workspace_status_label(
@@ -798,7 +891,7 @@ mod tests {
         assert_eq!(summary.status_label, "running");
         assert_eq!(
             summary.queue_summary.as_deref(),
-            Some("next task: rank 1 / task-1")
+            Some("now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none")
         );
     }
 
@@ -821,8 +914,12 @@ mod tests {
 
         assert_eq!(summary.workspace_state, PlanningWorkspaceState::Ready);
         assert_eq!(
+            summary.queue_summary.as_deref(),
+            Some("now: none  |  next: none  |  proposed: Draft sushi roadmap  |  blocked: none")
+        );
+        assert_eq!(
             summary.proposal_summary.as_deref(),
-            Some("1 promotable follow-up proposal available: Draft sushi roadmap")
+            Some("Draft sushi roadmap")
         );
     }
 
@@ -904,7 +1001,7 @@ mod tests {
 
         assert_eq!(
             projection.queue_head_line.as_deref(),
-            Some("planning queue head: next task: rank 1 / task-1")
+            Some("planning queue head: now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none")
         );
         assert_eq!(projection.current_state_line, "current state: ready");
         assert!(
@@ -916,6 +1013,73 @@ mod tests {
             projection
                 .next_action_line
                 .starts_with("next action: let automation continue")
+        );
+    }
+
+    #[test]
+    fn status_projection_reframes_queue_snapshot_metadata() {
+        let service = PlanningRuntimePolicyService::new();
+        let queue_head = queue_head();
+        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_snapshot(
+            "Planning Context".to_string(),
+            "next task: rank 1 / task-1".to_string(),
+            Some("1 promotable follow-up proposal available: Draft sushi roadmap".to_string()),
+            Some(queue_head.clone()),
+            crate::domain::planning::PriorityQueueSnapshot {
+                next_task: Some(queue_head.clone()),
+                active_tasks: vec![
+                    queue_head,
+                    crate::domain::planning::PriorityQueueTask {
+                        rank: 2,
+                        task_id: "task-2".to_string(),
+                        direction_id: "general-workstream".to_string(),
+                        direction_title: "General workstream".to_string(),
+                        task_title: "Follow-up queue reconciliation".to_string(),
+                        status: crate::domain::planning::TaskStatus::Ready,
+                        combined_priority: 8,
+                        updated_at: "2026-04-10T01:00:00Z".to_string(),
+                        rank_reasons: vec!["status=ready".to_string()],
+                    },
+                ],
+                proposed_tasks: vec![crate::domain::planning::PriorityQueueTask {
+                    rank: 3,
+                    task_id: "task-proposal-1".to_string(),
+                    direction_id: "general-workstream".to_string(),
+                    direction_title: "General workstream".to_string(),
+                    task_title: "Draft sushi roadmap".to_string(),
+                    status: crate::domain::planning::TaskStatus::Proposed,
+                    combined_priority: 6,
+                    updated_at: "2026-04-10T02:00:00Z".to_string(),
+                    rank_reasons: vec!["combined_priority=6".to_string()],
+                }],
+                skipped_tasks: vec![crate::domain::planning::PriorityQueueSkippedTask {
+                    task_id: "task-blocked-1".to_string(),
+                    task_title: "Resolve blocked review thread".to_string(),
+                    direction_id: "general-workstream".to_string(),
+                    status: crate::domain::planning::TaskStatus::Blocked,
+                    reason: "blocked by tasks: task-2(in_progress)".to_string(),
+                }],
+            },
+        );
+
+        let projection = service.build_status_projection(PlanningRuntimeStatusProjectionRequest {
+            snapshot: &snapshot,
+            has_running_turn: false,
+            is_repairing: false,
+            repair_failure_summary: None,
+            repair_attempt: None,
+            max_detail_len: 48,
+        });
+
+        assert_eq!(
+            projection.queue_head_line.as_deref(),
+            Some(
+                "planning queue head: now: Implement queue-aware policy  |  next: Follow-up queue reconciliation  |  proposed: Draft sushi roadmap  |  blocked: Resolve blocked review thread (blocked by tasks: task-2(in_progress))"
+            )
+        );
+        assert_eq!(
+            projection.proposal_line.as_deref(),
+            Some("planning proposals: Draft sushi roadmap")
         );
     }
 }

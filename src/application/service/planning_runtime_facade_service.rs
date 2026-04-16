@@ -752,7 +752,9 @@ mod tests {
         );
         assert_eq!(
             projection.queue_head_line.as_deref(),
-            Some("planning queue head: next task: rank 1 / task-1")
+            Some(
+                "planning queue head: now: Implement planning runtime facade  |  next: none  |  proposed: none  |  blocked: none"
+            )
         );
         assert!(
             projection
@@ -788,7 +790,7 @@ mod tests {
             });
 
         assert!(projection.proposal_line.as_deref().is_some_and(|line| {
-            line.starts_with("planning proposals: 1 promotable follow-up proposal")
+            line == "planning proposals: Draft sushi roadmap"
         }));
     }
 }
