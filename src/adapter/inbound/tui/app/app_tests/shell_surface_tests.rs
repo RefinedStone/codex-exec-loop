@@ -379,6 +379,29 @@ fn planner_debug_surfaces_use_operator_facing_labels() {
 }
 
 #[test]
+fn planner_debug_surfaces_reframe_legacy_ranked_queue_summary_metadata() {
+    let (mut app, _) = make_test_app();
+    app.toggle_planner_visibility();
+    app.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshSucceeded;
+    app.planner_worker_panel_state.last_operation_label = Some("refresh".to_string());
+    app.planner_worker_panel_state.last_queue_summary = Some(
+        "next task: rank 1 / task-1 / Implement shell planning status / priority 10  |  1 promotable follow-up proposal available: Draft queue inspection overlay".to_string(),
+    );
+
+    let status = build_automation_status_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(status.contains(
+        "queued work: now: Implement shell planning status  |  next: none  |  proposed: Draft queue inspection overlay  |  blocked: none"
+    ));
+    assert!(!status.contains("queued work: next task: rank 1 / task-1"));
+    assert!(!status.contains("queued work: now: rank 1 / task-1"));
+}
+
+#[test]
 fn auto_follow_transcript_debug_detail_uses_operator_facing_labels() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
@@ -639,6 +662,27 @@ fn queue_overlay_notes_reframe_legacy_queue_summary_strings() {
         "queued work: now: task-1  |  next: none  |  proposed: none  |  blocked: none"
     ));
     assert!(!rendered.contains("queued work: next task:"));
+}
+
+#[test]
+fn queue_overlay_notes_reframe_legacy_ranked_queue_summary_metadata() {
+    let (mut app, _) = make_test_app();
+    app.planner_worker_panel_state.last_queue_summary = Some(
+        "next task: rank 1 / task-1 / Implement shell planning status / priority 10  |  1 promotable follow-up proposal available: Draft queue inspection overlay".to_string(),
+    );
+
+    let rendered = build_queue_overlay_view(&app)
+        .note_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(
+        "queued work: now: Implement shell planning status  |  next: none  |  proposed: Draft queue inspection overlay  |  blocked: none"
+    ));
+    assert!(!rendered.contains("queued work: next task: rank 1 / task-1"));
+    assert!(!rendered.contains("queued work: now: rank 1 / task-1"));
 }
 
 #[test]

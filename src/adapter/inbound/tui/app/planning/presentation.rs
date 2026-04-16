@@ -98,29 +98,67 @@ pub(crate) fn compact_queue_framing_summary(summary: &str, max_detail_len: usize
         return queue_framing_summary_from_parts("none", "none", "none", "none");
     }
 
-    if trimmed.contains("now:") && trimmed.contains("proposed:") && trimmed.contains("blocked:") {
-        return trimmed.to_string();
-    }
-
-    if let Some(task_title) = trimmed.strip_prefix("next task: ") {
-        return queue_framing_summary_from_parts(
-            compact_whitespace_detail(task_title, max_detail_len).as_str(),
-            "none",
-            "none",
-            "none",
-        );
-    }
-
-    if trimmed.starts_with("queue idle:") {
-        return queue_framing_summary_from_parts("none", "none", "none", "none");
-    }
-
-    if trimmed.contains("promotable") {
-        let proposed_detail = compact_proposal_summary_detail(trimmed, max_detail_len);
-        return queue_framing_summary_from_parts("none", "none", proposed_detail.as_str(), "none");
+    if let Some(details) = parse_legacy_queue_framing_details(trimmed, max_detail_len) {
+        return queue_framing_summary_from_details(&details);
     }
 
     compact_whitespace_detail(trimmed, max_detail_len)
+}
+
+fn parse_legacy_queue_framing_details(
+    summary: &str,
+    max_detail_len: usize,
+) -> Option<QueueFramingDetails> {
+    let mut details = QueueFramingDetails {
+        now_detail: "none".to_string(),
+        next_detail: "none".to_string(),
+        proposed_detail: "none".to_string(),
+        blocked_detail: "none".to_string(),
+    };
+    let mut matched = false;
+
+    for segment in summary.split("  |  ") {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(detail) = trimmed.strip_prefix("now: ") {
+            details.now_detail = compact_whitespace_detail(detail, max_detail_len);
+            matched = true;
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("next: ") {
+            details.next_detail = compact_whitespace_detail(detail, max_detail_len);
+            matched = true;
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("proposed: ") {
+            details.proposed_detail = compact_whitespace_detail(detail, max_detail_len);
+            matched = true;
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("blocked: ") {
+            details.blocked_detail = compact_whitespace_detail(detail, max_detail_len);
+            matched = true;
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("next task: ") {
+            details.now_detail = compact_legacy_next_task_detail(detail, max_detail_len);
+            matched = true;
+            continue;
+        }
+        if trimmed.starts_with("queue idle:") || trimmed.contains("no executable planning task") {
+            matched = true;
+            continue;
+        }
+        if trimmed.contains("promotable") {
+            details.proposed_detail = compact_proposal_summary_detail(trimmed, max_detail_len);
+            matched = true;
+        }
+    }
+
+    matched.then_some(details)
 }
 
 fn build_queue_framing_details_from_snapshot(
@@ -550,6 +588,24 @@ fn compact_queue_task_summary(
         summary.push_str(&format!(" (+{hidden_count} more)"));
     }
     summary
+}
+
+fn compact_legacy_next_task_detail(summary: &str, max_detail_len: usize) -> String {
+    let trimmed = summary.trim();
+    let segments = trimmed.split(" / ").map(str::trim).collect::<Vec<_>>();
+    if segments.len() >= 4
+        && segments.first().is_some_and(|segment| segment.starts_with("rank "))
+        && segments
+            .last()
+            .is_some_and(|segment| segment.starts_with("priority "))
+    {
+        let title = segments[2..segments.len() - 1].join(" / ");
+        if !title.trim().is_empty() {
+            return compact_whitespace_detail(title.as_str(), max_detail_len);
+        }
+    }
+
+    compact_whitespace_detail(trimmed, max_detail_len)
 }
 
 fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
