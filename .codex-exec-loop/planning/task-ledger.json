@@ -161,13 +161,13 @@
     {
       "id": "planner-debug-diagnostic-wording-alignment",
       "direction_id": "operator-state-language",
-      "direction_relation_note": "Direct follow-up from the latest main-session reply, which says the only remaining expansion worth doing is planner debug and diagnostic wording outside automation.",
+      "direction_relation_note": "Completed the planner and startup-check slice by normalizing planner debug preview or panel labels, startup overlays, inline inspection, blocked prompts, and command-palette wording onto the canonical operator-facing language.",
       "title": "Align planner debug and diagnostic wording with the canonical operator language",
-      "description": "Audit planner debug, diagnostic, and adjacent non-automation inspection surfaces for lingering legacy planning terminology, rewrite them to the canonical current state / cause / next action framing where it fits, and update the affected expectations so debugging and diagnosis use the same operator-facing vocabulary as runtime status and trust surfaces.",
-      "status": "ready",
+      "description": "Completed the planner debug and startup-check wording rollout by switching planner debug preview or panel labels to operator-facing terms such as planner state, queued work, planner update, and operator action, unifying startup overlays and inspection prompts around startup checks, and rewriting startup summaries to show current state / cause / next action directly with regression coverage in commit 4f845fa on `feature/native-operator-state-language-canonical-guidance` after `cargo test` passed with 419 tests.",
+      "status": "done",
       "base_priority": 90,
       "dynamic_priority_delta": 12,
-      "priority_reason": "The latest main-session reply says no automation-scope code remains and names planner debug/diagnostic wording as the next concrete extension, so builtin continuation should promote this single follow-up instead of leaving only proposals.",
+      "priority_reason": "Finished in main session commit 4f845fa after `cargo test` passed with 419 tests, so the queue should move to the next explicitly suggested wording expansion instead of repeating this completed head task.",
       "depends_on": [
         "remaining-trust-surface-wording-rollout"
       ],
@@ -175,7 +175,26 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-16T10:35:00Z"
+      "updated_at": "2026-04-16T10:45:00Z"
+    },
+    {
+      "id": "auxiliary-debug-surface-wording-rollout",
+      "direction_id": "operator-state-language",
+      "direction_relation_note": "Direct follow-up from the latest main-session reply, which says the remaining worthwhile expansion is carrying the same wording rules into debug surfaces outside planner and startup checks.",
+      "title": "Extend canonical operator wording to remaining auxiliary debug surfaces",
+      "description": "Audit the remaining non-planner, non-startup auxiliary debug or inspection surfaces for legacy planning or diagnostic terminology, align their visible labels and summaries to the canonical operator-facing language where appropriate, and refresh the affected expectations so debug affordances outside the recently finished planner and startup slice no longer drift from current state / cause / next action guidance.",
+      "status": "ready",
+      "base_priority": 89,
+      "dynamic_priority_delta": 11,
+      "priority_reason": "The latest main-session reply says no code remains in the completed planner or startup slice and names broader auxiliary debug-surface wording alignment as the next likely extension, so builtin continuation should promote that single executable follow-up ahead of general proposals.",
+      "depends_on": [
+        "planner-debug-diagnostic-wording-alignment"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T10:45:30Z"
     },
     {
       "id": "simple-mode-first-success-review",
