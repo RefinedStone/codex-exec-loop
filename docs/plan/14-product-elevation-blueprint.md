@@ -180,4 +180,3 @@ Acceptance signals:
 - [15-ux-flow-rearchitecture.md](15-ux-flow-rearchitecture.md)
 - [16-planning-and-automation-evolution.md](16-planning-and-automation-evolution.md)
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)
-- [18-planning-workspace-lifecycle-commands.md](18-planning-workspace-lifecycle-commands.md)

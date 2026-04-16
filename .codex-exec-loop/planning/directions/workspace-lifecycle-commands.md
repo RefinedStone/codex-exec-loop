@@ -24,8 +24,8 @@ Long-lived self-host use gets fragile when planning health can only be checked a
 ## Relevant inputs
 
 - `docs/plan/14-product-elevation-blueprint.md`
+- `docs/plan/15-ux-flow-rearchitecture.md`
 - `docs/plan/16-planning-and-automation-evolution.md`
-- `docs/plan/18-planning-workspace-lifecycle-commands.md`
 - `src/application/service/planning_validation_service.rs`
 - `src/application/service/planning_bootstrap_service.rs`
 - `src/application/service/planning_runtime_facade_service.rs`

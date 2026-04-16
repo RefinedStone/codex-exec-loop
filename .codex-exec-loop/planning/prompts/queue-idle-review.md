@@ -2,7 +2,7 @@
 
 Use this prompt only when the executable queue is empty.
 
-- Treat `docs/plan/14-product-elevation-blueprint.md`, `docs/plan/15-ux-flow-rearchitecture.md`, `docs/plan/16-planning-and-automation-evolution.md`, `docs/plan/17-structure-and-architecture-debt-map.md`, and `docs/plan/18-planning-workspace-lifecycle-commands.md` as the long-term product roadmap for this workspace.
+- Treat `docs/plan/14-product-elevation-blueprint.md`, `docs/plan/15-ux-flow-rearchitecture.md`, `docs/plan/16-planning-and-automation-evolution.md`, `docs/plan/17-structure-and-architecture-debt-map.md`, and `.codex-exec-loop/planning/directions/workspace-lifecycle-commands.md` as the long-term product roadmap for this workspace.
 - Treat `directions.toml` as the durable strategy map. Long-term intent belongs there; immediate execution slices belong in `task-ledger.json`.
 - Assume this workspace is meant to sustain many hours of queue-driven improvement. Keep the long-term roadmap encoded in directions, but keep the executable queue limited to small, reviewable slices.
 - Prefer active directions in this order unless current code state clearly blocks it:
