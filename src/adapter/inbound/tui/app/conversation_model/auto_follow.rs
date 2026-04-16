@@ -60,18 +60,16 @@ impl AutoFollowupSkipReason {
                 "planning mode is off; run :planning to resume queue automation".to_string()
             }
             Self::PlanningBlocked => {
-                "planning files are invalid or incomplete; auto follow-up stays paused until they validate"
-                    .to_string()
+                "planning needs repair before automation can continue".to_string()
             }
             Self::PlanningQueueIdlePolicyStop => {
-                "the planning queue is idle and queue_idle.policy is stop".to_string()
+                "planning is valid but the queue is idle, and automation stops here".to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "queue-driven auto follow-up requires an actionable planning queue head"
-                    .to_string()
+                "planning is valid but has no next task yet".to_string()
             }
             Self::PlanningRepeatedQueueHead => {
-                "the planning queue selected the same task again; auto follow-up stays paused until the queue advances"
+                "automation is paused because the queue did not advance past the previous task"
                     .to_string()
             }
         }
@@ -85,10 +83,10 @@ impl AutoFollowupSkipReason {
             Self::StopKeywordMatched => "stopped: stop keyword matched",
             Self::NoFileChanges => "stopped: no file changes",
             Self::PlanningDisabled => "stopped: planning off",
-            Self::PlanningBlocked => "paused: planning files invalid",
-            Self::PlanningQueueIdlePolicyStop => "stopped: queue idle policy stop",
-            Self::PlanningQueueHeadRequired => "paused: planning queue empty",
-            Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
+            Self::PlanningBlocked => "paused: planning needs repair",
+            Self::PlanningQueueIdlePolicyStop => "stopped: queue idle",
+            Self::PlanningQueueHeadRequired => "paused: waiting for next task",
+            Self::PlanningRepeatedQueueHead => "paused: queue did not advance",
         }
     }
 
@@ -113,18 +111,17 @@ impl AutoFollowupSkipReason {
                 "turn completed / auto follow-up stopped: planning mode is off".to_string()
             }
             Self::PlanningBlocked => {
-                "turn completed / auto follow-up paused: planning files invalid".to_string()
+                "turn completed / auto follow-up paused: planning needs repair".to_string()
             }
             Self::PlanningQueueIdlePolicyStop => {
-                "turn completed / auto follow-up stopped: planning queue idle policy is stop"
-                    .to_string()
+                "turn completed / auto follow-up stopped: planning queue is idle".to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "turn completed / auto follow-up paused: planning queue has no next task"
+                "turn completed / auto follow-up paused: planning has no next task yet"
                     .to_string()
             }
             Self::PlanningRepeatedQueueHead => {
-                "turn completed / auto follow-up paused: planning queue repeated the previous task"
+                "turn completed / auto follow-up paused: the queue did not advance past the previous task"
                     .to_string()
             }
         }

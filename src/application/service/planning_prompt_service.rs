@@ -225,13 +225,22 @@ impl PlanningRuntimeSnapshot {
 
     pub fn preview_status_label(&self) -> &'static str {
         if !self.plan_enabled {
-            return "inactive";
+            return "waiting";
+        }
+        if self.auto_followup_pause_reason.is_some() {
+            return "paused";
         }
         match self.workspace_status {
-            PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
+            PlanningRuntimeWorkspaceStatus::Uninitialized => "waiting",
             PlanningRuntimeWorkspaceStatus::Invalid => "blocked",
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "ready",
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
+                if self.proposal_summary.is_some() {
+                    "review needed"
+                } else {
+                    "waiting"
+                }
+            }
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask => "ready",
         }
     }
 

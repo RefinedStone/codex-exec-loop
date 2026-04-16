@@ -3,10 +3,12 @@ use super::super::{
     PriorityQueueTask, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
     QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, Span, Style,
     build_automation_key_lines, build_automation_list_view, build_automation_preview_lines,
-    build_automation_status_lines,
-    compact_whitespace_detail,
+    build_automation_status_lines, compact_whitespace_detail,
 };
 use super::{AutomationOverlayView, QueueOverlayView};
+use crate::application::service::planning::{
+    PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjectionRequest,
+};
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     let header_lines = vec![
@@ -51,6 +53,24 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         ConversationState::Ready(conversation) => {
             let snapshot = &conversation.planning_runtime_snapshot;
             let queue_snapshot = snapshot.queue_snapshot();
+            let planning_projection = app.planning.runtime.build_followup_status_projection(
+                PlanningRuntimeStatusProjectionRequest {
+                    snapshot,
+                    has_running_turn: conversation.has_running_turn(),
+                    is_repairing: conversation.planning_repair_state.is_some(),
+                    repair_failure_summary: conversation
+                        .planning_repair_state
+                        .as_ref()
+                        .map(|state| state.latest_request.failure_summary.as_str()),
+                    repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
+                        PlanningRuntimeRepairAttempt {
+                            attempts_used: state.attempts_used,
+                            max_attempts: state.max_attempts,
+                        }
+                    }),
+                    max_detail_len: QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
+                },
+            );
             let queue_lines = queue_snapshot
                 .map(|queue_snapshot| {
                     build_queue_task_lines(
@@ -87,50 +107,13 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                         vec![Line::from("No promotable proposals are queued right now.")]
                     }
                 });
-
-            let mut summary_segments = Vec::new();
-            if let Some(queue_head) = snapshot.queue_head() {
-                summary_segments.push(format!(
-                    "next: {}",
-                    compact_whitespace_detail(
-                        queue_head.task_title.trim(),
-                        QUEUE_INSPECTION_TITLE_DETAIL_LIMIT
-                    )
-                ));
-            }
-            if let Some(queue_summary) = snapshot.queue_summary() {
-                summary_segments.push(format!(
-                    "queue: {}",
-                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                ));
-                if snapshot.queue_head().is_none() {
-                    summary_segments
-                        .push(format!("policy: {}", snapshot.queue_idle_policy().label()));
-                }
-            }
-            if let Some(proposal_summary) = snapshot.proposal_summary() {
-                summary_segments.push(format!(
-                    "proposals: {}",
-                    compact_whitespace_detail(proposal_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                ));
-            }
-            if summary_segments.is_empty() {
-                summary_segments.push(format!("status: {}", snapshot.preview_status_label()));
-            }
-            let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
+            let summary_lines = vec![
+                Line::from(planning_projection.current_state_line),
+                Line::from(planning_projection.cause_line),
+                Line::from(planning_projection.next_action_line),
+            ];
 
             let mut note_lines = Vec::new();
-            if let Some(detail) = snapshot.auto_followup_pause_reason() {
-                note_lines.push(Line::from(format!(
-                    "pause: {}",
-                    compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                )));
-            } else if let Some(detail) = snapshot.failure_reason() {
-                note_lines.push(Line::from(format!(
-                    "blocking issue: {}",
-                    compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                )));
-            }
             if let Some(summary) =
                 conversation.planning_notice_summary(QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
             {

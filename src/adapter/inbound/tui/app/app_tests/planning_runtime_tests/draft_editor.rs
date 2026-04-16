@@ -211,7 +211,7 @@ fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_conte
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "ready"
+        "waiting"
     );
 
     let planning_dir = std::path::Path::new(&workspace_dir)
@@ -275,7 +275,7 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "inactive"
+        "waiting"
     );
     assert!(
         !std::path::Path::new(&workspace_dir)

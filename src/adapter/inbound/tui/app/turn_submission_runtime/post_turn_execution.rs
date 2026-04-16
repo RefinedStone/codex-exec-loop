@@ -523,7 +523,8 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        if planning_runtime_snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        if planning_runtime_snapshot.workspace_status()
+            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
         {
             return ConversationPostTurnAction::SkipAutoFollowup {
@@ -718,7 +719,7 @@ fn repeated_queue_head_detail(
     }
 
     Some(format!(
-        "planner refresh kept the previously handed-off task unchanged as the queue head: {}",
+        "automation paused because the queue still points to the previous task: {}",
         previous_handoff.task_title
     ))
 }

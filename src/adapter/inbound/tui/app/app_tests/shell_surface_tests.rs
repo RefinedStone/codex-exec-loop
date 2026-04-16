@@ -8,11 +8,11 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
 
 use super::{
-    ConversationInputState, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent, KeyModifiers,
-    PlanningExecutionSnapshot, PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay,
-    StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_ready_input_lines,
+    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
+    ConversationState, KeyCode, KeyEvent, KeyModifiers, PlanningExecutionSnapshot,
+    PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay, StartupState,
+    TASK_LEDGER_FILE_PATH, build_automation_overlay_view, build_automation_preview_lines,
+    build_automation_status_lines, build_queue_overlay_view, build_ready_input_lines,
     create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
     sample_planning_runtime_snapshot, sample_startup_diagnostics,
 };
@@ -62,7 +62,12 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
-    assert_eq!(conversation.planning_runtime_snapshot.preview_status_label(), "blocked");
+    assert_eq!(
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
+        "blocked"
+    );
     assert!(
         conversation
             .planning_runtime_snapshot
@@ -117,7 +122,10 @@ fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("conversation should remain ready");
     };
-    assert_eq!(conversation.input_state, ConversationInputState::ReadyToContinue);
+    assert_eq!(
+        conversation.input_state,
+        ConversationInputState::ReadyToContinue
+    );
     assert_eq!(conversation.status_text, "turn failed");
     assert!(conversation.messages.iter().any(|message| {
         message.kind == ConversationMessageKind::Status
@@ -166,7 +174,11 @@ fn automation_inline_command_opens_overlay() {
     };
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Automation);
     assert!(conversation.input_buffer.is_empty());
-    assert!(conversation.status_text.contains("opened automation controls"));
+    assert!(
+        conversation
+            .status_text
+            .contains("opened automation controls")
+    );
 }
 
 #[test]
@@ -268,7 +280,7 @@ fn automation_preview_surfaces_queue_refresh_copy_when_queue_is_idle() {
         .join("\n");
 
     assert!(rendered.contains("planning priority queue를 갱신하세요."));
-    assert!(rendered.contains("planning: ready"));
+    assert!(rendered.contains("planning: waiting"));
 }
 
 #[test]
@@ -277,8 +289,8 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("conversation should be ready");
     };
-    conversation.status_text = "turn completed / queued auto follow-up with mode planning queue"
-        .to_string();
+    conversation.status_text =
+        "turn completed / queued auto follow-up with mode planning queue".to_string();
     conversation.base_warnings =
         vec!["planner queue changed shape after reconciliation".to_string()];
     conversation.warnings = conversation.base_warnings.clone();
@@ -291,9 +303,42 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
         .join("\n");
 
     assert!(rendered.contains("automation: on"));
-    assert!(rendered.contains("status: turn completed / queued auto follow-up with mode planning queue"));
+    assert!(rendered.contains("current state:"));
+    assert!(rendered.contains("cause:"));
+    assert!(rendered.contains("next action:"));
+    assert!(
+        rendered
+            .contains("status: turn completed / queued auto follow-up with mode planning queue")
+    );
     assert!(rendered.contains("warning: planner queue changed shape"));
     assert!(rendered.contains("planning reconciliation completed"));
+}
+
+#[test]
+fn queue_overlay_uses_current_state_cause_and_next_action_summary() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
+        "Planning Context".to_string(),
+        "queue idle: no executable planning task".to_string(),
+        Some("1 promotable follow-up proposal available: Draft queue review".to_string()),
+        None,
+    ));
+
+    let rendered = build_queue_overlay_view(&app)
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("current state: review needed"));
+    assert!(rendered.contains("cause: planning has proposals but no executable next task"));
+    assert!(
+        rendered.contains("next action: review the queue and promote the next actionable task")
+    );
 }
 
 #[test]
@@ -318,15 +363,9 @@ fn automation_overlay_scroll_keys_update_preview_offset() {
     app.show_automation_overlay();
     assert_eq!(app.followup_overlay_ui_state.preview_scroll, 0);
 
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(
-        KeyCode::PageDown,
-        KeyModifiers::NONE,
-    )));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,)));
     assert!(app.followup_overlay_ui_state.preview_scroll > 0);
 
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::NONE,
-    )));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
 }

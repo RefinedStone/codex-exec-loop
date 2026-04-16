@@ -38,7 +38,7 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "ready"
+        "waiting"
     );
 
     let planning_dir = std::path::Path::new(&workspace_dir)

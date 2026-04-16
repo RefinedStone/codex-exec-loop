@@ -99,7 +99,7 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "ready"
+        "waiting"
     );
     assert!(
         repair_prompt

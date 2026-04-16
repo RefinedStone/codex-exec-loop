@@ -46,6 +46,13 @@ pub struct PlanningRuntimePreviewView {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningRuntimeOperatorGuidance {
+    pub current_state: &'static str,
+    pub cause: String,
+    pub next_action: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanningRuntimeSummaryRequest<'a> {
     pub snapshot: &'a PlanningRuntimeSnapshot,
@@ -84,6 +91,9 @@ pub struct PlanningRuntimeStatusProjectionRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeStatusProjection {
+    pub current_state_line: String,
+    pub cause_line: String,
+    pub next_action_line: String,
     pub planning_status_line: String,
     pub repair_attempt_line: Option<String>,
     pub queue_head_line: Option<String>,
@@ -185,7 +195,7 @@ impl PlanningRuntimePolicyService {
         };
 
         PlanningRuntimeSummaryView {
-            status_label: workspace_status_label(workspace_state),
+            status_label: workspace_status_label(request.snapshot, workspace_state),
             queue_summary: request.snapshot.queue_summary().map(str::to_string),
             proposal_summary: request.snapshot.proposal_summary().map(str::to_string),
             failure_summary: request
@@ -205,41 +215,38 @@ impl PlanningRuntimePolicyService {
         if let PlanningAutoFollowPolicyDecision::Blocked(reason) = decision {
             let detail = match reason {
                 PlanningAutoFollowBlockReason::PlanningDisabled => {
-                    "planning mode is off; run :planning to resume queue automation".to_string()
+                    "planning mode is off, so queue-driven continuation is waiting for you to turn it back on".to_string()
                 }
                 PlanningAutoFollowBlockReason::InvalidWorkspace => {
-                    "planning files are invalid or incomplete".to_string()
+                    invalid_planning_cause(snapshot, None)
                 }
                 PlanningAutoFollowBlockReason::ActionableQueueRequired => {
-                    if let Some(proposal_summary) = snapshot.proposal_summary() {
+                    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Uninitialized
+                    {
+                        "no planning workspace is active for this shell yet".to_string()
+                    } else if let Some(proposal_summary) = snapshot.proposal_summary() {
                         format!(
-                            "queue-driven auto follow-up requires an actionable planning queue head; {proposal_summary}"
+                            "planning is valid but has no next task yet; {proposal_summary}"
                         )
                     } else {
-                        "queue-driven auto follow-up requires an actionable planning queue head"
-                            .to_string()
+                        idle_queue_cause(snapshot)
                     }
                 }
                 PlanningAutoFollowBlockReason::RepeatedQueueHead => snapshot
                     .auto_followup_pause_reason()
                     .unwrap_or(
-                        "queue-driven auto follow-up is paused until the planning queue advances beyond the previously handed-off task",
+                        "automation is paused because the queue did not advance beyond the previous task",
                     )
                     .to_string(),
             };
             return PlanningRuntimePreviewView {
-                status_label: preview_block_label(reason),
+                status_label: preview_block_label(reason, snapshot),
                 detail: Some(detail),
             };
         }
 
         PlanningRuntimePreviewView {
-            status_label: match snapshot.workspace_status() {
-                PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
-                PlanningRuntimeWorkspaceStatus::Invalid => "blocked",
-                PlanningRuntimeWorkspaceStatus::ReadyNoTask
-                | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "ready",
-            },
+            status_label: snapshot.preview_status_label(),
             detail: non_blocked_preview_detail(snapshot),
         }
     }
@@ -336,8 +343,23 @@ impl PlanningRuntimePolicyService {
             is_repairing: request.is_repairing,
             repair_failure_summary: request.repair_failure_summary,
         });
+        let operator_guidance = build_operator_guidance(PlanningRuntimeSummaryRequest {
+            snapshot: request.snapshot,
+            has_running_turn: request.has_running_turn,
+            is_repairing: request.is_repairing,
+            repair_failure_summary: request.repair_failure_summary,
+        });
 
         PlanningRuntimeStatusProjection {
+            current_state_line: format!("current state: {}", operator_guidance.current_state),
+            cause_line: format!(
+                "cause: {}",
+                compact_projection_detail(&operator_guidance.cause, request.max_detail_len)
+            ),
+            next_action_line: format!(
+                "next action: {}",
+                compact_projection_detail(&operator_guidance.next_action, request.max_detail_len)
+            ),
             planning_status_line: format!("planning status: {}", summary.status_label),
             repair_attempt_line: request.repair_attempt.map(|repair_attempt| {
                 format!(
@@ -387,23 +409,155 @@ fn compact_queue_summary(
     detail
 }
 
-fn workspace_status_label(state: PlanningWorkspaceState) -> &'static str {
+fn workspace_status_label(
+    snapshot: &PlanningRuntimeSnapshot,
+    state: PlanningWorkspaceState,
+) -> &'static str {
     match state {
-        PlanningWorkspaceState::Uninitialized => "inactive",
-        PlanningWorkspaceState::Authoring => "authoring",
-        PlanningWorkspaceState::Ready => "valid",
-        PlanningWorkspaceState::Executing => "stale",
+        PlanningWorkspaceState::Uninitialized => "waiting",
+        PlanningWorkspaceState::Authoring => "review needed",
+        PlanningWorkspaceState::Ready => {
+            if snapshot.auto_followup_pause_reason().is_some() {
+                "paused"
+            } else if snapshot.queue_head().is_none() && snapshot.proposal_summary().is_some() {
+                "review needed"
+            } else if snapshot.queue_head().is_none() {
+                "waiting"
+            } else {
+                "ready"
+            }
+        }
+        PlanningWorkspaceState::Executing => "running",
         PlanningWorkspaceState::Repairing => "repairing",
-        PlanningWorkspaceState::BlockedInvalid => "invalid",
+        PlanningWorkspaceState::BlockedInvalid => "blocked",
     }
 }
 
-fn preview_block_label(reason: PlanningAutoFollowBlockReason) -> &'static str {
+fn preview_block_label(
+    reason: PlanningAutoFollowBlockReason,
+    snapshot: &PlanningRuntimeSnapshot,
+) -> &'static str {
     match reason {
-        PlanningAutoFollowBlockReason::PlanningDisabled => "inactive",
+        PlanningAutoFollowBlockReason::PlanningDisabled => "waiting",
         PlanningAutoFollowBlockReason::InvalidWorkspace => "blocked",
-        PlanningAutoFollowBlockReason::ActionableQueueRequired => "queue-empty",
+        PlanningAutoFollowBlockReason::ActionableQueueRequired => {
+            if snapshot.proposal_summary().is_some() {
+                "review needed"
+            } else {
+                "waiting"
+            }
+        }
         PlanningAutoFollowBlockReason::RepeatedQueueHead => "paused",
+    }
+}
+
+fn build_operator_guidance(
+    request: PlanningRuntimeSummaryRequest<'_>,
+) -> PlanningRuntimeOperatorGuidance {
+    let snapshot = request.snapshot;
+    if request.is_repairing {
+        return PlanningRuntimeOperatorGuidance {
+            current_state: "repairing",
+            cause: invalid_planning_cause(snapshot, request.repair_failure_summary),
+            next_action:
+                "wait for repair to finish, or reopen planning if repair needs another fix"
+                    .to_string(),
+        };
+    }
+
+    if request.has_running_turn {
+        return PlanningRuntimeOperatorGuidance {
+            current_state: "running",
+            cause: running_turn_cause(snapshot),
+            next_action: "wait for the current turn to finish".to_string(),
+        };
+    }
+
+    if !snapshot.plan_enabled() {
+        return PlanningRuntimeOperatorGuidance {
+            current_state: "waiting",
+            cause: if snapshot.workspace_present() {
+                "planning mode is off, so queue-driven continuation is waiting".to_string()
+            } else {
+                "no planning workspace is active for this shell yet".to_string()
+            },
+            next_action: if snapshot.workspace_present() {
+                "run :planning and turn Plan on when you want queue-driven continuation".to_string()
+            } else {
+                "continue manually, or run :planning to set up queue-driven continuation"
+                    .to_string()
+            },
+        };
+    }
+
+    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+        return PlanningRuntimeOperatorGuidance {
+            current_state: "blocked",
+            cause: invalid_planning_cause(snapshot, request.repair_failure_summary),
+            next_action: "reopen planning and fix the validation errors before resuming automation"
+                .to_string(),
+        };
+    }
+
+    if let Some(pause_reason) = snapshot.auto_followup_pause_reason() {
+        return PlanningRuntimeOperatorGuidance {
+            current_state: "paused",
+            cause: pause_reason.to_string(),
+            next_action: if snapshot.queue_head().is_some() || snapshot.proposal_summary().is_some()
+            {
+                "review the queue and choose the next actionable task before resuming automation"
+                    .to_string()
+            } else {
+                "review the queue or reopen planning before resuming automation".to_string()
+            },
+        };
+    }
+
+    match snapshot.workspace_status() {
+        PlanningRuntimeWorkspaceStatus::ReadyWithTask => PlanningRuntimeOperatorGuidance {
+            current_state: "ready",
+            cause: ready_queue_cause(snapshot),
+            next_action: "let automation continue, or run the queued task manually".to_string(),
+        },
+        PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
+            if snapshot.proposal_summary().is_some() {
+                PlanningRuntimeOperatorGuidance {
+                    current_state: "review needed",
+                    cause: proposal_review_cause(snapshot),
+                    next_action: "review the queue and promote the next actionable task"
+                        .to_string(),
+                }
+            } else if snapshot.queue_idle_policy() == crate::domain::planning::QueueIdlePolicy::Stop
+            {
+                PlanningRuntimeOperatorGuidance {
+                    current_state: "paused",
+                    cause: "planning is valid but the queue is idle, and automation stops here"
+                        .to_string(),
+                    next_action: "review the queue or add the next task before resuming automation"
+                        .to_string(),
+                }
+            } else {
+                PlanningRuntimeOperatorGuidance {
+                    current_state: "waiting",
+                    cause: idle_queue_cause(snapshot),
+                    next_action:
+                        "finish the next turn or review the queue so the next task can be queued"
+                            .to_string(),
+                }
+            }
+        }
+        PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningRuntimeOperatorGuidance {
+            current_state: "waiting",
+            cause: "no planning workspace is active for this shell yet".to_string(),
+            next_action: "continue manually, or run :planning to set up queue-driven continuation"
+                .to_string(),
+        },
+        PlanningRuntimeWorkspaceStatus::Invalid => PlanningRuntimeOperatorGuidance {
+            current_state: "blocked",
+            cause: invalid_planning_cause(snapshot, request.repair_failure_summary),
+            next_action: "reopen planning and fix the validation errors before resuming automation"
+                .to_string(),
+        },
     }
 }
 
@@ -420,6 +574,56 @@ fn non_blocked_preview_detail(snapshot: &PlanningRuntimeSnapshot) -> Option<Stri
 
 fn compact_projection_detail(text: &str, max_len: usize) -> String {
     compact_whitespace_detail(text, max_len)
+}
+
+fn running_turn_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
+    snapshot
+        .queue_head()
+        .map(|queue_head| {
+            format!(
+                "the shell is executing the current queued task: {}",
+                queue_head.task_title.trim()
+            )
+        })
+        .unwrap_or_else(|| "the shell is executing the current turn".to_string())
+}
+
+fn ready_queue_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
+    snapshot
+        .queue_head()
+        .map(|queue_head| format!("the next queued task is {}", queue_head.task_title.trim()))
+        .unwrap_or_else(|| "planning is valid and ready for the next task".to_string())
+}
+
+fn idle_queue_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
+    let queue_summary = snapshot.queue_summary().unwrap_or_default();
+    if queue_summary.contains("queue idle") || queue_summary.contains("no executable") {
+        "planning is valid but has no next task yet".to_string()
+    } else if queue_summary.trim().is_empty() {
+        "planning is valid but has no next task yet".to_string()
+    } else {
+        queue_summary.to_string()
+    }
+}
+
+fn proposal_review_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
+    if let Some(proposal_summary) = snapshot.proposal_summary() {
+        format!("planning has proposals but no executable next task: {proposal_summary}")
+    } else {
+        "planning has proposals but no executable next task".to_string()
+    }
+}
+
+fn invalid_planning_cause(
+    snapshot: &PlanningRuntimeSnapshot,
+    repair_failure_summary: Option<&str>,
+) -> String {
+    match repair_failure_summary.or_else(|| snapshot.failure_reason()) {
+        Some(detail) => {
+            format!("planning needs repair before automation can continue: {detail}")
+        }
+        None => "planning needs repair before automation can continue".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -463,7 +667,7 @@ mod tests {
             service
                 .build_preview_view_for_decision(decision, &snapshot)
                 .status_label,
-            "queue-empty"
+            "waiting"
         );
     }
 
@@ -487,7 +691,7 @@ mod tests {
 
         let preview = service.build_preview_view_for_decision(decision, &snapshot);
 
-        assert_eq!(preview.status_label, "ready");
+        assert_eq!(preview.status_label, "review needed");
         assert!(preview.detail.as_deref().is_some_and(|detail| {
             detail.contains("queue idle: no executable planning task")
                 && detail.contains("promotable follow-up proposals available")
@@ -515,7 +719,7 @@ mod tests {
             service
                 .build_preview_view_for_decision(decision, &snapshot)
                 .status_label,
-            "ready"
+            "waiting"
         );
     }
 
@@ -537,7 +741,7 @@ mod tests {
                 .detail
                 .as_deref()
                 .is_some_and(|detail| {
-                    detail.contains("queue-driven auto follow-up requires an actionable planning queue head")
+                    detail.contains("no planning workspace is active for this shell yet")
                 })
         );
     }
@@ -580,7 +784,10 @@ mod tests {
         );
         assert!(
             service
-                .auto_follow_transcript_text(&snapshot, PlanningAutoFollowPromptMode::RefreshPlanningQueue)
+                .auto_follow_transcript_text(
+                    &snapshot,
+                    PlanningAutoFollowPromptMode::RefreshPlanningQueue
+                )
                 .contains("existing proposal 작업 목록을 priority queue에 넣고")
         );
     }
@@ -626,7 +833,7 @@ mod tests {
         });
 
         assert_eq!(summary.workspace_state, PlanningWorkspaceState::Executing);
-        assert_eq!(summary.status_label, "stale");
+        assert_eq!(summary.status_label, "running");
         assert_eq!(
             summary.queue_summary.as_deref(),
             Some("next task: rank 1 / task-1")
@@ -737,6 +944,17 @@ mod tests {
         assert_eq!(
             projection.queue_head_line.as_deref(),
             Some("planning queue head: next task: rank 1 / task-1")
+        );
+        assert_eq!(projection.current_state_line, "current state: ready");
+        assert!(
+            projection
+                .cause_line
+                .starts_with("cause: the next queued task is Implement queue-aware")
+        );
+        assert!(
+            projection
+                .next_action_line
+                .starts_with("next action: let automation continue")
         );
     }
 }

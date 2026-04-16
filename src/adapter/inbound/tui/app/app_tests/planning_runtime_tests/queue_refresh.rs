@@ -267,19 +267,19 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
     );
     assert_eq!(
         conversation.status_text,
-        "turn completed / auto follow-up paused: planning queue repeated the previous task"
+        "turn completed / auto follow-up paused: the queue did not advance past the previous task"
     );
     assert!(
         conversation
             .planning_runtime_snapshot
             .auto_followup_pause_reason()
-            .is_some_and(|reason: &str| reason.contains("previously handed-off task"))
+            .is_some_and(|reason: &str| reason.contains("queue still points to the previous task"))
     );
     assert!(
         app.planner_worker_panel_state
             .last_host_detail
             .as_deref()
-            .is_some_and(|detail: &str| detail.contains("previously handed-off task"))
+            .is_some_and(|detail: &str| detail.contains("queue still points to the previous task"))
     );
     assert!(
         app.planner_worker_panel_state

@@ -248,6 +248,9 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                     max_detail_len: AUTOMATION_PLANNING_DETAIL_LIMIT,
                 },
             );
+            let current_state_line = planning_projection.current_state_line;
+            let cause_line = planning_projection.cause_line;
+            let next_action_line = planning_projection.next_action_line;
             let planning_status_line = planning_projection.planning_status_line;
             let repair_attempt_line = planning_projection.repair_attempt_line;
             let queue_head_line = planning_projection.queue_head_line;
@@ -279,6 +282,9 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                     "planner detail: {}",
                     app.planner_visibility_label()
                 )),
+                Line::from(current_state_line),
+                Line::from(cause_line),
+                Line::from(next_action_line),
                 Line::from(planning_status_line),
                 Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",

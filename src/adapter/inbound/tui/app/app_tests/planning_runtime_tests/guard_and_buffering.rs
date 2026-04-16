@@ -339,7 +339,7 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
     };
     assert_eq!(
         conversation.status_text,
-        "turn completed / auto follow-up stopped: planning queue idle policy is stop"
+        "turn completed / auto follow-up stopped: planning queue is idle"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -630,7 +630,7 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "ready"
+        "waiting"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");

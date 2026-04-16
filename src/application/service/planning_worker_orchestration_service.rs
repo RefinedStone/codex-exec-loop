@@ -569,7 +569,7 @@ mod tests {
             .expect("refresh should reconcile invalid worker candidate");
 
         assert!(result.repair_request.is_some());
-        assert!(result.runtime_snapshot.preview_status_label() == "ready");
+        assert!(result.runtime_snapshot.preview_status_label() == "waiting");
         assert!(result.rejected_summary.is_some());
 
         let restored = workspace_port

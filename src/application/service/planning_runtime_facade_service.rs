@@ -327,9 +327,7 @@ mod tests {
     };
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_policy_service::{
-        PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
-    };
+    use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
@@ -536,7 +534,11 @@ mod tests {
         let PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) = decision else {
             panic!("expected refresh prompt");
         };
-        assert!(prompt.prompt.contains("planning priority queue를 갱신하세요."));
+        assert!(
+            prompt
+                .prompt
+                .contains("planning priority queue를 갱신하세요.")
+        );
         assert!(prompt.handoff_task.is_none());
     }
 
@@ -563,7 +565,11 @@ mod tests {
         let PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) = decision else {
             panic!("expected refresh prompt");
         };
-        assert!(prompt.prompt.contains("planning priority queue를 갱신하세요."));
+        assert!(
+            prompt
+                .prompt
+                .contains("planning priority queue를 갱신하세요.")
+        );
         assert!(prompt.prompt.contains("latest answer"));
         assert!(prompt.handoff_task.is_none());
     }
@@ -615,10 +621,12 @@ mod tests {
             snapshot: &snapshot,
         });
 
-        assert!(preview
-            .rendered_prompt
-            .contains("planning priority queue를 갱신하세요."));
-        assert_eq!(preview.planning_status_line, "planning: ready");
+        assert!(
+            preview
+                .rendered_prompt
+                .contains("planning priority queue를 갱신하세요.")
+        );
+        assert_eq!(preview.planning_status_line, "planning: waiting");
         assert_eq!(
             preview.planning_detail_line.as_deref(),
             Some("planning detail: queue idle: no executable planning task")
@@ -702,6 +710,13 @@ mod tests {
         assert_eq!(
             projection.planning_status_line,
             "planning status: repairing"
+        );
+        assert_eq!(projection.current_state_line, "current state: repairing");
+        assert!(projection.cause_line.contains("planning needs repair"));
+        assert!(
+            projection
+                .next_action_line
+                .starts_with("next action: wait for repair to finish")
         );
         assert_eq!(
             projection.repair_attempt_line.as_deref(),
