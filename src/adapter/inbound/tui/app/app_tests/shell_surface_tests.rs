@@ -6,15 +6,19 @@ use crossterm::event::Event;
 use super::super::shell_runtime;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
+use crate::domain::parallel_mode::{
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+};
 
 use super::{
-    ConversationInputState, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent, KeyModifiers,
-    PlanningExecutionSnapshot, PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay,
-    StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_ready_input_lines,
-    create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
-    sample_planning_runtime_snapshot, sample_startup_diagnostics,
+    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
+    ConversationState, KeyCode, KeyEvent, KeyModifiers, PlanningExecutionSnapshot,
+    PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay, StartupState,
+    TASK_LEDGER_FILE_PATH, build_automation_overlay_view, build_automation_preview_lines,
+    build_automation_status_lines, build_ready_input_lines, create_temp_workspace, make_test_app,
+    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
+    sample_startup_diagnostics,
 };
 
 #[test]
@@ -62,7 +66,12 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
-    assert_eq!(conversation.planning_runtime_snapshot.preview_status_label(), "blocked");
+    assert_eq!(
+        conversation
+            .planning_runtime_snapshot
+            .preview_status_label(),
+        "blocked"
+    );
     assert!(
         conversation
             .planning_runtime_snapshot
@@ -117,7 +126,10 @@ fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("conversation should remain ready");
     };
-    assert_eq!(conversation.input_state, ConversationInputState::ReadyToContinue);
+    assert_eq!(
+        conversation.input_state,
+        ConversationInputState::ReadyToContinue
+    );
     assert_eq!(conversation.status_text, "turn failed");
     assert!(conversation.messages.iter().any(|message| {
         message.kind == ConversationMessageKind::Status
@@ -166,7 +178,78 @@ fn automation_inline_command_opens_overlay() {
     };
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Automation);
     assert!(conversation.input_buffer.is_empty());
-    assert!(conversation.status_text.contains("opened automation controls"));
+    assert!(
+        conversation
+            .status_text
+            .contains("opened automation controls")
+    );
+}
+
+#[test]
+fn parallel_inline_command_opens_supersession_overlay() {
+    let (app, _) = make_test_app();
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    runtime.app_mut().push_input_character(':');
+    runtime.app_mut().push_input_character('p');
+    runtime.app_mut().push_input_character('a');
+    runtime.app_mut().push_input_character('r');
+    runtime.app_mut().push_input_character('a');
+    runtime.app_mut().push_input_character('l');
+    runtime.app_mut().push_input_character('l');
+    runtime.app_mut().push_input_character('e');
+    runtime.app_mut().push_input_character('l');
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.status_text.contains("parallel mode:"));
+}
+
+#[test]
+fn sessions_command_routes_to_supersession_when_parallel_mode_is_enabled() {
+    let (app, _) = make_test_app();
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    ));
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    runtime.app_mut().push_input_character(':');
+    runtime.app_mut().push_input_character('s');
+    runtime.app_mut().push_input_character('e');
+    runtime.app_mut().push_input_character('s');
+    runtime.app_mut().push_input_character('s');
+    runtime.app_mut().push_input_character('i');
+    runtime.app_mut().push_input_character('o');
+    runtime.app_mut().push_input_character('n');
+    runtime.app_mut().push_input_character('s');
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert!(
+        conversation
+            .status_text
+            .contains("opened supersession control tower")
+    );
 }
 
 #[test]
@@ -229,6 +312,30 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
     assert!(keys.contains("Ctrl+a: automation on/off"));
 }
 
+fn sample_parallel_mode_snapshot(
+    readiness: ParallelModeReadinessState,
+) -> ParallelModeReadinessSnapshot {
+    ParallelModeReadinessSnapshot::new(
+        "/tmp/root",
+        readiness,
+        vec![
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GitRepository,
+                ParallelModeCapabilityState::Ready,
+                "git repo detected at /tmp/root",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::Planning,
+                ParallelModeCapabilityState::Ready,
+                "planning workspace is healthy",
+                None,
+            ),
+        ],
+        None,
+    )
+}
+
 #[test]
 fn automation_preview_uses_placeholder_without_agent_reply() {
     let (app, _) = make_test_app();
@@ -277,8 +384,8 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("conversation should be ready");
     };
-    conversation.status_text = "turn completed / queued auto follow-up with mode planning queue"
-        .to_string();
+    conversation.status_text =
+        "turn completed / queued auto follow-up with mode planning queue".to_string();
     conversation.base_warnings =
         vec!["planner queue changed shape after reconciliation".to_string()];
     conversation.warnings = conversation.base_warnings.clone();
@@ -291,7 +398,10 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
         .join("\n");
 
     assert!(rendered.contains("automation: on"));
-    assert!(rendered.contains("status: turn completed / queued auto follow-up with mode planning queue"));
+    assert!(
+        rendered
+            .contains("status: turn completed / queued auto follow-up with mode planning queue")
+    );
     assert!(rendered.contains("warning: planner queue changed shape"));
     assert!(rendered.contains("planning reconciliation completed"));
 }
@@ -318,15 +428,9 @@ fn automation_overlay_scroll_keys_update_preview_offset() {
     app.show_automation_overlay();
     assert_eq!(app.followup_overlay_ui_state.preview_scroll, 0);
 
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(
-        KeyCode::PageDown,
-        KeyModifiers::NONE,
-    )));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,)));
     assert!(app.followup_overlay_ui_state.preview_scroll > 0);
 
-    assert!(app.handle_shell_overlay_key(KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::NONE,
-    )));
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
 }

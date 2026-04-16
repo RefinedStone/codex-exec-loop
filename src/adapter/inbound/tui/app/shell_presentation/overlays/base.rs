@@ -1,7 +1,9 @@
 #[cfg(test)]
+use super::super::super::planning::build_planner_panel_lines;
+#[cfg(test)]
 use super::super::super::planning::status_projection::build_planning_status_surface_projection;
 #[cfg(test)]
-use super::super::super::planning::build_planner_panel_lines;
+use super::super::status_panels;
 #[cfg(test)]
 use super::super::{
     Block, Borders, Constraint, ConversationShellFrameView, ConversationShellView, Direction,
@@ -47,6 +49,8 @@ pub(crate) fn build_conversation_shell_view(
     let _ = mode;
     let context = ShellCorePresentationContext::from_app(app);
     let plan_mode_indicator = current_plan_mode_indicator(app);
+    let parallel_mode_summary_line = status_panels::parallel_mode_summary_line(app);
+    let parallel_mode_alert_line = status_panels::parallel_mode_alert_line(app);
     let (planning_summary_line, planning_notice_line) = context
         .ready_conversation()
         .map(|conversation| {
@@ -66,6 +70,8 @@ pub(crate) fn build_conversation_shell_view(
     let mut footer_lines = build_shell_footer_lines_with_context(
         &context,
         plan_mode_indicator,
+        parallel_mode_summary_line,
+        parallel_mode_alert_line,
         app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
         planning_summary_line,
         planning_notice_line,
@@ -91,6 +97,11 @@ pub(crate) fn build_conversation_shell_view(
 }
 
 pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayView {
+    let ctrl_o_label = if app.parallel_mode_enabled() {
+        "Ctrl+o: supersession board"
+    } else {
+        "Ctrl+o: recent sessions"
+    };
     StartupOverlayView {
         header_lines: vec![
             Line::from(vec![
@@ -146,7 +157,7 @@ pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
         warning_lines: build_startup_warning_lines(app),
         key_lines: vec![
             Line::from("Esc/Ctrl+C: close    r: rerun checks"),
-            Line::from("Ctrl+o: recent sessions"),
+            Line::from(ctrl_o_label),
         ],
     }
 }

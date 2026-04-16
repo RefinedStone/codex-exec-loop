@@ -3,6 +3,7 @@ use std::thread;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::parallel_mode_service::ParallelModeService;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -65,6 +66,8 @@ impl NativeTuiApp {
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
+            parallel_mode_enabled: false,
+            parallel_mode_readiness_snapshot: None,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
@@ -77,6 +80,7 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
+            parallel_mode_service: ParallelModeService::new(),
             planning,
             active_turn_planning_capture: None,
             planner_worker_panel_state: super::PlannerWorkerPanelState::default(),

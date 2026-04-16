@@ -25,6 +25,10 @@ use crate::application::service::planning::{
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::parallel_mode::{
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+};
 use crate::domain::planning::PlanningValidationReport;
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
@@ -323,6 +327,50 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Degraded,
+    ));
+    app.shell_overlay = ShellOverlay::Supersession;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession inspection render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(rendered.contains("Supersession / inline inspection"));
+    assert!(rendered.contains("Capabilities"));
+    assert!(rendered.contains("Control Tower"));
+    assert!(rendered.contains("pool board: not reconciled yet"));
+    assert!(!rendered.contains("Transcript /"));
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    append_stable_history_message(&mut app, "parallel summary should render in the live shell");
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    ));
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("parallel: ready  |  mode: parallel"));
+    assert!(rendered.contains("parallel alert:"));
 }
 
 #[test]
@@ -634,6 +682,37 @@ fn sample_session(id: &str) -> SessionSummary {
         path: format!("/tmp/root/{id}.json"),
         git_branch: Some("feature/demo".to_string()),
     }
+}
+
+fn sample_parallel_mode_snapshot(
+    readiness: ParallelModeReadinessState,
+) -> ParallelModeReadinessSnapshot {
+    ParallelModeReadinessSnapshot::new(
+        "/tmp/root",
+        readiness,
+        vec![
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GitRepository,
+                ParallelModeCapabilityState::Ready,
+                "git repo detected at /tmp/root",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::Planning,
+                match readiness {
+                    ParallelModeReadinessState::Ready => ParallelModeCapabilityState::Ready,
+                    ParallelModeReadinessState::Degraded => ParallelModeCapabilityState::Degraded,
+                    ParallelModeReadinessState::Blocked => ParallelModeCapabilityState::Blocked,
+                    ParallelModeReadinessState::Repairing => {
+                        ParallelModeCapabilityState::Repairing
+                    }
+                },
+                "planning workspace is healthy",
+                Some("review the readiness panel".to_string()),
+            ),
+        ],
+        Some("planning: degraded / cause: planning workspace is healthy / next action: review the readiness panel".to_string()),
+    )
 }
 
 fn append_stable_history_message(app: &mut NativeTuiApp, text: &str) {
