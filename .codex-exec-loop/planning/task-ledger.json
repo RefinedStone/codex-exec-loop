@@ -1,4 +1,227 @@
 {
   "version": 1,
-  "tasks": []
+  "tasks": [
+    {
+      "id": "task-supersession-mode-readiness-skeleton",
+      "direction_id": "supersession-mode-entry-and-readiness",
+      "direction_relation_note": "Implements the next concrete slice from the supersession roadmap: Slice 1 capability detection and mode skeleton so parallel mode can enter as a supervisor-first shell state before any agent launch.",
+      "title": "Add parallel mode readiness snapshot and shell entry skeleton",
+      "description": "Introduce the first operator-visible supersession slice by adding explicit parallel mode entrypoints, durable readiness checks for git/worktree/push/gh/planning, and a placeholder supersession prepare surface that reports ready, degraded, or blocked state without disturbing normal-mode session browsing while parallel mode is off.",
+      "status": "done",
+      "base_priority": 100,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in main session via commit 1d193d8 and PR #252 after adding the readiness snapshot, `:parallel` entry commands, supersession overlay skeleton, and verification with cargo build/test.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T00:05:00Z"
+    },
+    {
+      "id": "task-supersession-control-tower-empty-board",
+      "direction_id": "supersession-agent-control-tower",
+      "direction_relation_note": "Completed the control-tower placeholder slice by shipping the read-only supervisor snapshot model and multi-panel supersession board, which now becomes the base surface for later runtime lifecycle wiring.",
+      "title": "Build supervisor board with roster, pool, and distributor placeholders",
+      "description": "Shipped the read-only supervisor snapshot model and supersession board layout with Capabilities, Pool Board, Agent Roster, Selected Detail, Distributor, and Queue panels plus shell-tail summaries, leaving runtime lifecycle and queue data binding for later follow-up slices.",
+      "status": "done",
+      "base_priority": 95,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in main session via commit 019c820 and PR #253 after adding the read-only supervisor snapshot model, multi-panel supersession board, and shell-tail summaries with cargo build/test verification.",
+      "depends_on": [
+        "task-supersession-mode-readiness-skeleton"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T19:34:28Z"
+    },
+    {
+      "id": "task-supersession-ledger-refresh-contract",
+      "direction_id": "supersession-ledger-feedback-loop",
+      "direction_relation_note": "Derived from the supersession docs and latest answer that official task state must remain ledger-owned even after agent milestones, so the refresh contract needs to stay explicit as runtime orchestration grows.",
+      "title": "Define serialized completion refresh contract for official ledger updates",
+      "description": "Implement the planning-facing completion payload and supervisor-side reported-versus-official state boundary so agent completion stays non-official until one serialized hidden planning worker refresh succeeds, and new assignment remains blocked while refresh is running or failed.",
+      "status": "proposed",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "This remains necessary for supersession authority boundaries, but the latest main-session reply shifted the immediate executable queue toward runtime pool, roster, and distributor bindings.",
+      "depends_on": [
+        "task-supersession-control-tower-empty-board"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T19:34:28Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-reconcile",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Completed the first pool runtime slice by replacing placeholder pool data with git/worktree-backed reconcile snapshots, deterministic akra pool-root discovery, and cleanup-aware slot-state classification on the supervisor board.",
+      "title": "Implement akra pool reconcile and slot lease cleanup state",
+      "description": "Shipped the first GitWorkspacePort-backed pool runtime slice that reconciles the default akra slots, computes deterministic pool-root naming, classifies missing, idle, awaiting_cleanup, blocked, and unavailable states from git/worktree inspection, and caches supervisor snapshots in the TUI so pool inspection does not rerun on every render.",
+      "status": "done",
+      "base_priority": 92,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in main session via commit 46ae69e and PR #254 after adding git/worktree-backed pool reconcile, cleanup-aware slot classification, TUI snapshot caching, and cargo build/test verification.",
+      "depends_on": [
+        "task-supersession-mode-readiness-skeleton",
+        "task-supersession-control-tower-empty-board"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T04:17:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-slot-lifecycle-actions",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Completed the next pool execution slice by splitting read-only inspect from mutating reconcile and adding actual akra baseline creation, missing slot provisioning, and merged-slot cleanup execution under the supervisor refresh path.",
+      "title": "Implement akra slot provisioning and cleanup execution flow",
+      "description": "Shipped the mutating akra reconcile flow so `:parallel on` and refresh can create the local akra baseline branch, provision missing default slots, clean merged agent branches, and reset or delete reusable slots back toward idle without manual filesystem intervention.",
+      "status": "done",
+      "base_priority": 93,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in main session via commit 904f695 and PR #255 after adding mutating akra reconcile, slot provisioning, merged-slot cleanup execution, and cargo build/test verification.",
+      "depends_on": [
+        "task-supersession-mode-readiness-skeleton",
+        "task-supersession-control-tower-empty-board",
+        "task-supersession-worktree-pool-reconcile"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:05:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-lease-runtime-transitions",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Completed the durable lease lifecycle slice by adding persisted slot lease records, `leased/running/cleanup_pending` transitions, and cleanup-state projection so the akra pool can now track ownership and merged cleanup readiness across refreshes.",
+      "title": "Persist akra slot leases and running-state transitions",
+      "description": "Shipped persisted akra slot lease records under `.leases/*.json`, lifecycle transition APIs for `leased`, `running`, and `cleanup_pending`, guardrails for branch/worktree ownership and akra integration checks, and cleanup inspection updates that now surface durable lease-backed slot states instead of inferred projections.",
+      "status": "done",
+      "base_priority": 94,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in main session via commit 3cf56d1 and PR #256 after adding persisted lease storage, lifecycle transition APIs, cleanup-state inspection updates, service tests, and cargo build/test verification.",
+      "depends_on": [
+        "task-supersession-mode-readiness-skeleton",
+        "task-supersession-control-tower-empty-board",
+        "task-supersession-worktree-pool-reconcile",
+        "task-supersession-worktree-pool-slot-lifecycle-actions"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:20:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-runtime-lease-wiring",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Promoted as the next executable queue head because the latest main-session reply explicitly says the lease APIs are implemented but the actual agent/session runtime still does not call them, making runtime wiring the direct follow-up before roster and distributor panels can trust slot state.",
+      "title": "Wire agent session runtime into slot lease lifecycle APIs",
+      "description": "Connect the real agent and session runtime flow to `acquire_slot_lease`, `mark_slot_running`, and `mark_slot_cleanup_pending` so slot ownership, running-state entry, and merged-cleanup readiness are driven by actual execution events rather than service-only helpers.",
+      "status": "ready",
+      "base_priority": 96,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply names missing runtime calls into the new lease APIs as the first unfinished item, so this is the clearest executable next task for builtin next-task automation.",
+      "depends_on": [
+        "task-supersession-mode-readiness-skeleton",
+        "task-supersession-control-tower-empty-board",
+        "task-supersession-worktree-pool-reconcile",
+        "task-supersession-worktree-pool-slot-lifecycle-actions",
+        "task-supersession-worktree-pool-lease-runtime-transitions"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:20:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-explicit-lease-release",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Created from the latest main-session reply, which explicitly leaves bootstrap-failure handling and clean-slot idle restoration as a separate follow-up beyond the newly added persisted lease transition APIs.",
+      "title": "Add explicit lease release for bootstrap failure recovery",
+      "description": "Introduce a dedicated release path that can return a clean leased slot back to idle when bootstrap or early runtime setup fails before the session reaches durable running state, instead of leaving recovery to ad hoc cleanup behavior.",
+      "status": "proposed",
+      "base_priority": 87,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply directly calls out missing explicit release behavior for bootstrap failure, but wiring the runtime into the lease lifecycle APIs is the more immediate prerequisite.",
+      "depends_on": [
+        "task-supersession-worktree-pool-runtime-lease-wiring"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:20:00Z"
+    },
+    {
+      "id": "task-supersession-agent-roster-lifecycle-runtime",
+      "direction_id": "supersession-agent-control-tower",
+      "direction_relation_note": "Still follows the shipped placeholder board, but the latest main-session reply now makes runtime wiring the immediate prerequisite: roster state should wait until actual agent/session execution drives the persisted lease lifecycle so task ownership and durations reflect real runtime events instead of service-only transitions.",
+      "title": "Wire supervisor roster to live agent lifecycle state",
+      "description": "Replace static agent roster placeholders with runtime lifecycle projection that shows task ownership, slot identity, lease state, running duration, and latest summary for active and recently completed agents once actual agent/session execution is wired into the persisted lease lifecycle.",
+      "status": "proposed",
+      "base_priority": 84,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply still leaves roster runtime binding unfinished, but it now depends on the new runtime lease wiring before the board can project trustworthy ownership and duration data.",
+      "depends_on": [
+        "task-supersession-control-tower-empty-board",
+        "task-supersession-worktree-pool-reconcile",
+        "task-supersession-worktree-pool-runtime-lease-wiring"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:20:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-operator-recovery",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Still tracks operator recovery for slots whose branches are not yet integrated into akra, but the latest main-session reply now makes runtime lease wiring and explicit release behavior the more immediate prerequisites for safe recovery decisions.",
+      "title": "Handle operator recovery for non-merged slot branches",
+      "description": "Add supervisor-visible recovery behavior for slots whose agent branches are not yet integrated into akra so they land in an explicit blocked or recoverable state with operator actions instead of only supporting merged-branch cleanup paths.",
+      "status": "proposed",
+      "base_priority": 85,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Non-merged branch recovery is still necessary, but runtime lease wiring and bootstrap-failure release are now the more immediate prerequisites for safe operator recovery decisions.",
+      "depends_on": [
+        "task-supersession-worktree-pool-runtime-lease-wiring",
+        "task-supersession-worktree-pool-explicit-lease-release"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:20:00Z"
+    },
+    {
+      "id": "task-supersession-distributor-queue-runtime-bindings",
+      "direction_id": "supersession-distributor-merge-queue",
+      "direction_relation_note": "Updated from the latest main-session reply, which now makes the missing runtime connection explicit: distributor and agent bindings should wait until actual agent/session execution drives the persisted lease lifecycle, then connect the board to real runtime ownership and queue execution rather than placeholders.",
+      "title": "Bind distributor queue and selected detail to runtime data",
+      "description": "Replace placeholder distributor and selected-detail panels with runtime queue-head, queue membership, selected item data, and agent or distributor linkage once actual agent/session execution is wired into the persisted lease lifecycle and exposes real slot ownership and execution context.",
+      "status": "proposed",
+      "base_priority": 82,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply still leaves agent and distributor runtime connection unfinished, but runtime lease wiring plus roster lifecycle are the higher-confidence prerequisites for meaningful queue-state projection.",
+      "depends_on": [
+        "task-supersession-control-tower-empty-board",
+        "task-supersession-worktree-pool-runtime-lease-wiring",
+        "task-supersession-agent-roster-lifecycle-runtime"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T05:20:00Z"
+    }
+  ]
 }
