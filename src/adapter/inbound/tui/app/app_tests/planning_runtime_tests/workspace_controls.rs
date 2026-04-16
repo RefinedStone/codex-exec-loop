@@ -6,7 +6,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::super::{
     ConversationState, InlineShellCommandInput, PLAN_OFF_FILE_PATH, PlanningInitOverlayStep,
     ShellOverlay, StartupState, bootstrap_active_planning_workspace, create_temp_workspace,
-    make_test_app, sample_startup_diagnostics, sync_draft_conversation_to_startup_workspace,
+    make_test_app, rewrite_active_directions_toml, sample_startup_diagnostics,
+    sync_draft_conversation_to_startup_workspace,
+};
+use crate::application::service::planning::PlanningRuntimeWorkspaceStatus;
+use crate::application::service::planning_contract::{
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, default_direction_detail_doc_path,
 };
 
 #[test]
@@ -129,6 +134,57 @@ fn planning_on_command_requires_existing_workspace() {
     assert!(
         !plan_off_path.exists(),
         "Plan off marker should stay absent"
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn planning_doctor_command_repairs_safe_supporting_path_errors() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("planning-doctor-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    std::fs::write(
+        Path::new(&workspace_dir).join("README.md"),
+        "# invalid planning supporting path\n",
+    )
+    .expect("workspace readme should be writable");
+    rewrite_active_directions_toml(&workspace_dir, |directions| {
+        directions
+            .replace(
+                r#"detail_doc_path = """#,
+                r#"detail_doc_path = "README.md""#,
+            )
+            .replace(
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+                r#"prompt_path = "README.md""#,
+            )
+    });
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":planning doctor").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(conversation.status_text.contains("planning doctor applied"));
+    assert!(conversation.status_text.contains("validation: ok"));
+    assert_ne!(
+        conversation.planning_runtime_snapshot.workspace_status(),
+        PlanningRuntimeWorkspaceStatus::Invalid
+    );
+    assert!(
+        Path::new(&workspace_dir)
+            .join(default_direction_detail_doc_path("general-workstream"))
+            .is_file()
+    );
+    assert!(
+        Path::new(&workspace_dir)
+            .join(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+            .is_file()
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
