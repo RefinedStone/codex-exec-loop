@@ -95,6 +95,13 @@ struct PoolRuntimeContext {
     invalid_slot_leases: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct WorkspaceSlotLeaseResolution {
+    context: PoolRuntimeContext,
+    lease: ParallelModeSlotLeaseSnapshot,
+    workspace_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParallelModeService;
 
@@ -393,6 +400,63 @@ impl ParallelModeService {
         lease.state = ParallelModeSlotLeaseState::CleanupPending;
         write_slot_lease(&context.pool_root, &lease)?;
         Ok(lease)
+    }
+
+    pub fn mark_workspace_slot_running(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+
+        self.mark_slot_running(
+            workspace_dir,
+            &resolution.lease.slot_id,
+            &resolution.lease.agent_id,
+        )
+        .map(Some)
+    }
+
+    pub fn release_workspace_slot_lease_after_failed_start(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Leased {
+            return Ok(None);
+        }
+
+        let Some(slot_status) = inspect_slot_git_status(&resolution.workspace_path) else {
+            return Err(format!(
+                "slot `{}` could not be inspected after startup failure",
+                resolution.lease.slot_id
+            ));
+        };
+        if !slot_status.is_clean_baseline() {
+            return Err(format!(
+                "slot `{}` could not be released after startup failure because worktree is not clean: {}",
+                resolution.lease.slot_id,
+                slot_status.detail_label()
+            ));
+        }
+
+        if !cleanup_slot(
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            &resolution.lease.slot_id,
+            &resolution.workspace_path,
+            &resolution.lease.branch_name,
+        ) {
+            return Err(format!(
+                "slot `{}` could not be reset to `{AKRA_BRANCH}` after startup failure",
+                resolution.lease.slot_id
+            ));
+        }
+
+        Ok(Some(resolution.lease))
     }
 }
 
@@ -902,6 +966,55 @@ fn load_pool_runtime_context(
             detail,
         )
     })
+}
+
+fn resolve_workspace_slot_lease(
+    workspace_dir: &str,
+) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
+    let context =
+        load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+    let workspace_path = canonicalize_best_effort(Path::new(workspace_dir));
+    let Some(current_branch) = current_branch_name(&workspace_path) else {
+        return Err(format!(
+            "workspace `{}` does not currently resolve to a branch",
+            workspace_path.display()
+        ));
+    };
+
+    let mut matching_leases = context
+        .slot_leases
+        .values()
+        .filter(|lease| worktree_paths_match(&workspace_path, Path::new(&lease.worktree_path)))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if matching_leases.is_empty() {
+        return Ok(None);
+    }
+    if matching_leases.len() > 1 {
+        return Err(format!(
+            "workspace `{}` matched multiple slot leases",
+            workspace_path.display()
+        ));
+    }
+
+    let lease = matching_leases
+        .pop()
+        .expect("matching lease count should be one");
+    if lease.branch_name != current_branch {
+        return Err(format!(
+            "workspace `{}` is on `{}` but slot lease expects `{}`",
+            workspace_path.display(),
+            current_branch,
+            lease.branch_name
+        ));
+    }
+
+    Ok(Some(WorkspaceSlotLeaseResolution {
+        context,
+        lease,
+        workspace_path,
+    }))
 }
 
 fn load_pool_runtime_context_from_roots(
@@ -1633,6 +1746,14 @@ fn annotate_worktree_label(base_label: String, detail: &str) -> String {
     }
 }
 
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn worktree_paths_match(left: &Path, right: &Path) -> bool {
+    canonicalize_best_effort(left) == canonicalize_best_effort(right)
+}
+
 fn slot_id(slot_number: usize) -> String {
     format!("slot-{slot_number}")
 }
@@ -1700,9 +1821,16 @@ fn write_slot_lease(pool_root: &Path, lease: &ParallelModeSlotLeaseSnapshot) -> 
     ensure_directory_exists(&leases_root)
         .map_err(|error| format!("failed to create lease directory: {error}"))?;
     let lease_path = slot_lease_file_path(pool_root, &lease.slot_id);
+    let temp_path = lease_path.with_extension("tmp");
     let lease_body = serde_json::to_string_pretty(lease)
         .map_err(|error| format!("failed to serialize slot lease: {error}"))?;
-    fs::write(&lease_path, lease_body)
+    fs::write(&temp_path, lease_body).map_err(|error| {
+        format!(
+            "failed to write temporary slot lease `{}`: {error}",
+            lease.slot_id
+        )
+    })?;
+    fs::rename(&temp_path, &lease_path)
         .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
 }
 
@@ -1944,11 +2072,11 @@ fn run_command_with_stdin<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-        ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-        ParallelModeService, ParallelModeSupervisorState, build_pool_board,
-        derive_default_pool_root, derive_readiness, inspect_planning, parse_https_remote,
-        reconcile_pool_board, slot_id, slot_lease_file_path,
+        build_pool_board, derive_default_pool_root, derive_readiness, inspect_planning,
+        parse_https_remote, reconcile_pool_board, slot_id, slot_lease_file_path,
+        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+        ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
+        ParallelModeSupervisorState, DEFAULT_POOL_SIZE,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::parallel_mode::{
@@ -2415,11 +2543,9 @@ mod tests {
         assert_eq!(persisted.state, ParallelModeSlotLeaseState::Leased);
         assert_eq!(persisted.agent_id, "agent-1");
         assert_eq!(persisted.task_id, "task-1");
-        assert!(
-            persisted
-                .branch_name
-                .starts_with("akra-agent/slot-1/task-one")
-        );
+        assert!(persisted
+            .branch_name
+            .starts_with("akra-agent/slot-1/task-one"));
         assert_eq!(pool.leased_slots, 1);
         assert_eq!(pool.running_slots, 0);
         assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Leased);
@@ -2456,6 +2582,87 @@ mod tests {
         assert_eq!(pool.leased_slots, 0);
         assert_eq!(pool.running_slots, 1);
         assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Running);
+    }
+
+    #[test]
+    fn mark_workspace_slot_running_updates_matching_lease() {
+        let repo = TempGitRepo::new("workspace-running-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+
+        let running_lease = service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("workspace lease transition should succeed")
+            .expect("workspace should have an active lease");
+        let persisted = repo.read_slot_lease(1);
+
+        assert_eq!(running_lease.state, ParallelModeSlotLeaseState::Running);
+        assert_eq!(persisted.state, ParallelModeSlotLeaseState::Running);
+        assert!(persisted.running_started_at.is_some());
+    }
+
+    #[test]
+    fn release_workspace_slot_lease_after_failed_start_resets_clean_slot_to_idle() {
+        let repo = TempGitRepo::new("release-unstarted-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let released_lease = service
+            .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+            .expect("clean unstarted slot should be released")
+            .expect("workspace should have an active lease");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+        let pool = build_pool_board(&repo.workspace_dir(), Some(&readiness));
+
+        assert_eq!(released_lease.slot_id, "slot-1");
+        assert_eq!(released_lease.state, ParallelModeSlotLeaseState::Leased);
+        assert!(!repo.slot_lease_path(1).exists());
+        assert!(!repo.branch_exists(&lease.branch_name));
+        assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+        assert_eq!(pool.leased_slots, 0);
+        assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Idle);
+    }
+
+    #[test]
+    fn release_workspace_slot_lease_after_failed_start_rejects_dirty_worktree() {
+        let repo = TempGitRepo::new("release-dirty-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        fs::write(
+            Path::new(&lease.worktree_path).join("dirty.txt"),
+            "scratch\n",
+        )
+        .expect("worktree should become dirty");
+
+        let error = service
+            .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+            .expect_err("dirty unstarted slot should stay leased");
+
+        assert!(error.contains("could not be released after startup failure"));
+        assert!(repo.slot_lease_path(1).exists());
+        assert!(repo.branch_exists(&lease.branch_name));
     }
 
     #[test]
