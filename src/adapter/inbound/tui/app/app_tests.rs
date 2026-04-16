@@ -1,19 +1,11 @@
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::text::Line;
 
 use super::conversation_model::PlanningRepairState;
-use super::shell_presentation::{
-    build_inline_prompt_cursor_offset, build_input_prompt_cursor_offset,
-};
 use super::{
     ActiveTurnPlanningCapture, AutoFollowRuntimePhase, AutoFollowState, AutoFollowupSubmitContext,
     BackgroundMessage, ConversationInputState, ConversationMessage, ConversationMessageKind,
@@ -25,12 +17,11 @@ use super::{
     PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
     SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
     TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
-    build_automation_overlay_view, build_automation_preview_lines,
-    build_automation_status_lines, build_inline_tail_lines, build_input_title,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
-    build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
-    build_status_title, build_transcript_panel_view, build_transcript_title,
-    format_conversation_lines, shell_layout, startup_ascii_art_enabled_from_value,
+    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
+    build_inline_tail_lines, build_planning_init_overlay_view, build_queue_overlay_view,
+    build_ready_input_lines, build_session_overlay_view, build_startup_overlay_view,
+    build_status_title, build_transcript_panel_view, format_conversation_lines, shell_layout,
+    startup_ascii_art_enabled_from_value,
 };
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
@@ -222,34 +213,6 @@ fn sample_startup_diagnostics(workspace_path: &str, can_continue: bool) -> Start
     }
 }
 
-fn sample_session(id: &str) -> SessionSummary {
-    sample_session_with_workspace(id, "/tmp/root", "preview")
-}
-
-fn sample_session_with_workspace(id: &str, cwd: &str, preview: &str) -> SessionSummary {
-    sample_session_with_workspace_at(id, cwd, preview, 1_700_000_000)
-}
-
-fn sample_session_with_workspace_at(
-    id: &str,
-    cwd: &str,
-    preview: &str,
-    updated_at_epoch: i64,
-) -> SessionSummary {
-    SessionSummary {
-        id: id.to_string(),
-        name: Some(id.to_string()),
-        preview: preview.to_string(),
-        cwd: cwd.to_string(),
-        source: "codex".to_string(),
-        model_provider: "openai".to_string(),
-        updated_at_epoch,
-        status_type: "ready".to_string(),
-        path: format!("{cwd}/{id}.json"),
-        git_branch: Some("main".to_string()),
-    }
-}
-
 fn create_temp_workspace(prefix: &str) -> String {
     let unique_suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -258,54 +221,6 @@ fn create_temp_workspace(prefix: &str) -> String {
     let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
     std::fs::create_dir_all(&path).expect("temp workspace should be created");
     path.display().to_string()
-}
-
-struct TempWorkspace {
-    path: String,
-}
-
-impl TempWorkspace {
-    fn new(prefix: &str) -> Self {
-        Self {
-            path: create_temp_workspace(prefix),
-        }
-    }
-
-    fn path(&self) -> &str {
-        self.path.as_str()
-    }
-}
-
-impl Drop for TempWorkspace {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.path).ok();
-    }
-}
-
-fn wait_for_new_thread_prompt(
-    codex_port: &Arc<FakeCodexAppServerPort>,
-    predicate: impl Fn(&str) -> bool,
-) -> String {
-    let timeout = Duration::from_millis(500);
-    let poll_interval = Duration::from_millis(5);
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(prompt) = codex_port
-            .new_thread_calls
-            .lock()
-            .expect("new-thread call mutex poisoned")
-            .iter()
-            .map(|(_, prompt)| prompt.clone())
-            .find(|prompt| predicate(prompt))
-        {
-            return prompt;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "manual submit should reach the codex app-server port within {timeout:?}"
-        );
-        thread::sleep(poll_interval);
-    }
 }
 
 fn bootstrap_active_planning_workspace(workspace_dir: &str) {

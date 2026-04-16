@@ -86,14 +86,6 @@ fn render_planning_auto_follow_body(
         .replace("{last_message}", last_message)
 }
 
-fn render_max_auto_turns(max_auto_turns: usize) -> String {
-    if max_auto_turns == usize::MAX {
-        "infinite".to_string()
-    } else {
-        max_auto_turns.to_string()
-    }
-}
-
 fn append_planning_fragment(
     rendered_prompt: String,
     planning_prompt_fragment: Option<&str>,

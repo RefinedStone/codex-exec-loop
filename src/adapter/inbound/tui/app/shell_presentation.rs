@@ -193,11 +193,6 @@ pub(super) use overlays::{
 pub(super) use status_panels::InlineTailView;
 
 #[cfg(test)]
-pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    status_panels::build_shell_footer_lines(app)
-}
-
-#[cfg(test)]
 fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     plan_mode_indicator: status_panels::PlanModeIndicatorView,
@@ -551,14 +546,6 @@ pub(super) fn build_input_prompt_cursor_offset(
     build_prompt_cursor_offset(conversation, content_width)
 }
 
-#[cfg(test)]
-pub(super) fn build_inline_prompt_cursor_offset(
-    app: &NativeTuiApp,
-    content_width: u16,
-) -> Option<(u16, u16)> {
-    build_inline_tail_view(app, content_width).prompt_cursor_offset
-}
-
 fn build_prompt_cursor_offset(
     conversation: &ConversationViewModel,
     content_width: u16,
@@ -705,12 +692,6 @@ fn build_shell_title() -> Line<'static> {
 }
 
 #[cfg(test)]
-pub(super) fn build_transcript_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    let _ = mode;
-    build_transcript_title_with_context(&ShellCorePresentationContext::from_app(app))
-}
-
-#[cfg(test)]
 fn build_transcript_title_with_context(
     _context: &ShellCorePresentationContext<'_>,
 ) -> Line<'static> {
@@ -720,12 +701,6 @@ fn build_transcript_title_with_context(
 #[cfg(test)]
 pub(super) fn build_status_title() -> Line<'static> {
     Line::from("Controls / shell shortcuts and live status")
-}
-
-#[cfg(test)]
-pub(super) fn build_input_title(app: &NativeTuiApp, mode: ShellFrontendMode) -> Line<'static> {
-    let _ = mode;
-    build_input_title_with_context(&ShellCorePresentationContext::from_app(app))
 }
 
 #[cfg(test)]

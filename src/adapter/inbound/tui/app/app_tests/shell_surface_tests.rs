@@ -1,4 +1,5 @@
 use std::thread;
+use std::time::Duration;
 
 use crossterm::event::Event;
 
@@ -101,7 +102,7 @@ fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
         .submit_prompt("ship it".to_string(), super::PromptOrigin::Manual);
 
     for _ in 0..20 {
-        thread::sleep(super::Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
         runtime.poll_background_messages();
         let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
             continue;

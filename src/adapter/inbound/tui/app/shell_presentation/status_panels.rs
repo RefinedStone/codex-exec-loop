@@ -22,9 +22,9 @@ use crate::application::service::planning::{
 
 #[cfg(test)]
 use super::{
-    FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT, FOOTER_PLANNING_DETAIL_LIMIT,
-    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT, FOOTER_WARNING_DETAIL_LIMIT,
-    INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
+    FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT,
+    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT,
+    FOOTER_WARNING_DETAIL_LIMIT, INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
 };
 
 #[derive(Clone)]
@@ -39,28 +39,6 @@ pub(super) struct PlanModeIndicatorView {
     primary_label: &'static str,
     detail_label: Option<&'static str>,
     color: Color,
-}
-
-#[cfg(test)]
-pub(super) fn build_shell_footer_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let context = ShellCorePresentationContext::from_app(app);
-    let plan_mode_indicator = current_plan_mode_indicator(app);
-    let planning_summary_line = context.ready_conversation().and_then(|conversation| {
-        build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
-    });
-    let planning_notice_line = context.ready_conversation().and_then(|conversation| {
-        build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
-    });
-    let planner_panel_lines = build_planner_panel_lines(app, FOOTER_NOTICE_DETAIL_LIMIT);
-
-    build_shell_footer_lines_with_context(
-        &context,
-        plan_mode_indicator,
-        app.github_review_recent_changes_summary(FOOTER_NOTICE_DETAIL_LIMIT),
-        planning_summary_line,
-        planning_notice_line,
-        planner_panel_lines,
-    )
 }
 
 #[cfg(test)]
