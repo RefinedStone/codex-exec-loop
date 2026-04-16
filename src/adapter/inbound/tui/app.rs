@@ -12,7 +12,6 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
@@ -25,8 +24,7 @@ use crate::domain::session_summary::SessionSummary;
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 3;
-const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
-const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
+const MAX_AUTO_FOLLOW_MAX_TURNS: usize = 50;
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 #[cfg(test)]
@@ -155,8 +153,8 @@ use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{
     build_conversation_shell_frame_view, build_conversation_shell_view,
-    build_followup_template_overlay_view, build_followup_template_preview_lines,
-    build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
+    build_automation_overlay_view, build_automation_preview_lines,
+    build_automation_status_lines, build_inline_tail_lines, build_input_title,
     build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
     build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
     build_status_title, build_transcript_panel_view, build_transcript_title,
@@ -165,7 +163,7 @@ use shell_presentation::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AutoFollowupSubmitContext {
     queued_from_turn_id: String,
-    template_label: String,
+    mode_label: String,
     transcript_text: String,
     debug_detail: Option<String>,
     handoff_task: Option<PlanningTaskHandoff>,
@@ -221,7 +219,6 @@ struct NativeTuiApp {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
-    followup_template_service: FollowupTemplateService,
     planning: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,

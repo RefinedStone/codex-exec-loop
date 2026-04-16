@@ -15,12 +15,8 @@ use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemP
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
-use crate::application::port::outbound::followup_template_port::{
-    FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
-};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning::PlanningBootstrapMode;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::{
@@ -312,7 +308,7 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
 fn inline_followup_inspection_renders_preview_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.show_followup_template_overlay();
+    app.show_automation_overlay();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -320,8 +316,8 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Follow-Up Templates / inline inspection"));
-    assert!(rendered.contains("Template List"));
+    assert!(rendered.contains("Automation Controls / inline inspection"));
+    assert!(rendered.contains("Automation"));
     assert!(rendered.contains("Preview"));
     assert!(rendered.contains("automation: on"));
     assert!(!rendered.contains("shell inspection"));
@@ -509,7 +505,7 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
 
     assert!(keys.contains("Type the new max-turn value directly."));
     assert!(keys.contains("Enter: save max turns"));
-    assert!(keys.contains("Use a whole number greater than 0, or type infinite."));
+    assert!(keys.contains("Use a whole number between 1 and 50."));
     assert!(!keys.contains("promote staged scaffold"));
 }
 
@@ -593,25 +589,12 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
     }
 }
 
-struct FakeFollowupTemplatePort;
-
-impl FollowupTemplatePort for FakeFollowupTemplatePort {
-    fn load_workspace_templates(
-        &self,
-        _workspace_dir: &str,
-    ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
-        Ok(Vec::new())
-    }
-}
-
 fn make_test_app() -> NativeTuiApp {
     let codex_port = Arc::new(FakeCodexAppServerPort);
-    let followup_port = Arc::new(FakeFollowupTemplatePort);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        FollowupTemplateService::new(followup_port),
         PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
     );
     app.show_startup_ascii_art = false;

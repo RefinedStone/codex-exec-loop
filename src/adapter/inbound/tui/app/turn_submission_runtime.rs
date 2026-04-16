@@ -68,7 +68,7 @@ impl NativeTuiApp {
             ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt,
                 queued_from_turn_id,
-                template_label,
+                mode_label,
                 transcript_text,
                 handoff_task,
             } => {
@@ -77,7 +77,7 @@ impl NativeTuiApp {
                     prompt,
                     PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                         queued_from_turn_id,
-                        template_label,
+                        mode_label,
                         transcript_text,
                         debug_detail,
                         handoff_task,

@@ -283,12 +283,8 @@ mod tests {
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
-    use crate::application::port::outbound::followup_template_port::{
-        FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
-    };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
-    use crate::application::service::followup_template_service::FollowupTemplateService;
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
@@ -582,25 +578,12 @@ mod tests {
         }
     }
 
-    struct FakeFollowupTemplatePort;
-
-    impl FollowupTemplatePort for FakeFollowupTemplatePort {
-        fn load_workspace_templates(
-            &self,
-            _workspace_dir: &str,
-        ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
-            Ok(Vec::new())
-        }
-    }
-
     fn make_test_app() -> NativeTuiApp {
         let codex_port = Arc::new(FakeCodexAppServerPort);
-        let followup_port = Arc::new(FakeFollowupTemplatePort);
         NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
-            FollowupTemplateService::new(followup_port),
             PlanningServices::from_workspace_port(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),

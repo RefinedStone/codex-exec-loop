@@ -1,6 +1,0 @@
-자동 후속 {auto_turn}/{max_auto_turns} 입니다.
-
-직전 답변:
-{last_message}
-
-방금 결과를 기준으로 다음 작업 1개만 이어서 진행하세요.

@@ -4,17 +4,17 @@ use crate::application::service::planning::{
     PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
 };
-use crate::application::service::turn_prompt_assembly_service::PREVIEW_THREAD_ID_PLACEHOLDER;
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const FOLLOWUP_WARNING_DETAIL_LIMIT: usize = 32;
-const FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
-const FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
-const FOLLOWUP_PLANNING_DETAIL_LIMIT: usize = 48;
-const FOLLOWUP_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
-const FOLLOWUP_PLANNER_DEBUG_MAX_LINES: usize = 256;
+const AUTOMATION_WARNING_DETAIL_LIMIT: usize = 32;
+const AUTOMATION_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 32;
+const AUTOMATION_GITHUB_REVIEW_DETAIL_LIMIT: usize = 24;
+const AUTOMATION_PLANNING_DETAIL_LIMIT: usize = 48;
+const AUTOMATION_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
+const AUTOMATION_PLANNER_DEBUG_MAX_LINES: usize = 256;
+const PREVIEW_THREAD_ID_PLACEHOLDER: &str = "draft-thread";
 
 pub(crate) fn build_planning_summary_line(
     app: &NativeTuiApp,
@@ -101,20 +101,15 @@ pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
     lines
 }
 
-pub(crate) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(crate) fn build_automation_preview_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("conversation is still loading")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
         ConversationState::Ready(conversation) => {
-            let template = conversation.auto_follow_state.selected_template();
             let preview =
                 app.planning
                     .runtime
                     .build_auto_follow_preview(PlanningRuntimePreviewRequest {
-                        template,
-                        auto_turn: conversation.auto_follow_state.next_auto_turn_index(),
-                        max_auto_turns: conversation.auto_follow_state.max_auto_turns_value(),
-                        session_id: &conversation.thread_id,
                         stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
                         last_message: conversation.latest_agent_message_text(),
                         snapshot: &conversation.planning_runtime_snapshot,
@@ -126,8 +121,10 @@ pub(crate) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             };
 
             let mut lines = vec![
-                Line::from(format!("selected: {}", template.label)),
-                Line::from(format!("source: {}", template.source_label())),
+                Line::from(format!(
+                    "mode: {}",
+                    conversation.auto_follow_state.mode_label()
+                )),
                 Line::from(format!("preview thread id: {preview_thread_id}")),
             ];
 
@@ -143,12 +140,6 @@ pub(crate) fn build_followup_template_preview_lines(app: &NativeTuiApp) -> Vec<L
             lines.push(Line::from(preview.planning_status_line));
             if let Some(detail_line) = preview.planning_detail_line.as_deref() {
                 lines.push(Line::raw(detail_line.to_string()));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(Line::from("Raw Template"));
-            for body_line in template.body.lines() {
-                lines.push(Line::from(body_line.to_string()));
             }
 
             lines.push(Line::from(""));
@@ -200,7 +191,7 @@ fn append_multiline_debug_block(lines: &mut Vec<Line<'static>>, block: Option<&s
         return;
     }
 
-    for line in build_debug_preview_lines(block, FOLLOWUP_PLANNER_DEBUG_MAX_LINES) {
+    for line in build_debug_preview_lines(block, AUTOMATION_PLANNER_DEBUG_MAX_LINES) {
         if line.is_empty() {
             lines.push(Line::from(""));
         } else {
@@ -227,7 +218,7 @@ fn planner_debug_section_header_line(label: &str) -> Line<'static> {
     ))
 }
 
-pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.conversation_state {
         ConversationState::Loading => vec![Line::from("conversation is still loading")],
         ConversationState::Failed(message) => vec![Line::from(message.clone())],
@@ -238,7 +229,7 @@ pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 .activity_scope_label(turn_running);
             let approval_summary = conversation.approval_summary();
             let github_review_summary =
-                app.github_review_recent_changes_summary(FOLLOWUP_GITHUB_REVIEW_DETAIL_LIMIT);
+                app.github_review_recent_changes_summary(AUTOMATION_GITHUB_REVIEW_DETAIL_LIMIT);
             let planning_projection = app.planning.runtime.build_followup_status_projection(
                 PlanningRuntimeStatusProjectionRequest {
                     snapshot: &conversation.planning_runtime_snapshot,
@@ -254,7 +245,7 @@ pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                             max_attempts: state.max_attempts,
                         }
                     }),
-                    max_detail_len: FOLLOWUP_PLANNING_DETAIL_LIMIT,
+                    max_detail_len: AUTOMATION_PLANNING_DETAIL_LIMIT,
                 },
             );
             let planning_status_line = planning_projection.planning_status_line;
@@ -274,7 +265,7 @@ pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 )),
                 Line::from(format!(
                     "max auto turns: {}",
-                    conversation.auto_follow_state.max_auto_turns_label()
+                    conversation.auto_follow_state.max_auto_turns_value()
                 )),
                 Line::from(format!(
                     "stop keyword: {}",
@@ -333,12 +324,12 @@ pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
                 lines.push(Line::from(failure_line));
             }
             if let Some(planning_notice_summary) =
-                conversation.planning_notice_summary(FOLLOWUP_PLANNING_DETAIL_LIMIT)
+                conversation.planning_notice_summary(AUTOMATION_PLANNING_DETAIL_LIMIT)
             {
                 lines.push(Line::from(planning_notice_summary));
             }
             lines.extend(
-                build_planner_panel_lines(app, FOLLOWUP_PLANNER_PANEL_DETAIL_LIMIT)
+                build_planner_panel_lines(app, AUTOMATION_PLANNER_PANEL_DETAIL_LIMIT)
                     .into_iter()
                     .map(Line::from),
             );
@@ -360,19 +351,19 @@ pub(crate) fn build_followup_template_status_lines(app: &NativeTuiApp) -> Vec<Li
             }
             lines.push(Line::from(Span::styled(
                 match conversation
-                    .runtime_notice_summary(FOLLOWUP_RUNTIME_NOTICE_DETAIL_LIMIT)
+                    .runtime_notice_summary(AUTOMATION_RUNTIME_NOTICE_DETAIL_LIMIT)
                     .as_deref()
                 {
                     Some(runtime_notice_summary) => format!(
                         "status: {}  |  {}  |  {}",
                         conversation.status_text,
-                        conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
+                        conversation.warning_summary(AUTOMATION_WARNING_DETAIL_LIMIT),
                         runtime_notice_summary,
                     ),
                     None => format!(
                         "status: {}  |  {}",
                         conversation.status_text,
-                        conversation.warning_summary(FOLLOWUP_WARNING_DETAIL_LIMIT),
+                        conversation.warning_summary(AUTOMATION_WARNING_DETAIL_LIMIT),
                     ),
                 },
                 Style::default().fg(Color::Yellow),

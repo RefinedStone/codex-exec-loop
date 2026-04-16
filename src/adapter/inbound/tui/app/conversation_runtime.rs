@@ -38,7 +38,7 @@ pub(super) enum ConversationRuntimeEffect {
     QueueAutoPrompt {
         prompt: String,
         queued_from_turn_id: String,
-        template_label: String,
+        mode_label: String,
         transcript_text: String,
         handoff_task: Option<PlanningTaskHandoff>,
     },
@@ -49,7 +49,6 @@ pub(super) struct ConversationPostTurnEvaluation {
     pub planning_runtime_snapshot: PlanningRuntimeSnapshot,
     pub planning_repair_state: Option<PlanningRepairState>,
     pub runtime_notices: Vec<String>,
-    pub repeated_planning_queue_head_count: usize,
     pub action: ConversationPostTurnAction,
 }
 
@@ -57,7 +56,7 @@ pub(super) struct ConversationPostTurnEvaluation {
 pub(super) struct QueuedAutoPrompt {
     pub prompt: String,
     pub queued_from_turn_id: String,
-    pub template_label: String,
+    pub mode_label: String,
     pub transcript_text: String,
     pub handoff_task: Option<PlanningTaskHandoff>,
 }
@@ -103,7 +102,6 @@ pub(super) fn reduce_conversation_runtime(
                 PromptOrigin::AutoFollow(context) => {
                     state.record_auto_followup_submission(
                         &context.queued_from_turn_id,
-                        &context.template_label,
                         context.handoff_task.as_ref(),
                     );
                 }
@@ -113,8 +111,8 @@ pub(super) fn reduce_conversation_runtime(
                 state
                     .auto_follow_state
                     .active_turn_index()
-                    .unwrap_or_else(|| state.auto_follow_state.next_auto_turn_index()),
-                state.auto_follow_state.max_auto_turns_label()
+                    .unwrap_or_else(|| { state.auto_follow_state.next_auto_turn_index() }),
+                state.auto_follow_state.max_auto_turns_value()
             );
             let transcript_message = match &origin {
                 PromptOrigin::AutoFollow(context) => {
@@ -145,8 +143,8 @@ pub(super) fn reduce_conversation_runtime(
             state.status_text = match origin {
                 PromptOrigin::Manual => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
-                    "auto follow-up submitted / turn {auto_follow_progress} / template: {}",
-                    context.template_label
+                    "auto follow-up submitted / turn {auto_follow_progress} / mode: {}",
+                    context.mode_label
                 ),
             };
             effects.push(ConversationRuntimeEffect::StartStream {
@@ -217,28 +215,25 @@ pub(super) fn reduce_conversation_runtime(
             state.replace_planning_runtime_snapshot(evaluation.planning_runtime_snapshot);
             state.planning_repair_state = evaluation.planning_repair_state;
             state.extend_runtime_notices(evaluation.runtime_notices);
-            state.set_repeated_planning_queue_head_count(
-                evaluation.repeated_planning_queue_head_count,
-            );
             match evaluation.action {
                 ConversationPostTurnAction::QueueAutoPrompt(queued_prompt) => {
                     let QueuedAutoPrompt {
                         prompt,
                         queued_from_turn_id,
-                        template_label,
+                        mode_label,
                         transcript_text,
                         handoff_task,
                     } = *queued_prompt;
                     state.clear_auto_followup_skip();
-                    state.record_auto_followup_queue(&queued_from_turn_id, &template_label);
+                    state.record_auto_followup_queue(&queued_from_turn_id);
                     state.status_text = format!(
-                        "turn completed / queued auto follow-up with template {template_label}"
+                        "turn completed / queued auto follow-up with mode {mode_label}"
                     );
                     state.append_status_message(state.status_text.clone());
                     effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
                         prompt,
                         queued_from_turn_id,
-                        template_label,
+                        mode_label,
                         transcript_text,
                         handoff_task,
                     });
@@ -272,9 +267,6 @@ mod tests {
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
-    };
-    use crate::domain::followup_template::{
-        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
     };
 
     #[test]
@@ -319,7 +311,7 @@ mod tests {
                 transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
-                    template_label: "builtin next-task".to_string(),
+                    mode_label: "planning queue".to_string(),
                     transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                     debug_detail: None,
                     handoff_task: None,
@@ -329,7 +321,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.status_text,
-            "auto follow-up submitted / turn 1/3 / template: builtin next-task"
+            "auto follow-up submitted / turn 1/3 / mode: planning queue"
         );
         assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 0);
         assert_eq!(reduced.state.auto_follow_state.active_turn_index(), Some(1));
@@ -347,9 +339,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.detail.as_str()),
-            Some(
-                "queued after the previous turn completed; submitted with template builtin next-task"
-            )
+            Some("queued after the previous turn completed; submitted planning auto follow-up")
         );
         assert_eq!(
             reduced.state.messages[0].text,
@@ -408,7 +398,7 @@ mod tests {
                 transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                     queued_from_turn_id: "turn-1".to_string(),
-                    template_label: "builtin next-task".to_string(),
+                    mode_label: "planning queue".to_string(),
                     transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                     debug_detail: Some(
                         "planner temp session: refresh / refresh ok\nplanner response:\n  queued next task"
@@ -1048,12 +1038,11 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
-                    repeated_planning_queue_head_count: 0,
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "continue".to_string(),
                             queued_from_turn_id: "turn-1".to_string(),
-                            template_label: "builtin next-task".to_string(),
+                            mode_label: "planning queue".to_string(),
                             transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                                 .to_string(),
                             handoff_task: None,
@@ -1068,14 +1057,14 @@ mod tests {
             vec![ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt: "continue".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
-                template_label: "builtin next-task".to_string(),
+                mode_label: "planning queue".to_string(),
                 transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 handoff_task: None,
             }]
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / queued auto follow-up with template builtin next-task"
+            "turn completed / queued auto follow-up with mode planning queue"
         );
         assert!(
             reduced
@@ -1107,12 +1096,11 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
-                    repeated_planning_queue_head_count: 0,
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "continue".to_string(),
                             queued_from_turn_id: "turn-1".to_string(),
-                            template_label: "builtin next-task".to_string(),
+                            mode_label: "planning queue".to_string(),
                             transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                                 .to_string(),
                             handoff_task: None,
@@ -1127,14 +1115,14 @@ mod tests {
             vec![ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt: "continue".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
-                template_label: "builtin next-task".to_string(),
+                mode_label: "planning queue".to_string(),
                 transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 handoff_task: None,
             }]
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / queued auto follow-up with template builtin next-task"
+            "turn completed / queued auto follow-up with mode planning queue"
         );
         assert_eq!(
             reduced
@@ -1160,12 +1148,11 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
-                    repeated_planning_queue_head_count: 0,
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "continue".to_string(),
                             queued_from_turn_id: "turn-1".to_string(),
-                            template_label: "builtin next-task".to_string(),
+                            mode_label: "planning queue".to_string(),
                             transcript_text: "다음 queued task 1개를 이어서 진행합니다."
                                 .to_string(),
                             handoff_task: None,
@@ -1180,14 +1167,14 @@ mod tests {
             vec![ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt: "continue".to_string(),
                 queued_from_turn_id: "turn-1".to_string(),
-                template_label: "builtin next-task".to_string(),
+                mode_label: "planning queue".to_string(),
                 transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                 handoff_task: None,
             }]
         );
         assert_eq!(
             reduced.state.status_text,
-            "turn completed / queued auto follow-up with template builtin next-task"
+            "turn completed / queued auto follow-up with mode planning queue"
         );
         assert_eq!(
             reduced
@@ -1232,7 +1219,6 @@ mod tests {
             live_agent_message: None,
             buffered_tool_messages: Vec::new(),
             base_warnings: Vec::new(),
-            template_warnings: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
             input_buffer: "ship it".to_string(),
@@ -1243,20 +1229,12 @@ mod tests {
             active_turn_started_at: None,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
-            auto_follow_state: AutoFollowState::new(FollowupTemplateCatalog {
-                items: vec![FollowupTemplateDefinition {
-                    id: "builtin-next-task".to_string(),
-                    label: "builtin next-task".to_string(),
-                    body: "follow up {auto_turn}/{max_auto_turns}\n{last_message}".to_string(),
-                    source: FollowupTemplateSource::Builtin,
-                }],
-            }),
+            auto_follow_state: AutoFollowState::new(),
             planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
-            repeated_planning_queue_head_count: 0,
             status_text: "thread loaded".to_string(),
         }
     }

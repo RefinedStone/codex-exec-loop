@@ -8,10 +8,10 @@ use super::shell_presentation::{
     build_input_prompt_cursor_offset,
 };
 use super::shell_presentation::{
-    DirectionsMaintenanceOverlayView, FollowupTemplateOverlayView, OverlayListView,
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
     StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_followup_template_overlay_view, build_inline_tail_view,
+    build_automation_overlay_view, build_inline_tail_view,
     build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
     build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
 };
@@ -332,8 +332,8 @@ fn draw_inline_shell_inspection(
         ShellOverlay::DirectionsMaintenance => {
             draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
         }
-        ShellOverlay::FollowupTemplates => {
-            draw_inline_followup_template_inspection(frame, inspection_area, app)
+        ShellOverlay::Automation => {
+            draw_inline_automation_inspection(frame, inspection_area, app)
         }
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
@@ -479,13 +479,13 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
-fn draw_inline_followup_template_inspection(
+fn draw_inline_automation_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &mut NativeTuiApp,
 ) {
-    let overlay_view = build_followup_template_overlay_view(app);
-    let FollowupTemplateOverlayView {
+    let overlay_view = build_automation_overlay_view(app);
+    let AutomationOverlayView {
         header_lines,
         list_view,
         preview_lines,
@@ -506,7 +506,7 @@ fn draw_inline_followup_template_inspection(
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Follow-Up Templates / inline inspection"),
+        Line::from("Automation Controls / inline inspection"),
         body_lines,
         true,
     );
@@ -524,7 +524,7 @@ fn draw_inline_followup_template_inspection(
     );
     app.followup_overlay_ui_state.preview_scroll = preview_scroll;
 
-    draw_inline_followup_template_list_panel(frame, content_layout[0], app, list_view);
+    draw_inline_automation_list_panel(frame, content_layout[0], app, list_view);
     render_inline_scrolled_section(
         frame,
         content_layout[1],
@@ -843,9 +843,9 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
 
 #[cfg(test)]
 #[allow(dead_code)]
-fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
-    let overlay_view = build_followup_template_overlay_view(app);
-    let FollowupTemplateOverlayView {
+fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+    let overlay_view = build_automation_overlay_view(app);
+    let AutomationOverlayView {
         header_lines,
         list_view,
         preview_lines,
@@ -867,7 +867,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
         .split(popup_area);
 
     let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Templates"));
+        .block(Block::default().borders(Borders::ALL).title("Automation"));
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -883,7 +883,7 @@ fn draw_followup_template_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp)
     );
     app.followup_overlay_ui_state.preview_scroll = preview_scroll;
 
-    draw_followup_template_list_panel(frame, content_layout[0], app, list_view);
+    draw_automation_list_panel(frame, content_layout[0], app, list_view);
     frame.render_widget(
         Paragraph::new(preview_lines)
             .block(Block::default().borders(Borders::ALL).title("Preview"))
@@ -1062,7 +1062,7 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
 
 #[cfg(test)]
 #[allow(dead_code)]
-fn draw_followup_template_list_panel(
+fn draw_automation_list_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &mut NativeTuiApp,
@@ -1073,7 +1073,7 @@ fn draw_followup_template_list_panel(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Template List"),
+                    .title("Automation"),
             )
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
@@ -1089,7 +1089,7 @@ fn draw_followup_template_list_panel(
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Template List"),
+            .title("Automation"),
     )
     .highlight_style(
         Style::default()
@@ -1148,7 +1148,7 @@ fn draw_inline_session_list_panel(
     );
 }
 
-fn draw_inline_followup_template_list_panel(
+fn draw_inline_automation_list_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &mut NativeTuiApp,
@@ -1156,7 +1156,7 @@ fn draw_inline_followup_template_list_panel(
 ) {
     let section_layout = split_inline_section(area);
     frame.render_widget(
-        Paragraph::new(vec![Line::from("Template List")]),
+        Paragraph::new(vec![Line::from("Automation")]),
         section_layout[0],
     );
 

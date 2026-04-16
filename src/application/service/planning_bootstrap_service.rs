@@ -164,7 +164,6 @@ impl PlanningBootstrapService {
                                     "minLength": 1
                                 },
                                 "direction_relation_note": { "type": "string" },
-                                "progress_note": { "type": "string" },
                                 "title": {
                                     "type": "string",
                                     "minLength": 1

@@ -2,11 +2,11 @@ use super::super::{
     Color, ConversationState, Line, Modifier, NativeTuiApp, PriorityQueueSkippedTask,
     PriorityQueueTask, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
     QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, Span, Style,
-    build_followup_template_key_lines, build_followup_template_list_view,
-    build_followup_template_preview_lines, build_followup_template_status_lines,
+    build_automation_key_lines, build_automation_list_view, build_automation_preview_lines,
+    build_automation_status_lines,
     compact_whitespace_detail,
 };
-use super::{FollowupTemplateOverlayView, QueueOverlayView};
+use super::{AutomationOverlayView, QueueOverlayView};
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     let header_lines = vec![
@@ -173,26 +173,24 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     }
 }
 
-pub(crate) fn build_followup_template_overlay_view(
-    app: &NativeTuiApp,
-) -> FollowupTemplateOverlayView {
-    FollowupTemplateOverlayView {
+pub(crate) fn build_automation_overlay_view(app: &NativeTuiApp) -> AutomationOverlayView {
+    AutomationOverlayView {
         header_lines: vec![
             Line::from(vec![
                 Span::styled(
-                    "Follow-Up Templates",
+                    "Automation Controls",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" / shell inspection"),
             ]),
-            Line::from("Inspect the selected strategy before the next auto follow-up turn."),
+            Line::from("Inspect planning-driven automation before the next auto-follow turn."),
         ],
-        list_view: build_followup_template_list_view(app),
-        preview_lines: build_followup_template_preview_lines(app),
-        status_lines: build_followup_template_status_lines(app),
-        key_lines: build_followup_template_key_lines(app),
+        list_view: build_automation_list_view(app),
+        preview_lines: build_automation_preview_lines(app),
+        status_lines: build_automation_status_lines(app),
+        key_lines: build_automation_key_lines(app),
     }
 }
 
@@ -220,12 +218,6 @@ fn build_queue_task_lines(
             task.combined_priority,
             compact_whitespace_detail(task.task_title.trim(), QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
         )));
-        if let Some(progress_note) = task.progress_note() {
-            lines.push(Line::from(format!(
-                "   progress: {}",
-                compact_whitespace_detail(progress_note, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-            )));
-        }
     }
 
     let hidden_count = tasks.len().saturating_sub(max_visible_tasks);

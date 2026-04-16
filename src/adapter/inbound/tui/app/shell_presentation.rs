@@ -1,14 +1,13 @@
 use std::time::{Duration, Instant};
 
 pub(super) use super::planning::{
-    build_followup_template_preview_lines, build_followup_template_status_lines,
+    build_automation_preview_lines, build_automation_status_lines,
 };
 use super::*;
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 use crate::application::service::session_service::{
     SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
-use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::{
     PlanningValidationSeverity, PriorityQueueSkippedTask, PriorityQueueTask,
 };
@@ -180,10 +179,10 @@ mod overlays;
 mod status_panels;
 
 pub(super) use overlays::{
-    DirectionsMaintenanceOverlayView, FollowupTemplateOverlayView, OverlayListEntryView,
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListEntryView,
     OverlayListView, PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView,
     SessionOverlayView, StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_followup_template_overlay_view, build_planning_draft_editor_overlay_view,
+    build_automation_overlay_view, build_planning_draft_editor_overlay_view,
     build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
     build_startup_banner_lines, build_startup_overlay_view,
 };
@@ -624,12 +623,12 @@ fn compact_inline_detail(text: &str, max_len: usize) -> String {
     compact_whitespace_detail(text, max_len)
 }
 
-pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.is_max_auto_turns_editing() {
         return vec![
             Line::from("Type the new max-turn value directly. Backspace deletes."),
             Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use a whole number greater than 0, or type infinite."),
+            Line::from("Use a whole number between 1 and 50."),
         ];
     }
 
@@ -642,12 +641,14 @@ pub(super) fn build_followup_template_key_lines(app: &NativeTuiApp) -> Vec<Line<
     }
 
     vec![
-        Line::from("Up/Down or j/k: change template    Ctrl+f: next template    r: reload"),
         Line::from("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
         Line::from(
             "Ctrl+a: automation on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword",
         ),
-        Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Enter/Esc/Ctrl+C: close"),
+        Line::from(
+            "Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Ctrl+b: planner detail",
+        ),
+        Line::from("Enter/Esc/Ctrl+C: close"),
     ]
 }
 
@@ -1277,7 +1278,7 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
 }
 
-fn build_followup_template_list_view(app: &NativeTuiApp) -> OverlayListView {
+fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
     match &app.conversation_state {
         ConversationState::Loading => OverlayListView {
             message_lines: Some(vec![Line::from("conversation is still loading")]),
@@ -1289,24 +1290,14 @@ fn build_followup_template_list_view(app: &NativeTuiApp) -> OverlayListView {
             items: Vec::new(),
             selected_index: None,
         },
-        ConversationState::Ready(conversation) => {
-            let items = conversation
-                .auto_follow_state
-                .template_state
-                .items
-                .iter()
-                .enumerate()
-                .map(|(index, template)| build_followup_template_list_entry(index, template))
-                .collect::<Vec<_>>();
-            let selected_index = (!items.is_empty())
-                .then_some(conversation.auto_follow_state.selected_template_index());
-
-            OverlayListView {
-                message_lines: None,
-                items,
-                selected_index,
-            }
-        }
+        ConversationState::Ready(_) => OverlayListView {
+            message_lines: Some(vec![
+                Line::from("automation follows the planning queue only"),
+                Line::from("no legacy automation catalogs or workspace prompt files are used"),
+            ]),
+            items: Vec::new(),
+            selected_index: None,
+        },
     }
 }
 
@@ -1408,18 +1399,6 @@ fn plural_suffix(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
 }
 
-fn build_followup_template_list_entry(
-    index: usize,
-    template: &FollowupTemplateDefinition,
-) -> OverlayListEntryView {
-    OverlayListEntryView {
-        lines: vec![
-            Line::from(format!("{}. {}", index + 1, template.label)),
-            Line::from(format!("   {}", template.source_label())),
-        ],
-    }
-}
-
 fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
     if conversation.has_running_turn() || conversation.auto_follow_state.has_live_activity() {
         "working"
@@ -1479,19 +1458,21 @@ fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<St
 }
 
 fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
-    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
     match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => "idle".to_string(),
         AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
-        }
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} starting")
-        }
-        AutoFollowRuntimePhase::Running { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} running")
-        }
+        AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} queued for submission",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Submitting { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} starting",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Running { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} running",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
     }
 }
 
@@ -1499,19 +1480,21 @@ fn auto_follow_prompt_status_line(
     conversation: &ConversationViewModel,
     inline: bool,
 ) -> Option<String> {
-    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
     let detail = match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => return None,
         AutoFollowRuntimePhase::Evaluating { .. } => "auto follow-up evaluating".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} queued")
-        }
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} starting")
-        }
-        AutoFollowRuntimePhase::Running { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} running")
-        }
+        AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} queued",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Submitting { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} starting",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
+        AutoFollowRuntimePhase::Running { turn_index, .. } => format!(
+            "auto turn {turn_index}/{} running",
+            conversation.auto_follow_state.max_auto_turns_value()
+        ),
     };
 
     Some(if inline {

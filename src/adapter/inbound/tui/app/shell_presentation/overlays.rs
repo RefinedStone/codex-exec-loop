@@ -26,7 +26,7 @@ pub(crate) struct SessionOverlayView {
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
-pub(crate) struct FollowupTemplateOverlayView {
+pub(crate) struct AutomationOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) list_view: OverlayListView,
     pub(crate) preview_lines: Vec<Line<'static>>,
@@ -93,4 +93,4 @@ pub(crate) use directions::build_directions_maintenance_overlay_view;
 pub(crate) use planning::{
     build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
 };
-pub(crate) use queue::{build_followup_template_overlay_view, build_queue_overlay_view};
+pub(crate) use queue::{build_automation_overlay_view, build_queue_overlay_view};

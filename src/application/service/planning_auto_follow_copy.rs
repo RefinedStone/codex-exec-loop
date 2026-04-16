@@ -16,9 +16,7 @@ Queue가 비었을 때만 이 prompt를 사용합니다.
 - 지금 바로 이어서 실행해야 할 항목만 `ready` 또는 `in_progress`로 두고, 나머지는 `proposed`로 남기세요.
 - 더 이어갈 작업이 정말 없다면 queue를 비운 채 유지하고, 그 판단을 짧게 요약하세요.
 "#;
-pub const PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY: &str = r#"자동 후속 {auto_turn}/{max_auto_turns} 입니다.
-
-직전 답변을 실행 관점에서 정리해 planning priority queue를 갱신하세요.
+pub const PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY: &str = r#"직전 답변을 실행 관점에서 정리해 planning priority queue를 갱신하세요.
 - 직전 답변에서 실행 가능한 보완, 수정, 후속 제안 사항을 작업 목록으로 정리하고 `task-ledger.json`에 반영하세요.
 - 기존 proposal 또는 task와 의미가 겹치면 중복 생성 대신 기존 항목을 갱신하세요.
 - 실행 가능한 작업 목록은 priority가 보이도록 normal queue task로 반영하고, `proposed`는 아직 일반 queue에 올리면 안 되는 후보만 남기세요.

@@ -15,7 +15,6 @@ fn stale_planning_repair_state_does_not_queue_visible_retry() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-1".to_string());
     conversation.planning_repair_state = Some(PlanningRepairState {
@@ -114,7 +113,6 @@ fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-2".to_string());
@@ -212,7 +210,6 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_buffer = "operator override draft".to_string();
     conversation.input_state = ConversationInputState::StreamingTurn;
@@ -295,7 +292,6 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
 
     let mut conversation = ready_conversation();
     conversation.auto_follow_state.enabled = false;
-    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-4".to_string());
@@ -343,7 +339,7 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
     };
     assert_eq!(
         conversation.status_text,
-        "turn completed / automation stopped: off"
+        "turn completed / auto follow-up stopped: planning queue idle policy is stop"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -386,7 +382,6 @@ fn buffered_queue_command_stays_available_while_auto_followup_submits() {
     .expect("task ledger should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 0;
     conversation.cwd = workspace_dir.clone();
     conversation.draft_workspace_directory = workspace_dir.clone();
     conversation.input_buffer = ":q".to_string();
@@ -435,7 +430,7 @@ fn buffered_queue_command_stays_available_while_auto_followup_submits() {
     assert_eq!(conversation.input_buffer, ":q");
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / template: builtin next-task"
+        "auto follow-up submitted / turn 1/3 / mode: planning queue"
     );
     assert_eq!(
         conversation
@@ -493,7 +488,6 @@ fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
     .expect("task ledger should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 0;
     conversation.cwd = workspace_dir.clone();
     conversation.draft_workspace_directory = workspace_dir.clone();
     conversation.input_buffer = "operator draft stays here".to_string();
@@ -542,7 +536,7 @@ fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
     assert_eq!(conversation.input_buffer, "operator draft stays here");
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / template: builtin next-task"
+        "auto follow-up submitted / turn 1/3 / mode: planning queue"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -578,7 +572,6 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-2".to_string());

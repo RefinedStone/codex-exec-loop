@@ -41,7 +41,6 @@ Bundle contents:
 - `OPERATOR.md`
 - `VERSION.txt`
 - `examples/`
-- `.codex-exec-loop/followups/`
 - `SHA256SUMS.txt`
 
 The npm distribution uses a Codex-style split:

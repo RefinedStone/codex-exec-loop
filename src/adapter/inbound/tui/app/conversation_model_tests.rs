@@ -27,38 +27,6 @@ use crate::application::service::turn_prompt_assembly_service::TurnPromptAssembl
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
 };
-use crate::domain::followup_template::{
-    FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
-    FollowupTemplateSource,
-};
-
-fn sample_template_catalog() -> FollowupTemplateCatalog {
-    FollowupTemplateCatalog {
-        items: vec![
-            FollowupTemplateDefinition {
-                id: "builtin-next-task".to_string(),
-                label: "builtin next-task".to_string(),
-                body: "자동 후속 {auto_turn}/{max_auto_turns} 입니다.\n\n직전 답변:\n{last_message}\n{stop_keyword}".to_string(),
-                source: FollowupTemplateSource::Builtin,
-            },
-            FollowupTemplateDefinition {
-                id: "builtin-plan-queue".to_string(),
-                label: "builtin plan-queue".to_string(),
-                body: "plan_priority_queue.md\n{last_message}\n{stop_keyword}".to_string(),
-                source: FollowupTemplateSource::Builtin,
-            },
-            FollowupTemplateDefinition {
-                id: "workspace-custom-review".to_string(),
-                label: "workspace custom-review".to_string(),
-                body: "workspace custom body\n{last_message}".to_string(),
-                source: FollowupTemplateSource::WorkspaceFile {
-                    path: "/tmp/workspace/.codex-exec-loop/followups/custom-review.md"
-                        .to_string(),
-                },
-            },
-        ],
-    }
-}
 
 fn ready_conversation() -> ConversationViewModel {
     ConversationViewModel {
@@ -71,7 +39,6 @@ fn ready_conversation() -> ConversationViewModel {
         live_agent_message: None,
         buffered_tool_messages: Vec::new(),
         base_warnings: Vec::new(),
-        template_warnings: Vec::new(),
         warnings: Vec::new(),
         runtime_notices: Vec::new(),
         input_buffer: String::new(),
@@ -82,7 +49,7 @@ fn ready_conversation() -> ConversationViewModel {
         active_turn_started_at: None,
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
-        auto_follow_state: AutoFollowState::new(sample_template_catalog()),
+        auto_follow_state: AutoFollowState::new(),
         planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
@@ -184,7 +151,7 @@ fn planning_runtime() -> PlanningRuntimeUseCases {
 }
 
 #[test]
-fn auto_followup_prompt_renders_builtin_template() {
+fn queue_handoff_prompt_renders_for_auto_follow() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
@@ -203,28 +170,16 @@ fn auto_followup_prompt_renders_builtin_template() {
         panic!("auto follow-up prompt should render");
     };
 
-    assert!(
-        prompt
-            .prompt
-            .contains("Continue the next highest-priority task.")
-    );
+    assert!(prompt.prompt.contains("Continue the next highest-priority task."));
     assert!(prompt.prompt.contains("Implement shell planning status"));
-    assert!(prompt.prompt.contains("General workstream"));
     assert_eq!(
         prompt.transcript_text,
         "다음 queued task 1개를 이어서 진행합니다."
     );
-    assert_eq!(
-        prompt
-            .handoff_task
-            .as_ref()
-            .map(|task| task.task_id.as_str()),
-        Some("task-1")
-    );
 }
 
 #[test]
-fn warning_summary_prefers_runtime_warning_detail_and_truncates() {
+fn warning_summary_prefers_latest_warning_and_truncates() {
     let mut conversation = ready_conversation();
     conversation.base_warnings = vec![
         "first warning".to_string(),
@@ -234,17 +189,14 @@ fn warning_summary_prefers_runtime_warning_detail_and_truncates() {
 
     let summary = conversation.warning_summary(36);
 
-    assert_eq!(
-        summary,
-        "runtime warnings (2): shared runtime busy with an activ..."
-    );
+    assert_eq!(summary, "warnings (2): shared runtime busy with an activ...");
 }
 
 #[test]
 fn runtime_notice_summary_is_separate_from_warning_summary() {
     let mut conversation = ready_conversation();
-    conversation.template_warnings = vec!["workspace template warning".to_string()];
-    conversation.warnings = conversation.template_warnings.clone();
+    conversation.base_warnings = vec!["workspace planning warning".to_string()];
+    conversation.warnings = conversation.base_warnings.clone();
     conversation.runtime_notices = vec![
         "shared runtime reset after recent sessions request failure; retrying with a fresh app-server connection (boom)"
             .to_string(),
@@ -252,7 +204,7 @@ fn runtime_notice_summary_is_separate_from_warning_summary() {
 
     assert_eq!(
         conversation.warning_summary(40),
-        "template warning: workspace template warning"
+        "warning: workspace planning warning"
     );
     let runtime_summary = conversation
         .runtime_notice_summary(40)
@@ -274,14 +226,10 @@ fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
                     .to_string(),
             ],
         },
-        FollowupTemplateCatalogLoadResult {
-            catalog: sample_template_catalog(),
-            warnings: Vec::new(),
-        },
         "/tmp/draft-workspace".to_string(),
     );
 
-    assert_eq!(conversation.status_text, "thread loaded / templates: 3");
+    assert_eq!(conversation.status_text, "thread loaded");
     assert!(
         conversation
             .runtime_notice_summary(36)
@@ -293,8 +241,8 @@ fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
 #[test]
 fn approval_review_status_preserves_warning_suffix() {
     let mut conversation = ready_conversation();
-    conversation.template_warnings = vec!["workspace template warning".to_string()];
-    conversation.warnings = conversation.template_warnings.clone();
+    conversation.base_warnings = vec!["planning warning".to_string()];
+    conversation.warnings = conversation.base_warnings.clone();
 
     conversation.update_approval_review(ConversationApprovalReview {
         target_item_id: "command-1".to_string(),
@@ -305,169 +253,7 @@ fn approval_review_status_preserves_warning_suffix() {
 
     assert_eq!(
         conversation.status_text,
-        "approval review in progress / target: command-1 / risk: high / template warning"
-    );
-}
-
-#[test]
-fn warning_summary_reports_runtime_and_template_counts_when_both_exist() {
-    let mut conversation = ready_conversation();
-    conversation.base_warnings = vec![
-        "shared runtime reset after turn stream failure; the next request will reconnect"
-            .to_string(),
-    ];
-    conversation.template_warnings = vec![
-        "workspace template missing".to_string(),
-        "template catalog reloaded with fallback".to_string(),
-    ];
-    conversation.warnings = conversation
-        .base_warnings
-        .iter()
-        .chain(conversation.template_warnings.iter())
-        .cloned()
-        .collect();
-
-    assert_eq!(
-        conversation.warning_summary(48),
-        "warnings: runtime 1, template 2 / shared runtime reset after turn stream failur..."
-    );
-}
-
-#[test]
-fn snapshot_status_keeps_base_status_with_compact_warning_label() {
-    let conversation = ConversationViewModel::from_snapshot(
-        ConversationSnapshot {
-            thread_id: "thread-1".to_string(),
-            title: "Existing session".to_string(),
-            cwd: "/tmp/workspace".to_string(),
-            messages: Vec::new(),
-            warnings: Vec::new(),
-            runtime_notices: vec!["shared runtime reset after startup checks failure".to_string()],
-        },
-        FollowupTemplateCatalogLoadResult {
-            catalog: sample_template_catalog(),
-            warnings: vec!["workspace template missing".to_string()],
-        },
-        "/tmp/draft-workspace".to_string(),
-    );
-
-    assert_eq!(
-        conversation.status_text,
-        "thread loaded / templates: 3 / template warning"
-    );
-    assert!(
-        conversation
-            .runtime_notice_summary(48)
-            .expect("runtime summary should exist")
-            .starts_with("runtime: shared runtime reset after startup checks")
-    );
-}
-
-#[test]
-fn auto_followup_prompt_ignores_buffered_manual_input() {
-    let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context",
-        "next task: task-1",
-    ));
-    conversation.messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "latest answer",
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
-    conversation.input_buffer = "manual prompt".to_string();
-
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime())
-    else {
-        panic!("buffered manual input should not block auto follow-up");
-    };
-
-    assert!(
-        prompt
-            .prompt
-            .contains("Continue the next highest-priority task.")
-    );
-}
-
-#[test]
-fn record_submitted_prompt_refreshes_cached_lines_and_tracks_turn_workspace() {
-    let mut conversation = ready_conversation();
-
-    conversation.record_submitted_prompt(
-        ConversationMessage::new(ConversationMessageKind::User, "ship it", None, None),
-        "/tmp/turn-workspace".to_string(),
-        true,
-    );
-
-    assert_eq!(
-        conversation.cached_conversation_lines,
-        format_conversation_lines(&conversation.messages)
-    );
-    assert_eq!(
-        conversation.active_turn_workspace_directory.as_deref(),
-        Some("/tmp/turn-workspace")
-    );
-}
-
-#[test]
-fn planning_workspace_directory_prefers_draft_workspace_for_new_threads() {
-    let mut conversation = ready_conversation();
-    conversation.thread_id.clear();
-    conversation.cwd = "/tmp/thread-workspace".to_string();
-    conversation.draft_workspace_directory = "/tmp/draft-workspace".to_string();
-
-    assert_eq!(
-        conversation.planning_workspace_directory(),
-        "/tmp/draft-workspace"
-    );
-}
-
-#[test]
-fn auto_followup_template_cycles_across_builtin_and_workspace_items() {
-    let mut state = AutoFollowState::new(sample_template_catalog());
-
-    assert_eq!(state.template_label(), "builtin next-task");
-    state.cycle_template_kind();
-    assert_eq!(state.template_label(), "builtin plan-queue");
-    state.cycle_template_kind();
-    assert_eq!(state.template_label(), "workspace custom-review");
-    state.cycle_template_kind();
-    assert_eq!(state.template_label(), "builtin next-task");
-}
-
-#[test]
-fn auto_followup_prompt_uses_selected_template_item() {
-    let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
-    conversation.messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "latest answer",
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
-
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime())
-    else {
-        panic!("plan queue prompt should render");
-    };
-
-    assert!(prompt.prompt.contains("plan_priority_queue.md"));
-    assert!(prompt.prompt.contains("latest answer"));
-}
-
-#[test]
-fn auto_followup_activity_exposes_workspace_template_source() {
-    let mut state = AutoFollowState::new(sample_template_catalog());
-    state.template_state.selected_index = 2;
-
-    assert_eq!(state.template_label(), "workspace custom-review");
-    assert!(
-        state
-            .template_source_label()
-            .contains(".codex-exec-loop/followups/custom-review.md")
+        "approval review in progress / target: command-1 / risk: high / warning"
     );
 }
 
@@ -507,70 +293,11 @@ fn max_auto_turn_candidate_accepts_positive_numbers_and_infinite() {
 }
 
 #[test]
-fn reloading_template_catalog_preserves_selected_template_when_id_still_exists() {
-    let mut state = AutoFollowState::new(sample_template_catalog());
-    state.template_state.selected_index = 1;
-
-    state.reload_template_catalog(FollowupTemplateCatalog {
-        items: vec![
-            FollowupTemplateDefinition {
-                id: "builtin-next-task".to_string(),
-                label: "builtin next-task".to_string(),
-                body: "next".to_string(),
-                source: FollowupTemplateSource::Builtin,
-            },
-            FollowupTemplateDefinition {
-                id: "builtin-plan-queue".to_string(),
-                label: "builtin plan-queue".to_string(),
-                body: "reloaded".to_string(),
-                source: FollowupTemplateSource::Builtin,
-            },
-        ],
-    });
-
-    assert_eq!(state.template_label(), "builtin plan-queue");
-}
-
-#[test]
-fn reloading_template_catalog_falls_back_to_first_template_when_selection_disappears() {
-    let mut state = AutoFollowState::new(sample_template_catalog());
-    state.template_state.selected_index = 2;
-
-    state.reload_template_catalog(FollowupTemplateCatalog {
-        items: vec![FollowupTemplateDefinition {
-            id: "builtin-next-task".to_string(),
-            label: "builtin next-task".to_string(),
-            body: "next".to_string(),
-            source: FollowupTemplateSource::Builtin,
-        }],
-    });
-
-    assert_eq!(state.template_label(), "builtin next-task");
-    assert_eq!(state.selected_template_index(), 0);
-}
-
-#[test]
 fn auto_followup_stops_when_stop_keyword_is_present() {
     let mut conversation = ready_conversation();
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "Work is complete.\nAUTO_STOP",
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
-
-    assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
-    );
-}
-
-#[test]
-fn auto_followup_stops_when_stop_keyword_case_varies() {
-    let mut conversation = ready_conversation();
-    conversation.messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "Work is complete.\nauto_stop!",
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
@@ -631,9 +358,7 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         .auto_follow_state
         .stop_rules
         .stop_on_no_file_changes = true;
-    conversation
-        .turn_activity
-        .last_completed_turn_file_change_count = 2;
+    conversation.turn_activity.last_completed_turn_file_change_count = 2;
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -647,20 +372,16 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         panic!("auto follow-up should continue when file changes exist");
     };
 
-    assert!(
-        prompt
-            .prompt
-            .contains("Continue the next highest-priority task.")
-    );
+    assert!(prompt.prompt.contains("Continue the next highest-priority task."));
 }
 
 #[test]
-fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
+fn auto_followup_refresh_prompt_appends_planning_fragment_when_queue_is_idle() {
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 1;
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context\nQueue Summary",
-        "next task: task-1",
+    conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
+        "Planning Context\nRuntime Follow-up Proposal Rules",
+        "queue idle: no executable planning task",
+        "2 promotable follow-up proposals available: Plan A | +1 more",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -672,13 +393,13 @@ fn auto_followup_prompt_appends_planning_prompt_fragment_when_ready() {
     let AutoFollowupDecision::QueuePrompt(prompt) =
         conversation.decide_auto_followup(&planning_runtime())
     else {
-        panic!("planning-aware auto follow-up prompt should render");
+        panic!("planning refresh prompt should render");
     };
 
-    assert!(prompt.prompt.contains("plan_priority_queue.md"));
+    assert!(prompt.prompt.contains("planning priority queue"));
     assert!(prompt.prompt.contains("latest answer"));
     assert!(prompt.prompt.contains("Planning Context"));
-    assert!(prompt.prompt.contains("Queue Summary"));
+    assert!(prompt.prompt.contains("Runtime Follow-up Proposal Rules"));
 }
 
 #[test]
@@ -697,48 +418,6 @@ fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
     assert_eq!(
         conversation.decide_auto_followup(&planning_runtime()),
         AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
-    );
-}
-
-#[test]
-fn builtin_next_task_blocks_when_planning_queue_has_no_next_task() {
-    let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready(
-        "Planning Context".to_string(),
-        "next_task: none".to_string(),
-        None,
-    ));
-    conversation.messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "latest answer",
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
-
-    assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
-    );
-}
-
-#[test]
-fn builtin_next_task_blocks_when_only_proposals_remain() {
-    let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
-        "Planning Context\nRuntime Follow-up Proposal Rules",
-        "queue idle: no executable planning task",
-        "2 promotable follow-up proposals available: Plan A | +1 more",
-    ));
-    conversation.messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "latest answer",
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
-
-    assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
     );
 }
 

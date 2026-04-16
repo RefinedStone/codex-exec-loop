@@ -26,7 +26,6 @@ pub(super) enum FollowupOverlayUiEvent {
         stop_keyword: String,
         max_auto_turns: String,
     },
-    TemplateChanged,
     ContentReset {
         stop_keyword: String,
         max_auto_turns: String,
@@ -91,9 +90,6 @@ pub(super) fn reduce_followup_overlay_ui(
                 is_editing: false,
                 buffer: max_auto_turns,
             };
-        }
-        FollowupOverlayUiEvent::TemplateChanged => {
-            state.preview_scroll = 0;
         }
         FollowupOverlayUiEvent::PreviewScrolled { delta } => {
             let amount = delta.unsigned_abs().min(u16::MAX as u32) as u16;
@@ -161,18 +157,6 @@ pub(super) fn reduce_followup_overlay_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn template_changed_resets_preview_scroll() {
-        let state = FollowupOverlayUiState {
-            preview_scroll: 12,
-            ..Default::default()
-        };
-
-        let reduced = reduce_followup_overlay_ui(state, FollowupOverlayUiEvent::TemplateChanged);
-
-        assert_eq!(reduced.preview_scroll, 0);
-    }
 
     #[test]
     fn preview_scrolled_saturates_at_zero() {

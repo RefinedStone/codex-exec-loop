@@ -25,8 +25,8 @@ use super::{
     PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
     SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
     TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
-    build_followup_template_overlay_view, build_followup_template_preview_lines,
-    build_followup_template_status_lines, build_inline_tail_lines, build_input_title,
+    build_automation_overlay_view, build_automation_preview_lines,
+    build_automation_status_lines, build_inline_tail_lines, build_input_title,
     build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
     build_session_overlay_view, build_shell_footer_lines, build_startup_overlay_view,
     build_status_title, build_transcript_panel_view, build_transcript_title,
@@ -42,12 +42,8 @@ use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemP
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
-use crate::application::port::outbound::followup_template_port::{
-    FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
-};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
@@ -61,9 +57,6 @@ use crate::application::service::planning_contract::{
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
-use crate::domain::followup_template::{
-    FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
-};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -193,36 +186,12 @@ fn run_fake_stream(
     }
 }
 
-struct FakeFollowupTemplatePort;
-
-impl FollowupTemplatePort for FakeFollowupTemplatePort {
-    fn load_workspace_templates(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
-        if workspace_dir == "/tmp/failing" {
-            return Err(anyhow::anyhow!("permission denied"));
-        }
-        if workspace_dir == "/tmp/root" {
-            return Ok(vec![WorkspaceFollowupTemplateRecord {
-                name: "root-template".to_string(),
-                path: "/tmp/root/.codex-exec-loop/followups/root-template.md".to_string(),
-                body: "workspace template body".to_string(),
-            }]);
-        }
-
-        Ok(Vec::new())
-    }
-}
-
 fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
     let codex_port = Arc::new(FakeCodexAppServerPort::default());
-    let followup_port = Arc::new(FakeFollowupTemplatePort);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port.clone()),
-        FollowupTemplateService::new(followup_port),
         PlanningServices::from_ports(
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
             Arc::new(AppServerPlanningWorkerAdapter::new(codex_port.clone())),
@@ -232,35 +201,6 @@ fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
 
     (app, codex_port)
 }
-
-fn sample_template_catalog() -> FollowupTemplateCatalog {
-    FollowupTemplateCatalog {
-        items: vec![
-            FollowupTemplateDefinition {
-                id: "builtin-next-task".to_string(),
-                label: "builtin next-task".to_string(),
-                body: "자동 후속 {auto_turn}/{max_auto_turns} 입니다.\n\n직전 답변:\n{last_message}\n{stop_keyword}".to_string(),
-                source: FollowupTemplateSource::Builtin,
-            },
-            FollowupTemplateDefinition {
-                id: "builtin-plan-queue".to_string(),
-                label: "builtin plan-queue".to_string(),
-                body: "plan_priority_queue.md\n{last_message}\n{stop_keyword}".to_string(),
-                source: FollowupTemplateSource::Builtin,
-            },
-            FollowupTemplateDefinition {
-                id: "workspace-custom-review".to_string(),
-                label: "workspace custom-review".to_string(),
-                body: "workspace custom body\n{last_message}".to_string(),
-                source: FollowupTemplateSource::WorkspaceFile {
-                    path: "/tmp/workspace/.codex-exec-loop/followups/custom-review.md"
-                        .to_string(),
-                },
-            },
-        ],
-    }
-}
-
 fn sample_startup_diagnostics(workspace_path: &str, can_continue: bool) -> StartupDiagnostics {
     StartupDiagnostics {
         cwd: workspace_path.to_string(),
@@ -464,7 +404,6 @@ fn ready_conversation() -> ConversationViewModel {
         live_agent_message: None,
         buffered_tool_messages: Vec::new(),
         base_warnings: Vec::new(),
-        template_warnings: Vec::new(),
         warnings: Vec::new(),
         runtime_notices: Vec::new(),
         input_buffer: String::new(),
@@ -475,13 +414,12 @@ fn ready_conversation() -> ConversationViewModel {
         active_turn_started_at: None,
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
-        auto_follow_state: AutoFollowState::new(sample_template_catalog()),
+        auto_follow_state: AutoFollowState::new(),
         planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         last_auto_followup_activity: None,
         last_planning_task_handoff: None,
-        repeated_planning_queue_head_count: 0,
         status_text: "thread loaded".to_string(),
     }
 }

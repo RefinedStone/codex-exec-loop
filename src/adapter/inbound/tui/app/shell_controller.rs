@@ -115,16 +115,15 @@ impl NativeTuiApp {
             InlineShellCommand::Queue => self.show_queue_overlay(),
             InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
-            InlineShellCommand::Templates => self.show_followup_template_overlay(),
+            InlineShellCommand::Automation => self.show_automation_overlay(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
             }
             InlineShellCommand::MaxAutoTurns => {
                 let Some(value) = command_input.argument().map(str::to_string) else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text:
-                            "usage: :turns <n|infinite>  |  alias: :auto-turns <n|infinite>"
-                                .to_string(),
+                        status_text: "usage: :turns <1-50>  |  alias: :auto-turns <1-50>"
+                            .to_string(),
                     });
                     self.clear_input_buffer();
                     return;
@@ -297,7 +296,7 @@ impl NativeTuiApp {
             return true;
         }
 
-        if self.handle_followup_overlay_key(key) {
+        if self.handle_automation_overlay_key(key) {
             return true;
         }
 

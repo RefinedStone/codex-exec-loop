@@ -43,7 +43,6 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 0;
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-invalid".to_string());
@@ -216,7 +215,6 @@ fn queue_idle_active_derivation_creates_next_task_and_submits_auto_followup() {
     .join("\n");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.template_state.selected_index = 0;
     conversation.cwd = workspace_dir.clone();
     conversation.draft_workspace_directory = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
@@ -289,7 +287,7 @@ fn queue_idle_active_derivation_creates_next_task_and_submits_auto_followup() {
     );
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / template: builtin next-task"
+        "auto follow-up submitted / turn 1/3 / mode: planning queue"
     );
     assert_eq!(
         app.planner_worker_panel_state
