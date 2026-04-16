@@ -302,7 +302,10 @@ impl PlanningDirectionsService {
         let workspace = self.load_complete_workspace(workspace_dir)?;
         let directions: DirectionCatalogDocument = toml::from_str(&workspace.directions_toml)
             .map_err(|error| anyhow!("failed to parse directions.toml: {error}"))?;
-        let mut next_directions_toml = workspace.directions_toml.clone();
+        let mut directions_document = workspace
+            .directions_toml
+            .parse::<DocumentMut>()
+            .map_err(|error| anyhow!("failed to parse directions.toml: {error}"))?;
         let mut repaired_detail_doc_mappings = 0;
         let mut created_detail_doc_files = 0;
         let mut repaired_queue_idle_prompt_mapping = false;
@@ -316,12 +319,12 @@ impl PlanningDirectionsService {
             }) {
                 configured_path.expect("checked above").to_string()
             } else {
-                default_direction_detail_doc_path(&direction.id)
+                default_validated_direction_detail_doc_path(&direction.id)?
             };
 
             if configured_path != Some(target_path.as_str()) {
-                next_directions_toml = set_direction_detail_doc_path(
-                    &next_directions_toml,
+                set_direction_detail_doc_path_in_document(
+                    &mut directions_document,
                     &direction.id,
                     &target_path,
                 )?;
@@ -356,8 +359,10 @@ impl PlanningDirectionsService {
             };
 
             if configured_prompt_path != Some(target_prompt_path.as_str()) {
-                next_directions_toml =
-                    set_queue_idle_prompt_path(&next_directions_toml, &target_prompt_path)?;
+                set_queue_idle_prompt_path_in_document(
+                    &mut directions_document,
+                    &target_prompt_path,
+                );
                 repaired_queue_idle_prompt_mapping = true;
             }
 
@@ -375,6 +380,11 @@ impl PlanningDirectionsService {
             }
         }
 
+        for (relative_path, body) in pending_supporting_files {
+            self.planning_workspace_port
+                .replace_planning_workspace_file(workspace_dir, &relative_path, Some(&body))?;
+        }
+        let next_directions_toml = directions_document.to_string();
         if next_directions_toml != workspace.directions_toml {
             self.planning_workspace_port
                 .replace_planning_workspace_file(
@@ -382,10 +392,6 @@ impl PlanningDirectionsService {
                     DIRECTIONS_FILE_PATH,
                     Some(&next_directions_toml),
                 )?;
-        }
-        for (relative_path, body) in pending_supporting_files {
-            self.planning_workspace_port
-                .replace_planning_workspace_file(workspace_dir, &relative_path, Some(&body))?;
         }
 
         let validation_report = self.validate_active_workspace(workspace_dir)?;
@@ -600,7 +606,7 @@ impl PlanningDirectionsService {
             }
         }
 
-        let fallback_path = default_direction_detail_doc_path(direction_id);
+        let fallback_path = default_validated_direction_detail_doc_path(direction_id)?;
         let fallback_body = self
             .load_supporting_file_best_effort(workspace_dir, &fallback_path)
             .unwrap_or_else(|| build_default_detail_doc_markdown_for_path(direction_id));
@@ -702,6 +708,18 @@ fn build_default_detail_doc_markdown_for_path(direction_id: &str) -> String {
     )
 }
 
+fn default_validated_direction_detail_doc_path(direction_id: &str) -> Result<String> {
+    let fallback_path = default_direction_detail_doc_path(direction_id);
+    if is_valid_planning_markdown_path(&fallback_path, PLANNING_DIRECTION_DOCS_DIRECTORY) {
+        Ok(fallback_path)
+    } else {
+        Err(anyhow!(
+            "direction {} does not produce a safe default detail_doc_path",
+            direction_id.trim()
+        ))
+    }
+}
+
 fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
     let normalized = path.trim().replace('\\', "/");
     if normalized.is_empty()
@@ -767,38 +785,45 @@ fn set_direction_detail_doc_path(
     let mut document = directions_toml
         .parse::<DocumentMut>()
         .map_err(|error| anyhow!("failed to parse directions.toml: {error}"))?;
-    let tables = document["directions"]
-        .as_array_of_tables_mut()
-        .ok_or_else(|| anyhow!("directions.toml does not contain [[directions]] tables"))?;
-    let mut updated = false;
-    for table in tables.iter_mut() {
-        let Some(id) = table.get("id").and_then(|item| item.as_str()) else {
-            continue;
-        };
-        if id.trim() == direction_id.trim() {
-            table["detail_doc_path"] = value(detail_doc_path);
-            updated = true;
-            break;
-        }
-    }
-
-    if updated {
-        Ok(document.to_string())
-    } else {
-        Err(anyhow!("unknown direction id: {}", direction_id.trim()))
-    }
+    set_direction_detail_doc_path_in_document(&mut document, direction_id, detail_doc_path)?;
+    Ok(document.to_string())
 }
 
 fn set_queue_idle_prompt_path(directions_toml: &str, prompt_path: &str) -> Result<String> {
     let mut document = directions_toml
         .parse::<DocumentMut>()
         .map_err(|error| anyhow!("failed to parse directions.toml: {error}"))?;
+    set_queue_idle_prompt_path_in_document(&mut document, prompt_path);
+    Ok(document.to_string())
+}
+
+fn set_direction_detail_doc_path_in_document(
+    document: &mut DocumentMut,
+    direction_id: &str,
+    detail_doc_path: &str,
+) -> Result<()> {
+    let tables = document["directions"]
+        .as_array_of_tables_mut()
+        .ok_or_else(|| anyhow!("directions.toml does not contain [[directions]] tables"))?;
+    for table in tables.iter_mut() {
+        let Some(id) = table.get("id").and_then(|item| item.as_str()) else {
+            continue;
+        };
+        if id.trim() == direction_id.trim() {
+            table["detail_doc_path"] = value(detail_doc_path);
+            return Ok(());
+        }
+    }
+
+    Err(anyhow!("unknown direction id: {}", direction_id.trim()))
+}
+
+fn set_queue_idle_prompt_path_in_document(document: &mut DocumentMut, prompt_path: &str) {
     if !document.as_table().contains_key("queue_idle") {
         document["queue_idle"] = Item::Table(Default::default());
         document["queue_idle"]["policy"] = value("stop");
     }
     document["queue_idle"]["prompt_path"] = value(prompt_path);
-    Ok(document.to_string())
 }
 
 #[cfg(test)]
@@ -1280,6 +1305,42 @@ mod tests {
                 .is_file()
         );
         assert!(Path::new(&workspace_dir).join(custom_prompt_path).is_file());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn doctor_workspace_rejects_unsafe_direction_id_without_partial_updates() {
+        let workspace_dir = create_temp_workspace("planning-directions-doctor-unsafe-id");
+        write_bootstrap_workspace(&workspace_dir);
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"id = "general-workstream""#,
+                r#"id = "../unsafe-direction""#,
+            )
+        });
+        let directions_path = Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH);
+        let original_directions =
+            fs::read_to_string(&directions_path).expect("directions.toml should be readable");
+
+        let error = sample_service()
+            .doctor_workspace(&workspace_dir)
+            .expect_err("planning doctor should reject unsafe fallback paths");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not produce a safe default detail_doc_path")
+        );
+        assert_eq!(
+            fs::read_to_string(&directions_path).expect("directions.toml should stay readable"),
+            original_directions
+        );
+        assert!(
+            !Path::new(&workspace_dir)
+                .join(".codex-exec-loop/planning/directions")
+                .exists()
+        );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
