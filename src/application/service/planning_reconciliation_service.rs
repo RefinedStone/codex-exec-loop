@@ -482,7 +482,6 @@ pub fn build_planning_repair_prompt(
     retry_reason: Option<PlanningRepairRetryReason>,
 ) -> String {
     let mut lines = vec![
-        "대리인입니다.".to_string(),
         format!("planning repair {attempt_number}/{max_attempts} 입니다."),
         "이전 턴에서 `task-ledger.json` 후보가 validation을 통과하지 못했습니다.".to_string(),
         "이번 턴에서는 `.codex-exec-loop/planning/task-ledger.json` 하나만 고치세요.".to_string(),

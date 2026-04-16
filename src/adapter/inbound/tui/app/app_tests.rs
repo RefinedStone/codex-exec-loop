@@ -239,7 +239,7 @@ fn sample_template_catalog() -> FollowupTemplateCatalog {
             FollowupTemplateDefinition {
                 id: "builtin-next-task".to_string(),
                 label: "builtin next-task".to_string(),
-                body: "대리인입니다.\n자동 후속 {auto_turn}/{max_auto_turns} 입니다.\n\n직전 답변:\n{last_message}\n{stop_keyword}".to_string(),
+                body: "자동 후속 {auto_turn}/{max_auto_turns} 입니다.\n\n직전 답변:\n{last_message}\n{stop_keyword}".to_string(),
                 source: FollowupTemplateSource::Builtin,
             },
             FollowupTemplateDefinition {

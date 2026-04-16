@@ -1,4 +1,3 @@
-대리인입니다.
 자동 후속 {auto_turn}/{max_auto_turns} 입니다.
 
 직전 답변:

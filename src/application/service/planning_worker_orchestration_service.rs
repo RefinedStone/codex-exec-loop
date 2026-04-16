@@ -200,8 +200,7 @@ fn build_planning_queue_refresh_prompt(
     let previous_handoff_section = previous_handoff_section(previous_handoff_task);
 
     format!(
-        r#"대리인입니다.
-planning worker refresh 입니다.
+        r#"planning worker refresh 입니다.
 
 이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 갱신하세요.
 - planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
@@ -232,8 +231,7 @@ fn build_planning_queue_idle_derive_prompt(
     let previous_handoff_section = previous_handoff_section(previous_handoff_task);
 
     format!(
-        r#"대리인입니다.
-planning worker queue-idle active-derivation review 입니다.
+        r#"planning worker queue-idle active-derivation review 입니다.
 
 이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 재평가하고, 필요하면 다음 작업을 적극적으로 도출하세요.
 - planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.

@@ -240,7 +240,6 @@ workspace 아래에 `.codex-exec-loop/followups/` 디렉터리를 만들고 `.md
 예시 템플릿:
 
 ```md
-대리인입니다.
 자동 후속 {auto_turn}/{max_auto_turns} 입니다.
 
 직전 결과를 기준으로 다음 작업 1개만 이어서 진행하세요.
