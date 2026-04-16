@@ -113,6 +113,13 @@ pub(crate) fn build_automation_preview_lines(app: &NativeTuiApp) -> Vec<Line<'st
                         stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
                         last_message: conversation.latest_agent_message_text(),
                         snapshot: &conversation.planning_runtime_snapshot,
+                        has_running_turn: conversation.has_running_turn(),
+                        is_repairing: conversation.planning_repair_state.is_some(),
+                        repair_failure_summary: conversation
+                            .planning_repair_state
+                            .as_ref()
+                            .map(|state| state.latest_request.failure_summary.as_str()),
+                        max_detail_len: AUTOMATION_PLANNING_DETAIL_LIMIT,
                     });
             let preview_thread_id = if conversation.thread_id.trim().is_empty() {
                 PREVIEW_THREAD_ID_PLACEHOLDER
@@ -137,10 +144,9 @@ pub(crate) fn build_automation_preview_lines(app: &NativeTuiApp) -> Vec<Line<'st
                     "preview last_message: placeholder until an agent reply exists",
                 ));
             }
-            lines.push(Line::from(preview.planning_status_line));
-            if let Some(detail_line) = preview.planning_detail_line.as_deref() {
-                lines.push(Line::raw(detail_line.to_string()));
-            }
+            lines.push(Line::from(preview.current_state_line));
+            lines.push(Line::from(preview.cause_line));
+            lines.push(Line::from(preview.next_action_line));
 
             lines.push(Line::from(""));
             lines.push(Line::from("Rendered Preview"));

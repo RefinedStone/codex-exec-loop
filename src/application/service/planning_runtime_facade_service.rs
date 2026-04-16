@@ -35,6 +35,10 @@ pub struct PlanningRuntimePreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
     pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub has_running_turn: bool,
+    pub is_repairing: bool,
+    pub repair_failure_summary: Option<&'a str>,
+    pub max_detail_len: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,8 +57,9 @@ pub struct PlanningRuntimeQueuedAutoFollowPrompt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeRenderedPreview {
     pub rendered_prompt: String,
-    pub planning_status_line: String,
-    pub planning_detail_line: Option<String>,
+    pub current_state_line: String,
+    pub cause_line: String,
+    pub next_action_line: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,9 +201,6 @@ impl PlanningRuntimeFacadeService {
         let policy_decision = self
             .planning_runtime_policy_service
             .decide_auto_follow(request.snapshot);
-        let planning_view = self
-            .planning_runtime_policy_service
-            .build_preview_view_for_decision(policy_decision, request.snapshot);
         let rendered_prompt = match policy_decision {
             PlanningAutoFollowPolicyDecision::QueuePrompt(
                 PlanningAutoFollowPromptMode::RefreshPlanningQueue,
@@ -217,12 +219,21 @@ impl PlanningRuntimeFacadeService {
                 PlanningAutoFollowPromptMode::ContinueQueuedTask,
             ) => self.builtin_next_task_preview_prompt(request.snapshot),
         };
+        let planning_projection = self.build_followup_status_projection(
+            PlanningRuntimeStatusProjectionRequest {
+                snapshot: request.snapshot,
+                has_running_turn: request.has_running_turn,
+                is_repairing: request.is_repairing,
+                repair_failure_summary: request.repair_failure_summary,
+                repair_attempt: None,
+                max_detail_len: request.max_detail_len,
+            },
+        );
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
-            planning_status_line: format!("planning: {}", planning_view.status_label),
-            planning_detail_line: planning_view
-                .detail
-                .map(|detail| format!("planning detail: {detail}")),
+            current_state_line: planning_projection.current_state_line,
+            cause_line: planning_projection.cause_line,
+            next_action_line: planning_projection.next_action_line,
         }
     }
 
@@ -582,6 +593,10 @@ mod tests {
             stop_keyword: "AUTO_STOP",
             last_message: None,
             snapshot: &ready_snapshot(),
+            has_running_turn: false,
+            is_repairing: false,
+            repair_failure_summary: None,
+            max_detail_len: 48,
         });
 
         assert!(
@@ -594,10 +609,16 @@ mod tests {
                 .rendered_prompt
                 .contains("Implement planning runtime facade")
         );
-        assert_eq!(preview.planning_status_line, "planning: ready");
-        assert_eq!(
-            preview.planning_detail_line.as_deref(),
-            Some("planning detail: next task: rank 1 / task-1")
+        assert_eq!(preview.current_state_line, "current state: ready");
+        assert!(
+            preview
+                .cause_line
+                .starts_with("cause: the next queued task is Implement planning")
+        );
+        assert!(
+            preview
+                .next_action_line
+                .starts_with("next action: let automation continue, or run the queued")
         );
     }
 
@@ -619,6 +640,10 @@ mod tests {
             stop_keyword: "AUTO_STOP",
             last_message: None,
             snapshot: &snapshot,
+            has_running_turn: false,
+            is_repairing: false,
+            repair_failure_summary: None,
+            max_detail_len: 48,
         });
 
         assert!(
@@ -626,10 +651,12 @@ mod tests {
                 .rendered_prompt
                 .contains("planning priority queue를 갱신하세요.")
         );
-        assert_eq!(preview.planning_status_line, "planning: waiting");
-        assert_eq!(
-            preview.planning_detail_line.as_deref(),
-            Some("planning detail: queue idle: no executable planning task")
+        assert_eq!(preview.current_state_line, "current state: waiting");
+        assert_eq!(preview.cause_line, "cause: planning is valid but has no next task yet");
+        assert!(
+            preview
+                .next_action_line
+                .starts_with("next action: finish the next turn or review the queue")
         );
     }
 

@@ -237,6 +237,9 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
     assert!(header.contains("Automation Controls"));
     assert!(list.contains("automation follows the planning queue only"));
     assert!(preview.contains("mode: planning queue"));
+    assert!(preview.contains("current state:"));
+    assert!(preview.contains("cause:"));
+    assert!(preview.contains("next action:"));
     assert!(preview.contains("Rendered Preview"));
     assert!(status.contains("automation: on"));
     assert!(keys.contains("Ctrl+a: automation on/off"));
@@ -281,7 +284,9 @@ fn automation_preview_surfaces_queue_refresh_copy_when_queue_is_idle() {
         .join("\n");
 
     assert!(rendered.contains("planning priority queue를 갱신하세요."));
-    assert!(rendered.contains("planning: waiting"));
+    assert!(rendered.contains("current state: waiting"));
+    assert!(rendered.contains("cause: planning is valid but has no next task yet"));
+    assert!(rendered.contains("next action:"));
 }
 
 #[test]

@@ -40,6 +40,7 @@ pub struct PlanningRuntimeSummaryView {
     pub failure_summary: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimePreviewView {
     pub status_label: &'static str,
@@ -207,6 +208,7 @@ impl PlanningRuntimePolicyService {
         }
     }
 
+    #[cfg(test)]
     pub fn build_preview_view_for_decision(
         &self,
         decision: PlanningAutoFollowPolicyDecision,
@@ -391,6 +393,7 @@ fn workspace_status_label(
     }
 }
 
+#[cfg(test)]
 fn preview_block_label(
     reason: PlanningAutoFollowBlockReason,
     snapshot: &PlanningRuntimeSnapshot,
@@ -519,6 +522,7 @@ fn build_operator_guidance(
     }
 }
 
+#[cfg(test)]
 fn non_blocked_preview_detail(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
     match (snapshot.queue_summary(), snapshot.proposal_summary()) {
         (Some(queue_summary), Some(proposal_summary)) => {
