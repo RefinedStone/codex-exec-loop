@@ -27,7 +27,7 @@ pub use super::planning_directions_service::{
 };
 pub use super::planning_init_service::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
-    PlanningDraftSaveResult, PlanningInitStageResult,
+    PlanningDraftSaveResult, PlanningInitStageResult, PlanningWorkspaceInitResult,
 };
 pub use super::planning_prompt_service::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 pub use super::planning_proposal_promotion_service::{
@@ -133,6 +133,13 @@ impl PlanningWorkspaceUseCases {
 
     pub fn has_planning_workspace(&self, workspace_dir: &str) -> anyhow::Result<bool> {
         self.init_service.has_planning_workspace(workspace_dir)
+    }
+
+    pub fn initialize_simple_workspace(
+        &self,
+        workspace_dir: &str,
+    ) -> anyhow::Result<PlanningWorkspaceInitResult> {
+        self.init_service.initialize_simple_workspace(workspace_dir)
     }
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> anyhow::Result<()> {

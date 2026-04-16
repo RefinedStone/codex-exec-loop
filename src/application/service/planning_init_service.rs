@@ -85,6 +85,13 @@ pub struct PlanningDraftPromoteResult {
     pub validation_report: PlanningValidationReport,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningWorkspaceInitResult {
+    pub mode: PlanningBootstrapMode,
+    pub created_file_count: usize,
+    pub created_paths: Vec<String>,
+}
+
 impl PlanningInitService {
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -141,6 +148,13 @@ impl PlanningInitService {
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?
             .has_any_files())
+    }
+
+    pub fn initialize_simple_workspace(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningWorkspaceInitResult> {
+        self.initialize_workspace(workspace_dir, PlanningBootstrapMode::Simple)
     }
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> Result<()> {
@@ -250,55 +264,12 @@ impl PlanningInitService {
         workspace_dir: &str,
         mode: PlanningBootstrapMode,
     ) -> Result<PlanningInitStageResult> {
-        let artifacts = self
-            .planning_bootstrap_service
-            .build_artifacts_for_mode(mode);
-        let mut validation_result = self.planning_validation_service.validate_workspace_files(
-            crate::domain::planning::PlanningWorkspaceFiles {
-                directions_toml: &artifacts.directions_toml,
-                task_ledger_json: &artifacts.task_ledger_json,
-                task_ledger_schema_json: &artifacts.task_ledger_schema_json,
-                result_output_markdown: &artifacts.result_output_markdown,
-            },
-        );
-        if let Some(directions) = validation_result.directions.as_ref() {
-            let staged_supporting_paths = artifacts
-                .supplemental_files
-                .iter()
-                .map(|file| file.active_path.as_str())
-                .collect::<Vec<_>>();
-            self.planning_validation_service
-                .validate_direction_supporting_files(
-                    directions,
-                    |path| staged_supporting_paths.contains(&path),
-                    &mut validation_result.report,
-                );
-        }
-
+        let bootstrap = self.prepare_bootstrap_workspace(mode);
         let draft_name = build_bootstrap_draft_name(Utc::now());
-        let mut staged_files = vec![
-            PlanningDraftFileRecord {
-                active_path: artifacts.directions_path,
-                body: artifacts.directions_toml,
-            },
-            PlanningDraftFileRecord {
-                active_path: artifacts.task_ledger_path,
-                body: artifacts.task_ledger_json,
-            },
-            PlanningDraftFileRecord {
-                active_path: artifacts.task_ledger_schema_path,
-                body: artifacts.task_ledger_schema_json,
-            },
-            PlanningDraftFileRecord {
-                active_path: artifacts.result_output_path,
-                body: artifacts.result_output_markdown,
-            },
-        ];
-        staged_files.extend(artifacts.supplemental_files.into_iter().map(Into::into));
         let stage_record = self.planning_workspace_port.stage_planning_draft_files(
             workspace_dir,
             &draft_name,
-            &staged_files,
+            &bootstrap.files,
         )?;
 
         Ok(PlanningInitStageResult {
@@ -307,7 +278,7 @@ impl PlanningInitService {
             draft_directory: stage_record.draft_directory,
             staged_files: stage_record.staged_files.clone(),
             staged_file_count: stage_record.staged_files.len(),
-            validation_report: validation_result.report,
+            validation_report: bootstrap.validation_report,
         })
     }
 
@@ -357,6 +328,107 @@ impl PlanningInitService {
 
         result.report
     }
+
+    fn initialize_workspace(
+        &self,
+        workspace_dir: &str,
+        mode: PlanningBootstrapMode,
+    ) -> Result<PlanningWorkspaceInitResult> {
+        if self.has_planning_workspace(workspace_dir)? {
+            anyhow::bail!(
+                "planning workspace already exists; reset or reuse the existing workspace instead"
+            );
+        }
+
+        let bootstrap = self.prepare_bootstrap_workspace(mode);
+        if !bootstrap.validation_report.is_valid() {
+            let first_error = bootstrap
+                .validation_report
+                .errors()
+                .first()
+                .map(|issue| issue.message.clone())
+                .unwrap_or_else(|| "planning bootstrap validation failed".to_string());
+            anyhow::bail!("planning bootstrap validation failed: {first_error}");
+        }
+
+        for file in &bootstrap.files {
+            self.planning_workspace_port
+                .replace_planning_workspace_file(
+                    workspace_dir,
+                    &file.active_path,
+                    Some(&file.body),
+                )?;
+        }
+        self.planning_workspace_port
+            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None)?;
+
+        Ok(PlanningWorkspaceInitResult {
+            mode,
+            created_file_count: bootstrap.files.len(),
+            created_paths: bootstrap
+                .files
+                .iter()
+                .map(|file| file.active_path.clone())
+                .collect(),
+        })
+    }
+
+    fn prepare_bootstrap_workspace(&self, mode: PlanningBootstrapMode) -> BootstrapWorkspacePlan {
+        let artifacts = self
+            .planning_bootstrap_service
+            .build_artifacts_for_mode(mode);
+        let mut validation_result = self.planning_validation_service.validate_workspace_files(
+            crate::domain::planning::PlanningWorkspaceFiles {
+                directions_toml: &artifacts.directions_toml,
+                task_ledger_json: &artifacts.task_ledger_json,
+                task_ledger_schema_json: &artifacts.task_ledger_schema_json,
+                result_output_markdown: &artifacts.result_output_markdown,
+            },
+        );
+        if let Some(directions) = validation_result.directions.as_ref() {
+            let staged_supporting_paths = artifacts
+                .supplemental_files
+                .iter()
+                .map(|file| file.active_path.as_str())
+                .collect::<Vec<_>>();
+            self.planning_validation_service
+                .validate_direction_supporting_files(
+                    directions,
+                    |path| staged_supporting_paths.contains(&path),
+                    &mut validation_result.report,
+                );
+        }
+
+        let mut files = vec![
+            PlanningDraftFileRecord {
+                active_path: artifacts.directions_path,
+                body: artifacts.directions_toml,
+            },
+            PlanningDraftFileRecord {
+                active_path: artifacts.task_ledger_path,
+                body: artifacts.task_ledger_json,
+            },
+            PlanningDraftFileRecord {
+                active_path: artifacts.task_ledger_schema_path,
+                body: artifacts.task_ledger_schema_json,
+            },
+            PlanningDraftFileRecord {
+                active_path: artifacts.result_output_path,
+                body: artifacts.result_output_markdown,
+            },
+        ];
+        files.extend(artifacts.supplemental_files.into_iter().map(Into::into));
+
+        BootstrapWorkspacePlan {
+            files,
+            validation_report: validation_result.report,
+        }
+    }
+}
+
+struct BootstrapWorkspacePlan {
+    files: Vec<PlanningDraftFileRecord>,
+    validation_report: PlanningValidationReport,
 }
 
 fn is_operator_editable_draft_path(active_path: &str) -> bool {
@@ -392,8 +464,9 @@ mod tests {
         PlanningBootstrapMode, PlanningBootstrapService,
     };
     use crate::application::service::planning_contract::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
-        RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
+        QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+        TASK_LEDGER_SCHEMA_FILE_PATH,
     };
     use crate::application::service::planning_validation_service::PlanningValidationService;
 
@@ -516,13 +589,18 @@ mod tests {
             relative_path: &str,
             body: Option<&str>,
         ) -> Result<()> {
-            self.active_file_bodies
+            let mut active_file_bodies = self
+                .active_file_bodies
                 .lock()
-                .expect("active_file_bodies mutex should not be poisoned")
-                .insert(
-                    relative_path.to_string(),
-                    body.unwrap_or_default().to_string(),
-                );
+                .expect("active_file_bodies mutex should not be poisoned");
+            match body {
+                Some(body) => {
+                    active_file_bodies.insert(relative_path.to_string(), body.to_string());
+                }
+                None => {
+                    active_file_bodies.remove(relative_path);
+                }
+            }
             Ok(())
         }
 
@@ -715,6 +793,78 @@ mod tests {
         assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
         assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
         assert!(active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
+    }
+
+    #[test]
+    fn initialize_simple_workspace_writes_active_planning_files_directly() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let result = service
+            .initialize_simple_workspace("/tmp/workspace")
+            .expect("simple workspace should initialize");
+
+        assert_eq!(result.mode, PlanningBootstrapMode::Simple);
+        assert_eq!(result.created_file_count, 5);
+        assert!(
+            result
+                .created_paths
+                .contains(&DIRECTIONS_FILE_PATH.to_string())
+        );
+        assert!(
+            result
+                .created_paths
+                .contains(&DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string())
+        );
+
+        let active_files = workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned");
+        assert!(active_files.contains_key(DIRECTIONS_FILE_PATH));
+        assert!(active_files.contains_key(TASK_LEDGER_FILE_PATH));
+        assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
+        assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
+        assert!(active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
+        assert!(!active_files.contains_key(PLAN_OFF_FILE_PATH));
+    }
+
+    #[test]
+    fn initialize_simple_workspace_rejects_existing_active_planning_files() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned")
+            .insert(DIRECTIONS_FILE_PATH.to_string(), "version = 1".to_string());
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let error = service
+            .initialize_simple_workspace("/tmp/workspace")
+            .expect_err("existing planning workspace should block init");
+
+        assert!(
+            error
+                .to_string()
+                .contains("planning workspace already exists")
+        );
+        let active_files = workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned");
+        assert_eq!(active_files.len(), 1);
+        assert_eq!(
+            active_files.get(DIRECTIONS_FILE_PATH).map(String::as_str),
+            Some("version = 1")
+        );
     }
 
     #[test]

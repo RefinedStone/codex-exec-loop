@@ -8,10 +8,12 @@ use anyhow::{Context, Result, bail};
 use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus, PlanningServices,
+    PlanningWorkspaceInitResult,
 };
 use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;
 
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
+const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +119,59 @@ impl DoctorReport {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InitReport {
+    workspace_path: String,
+    mode: &'static str,
+    created_file_count: Option<usize>,
+    queue_idle_policy: Option<String>,
+    status: Option<String>,
+    issue: Option<String>,
+}
+
+impl InitReport {
+    fn path_issue(workspace_path: String, issue: String) -> Self {
+        Self {
+            workspace_path,
+            mode: "simple",
+            created_file_count: None,
+            queue_idle_policy: None,
+            status: None,
+            issue: Some(issue),
+        }
+    }
+
+    fn success(
+        workspace_path: String,
+        result: &PlanningWorkspaceInitResult,
+        snapshot: &PlanningRuntimeSnapshot,
+    ) -> Self {
+        Self {
+            workspace_path,
+            mode: bootstrap_mode_label(result.mode),
+            created_file_count: Some(result.created_file_count),
+            queue_idle_policy: Some(snapshot.queue_idle_policy().label().to_string()),
+            status: Some("planning workspace initialized".to_string()),
+            issue: None,
+        }
+    }
+
+    fn failure(workspace_path: String, issue: String) -> Self {
+        Self {
+            workspace_path,
+            mode: "simple",
+            created_file_count: None,
+            queue_idle_policy: None,
+            status: None,
+            issue: Some(issue),
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        if self.issue.is_some() { 1 } else { 0 }
+    }
+}
+
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
     run_with_args(std::env::args_os().skip(1), stdout)
 }
@@ -131,14 +186,22 @@ where
         [] => Ok(None),
         [flag] if is_help_flag(flag) => {
             writeln!(stdout, "{DOCTOR_USAGE}")?;
+            writeln!(stdout, "{INIT_USAGE}")?;
             Ok(Some(0))
         }
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
             Ok(Some(run_doctor(Some(workspace.as_os_str()), stdout)?))
         }
+        [command] if command == OsStr::new("init") => Ok(Some(run_init(None, stdout)?)),
+        [command, workspace] if command == OsStr::new("init") => {
+            Ok(Some(run_init(Some(workspace.as_os_str()), stdout)?))
+        }
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
+        }
+        [command, _, ..] if command == OsStr::new("init") => {
+            bail!("{INIT_USAGE}");
         }
         [command, ..] => {
             bail!("unsupported command: {}", command.to_string_lossy());
@@ -154,6 +217,13 @@ fn run_doctor(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     let report = inspect_workspace(&workspace_path);
     render_doctor_report(stdout, &report)?;
+    Ok(report.exit_code())
+}
+
+fn run_init(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i32> {
+    let workspace_path = resolve_workspace_path(workspace_arg)?;
+    let report = initialize_workspace(&workspace_path);
+    render_init_report(stdout, &report)?;
     Ok(report.exit_code())
 }
 
@@ -207,6 +277,43 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     DoctorReport::from_snapshot(workspace_label, &snapshot)
 }
 
+fn initialize_workspace(workspace_path: &Path) -> InitReport {
+    let workspace_label = workspace_path.display().to_string();
+    if !workspace_path.exists() {
+        return InitReport::path_issue(
+            workspace_label,
+            format!(
+                "workspace path does not exist: {}",
+                workspace_path.display()
+            ),
+        );
+    }
+    if !workspace_path.is_dir() {
+        return InitReport::path_issue(
+            workspace_label,
+            format!(
+                "workspace path is not a directory: {}",
+                workspace_path.display()
+            ),
+        );
+    }
+
+    let planning =
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    match planning
+        .workspace
+        .initialize_simple_workspace(workspace_path.to_string_lossy().as_ref())
+    {
+        Ok(result) => {
+            let snapshot = planning
+                .runtime
+                .load_runtime_snapshot_or_invalid(workspace_path.to_string_lossy().as_ref());
+            InitReport::success(workspace_label, &result, &snapshot)
+        }
+        Err(error) => InitReport::failure(workspace_label, error.to_string()),
+    }
+}
+
 fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorState {
     match snapshot.workspace_status() {
         PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningDoctorState::Absent,
@@ -249,6 +356,36 @@ fn render_doctor_report(stdout: &mut impl Write, report: &DoctorReport) -> Resul
     }
 
     Ok(())
+}
+
+fn render_init_report(stdout: &mut impl Write, report: &InitReport) -> Result<()> {
+    writeln!(stdout, "workspace: {}", report.workspace_path)?;
+    writeln!(stdout, "command: init")?;
+    writeln!(stdout, "mode: {}", report.mode)?;
+
+    if let Some(created_file_count) = report.created_file_count {
+        writeln!(stdout, "created files: {created_file_count}")?;
+    }
+    if let Some(queue_idle_policy) = &report.queue_idle_policy {
+        writeln!(stdout, "queue-idle policy: {queue_idle_policy}")?;
+    }
+    if let Some(status) = &report.status {
+        writeln!(stdout, "status: {status}")?;
+    }
+    if let Some(issue) = &report.issue {
+        writeln!(stdout, "issue: {issue}")?;
+    }
+
+    Ok(())
+}
+
+fn bootstrap_mode_label(
+    mode: crate::application::service::planning::PlanningBootstrapMode,
+) -> &'static str {
+    match mode {
+        crate::application::service::planning::PlanningBootstrapMode::Detail => "detail",
+        crate::application::service::planning::PlanningBootstrapMode::Simple => "simple",
+    }
 }
 
 #[cfg(test)]
@@ -330,6 +467,13 @@ mod tests {
         ]
     }
 
+    fn init_args(workspace: &TestWorkspace) -> Vec<OsString> {
+        vec![
+            OsString::from("init"),
+            workspace.path.as_os_str().to_os_string(),
+        ]
+    }
+
     #[test]
     fn doctor_reports_absent_workspace_as_healthy() {
         let workspace =
@@ -344,6 +488,79 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(output.contains("planning state: absent"));
         assert!(output.contains("health: planning workspace is not initialized"));
+    }
+
+    #[test]
+    fn init_creates_simple_planning_scaffold_directly() {
+        let workspace =
+            TestWorkspace::new("init-simple").expect("test workspace should be created");
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args(init_args(&workspace), &mut stdout)
+            .expect("init should run")
+            .expect("init should produce an exit code");
+        let output = String::from_utf8(stdout).expect("init output should be valid utf-8");
+
+        assert_eq!(exit_code, 0);
+        assert!(output.contains("command: init"));
+        assert!(output.contains("mode: simple"));
+        assert!(output.contains("created files: 5"));
+        assert!(output.contains("queue-idle policy: review_and_enqueue"));
+        assert!(output.contains("status: planning workspace initialized"));
+        assert!(
+            Path::new(&workspace.path)
+                .join(DIRECTIONS_FILE_PATH)
+                .is_file()
+        );
+        assert!(
+            Path::new(&workspace.path)
+                .join(TASK_LEDGER_FILE_PATH)
+                .is_file()
+        );
+        assert!(
+            Path::new(&workspace.path)
+                .join(TASK_LEDGER_SCHEMA_FILE_PATH)
+                .is_file()
+        );
+        assert!(
+            Path::new(&workspace.path)
+                .join(RESULT_OUTPUT_FILE_PATH)
+                .is_file()
+        );
+        assert!(
+            Path::new(&workspace.path)
+                .join(".codex-exec-loop/planning/prompts/queue-idle-review.md")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn init_refuses_to_overwrite_existing_planning_workspace() {
+        let workspace =
+            TestWorkspace::new("init-existing").expect("test workspace should be created");
+        workspace
+            .write_file(DIRECTIONS_FILE_PATH, "version = 1\n")
+            .expect("existing directions should be writable");
+        let before = fs::read_to_string(Path::new(&workspace.path).join(DIRECTIONS_FILE_PATH))
+            .expect("existing directions should be readable");
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args(init_args(&workspace), &mut stdout)
+            .expect("init should run")
+            .expect("init should produce an exit code");
+        let output = String::from_utf8(stdout).expect("init output should be valid utf-8");
+        let after = fs::read_to_string(Path::new(&workspace.path).join(DIRECTIONS_FILE_PATH))
+            .expect("existing directions should remain readable");
+
+        assert_eq!(exit_code, 1);
+        assert!(output.contains("command: init"));
+        assert!(output.contains("issue: planning workspace already exists"));
+        assert_eq!(before, after);
+        assert!(
+            !Path::new(&workspace.path)
+                .join(TASK_LEDGER_FILE_PATH)
+                .exists()
+        );
     }
 
     #[test]
