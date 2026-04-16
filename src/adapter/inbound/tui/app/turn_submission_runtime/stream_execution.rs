@@ -7,6 +7,7 @@ use crate::adapter::inbound::tui::app::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::parallel_mode_service::ParallelModeService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PreparedTurnStreamRequest {
@@ -38,6 +39,7 @@ impl NativeTuiApp {
         spawn_conversation_stream_worker(
             request,
             self.conversation_service.clone(),
+            self.parallel_mode_service.clone(),
             self.tx.clone(),
         );
     }
@@ -62,6 +64,7 @@ impl NativeTuiApp {
 fn spawn_conversation_stream_worker(
     request: PreparedTurnStreamRequest,
     service: ConversationService,
+    parallel_mode_service: ParallelModeService,
     outer_tx: std::sync::mpsc::Sender<BackgroundMessage>,
 ) {
     thread::spawn(move || {
@@ -71,12 +74,25 @@ fn spawn_conversation_stream_worker(
             thread::spawn(move || run_stream_request(service, request_for_service, event_tx));
 
         let mut saw_terminal_event = false;
+        let mut saw_turn_started = false;
+        let mut saw_failed_before_turn_started = false;
         while let Ok(event) = event_rx.recv() {
+            if let Some(notice) = sync_slot_lease_for_stream_event(
+                &parallel_mode_service,
+                &request,
+                &event,
+                &mut saw_turn_started,
+            ) {
+                let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
+            }
             let should_stop = matches!(
                 event,
                 ConversationStreamEvent::TurnCompleted { .. }
                     | ConversationStreamEvent::Failed { .. }
             );
+            if matches!(&event, ConversationStreamEvent::Failed { .. }) && !saw_turn_started {
+                saw_failed_before_turn_started = true;
+            }
             if should_stop {
                 saw_terminal_event = true;
             }
@@ -90,6 +106,15 @@ fn spawn_conversation_stream_worker(
             Ok(result) => observe_stream_completion(&request, saw_terminal_event, result),
             Err(payload) => observe_stream_panic(&request, saw_terminal_event, payload),
         };
+        if let Some(notice) = finalize_slot_lease_after_stream_completion(
+            &parallel_mode_service,
+            &request,
+            saw_turn_started,
+            saw_failed_before_turn_started,
+            &observation,
+        ) {
+            let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
+        }
 
         if let Some(message) = observation.terminal_failure_message {
             let _ = outer_tx.send(BackgroundMessage::ConversationStream(
@@ -115,6 +140,61 @@ fn run_stream_request(
             .run_new_thread_stream(&request.workspace_directory, &request.prompt, event_sender)
             .map_err(|error: anyhow::Error| error.to_string()),
     }
+}
+
+fn sync_slot_lease_for_stream_event(
+    parallel_mode_service: &ParallelModeService,
+    request: &PreparedTurnStreamRequest,
+    event: &ConversationStreamEvent,
+    saw_turn_started: &mut bool,
+) -> Option<String> {
+    if !matches!(event, ConversationStreamEvent::TurnStarted { .. }) {
+        return None;
+    }
+
+    *saw_turn_started = true;
+    match parallel_mode_service.mark_workspace_slot_running(&request.workspace_directory) {
+        Ok(Some(_)) | Ok(None) => None,
+        Err(error) => Some(format!("slot lease running transition failed: {error}")),
+    }
+}
+
+fn finalize_slot_lease_after_stream_completion(
+    parallel_mode_service: &ParallelModeService,
+    request: &PreparedTurnStreamRequest,
+    saw_turn_started: bool,
+    saw_failed_before_turn_started: bool,
+    observation: &StreamExecutionObservation,
+) -> Option<String> {
+    if !should_release_unstarted_slot_lease(
+        saw_turn_started,
+        saw_failed_before_turn_started,
+        observation,
+    ) {
+        return None;
+    }
+
+    match parallel_mode_service
+        .release_workspace_slot_lease_after_failed_start(&request.workspace_directory)
+    {
+        Ok(Some(lease)) => Some(format!(
+            "slot lease released after startup failure / slot: {} / agent: {}",
+            lease.slot_id, lease.agent_id
+        )),
+        Ok(None) => None,
+        Err(error) => Some(format!(
+            "slot lease release failed after startup failure: {error}"
+        )),
+    }
+}
+
+fn should_release_unstarted_slot_lease(
+    saw_turn_started: bool,
+    saw_failed_before_turn_started: bool,
+    observation: &StreamExecutionObservation,
+) -> bool {
+    saw_failed_before_turn_started
+        || (!saw_turn_started && observation.terminal_failure_message.is_some())
 }
 
 fn observe_stream_completion(
@@ -238,5 +318,33 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn startup_failure_requests_unstarted_slot_release() {
+        let observation = StreamExecutionObservation {
+            terminal_failure_message: Some("turn stream failed".to_string()),
+            runtime_notice: Some("turn stream failed".to_string()),
+        };
+
+        assert!(should_release_unstarted_slot_lease(
+            false,
+            true,
+            &observation
+        ));
+    }
+
+    #[test]
+    fn running_turn_does_not_request_unstarted_slot_release() {
+        let observation = StreamExecutionObservation {
+            terminal_failure_message: Some("turn stream failed".to_string()),
+            runtime_notice: Some("turn stream failed".to_string()),
+        };
+
+        assert!(!should_release_unstarted_slot_lease(
+            true,
+            false,
+            &observation
+        ));
     }
 }
