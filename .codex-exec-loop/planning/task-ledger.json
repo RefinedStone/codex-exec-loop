@@ -605,6 +605,64 @@
       "last_updated_by": "llm",
       "source_turn_id": null,
       "updated_at": "2026-04-16T15:03:57Z"
+    },
+    {
+      "id": "planning-supporting-files-maintenance-framing",
+      "direction_id": "planning-authoring-ergonomics",
+      "direction_relation_note": "Follows the shipped simple-mode onboarding work by making directions detail docs and queue-idle prompt maintenance read as advanced planning maintenance instead of a parallel subsystem, which is the clearest remaining ergonomics gap named by the active direction docs.",
+      "title": "Reframe directions and queue-idle files as advanced planning maintenance",
+      "description": "Update the planning setup and controls flow so directions detail docs and queue-idle prompt editing are introduced as optional supporting files for accepted planning, not as a separate planning system, while preserving explicit staging and promotion. The slice should focus on operator-facing entry copy, labels, and maintenance affordances that reduce friction after the simple-mode happy path succeeds.",
+      "status": "ready",
+      "base_priority": 79,
+      "dynamic_priority_delta": 19,
+      "priority_reason": "The queue is empty, workspace lifecycle and first-run simple onboarding slices are already done, and the active planning-authoring direction still explicitly calls out reducing friction in directions maintenance for supporting files as the next sharp, reviewable operator-facing slice.",
+      "depends_on": [
+        "simple-mode-first-success-review"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T03:20:00Z"
+    },
+    {
+      "id": "resume-recovery-primary-action-framing",
+      "direction_id": "session-continuity-and-recovery",
+      "direction_relation_note": "Extends the shipped resume-context summary so resumed blocked or paused states point to one dominant recovery surface and verb, matching the recovery model in the active continuity and UX docs.",
+      "title": "Map resumed paused states to one primary recovery action",
+      "description": "After a resumed shell restores planning and queue context, make blocked or paused resume summaries name the single primary recovery path such as reviewing queue, reopening planning, or rerunning diagnostics, so operators do not need to infer which overlay to open next. Keep this scoped to resumed-session wording and recovery routing rather than broad new session-management features.",
+      "status": "proposed",
+      "base_priority": 74,
+      "dynamic_priority_delta": 12,
+      "priority_reason": "The continuity direction still has explicit unfinished intent after the shipped resume-context slice, but the sharper immediate gap is planning authoring ergonomics, so this should stay visible as the next alternate follow-up instead of becoming the queue head now.",
+      "depends_on": [
+        "resume-context-summary",
+        "presentation-boundary-extraction"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T03:20:00Z"
+    },
+    {
+      "id": "planning-authoring-supporting-files-boundary-split",
+      "direction_id": "architecture-boundaries",
+      "direction_relation_note": "Keeps the next authoring ergonomics work reviewable by separating planning setup flow from supporting-file maintenance responsibilities once the operator-facing framing is settled.",
+      "title": "Split planning setup flow from supporting-file maintenance seams",
+      "description": "Refactor the planning authoring path so simple setup and first-review flow are less coupled to directions detail-doc and queue-idle supporting-file maintenance logic, reducing hotspot risk in `planning/controller` and related tests. Tie the boundary change directly to faster, safer iteration on planning authoring copy and maintenance affordances rather than to abstract cleanup.",
+      "status": "proposed",
+      "base_priority": 68,
+      "dynamic_priority_delta": 10,
+      "priority_reason": "The architecture debt map still names planning authoring versus supporting-file maintenance coupling as product-facing debt, but the user-visible framing change should land first and confirm the seam before this refactor is promoted.",
+      "depends_on": [
+        "planning-supporting-files-maintenance-framing"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T03:20:00Z"
     }
   ]
 }
