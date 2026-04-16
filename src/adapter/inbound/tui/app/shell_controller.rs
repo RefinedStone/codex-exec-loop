@@ -16,7 +16,7 @@ impl ShellActionAvailability {
         match self {
             Self::Ready => "startup ready",
             Self::Pending => "startup checks still running",
-            Self::Blocked => "startup diagnostics need attention",
+            Self::Blocked => "startup checks need attention",
         }
     }
 }
@@ -43,13 +43,13 @@ impl NativeTuiApp {
         match (prompt_origin, self.shell_action_availability()) {
             (_, ShellActionAvailability::Ready) => "ready".to_string(),
             (PromptOrigin::Manual, state) => {
-                format!("{}; open diagnostics with Ctrl+d", state.status_text())
+                format!("{}; open startup checks with Ctrl+d", state.status_text())
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Pending) => {
                 "automation paused while startup checks are still running".to_string()
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
-                "automation paused because startup diagnostics need attention".to_string()
+                "automation paused because startup checks need attention".to_string()
             }
         }
     }

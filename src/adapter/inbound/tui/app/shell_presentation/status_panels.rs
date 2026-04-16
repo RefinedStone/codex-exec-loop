@@ -315,24 +315,28 @@ fn build_inline_startup_screen_lines_with_context(
 
     match context.startup_state {
         StartupState::Idle => {
-            lines.push(Line::from("status: preparing startup checks"));
+            lines.extend(super::build_startup_operator_lines_from_state(
+                context.startup_state,
+                INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+            ));
             if let Some(conversation) = context.ready_conversation() {
                 lines.push(Line::from(format!("workspace: {}", conversation.cwd)));
             }
         }
         StartupState::Loading => {
-            lines.push(Line::from("status: initializing codex shell"));
-            lines.extend(super::build_startup_check_lines_from_state(
+            lines.extend(super::build_startup_operator_lines_from_state(
                 context.startup_state,
+                INLINE_TAIL_NOTICE_DETAIL_LIMIT,
             ));
         }
         StartupState::Ready(diagnostics) => {
+            lines.extend(super::build_startup_operator_lines_from_state(
+                context.startup_state,
+                INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+            ));
             lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
-            lines.push(Line::from(format!(
-                "diagnostics: codex {}  |  app-server {}  |  account {}",
-                inline_diagnostic_status(diagnostics.codex_binary_ok, "ok", "check"),
-                inline_diagnostic_status(diagnostics.initialize_ok, "ok", "check"),
-                inline_diagnostic_status(diagnostics.account_ok, "ok", "attention"),
+            lines.push(Line::from(super::build_startup_check_summary_line(
+                diagnostics,
             )));
             if let Some(first_warning) = diagnostics.warnings.first() {
                 lines.push(Line::from(format!(
@@ -350,7 +354,11 @@ fn build_inline_startup_screen_lines_with_context(
             )));
         }
         StartupState::Failed(message) => {
-            lines.push(Line::from(format!("status: {message}")));
+            let _ = message;
+            lines.extend(super::build_startup_operator_lines_from_state(
+                context.startup_state,
+                INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+            ));
             for warning_line in super::build_startup_warning_lines_from_state(context.startup_state)
                 .into_iter()
                 .filter(|line| !line.to_string().eq_ignore_ascii_case("no warnings"))
@@ -418,14 +426,6 @@ fn plan_mode_prefixed_spans(
     spans
 }
 
-fn inline_diagnostic_status(
-    ok: bool,
-    ready_label: &'static str,
-    blocked_label: &'static str,
-) -> &'static str {
-    if ok { ready_label } else { blocked_label }
-}
-
 fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {
     let Some(conversation) = context.ready_conversation() else {
         return "start with a task, file path, or bug summary";
@@ -491,7 +491,7 @@ fn build_inline_ready_prompt_lines(
                 "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
             }
             (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
-                "prompt: blocked by startup diagnostics  |  Ctrl+d inspect".to_string()
+                "prompt: blocked while startup checks need attention  |  Ctrl+d inspect".to_string()
             }
             (ConversationInputState::DraftReady, _) => {
                 "prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()

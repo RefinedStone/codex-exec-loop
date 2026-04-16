@@ -45,9 +45,9 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Diagnostics,
         primary_name: ":diag",
         aliases: &[":diag", ":diagnostics"],
-        suggestion_detail: "diagnostics",
-        buffered_hint: "Press Enter to open the diagnostics inspection.",
-        execution_status: Some("opened diagnostics inspection"),
+        suggestion_detail: "startup checks",
+        buffered_hint: "Press Enter to open the startup checks.",
+        execution_status: Some("opened startup checks"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn execution_status_stays_alias_neutral() {
         let cases = [
-            (":diag", Some("opened diagnostics inspection")),
+            (":diag", Some("opened startup checks")),
             (":sessions", Some("opened recent sessions inspection")),
             (":queue", Some("opened planning queue inspection")),
             (":stop", None),

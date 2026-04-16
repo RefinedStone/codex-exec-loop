@@ -411,7 +411,7 @@ fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Diagnostics / inline inspection"),
+        Line::from("Startup Checks / inline inspection"),
         body_lines,
         true,
     );
@@ -759,7 +759,7 @@ fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .split(popup_area);
 
     let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Diagnostics"));
+        .block(Block::default().borders(Borders::ALL).title("Startup Checks"));
     frame.render_widget(header, layout[0]);
 
     frame.render_widget(

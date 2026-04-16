@@ -16,7 +16,7 @@ pub(super) fn build_debug_preview_lines(block: &str, max_lines: usize) -> Vec<St
             .map(|line| (*line).to_string()),
     );
     lines.push(format!(
-        "... {omitted_line_count} middle lines omitted in debug preview; worker received full text"
+        "... {omitted_line_count} middle lines omitted from planner debug preview; planner still received the full text"
     ));
     lines.extend(
         block_lines
@@ -47,7 +47,7 @@ mod tests {
                 "line 1".to_string(),
                 "line 2".to_string(),
                 "line 3".to_string(),
-                "... 33 middle lines omitted in debug preview; worker received full text"
+                "... 33 middle lines omitted from planner debug preview; planner still received the full text"
                     .to_string(),
                 "line 37".to_string(),
                 "line 38".to_string(),

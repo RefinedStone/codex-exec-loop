@@ -16,9 +16,10 @@ use super::super::{
     current_live_agent_lines, current_plan_mode_indicator,
 };
 use super::super::{
-    Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, StartupState, Style,
+    Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, Style,
     build_session_key_lines, build_session_overlay_content, build_session_warning_lines,
-    build_startup_check_lines, build_startup_warning_lines, startup_ascii_art_lines,
+    build_startup_check_lines, build_startup_operator_lines_from_state,
+    build_startup_warning_lines, startup_ascii_art_lines,
 };
 use super::{SessionOverlayView, StartupOverlayView};
 
@@ -88,7 +89,7 @@ pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
         header_lines: vec![
             Line::from(vec![
                 Span::styled(
-                    "Startup Diagnostics",
+                    "Startup Checks",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -97,44 +98,7 @@ pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
             ]),
             Line::from("Inspect readiness without leaving the live shell."),
         ],
-        summary_lines: match &app.startup_state {
-            StartupState::Idle => vec![
-                Line::from("status: idle"),
-                Line::from("startup checks have not started yet"),
-            ],
-            StartupState::Loading => vec![
-                Line::from(vec![
-                    Span::styled("status: ", Style::default().fg(Color::Gray)),
-                    Span::styled("running checks", Style::default().fg(Color::Yellow)),
-                ]),
-                Line::from("probing codex binary, app-server handshake, account state, and cwd"),
-            ],
-            StartupState::Ready(diagnostics) => vec![
-                Line::from(vec![
-                    Span::styled("status: ", Style::default().fg(Color::Gray)),
-                    Span::styled(
-                        if diagnostics.can_continue() {
-                            "ready"
-                        } else {
-                            "needs attention"
-                        },
-                        Style::default().fg(if diagnostics.can_continue() {
-                            Color::Green
-                        } else {
-                            Color::Yellow
-                        }),
-                    ),
-                ]),
-                Line::from(format!("cwd: {}", diagnostics.cwd)),
-            ],
-            StartupState::Failed(message) => vec![
-                Line::from(vec![
-                    Span::styled("status: ", Style::default().fg(Color::Gray)),
-                    Span::styled("failed", Style::default().fg(Color::Red)),
-                ]),
-                Line::from(message.clone()),
-            ],
-        },
+        summary_lines: build_startup_operator_lines_from_state(&app.startup_state, 56),
         check_lines: build_startup_check_lines(app),
         warning_lines: build_startup_warning_lines(app),
         key_lines: vec![

@@ -71,10 +71,10 @@ pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
         return Vec::new();
     }
 
-    let mut first_line = format!("planner status: {}", planner.status.label());
+    let mut first_line = format!("planner state: {}", planner.status.label());
     if let Some(queue_summary) = planner.last_queue_summary.as_deref() {
         first_line.push_str(&format!(
-            "  |  planner queue: {}",
+            "  |  queued work: {}",
             compact_whitespace_detail(queue_summary, max_detail_len)
         ));
     }
@@ -82,7 +82,7 @@ pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
     let mut lines = vec![first_line];
     if let Some(summary) = planner.last_summary.as_deref() {
         lines.push(format!(
-            "planner detail: {}",
+            "planner update: {}",
             compact_whitespace_detail(summary, max_detail_len)
         ));
     }
@@ -94,13 +94,13 @@ pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usiz
     }
     if let Some(host_detail) = planner.last_host_detail.as_deref() {
         lines.push(format!(
-            "planner host detail: {}",
+            "operator action: {}",
             compact_whitespace_detail(host_detail, max_detail_len)
         ));
     }
     if let Some(rejected_summary) = planner.last_rejected_summary.as_deref() {
         lines.push(format!(
-            "planner rejected: {}",
+            "planner rejection: {}",
             compact_whitespace_detail(rejected_summary, max_detail_len)
         ));
     }
@@ -177,18 +177,18 @@ fn append_planner_debug_preview_lines(lines: &mut Vec<Line<'static>>, app: &Nati
     }
 
     lines.push(Line::from(""));
-    lines.push(planner_debug_header_line("Planner Session Debug"));
+    lines.push(planner_debug_header_line("Planner Debug Context"));
     lines.push(Line::from(format!(
-        "last planner session: {} / {}",
+        "planner session: {}  |  state: {}",
         planner.last_operation_label.as_deref().unwrap_or("unknown"),
         planner.status.label()
     )));
 
-    lines.push(planner_debug_section_header_line("Prompt"));
+    lines.push(planner_debug_section_header_line("Submitted Prompt"));
     append_multiline_debug_block(lines, planner.last_prompt.as_deref());
 
     lines.push(Line::from(""));
-    lines.push(planner_debug_section_header_line("Response"));
+    lines.push(planner_debug_section_header_line("Planner Reply"));
     append_multiline_debug_block(lines, planner.last_response.as_deref());
 }
 

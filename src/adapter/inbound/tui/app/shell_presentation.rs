@@ -368,13 +368,13 @@ pub(super) fn build_ready_input_lines(
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
                 lines.push(Line::from("Startup checks are still running."));
                 lines.push(Line::from(
-                    "Type now if you want, then send once diagnostics turn ready.",
+                    "Type now if you want, then send once startup checks finish.",
                 ));
             }
             (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
-                lines.push(Line::from("Startup diagnostics need attention."));
+                lines.push(Line::from("Startup checks need attention."));
                 lines.push(Line::from(
-                    "Open Ctrl+d, resolve the warning, then send the prompt.",
+                    "Open Ctrl+d, resolve the blocking check, then send the prompt.",
                 ));
             }
             (ConversationInputState::DraftReady, _) => {
@@ -448,7 +448,7 @@ pub(super) fn build_ready_input_lines(
         }
         (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
             lines.push(Line::from(
-                "Prompt buffered. Ctrl+j inserts a new line. Press Enter after startup diagnostics turn ready.",
+                "Prompt buffered. Ctrl+j inserts a new line. Press Enter after startup checks finish.",
             ));
         }
         (ConversationInputState::SubmittingTurn, _)
@@ -769,7 +769,7 @@ fn recent_session_status_label(app: &NativeTuiApp) -> String {
         return match &app.startup_state {
             StartupState::Loading => "waiting for startup checks".to_string(),
             StartupState::Ready(_) | StartupState::Failed(_) => {
-                "blocked by startup diagnostics".to_string()
+                "blocked while startup checks need attention".to_string()
             }
             StartupState::Idle => "not requested yet".to_string(),
         };
@@ -789,30 +789,31 @@ fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 
 fn build_startup_check_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
     match startup_state {
-        StartupState::Idle => vec![Line::from("startup check has not started")],
+        StartupState::Idle => vec![Line::from("startup checks have not started yet")],
         StartupState::Loading => vec![
-            Line::from("checking codex binary"),
-            Line::from("opening codex app-server"),
-            Line::from("reading account state"),
+            Line::from("checking codex CLI"),
+            Line::from("checking workspace access"),
+            Line::from("checking app-server readiness"),
+            Line::from("checking account access"),
         ],
         StartupState::Ready(diagnostics) => vec![
             diagnostic_item(
-                "codex binary",
+                "codex CLI",
                 diagnostics.codex_binary_ok,
                 &diagnostics.codex_binary_detail,
             ),
             diagnostic_item(
-                "workspace",
+                "workspace access",
                 diagnostics.workspace_ok,
                 &diagnostics.workspace_detail,
             ),
             diagnostic_item(
-                "app-server initialize",
+                "app-server readiness",
                 diagnostics.initialize_ok,
                 &diagnostics.initialize_detail,
             ),
             diagnostic_item(
-                "account/read",
+                "account access",
                 diagnostics.account_ok,
                 &diagnostics.account_detail,
             ),
@@ -848,7 +849,7 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
                 message_lines: Some(vec![Line::from(if app.can_open_session_list() {
                     "session list has not loaded yet"
                 } else {
-                    "recent sessions unlock after startup diagnostics pass"
+                    "recent sessions unlock after startup checks succeed"
                 })]),
                 items: Vec::new(),
                 selected_index: None,
@@ -856,7 +857,7 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
             vec![Line::from(if app.can_open_session_list() {
                 "session details are not available yet"
             } else {
-                "startup diagnostics must pass before recent-session detail is available"
+                "startup checks must succeed before recent-session detail is available"
             })],
         ),
         SessionState::Loading => (
@@ -1062,7 +1063,7 @@ fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     vec![
         Line::from("/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
         Line::from("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
-        Line::from("n: draft    r: reload    Ctrl+d: diagnostics"),
+        Line::from("n: draft    r: reload    Ctrl+d: startup checks"),
     ]
 }
 
@@ -1245,7 +1246,7 @@ fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         SessionState::Failed(message) => vec![Line::from(message.clone())],
         SessionState::Loading => vec![Line::from("waiting for app-server response")],
         SessionState::Idle if !app.can_open_session_list() => vec![Line::from(
-            "recent sessions remain unavailable until startup diagnostics succeed",
+            "recent sessions remain unavailable until startup checks succeed",
         )],
         _ => vec![Line::from("no warnings")],
     }
@@ -1279,8 +1280,99 @@ fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
 }
 
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> Line<'static> {
-    let marker = if ok { "[ok]" } else { "[warn]" };
+    let marker = if ok { "[ready]" } else { "[attention]" };
     Line::from(format!("{marker} {title}: {detail}"))
+}
+
+fn startup_check_component_label(ok: bool) -> &'static str {
+    if ok { "ready" } else { "needs attention" }
+}
+
+fn startup_blocked_check_labels(
+    diagnostics: &crate::domain::startup_diagnostics::StartupDiagnostics,
+) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if !diagnostics.codex_binary_ok {
+        labels.push("codex CLI");
+    }
+    if !diagnostics.workspace_ok {
+        labels.push("workspace access");
+    }
+    if !diagnostics.initialize_ok {
+        labels.push("app-server readiness");
+    }
+    if !diagnostics.account_ok {
+        labels.push("account access");
+    }
+    labels
+}
+
+pub(super) fn build_startup_check_summary_line(
+    diagnostics: &crate::domain::startup_diagnostics::StartupDiagnostics,
+) -> String {
+    format!(
+        "startup checks: codex {}  |  workspace {}  |  app-server {}  |  account {}",
+        startup_check_component_label(diagnostics.codex_binary_ok),
+        startup_check_component_label(diagnostics.workspace_ok),
+        startup_check_component_label(diagnostics.initialize_ok),
+        startup_check_component_label(diagnostics.account_ok),
+    )
+}
+
+pub(super) fn build_startup_operator_lines_from_state(
+    startup_state: &StartupState,
+    max_detail_len: usize,
+) -> Vec<Line<'static>> {
+    match startup_state {
+        StartupState::Idle => vec![
+            Line::from("current state: waiting"),
+            Line::from("cause: startup checks have not started yet"),
+            Line::from("next action: wait for startup checks to start, or rerun them with r"),
+        ],
+        StartupState::Loading => vec![
+            Line::from("current state: checking"),
+            Line::from(
+                "cause: the shell is verifying codex, workspace, app-server, and account access",
+            ),
+            Line::from("next action: wait for startup checks to finish"),
+        ],
+        StartupState::Ready(diagnostics) if diagnostics.can_continue() => {
+            let cause_line = if diagnostics.warnings.is_empty() {
+                "cause: codex, workspace, app-server, and account access are ready".to_string()
+            } else {
+                "cause: startup checks passed, but warnings still need review".to_string()
+            };
+            let next_action_line = if diagnostics.warnings.is_empty() {
+                "next action: continue in the shell or open another inspection surface".to_string()
+            } else {
+                "next action: review the warnings, or continue if they do not block your work"
+                    .to_string()
+            };
+            vec![
+                Line::from("current state: ready"),
+                Line::from(cause_line),
+                Line::from(next_action_line),
+            ]
+        }
+        StartupState::Ready(diagnostics) => {
+            let blocked_checks = startup_blocked_check_labels(diagnostics).join(", ");
+            vec![
+                Line::from("current state: blocked"),
+                Line::from(format!(
+                    "cause: startup checks need attention for {blocked_checks}"
+                )),
+                Line::from("next action: inspect the failed checks, fix them, then rerun with r"),
+            ]
+        }
+        StartupState::Failed(message) => vec![
+            Line::from("current state: failed"),
+            Line::from(format!(
+                "cause: {}",
+                compact_inline_detail(message, max_detail_len)
+            )),
+            Line::from("next action: rerun startup checks with r"),
+        ],
+    }
 }
 
 fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {

@@ -124,13 +124,13 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 app.planner_worker_panel_state.last_queue_summary.as_deref()
             {
                 note_lines.push(Line::from(format!(
-                    "planner queue: {}",
+                    "queued work: {}",
                     compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
             if let Some(detail) = app.planner_worker_panel_state.last_host_detail.as_deref() {
                 note_lines.push(Line::from(format!(
-                    "planner host detail: {}",
+                    "operator action: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
@@ -140,7 +140,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 note_lines.push(detail);
             }
             if note_lines.is_empty() {
-                note_lines.push(Line::from("No planner notices or skipped queue items."));
+                note_lines.push(Line::from("No planner updates or skipped queue items."));
             } else {
                 note_lines.truncate(2);
             }

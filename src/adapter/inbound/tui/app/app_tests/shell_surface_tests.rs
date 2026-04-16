@@ -9,13 +9,13 @@ use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FI
 
 use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
-    ConversationState, KeyCode, KeyEvent, KeyModifiers, PlanningExecutionSnapshot,
-    PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay, StartupState,
-    TASK_LEDGER_FILE_PATH, build_automation_overlay_view, build_automation_preview_lines,
-    build_automation_status_lines, build_inline_tail_lines, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_ready_input_lines, create_temp_workspace, make_test_app,
-    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
-    sample_startup_diagnostics,
+    ConversationState, KeyCode, KeyEvent, KeyModifiers, PlannerWorkerStatus,
+    PlanningExecutionSnapshot, PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay,
+    StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
+    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
+    build_startup_overlay_view, create_temp_workspace, make_test_app, ready_conversation,
+    ready_turn_planning_capture, sample_planning_runtime_snapshot, sample_startup_diagnostics,
 };
 
 #[test]
@@ -320,6 +320,75 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
     );
     assert!(rendered.contains("warning: planner queue changed shape"));
     assert!(rendered.contains("planning reconciliation completed"));
+}
+
+#[test]
+fn planner_debug_surfaces_use_operator_facing_labels() {
+    let (mut app, _) = make_test_app();
+    app.toggle_planner_visibility();
+    app.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshSucceeded;
+    app.planner_worker_panel_state.last_operation_label = Some("refresh".to_string());
+    app.planner_worker_panel_state.last_queue_summary = Some("next task: task-1".to_string());
+    app.planner_worker_panel_state.last_summary =
+        Some("worker promoted the next queued task".to_string());
+    app.planner_worker_panel_state.last_host_detail =
+        Some("host accepted the refreshed queue".to_string());
+    app.planner_worker_panel_state.last_prompt = Some("planner prompt".to_string());
+    app.planner_worker_panel_state.last_response = Some("planner response".to_string());
+
+    let preview = build_automation_preview_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = build_automation_status_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(preview.contains("Planner Debug Context"));
+    assert!(preview.contains("planner session: refresh  |  state: refresh ok"));
+    assert!(preview.contains("Submitted Prompt"));
+    assert!(preview.contains("Planner Reply"));
+    assert!(status.contains("planner state: refresh ok  |  queued work: next task: task-1"));
+    assert!(status.contains("planner update: worker promoted the next queued task"));
+    assert!(status.contains("operator action: host accepted the refreshed queue"));
+}
+
+#[test]
+fn startup_checks_overlay_uses_current_state_cause_and_next_action() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+    let view = build_startup_overlay_view(&app);
+    let header = view
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = view
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let checks = view
+        .check_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(header.contains("Startup Checks"));
+    assert!(summary.contains("current state: ready"));
+    assert!(summary.contains("cause: codex, workspace, app-server, and account access are ready"));
+    assert!(
+        summary.contains("next action: continue in the shell or open another inspection surface")
+    );
+    assert!(checks.contains("[ready] codex CLI: ok"));
+    assert!(checks.contains("[ready] app-server readiness: ok"));
 }
 
 #[test]

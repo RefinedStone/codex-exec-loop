@@ -549,11 +549,7 @@ mod tests {
         };
         assert_eq!(runtime.app().shell_overlay, ShellOverlay::Startup);
         assert!(conversation.input_buffer.is_empty());
-        assert!(
-            conversation
-                .status_text
-                .contains("opened diagnostics inspection")
-        );
+        assert!(conversation.status_text.contains("opened startup checks"));
     }
 
     #[test]

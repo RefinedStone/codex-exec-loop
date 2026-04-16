@@ -130,7 +130,10 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("current state: ready"));
+    assert!(rendered.contains("startup checks: codex ready"));
+    assert!(rendered.contains("workspace ready"));
+    assert!(rendered.contains("app-server ready"));
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("prompt: new thread ready"));
@@ -226,7 +229,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 7));
+        .assert_cursor_position(Position::new(2, 11));
 }
 
 #[test]
@@ -269,8 +272,11 @@ fn inline_startup_inspection_replaces_transcript_panel() {
 
     let rendered = format!("{}", terminal.backend());
 
-    assert!(rendered.contains("Diagnostics / inline inspection"));
+    assert!(rendered.contains("Startup Checks / inline inspection"));
     assert!(rendered.contains("Checks"));
+    assert!(rendered.contains("current state: ready"));
+    assert!(rendered.contains("cause: codex, workspace, app-server"));
+    assert!(rendered.contains("next action: continue in the shell"));
     assert!(rendered.contains("schema snapshot: snapshot.json"));
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
