@@ -1,15 +1,9 @@
 use super::{AutoFollowState, ConversationViewModel, StopKeywordRule};
-use crate::application::service::followup_template_service::FollowupTemplateReloadResult;
-use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 
 #[derive(Debug, Clone)]
 pub(super) enum FollowupControlEvent {
     DraftWorkspaceSynced {
         workspace_directory: String,
-        template_load_result: FollowupTemplateCatalogLoadResult,
-    },
-    TemplateCatalogReloaded {
-        reload_result: FollowupTemplateReloadResult,
     },
     AutoFollowToggled,
     AutoFollowStopped,
@@ -21,13 +15,11 @@ pub(super) enum FollowupControlEvent {
         value: String,
     },
     NoFileChangeStopToggled,
-    TemplateCycledForward,
-    TemplateCycledBackward,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FollowupControlEffect {
-    TemplateOverlayUi,
+    OverlayUi,
     MaxAutoTurnsEditor { value: String },
     StopKeywordEditor { value: String },
 }
@@ -45,41 +37,9 @@ pub(super) fn reduce_followup_controls(
     let mut effects = Vec::new();
 
     match event {
-        FollowupControlEvent::DraftWorkspaceSynced {
-            workspace_directory,
-            template_load_result,
-        } => {
-            if state.sync_draft_workspace(workspace_directory, template_load_result) {
-                effects.push(FollowupControlEffect::TemplateOverlayUi);
-            }
-        }
-        FollowupControlEvent::TemplateCatalogReloaded { reload_result } => {
-            let template_count = reload_result.load_result.catalog.items.len();
-            let catalog_changed = state.auto_follow_state.template_state.items
-                != reload_result.load_result.catalog.items;
-            let warnings_changed = state.template_warnings != reload_result.load_result.warnings;
-
-            if reload_result.workspace_load_failed {
-                state.replace_template_warnings(reload_result.load_result.warnings);
-                state.set_status_with_warnings(
-                    "failed to reload workspace follow-up templates / keeping current catalog"
-                        .to_string(),
-                );
-                return FollowupControlReduction { state, effects };
-            }
-
-            if !catalog_changed && !warnings_changed {
-                let base_status = format!(
-                    "follow-up templates already up to date / selected: {} / templates: {template_count}",
-                    state.auto_follow_state.template_label()
-                );
-                state.set_status_with_warnings(base_status);
-                return FollowupControlReduction { state, effects };
-            }
-
-            state.reload_followup_templates(reload_result.load_result);
-            if catalog_changed {
-                effects.push(FollowupControlEffect::TemplateOverlayUi);
+        FollowupControlEvent::DraftWorkspaceSynced { workspace_directory } => {
+            if state.sync_draft_workspace(workspace_directory) {
+                effects.push(FollowupControlEffect::OverlayUi);
             }
         }
         FollowupControlEvent::AutoFollowToggled => {
@@ -147,24 +107,6 @@ pub(super) fn reduce_followup_controls(
                 state.auto_follow_state.no_file_change_stop_label()
             );
         }
-        FollowupControlEvent::TemplateCycledForward => {
-            state.auto_follow_state.cycle_template_kind();
-            state.clear_auto_followup_skip();
-            state.status_text = format!(
-                "auto follow-up template: {}",
-                state.auto_follow_state.template_label()
-            );
-            effects.push(FollowupControlEffect::TemplateOverlayUi);
-        }
-        FollowupControlEvent::TemplateCycledBackward => {
-            state.auto_follow_state.cycle_template_kind_backward();
-            state.clear_auto_followup_skip();
-            state.status_text = format!(
-                "auto follow-up template: {}",
-                state.auto_follow_state.template_label()
-            );
-            effects.push(FollowupControlEffect::TemplateOverlayUi);
-        }
     }
 
     FollowupControlReduction { state, effects }
@@ -177,335 +119,47 @@ mod tests {
         AutoFollowupSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
         INFINITE_AUTO_FOLLOW_MAX_TURNS,
     };
-    use crate::domain::followup_template::{
-        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
-    };
 
     #[test]
     fn draft_workspace_sync_updates_blank_draft_and_emits_ui_sync() {
-        let draft = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
+        let draft = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_followup_controls(
             draft,
             FollowupControlEvent::DraftWorkspaceSynced {
                 workspace_directory: "/tmp/alt".to_string(),
-                template_load_result: sample_template_load_result("workspace review", "review"),
             },
         );
 
         assert_eq!(reduced.state.cwd, "/tmp/alt");
-        assert_eq!(
-            reduced.state.auto_follow_state.template_label(),
-            "workspace review"
-        );
         assert!(reduced.state.status_text.contains("draft workspace synced"));
-        assert_eq!(
-            reduced.effects,
-            vec![FollowupControlEffect::TemplateOverlayUi]
-        );
+        assert_eq!(reduced.effects, vec![FollowupControlEffect::OverlayUi]);
     }
 
     #[test]
-    fn draft_workspace_sync_clears_skip_and_surfaces_warnings_in_status() {
-        let mut draft = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
+    fn draft_workspace_sync_clears_skip_state() {
+        let mut draft = ConversationViewModel::new_draft("/tmp/root".to_string());
         draft.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
 
         let reduced = reduce_followup_controls(
             draft,
             FollowupControlEvent::DraftWorkspaceSynced {
                 workspace_directory: "/tmp/alt".to_string(),
-                template_load_result: FollowupTemplateCatalogLoadResult {
-                    catalog: FollowupTemplateCatalog {
-                        items: vec![FollowupTemplateDefinition {
-                            id: "workspace review".to_string(),
-                            label: "workspace review".to_string(),
-                            body: "review".to_string(),
-                            source: FollowupTemplateSource::WorkspaceFile {
-                                path: "/tmp/root/.codex-exec-loop/followups/review.md".to_string(),
-                            },
-                        }],
-                    },
-                    warnings: vec!["workspace template parse warning".to_string()],
-                },
             },
         );
 
         assert!(reduced.state.last_auto_followup_activity.is_none());
-        assert!(reduced.state.status_text.contains("template warning"));
-    }
-
-    #[test]
-    fn workspace_sync_ignores_active_thread() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-        state.thread_id = "thread-1".to_string();
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::DraftWorkspaceSynced {
-                workspace_directory: "/tmp/alt".to_string(),
-                template_load_result: sample_template_load_result("workspace review", "review"),
-            },
-        );
-
-        assert_eq!(reduced.state.cwd, "/tmp/root");
-        assert_eq!(
-            reduced.state.auto_follow_state.template_label(),
-            "builtin next-task"
-        );
-        assert!(reduced.effects.is_empty());
-    }
-
-    #[test]
-    fn template_reload_preserves_existing_followup_settings() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result_pair(),
-        );
-        state.thread_id = "thread-1".to_string();
-        state.auto_follow_state.enabled = false;
-        state.auto_follow_state.set_max_auto_turns(7);
-        state
-            .auto_follow_state
-            .set_stop_keyword_value("DONE".to_string());
-        state.auto_follow_state.stop_rules.stop_on_no_file_changes = true;
-        state.auto_follow_state.template_state.selected_index = 1;
-        state.record_auto_followup_skip(AutoFollowupSkipReason::LimitReached);
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::TemplateCatalogReloaded {
-                reload_result: FollowupTemplateReloadResult {
-                    load_result: FollowupTemplateCatalogLoadResult {
-                        catalog: FollowupTemplateCatalog {
-                            items: vec![
-                                FollowupTemplateDefinition {
-                                    id: "builtin-next-task".to_string(),
-                                    label: "builtin next-task".to_string(),
-                                    body: "follow up".to_string(),
-                                    source: FollowupTemplateSource::Builtin,
-                                },
-                                FollowupTemplateDefinition {
-                                    id: "workspace-review".to_string(),
-                                    label: "workspace review".to_string(),
-                                    body: "review reloaded".to_string(),
-                                    source: FollowupTemplateSource::WorkspaceFile {
-                                        path: "/tmp/root/.codex-exec-loop/followups/review.md"
-                                            .to_string(),
-                                    },
-                                },
-                            ],
-                        },
-                        warnings: Vec::new(),
-                    },
-                    workspace_load_failed: false,
-                },
-            },
-        );
-
-        assert!(!reduced.state.auto_follow_state.enabled);
-        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 7);
-        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE");
-        assert_eq!(
-            reduced.state.auto_follow_state.no_file_change_stop_label(),
-            "on"
-        );
-        assert_eq!(
-            reduced.state.auto_follow_state.template_label(),
-            "workspace review"
-        );
-        assert!(reduced.state.last_auto_followup_activity.is_none());
-        assert_eq!(
-            reduced.effects,
-            vec![FollowupControlEffect::TemplateOverlayUi]
-        );
-    }
-
-    #[test]
-    fn template_reload_updates_warning_summary() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-        state.thread_id = "thread-1".to_string();
-        state.base_warnings = vec!["snapshot warning".to_string()];
-        state.replace_template_warnings(Vec::new());
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::TemplateCatalogReloaded {
-                reload_result: FollowupTemplateReloadResult {
-                    load_result: FollowupTemplateCatalogLoadResult {
-                        catalog: FollowupTemplateCatalog {
-                            items: vec![FollowupTemplateDefinition {
-                                id: "builtin-next-task".to_string(),
-                                label: "builtin next-task".to_string(),
-                                body: "follow up".to_string(),
-                                source: FollowupTemplateSource::Builtin,
-                            }],
-                        },
-                        warnings: vec!["template warning".to_string()],
-                    },
-                    workspace_load_failed: false,
-                },
-            },
-        );
-
-        assert_eq!(
-            reduced.state.warnings,
-            vec![
-                "snapshot warning".to_string(),
-                "template warning".to_string()
-            ]
-        );
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("warnings: runtime 1, template 1")
-        );
-    }
-
-    #[test]
-    fn template_reload_noop_reports_up_to_date_without_overlay_sync() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result_pair(),
-        );
-        state.thread_id = "thread-1".to_string();
-        state.auto_follow_state.template_state.selected_index = 1;
-        state.base_warnings = vec!["snapshot warning".to_string()];
-        state.replace_template_warnings(vec!["template warning".to_string()]);
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::TemplateCatalogReloaded {
-                reload_result: FollowupTemplateReloadResult {
-                    load_result: FollowupTemplateCatalogLoadResult {
-                        catalog: FollowupTemplateCatalog {
-                            items: vec![
-                                FollowupTemplateDefinition {
-                                    id: "builtin-next-task".to_string(),
-                                    label: "builtin next-task".to_string(),
-                                    body: "follow up".to_string(),
-                                    source: FollowupTemplateSource::Builtin,
-                                },
-                                FollowupTemplateDefinition {
-                                    id: "workspace-review".to_string(),
-                                    label: "workspace review".to_string(),
-                                    body: "review".to_string(),
-                                    source: FollowupTemplateSource::WorkspaceFile {
-                                        path: "/tmp/root/.codex-exec-loop/followups/review.md"
-                                            .to_string(),
-                                    },
-                                },
-                            ],
-                        },
-                        warnings: vec!["template warning".to_string()],
-                    },
-                    workspace_load_failed: false,
-                },
-            },
-        );
-
-        assert_eq!(
-            reduced.state.auto_follow_state.template_label(),
-            "workspace review"
-        );
-        assert_eq!(
-            reduced.state.warnings,
-            vec![
-                "snapshot warning".to_string(),
-                "template warning".to_string()
-            ]
-        );
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("follow-up templates already up to date")
-        );
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("warnings: runtime 1, template 1")
-        );
-        assert!(reduced.effects.is_empty());
-    }
-
-    #[test]
-    fn template_reload_failure_keeps_existing_catalog_without_overlay_sync() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result_pair(),
-        );
-        state.thread_id = "thread-1".to_string();
-        state.auto_follow_state.template_state.selected_index = 1;
-        state.base_warnings = vec!["snapshot warning".to_string()];
-        state.replace_template_warnings(Vec::new());
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::TemplateCatalogReloaded {
-                reload_result: FollowupTemplateReloadResult {
-                    load_result: FollowupTemplateCatalogLoadResult {
-                        catalog: FollowupTemplateCatalog {
-                            items: vec![FollowupTemplateDefinition {
-                                id: "builtin-next-task".to_string(),
-                                label: "builtin next-task".to_string(),
-                                body: "follow up".to_string(),
-                                source: FollowupTemplateSource::Builtin,
-                            }],
-                        },
-                        warnings: vec![
-                            "failed to load workspace follow-up templates: permission denied"
-                                .to_string(),
-                        ],
-                    },
-                    workspace_load_failed: true,
-                },
-            },
-        );
-
-        assert_eq!(
-            reduced.state.auto_follow_state.template_label(),
-            "workspace review"
-        );
-        assert_eq!(
-            reduced.state.warnings,
-            vec![
-                "snapshot warning".to_string(),
-                "failed to load workspace follow-up templates: permission denied".to_string()
-            ]
-        );
-        assert!(
-            reduced.state.status_text.contains(
-                "failed to reload workspace follow-up templates / keeping current catalog"
-            )
-        );
-        assert!(reduced.effects.is_empty());
     }
 
     #[test]
     fn toggling_auto_follow_clears_skip_and_updates_status() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-        state.record_auto_followup_skip(AutoFollowupSkipReason::Disabled);
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
 
         let reduced = reduce_followup_controls(state, FollowupControlEvent::AutoFollowToggled);
 
         assert!(!reduced.state.auto_follow_state.enabled);
+        assert_eq!(reduced.state.status_text, "automation off");
         assert_eq!(
             reduced
                 .state
@@ -514,16 +168,12 @@ mod tests {
                 .map(|activity| activity.summary.as_str()),
             Some("stopped: automation off")
         );
-        assert_eq!(reduced.state.status_text, "automation off");
     }
 
     #[test]
     fn updating_max_auto_turns_clears_skip_and_emits_editor_sync() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-        state.record_auto_followup_skip(AutoFollowupSkipReason::LimitReached);
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
 
         let reduced = reduce_followup_controls(
             state,
@@ -543,38 +193,30 @@ mod tests {
     }
 
     #[test]
-    fn invalid_max_auto_turns_keeps_existing_limit() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
+    fn updating_stop_keyword_value_clears_skip_and_emits_editor_sync() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
 
         let reduced = reduce_followup_controls(
             state,
-            FollowupControlEvent::MaxAutoTurnsUpdated {
-                value: "zero".to_string(),
+            FollowupControlEvent::StopKeywordValueUpdated {
+                value: "DONE_NOW".to_string(),
             },
         );
 
+        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE_NOW");
+        assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
-            reduced.state.auto_follow_state.max_auto_turns_value(),
-            DEFAULT_AUTO_FOLLOW_MAX_TURNS
-        );
-        assert!(reduced.effects.is_empty());
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("whole number greater than 0 or the word infinite")
+            reduced.effects,
+            vec![FollowupControlEffect::StopKeywordEditor {
+                value: "DONE_NOW".to_string()
+            }]
         );
     }
 
     #[test]
-    fn zero_max_auto_turns_keeps_existing_limit() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
+    fn invalid_max_auto_turns_keeps_existing_limit() {
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_followup_controls(
             state,
@@ -588,96 +230,16 @@ mod tests {
             DEFAULT_AUTO_FOLLOW_MAX_TURNS
         );
         assert!(reduced.effects.is_empty());
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("whole number greater than 0 or the word infinite")
-        );
-    }
-
-    #[test]
-    fn infinite_max_auto_turns_updates_state() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::MaxAutoTurnsUpdated {
-                value: "infinite".to_string(),
-            },
-        );
-
-        assert!(
-            reduced.state.auto_follow_state.max_auto_turns_value()
-                == INFINITE_AUTO_FOLLOW_MAX_TURNS
-        );
-        assert_eq!(
-            reduced.effects,
-            vec![FollowupControlEffect::MaxAutoTurnsEditor {
-                value: "infinite".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn cycling_template_resets_overlay_ui_and_wraps_backward() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result_pair(),
-        );
-        state.auto_follow_state.template_state.selected_index = 0;
-
-        let reduced = reduce_followup_controls(state, FollowupControlEvent::TemplateCycledBackward);
-
-        assert_eq!(
-            reduced.state.auto_follow_state.template_label(),
-            "workspace review"
-        );
-        assert_eq!(
-            reduced.effects,
-            vec![FollowupControlEffect::TemplateOverlayUi]
-        );
-    }
-
-    #[test]
-    fn updating_stop_keyword_value_clears_skip_and_emits_editor_sync() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-        state.record_auto_followup_skip(AutoFollowupSkipReason::StopKeywordMatched);
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::StopKeywordValueUpdated {
-                value: "DONE".to_string(),
-            },
-        );
-
-        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE");
-        assert!(reduced.state.last_auto_followup_activity.is_none());
-        assert_eq!(
-            reduced.effects,
-            vec![FollowupControlEffect::StopKeywordEditor {
-                value: "DONE".to_string()
-            }]
-        );
     }
 
     #[test]
     fn invalid_stop_keyword_value_keeps_existing_rule() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_followup_controls(
             state,
             FollowupControlEvent::StopKeywordValueUpdated {
-                value: "two words".to_string(),
+                value: "not-valid!".to_string(),
             },
         );
 
@@ -686,76 +248,5 @@ mod tests {
             DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
         );
         assert!(reduced.effects.is_empty());
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("letters, numbers, or underscores")
-        );
-    }
-
-    #[test]
-    fn punctuated_stop_keyword_value_keeps_existing_rule() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result("builtin next-task", "follow up"),
-        );
-
-        let reduced = reduce_followup_controls(
-            state,
-            FollowupControlEvent::StopKeywordValueUpdated {
-                value: "done!".to_string(),
-            },
-        );
-
-        assert_eq!(
-            reduced.state.auto_follow_state.stop_keyword_value(),
-            DEFAULT_AUTO_FOLLOW_STOP_KEYWORD
-        );
-        assert!(reduced.effects.is_empty());
-        assert!(
-            reduced
-                .state
-                .status_text
-                .contains("letters, numbers, or underscores")
-        );
-    }
-
-    fn sample_template_load_result(label: &str, body: &str) -> FollowupTemplateCatalogLoadResult {
-        FollowupTemplateCatalogLoadResult {
-            catalog: FollowupTemplateCatalog {
-                items: vec![FollowupTemplateDefinition {
-                    id: label.to_string(),
-                    label: label.to_string(),
-                    body: body.to_string(),
-                    source: FollowupTemplateSource::Builtin,
-                }],
-            },
-            warnings: Vec::new(),
-        }
-    }
-
-    fn sample_template_load_result_pair() -> FollowupTemplateCatalogLoadResult {
-        FollowupTemplateCatalogLoadResult {
-            catalog: FollowupTemplateCatalog {
-                items: vec![
-                    FollowupTemplateDefinition {
-                        id: "builtin-next-task".to_string(),
-                        label: "builtin next-task".to_string(),
-                        body: "follow up".to_string(),
-                        source: FollowupTemplateSource::Builtin,
-                    },
-                    FollowupTemplateDefinition {
-                        id: "workspace-review".to_string(),
-                        label: "workspace review".to_string(),
-                        body: "review".to_string(),
-                        source: FollowupTemplateSource::WorkspaceFile {
-                            path: "/tmp/root/.codex-exec-loop/followups/review.md".to_string(),
-                        },
-                    },
-                ],
-            },
-            warnings: Vec::new(),
-        }
     }
 }

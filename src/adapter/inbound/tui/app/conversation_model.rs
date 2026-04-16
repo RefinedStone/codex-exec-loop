@@ -1,8 +1,7 @@
 #[cfg(test)]
 pub(super) use super::shell_presentation::format_conversation_lines;
 pub(super) use super::{
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-    INFINITE_AUTO_FOLLOW_MAX_TURNS, INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD, MAX_AUTO_FOLLOW_MAX_TURNS,
 };
 #[cfg(test)]
 pub(super) use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};

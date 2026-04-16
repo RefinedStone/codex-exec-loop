@@ -23,7 +23,7 @@ pub use super::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 pub use super::planning_bootstrap_service::PlanningBootstrapMode;
 pub use super::planning_directions_service::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
-    DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
+    DirectionsSupportingFileStatus, QueueIdleReviewContext,
 };
 pub use super::planning_init_service::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
@@ -228,10 +228,6 @@ impl PlanningWorkspaceUseCases {
     ) -> anyhow::Result<PlanningDraftEditorSession> {
         self.directions_service
             .stage_queue_idle_prompt_editor_session(workspace_dir)
-    }
-
-    pub fn doctor_workspace(&self, workspace_dir: &str) -> anyhow::Result<PlanningDoctorOutcome> {
-        self.directions_service.doctor_workspace(workspace_dir)
     }
 }
 

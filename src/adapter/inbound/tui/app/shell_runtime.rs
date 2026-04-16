@@ -74,17 +74,10 @@ impl ShellRuntime {
                 }
                 BackgroundMessage::ConversationLoaded(result) => {
                     let draft_workspace_directory = self.app.current_workspace_directory();
-                    let template_load_result = match &result {
-                        Ok(snapshot) => {
-                            Some(self.app.load_followup_template_catalog(&snapshot.cwd))
-                        }
-                        Err(_) => None,
-                    };
                     self.app.reset_planner_worker_panel_state();
                     self.app.dispatch_conversation_lifecycle(
                         ConversationLifecycleEvent::ConversationLoaded {
                             result,
-                            template_load_result,
                             draft_workspace_directory,
                         },
                     );
@@ -93,7 +86,7 @@ impl ShellRuntime {
                     self.app
                         .dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                             stop_keyword: self.app.current_stop_keyword_value(),
-                            max_auto_turns: self.app.current_max_auto_turns_label(),
+                            max_auto_turns: self.app.current_max_auto_turns_value().to_string(),
                         });
                 }
                 BackgroundMessage::ConversationStream(event) => {
@@ -222,7 +215,7 @@ impl ShellRuntime {
                 self.app.start_stop_keyword_edit()
             }
             KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.cycle_auto_followup_template()
+                self.app.toggle_automation_overlay()
             }
             KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.toggle_stop_keyword()
@@ -235,9 +228,6 @@ impl ShellRuntime {
             }
             KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.toggle_session_overlay()
-            }
-            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.toggle_followup_template_overlay()
             }
             KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => self
                 .app
@@ -287,13 +277,9 @@ mod tests {
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
-    use crate::application::port::outbound::followup_template_port::{
-        FollowupTemplatePort, WorkspaceFollowupTemplateRecord,
-    };
     use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
-    use crate::application::service::followup_template_service::FollowupTemplateService;
     use crate::application::service::github_review_poller_service::GithubReviewPollerService;
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::session_service::SessionService;
@@ -356,17 +342,6 @@ mod tests {
         }
     }
 
-    struct FakeFollowupTemplatePort;
-
-    impl FollowupTemplatePort for FakeFollowupTemplatePort {
-        fn load_workspace_templates(
-            &self,
-            _workspace_dir: &str,
-        ) -> Result<Vec<WorkspaceFollowupTemplateRecord>> {
-            Ok(Vec::new())
-        }
-    }
-
     struct FakeGithubReviewPollerPort;
 
     impl GithubReviewPollerPort for FakeGithubReviewPollerPort {
@@ -387,12 +362,10 @@ mod tests {
 
     fn make_test_runtime() -> ShellRuntime {
         let codex_port = Arc::new(FakeCodexAppServerPort);
-        let followup_port = Arc::new(FakeFollowupTemplatePort);
         let app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
-            FollowupTemplateService::new(followup_port),
             PlanningServices::from_workspace_port(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),
@@ -508,7 +481,6 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["stale notice".to_string()],
-                    repeated_planning_queue_head_count: 0,
                     action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollowup {
                         reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::Disabled,
                     },
@@ -667,10 +639,7 @@ mod tests {
     fn ctrl_l_starts_max_auto_turns_editing() {
         let mut runtime = make_test_runtime();
         runtime.app_mut().conversation_state =
-            ConversationState::ready(ConversationViewModel::new_draft(
-                "/tmp/root".to_string(),
-                runtime.app().load_followup_template_catalog("/tmp/root"),
-            ));
+            ConversationState::ready(ConversationViewModel::new_draft("/tmp/root".to_string()));
 
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('l'),
@@ -678,7 +647,7 @@ mod tests {
         )));
 
         assert!(runtime.app().is_max_auto_turns_editing());
-        assert_eq!(runtime.app().shell_overlay, ShellOverlay::FollowupTemplates);
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Automation);
     }
 
     #[test]

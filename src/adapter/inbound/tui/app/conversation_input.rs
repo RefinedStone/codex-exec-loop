@@ -102,17 +102,10 @@ fn clear_startup_submit_after_input_change(state: &mut ConversationViewModel) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::followup_template::{
-        FollowupTemplateCatalog, FollowupTemplateCatalogLoadResult, FollowupTemplateDefinition,
-        FollowupTemplateSource,
-    };
 
     #[test]
     fn character_typed_appends_to_input_buffer() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_conversation_input(
             state,
@@ -124,10 +117,7 @@ mod tests {
 
     #[test]
     fn backspace_pressed_removes_last_character() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = "draft".to_string();
 
         let reduced = reduce_conversation_input(state, ConversationInputEvent::BackspacePressed);
@@ -137,10 +127,7 @@ mod tests {
 
     #[test]
     fn newline_inserted_adds_line_break() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = "draft".to_string();
 
         let reduced = reduce_conversation_input(state, ConversationInputEvent::NewlineInserted);
@@ -150,10 +137,7 @@ mod tests {
 
     #[test]
     fn previous_word_deleted_removes_last_word() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = "ship this next".to_string();
 
         let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
@@ -163,10 +147,7 @@ mod tests {
 
     #[test]
     fn previous_word_deleted_trims_trailing_space_before_removing_last_word() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = "ship this   ".to_string();
 
         let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
@@ -176,10 +157,7 @@ mod tests {
 
     #[test]
     fn previous_word_deleted_respects_newline_boundaries() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = "first line\nsecond".to_string();
 
         let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
@@ -189,10 +167,7 @@ mod tests {
 
     #[test]
     fn status_message_shown_replaces_status_text() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_conversation_input(
             state,
@@ -206,10 +181,7 @@ mod tests {
 
     #[test]
     fn startup_submit_armed_sets_queue_status() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_conversation_input(
             state,
@@ -227,10 +199,7 @@ mod tests {
 
     #[test]
     fn input_change_cancels_armed_startup_submit() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.arm_startup_submit();
 
         let reduced = reduce_conversation_input(
@@ -248,10 +217,7 @@ mod tests {
 
     #[test]
     fn colon_input_opens_inline_command_palette() {
-        let state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_conversation_input(
             state,
@@ -270,10 +236,7 @@ mod tests {
 
     #[test]
     fn command_palette_can_be_dismissed_without_clearing_input() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = ":p".to_string();
         state.sync_inline_shell_command_palette();
 
@@ -286,10 +249,7 @@ mod tests {
 
     #[test]
     fn command_palette_inserted_command_switches_to_argument_entry() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = ":t".to_string();
         state.sync_inline_shell_command_palette();
 
@@ -306,28 +266,11 @@ mod tests {
 
     #[test]
     fn input_cleared_empties_buffer() {
-        let mut state = ConversationViewModel::new_draft(
-            "/tmp/root".to_string(),
-            sample_template_load_result(),
-        );
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.input_buffer = ":diag".to_string();
 
         let reduced = reduce_conversation_input(state, ConversationInputEvent::InputCleared);
 
         assert!(reduced.state.input_buffer.is_empty());
-    }
-
-    fn sample_template_load_result() -> FollowupTemplateCatalogLoadResult {
-        FollowupTemplateCatalogLoadResult {
-            catalog: FollowupTemplateCatalog {
-                items: vec![FollowupTemplateDefinition {
-                    id: "builtin-next-task".to_string(),
-                    label: "builtin next-task".to_string(),
-                    body: "follow up".to_string(),
-                    source: FollowupTemplateSource::Builtin,
-                }],
-            },
-            warnings: Vec::new(),
-        }
     }
 }

@@ -1,6 +1,5 @@
 use super::super::{ConversationState, FollowupControlEvent, NativeTuiApp, StartupState};
 use crate::application::service::planning::PlanningRuntimeSnapshot;
-use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 
 impl NativeTuiApp {
     pub(crate) fn sync_draft_shell_workspace(&mut self, workspace_directory: &str) {
@@ -16,7 +15,6 @@ impl NativeTuiApp {
 
         self.dispatch_followup_controls(FollowupControlEvent::DraftWorkspaceSynced {
             workspace_directory: workspace_directory.to_string(),
-            template_load_result: self.load_followup_template_catalog(workspace_directory),
         });
         self.refresh_ready_conversation_planning_runtime_snapshot();
     }
@@ -37,14 +35,6 @@ impl NativeTuiApp {
             }
             _ => self.current_workspace_directory(),
         }
-    }
-
-    pub(crate) fn load_followup_template_catalog(
-        &self,
-        workspace_directory: &str,
-    ) -> FollowupTemplateCatalogLoadResult {
-        self.followup_template_service
-            .load_catalog(workspace_directory)
     }
 
     pub(crate) fn load_planning_runtime_snapshot(

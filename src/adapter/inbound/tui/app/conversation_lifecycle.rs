@@ -1,20 +1,17 @@
 use super::{ConversationState, ConversationViewModel};
 use crate::domain::conversation::ConversationSnapshot;
-use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone)]
 pub(super) enum ConversationLifecycleEvent {
     NewDraftOpened {
         workspace_directory: String,
-        template_load_result: FollowupTemplateCatalogLoadResult,
     },
     SessionChosen {
         session: SessionSummary,
     },
     ConversationLoaded {
         result: Result<ConversationSnapshot, String>,
-        template_load_result: Option<FollowupTemplateCatalogLoadResult>,
         draft_workspace_directory: String,
     },
 }
@@ -43,15 +40,10 @@ pub(super) fn reduce_conversation_lifecycle(
     let mut effects = Vec::new();
 
     match event {
-        ConversationLifecycleEvent::NewDraftOpened {
-            workspace_directory,
-            template_load_result,
-        } => {
+        ConversationLifecycleEvent::NewDraftOpened { workspace_directory } => {
             state.active_session = None;
-            state.conversation_state = ConversationState::ready(ConversationViewModel::new_draft(
-                workspace_directory,
-                template_load_result,
-            ));
+            state.conversation_state =
+                ConversationState::ready(ConversationViewModel::new_draft(workspace_directory));
         }
         ConversationLifecycleEvent::SessionChosen { session } => {
             let thread_id = session.id.clone();
@@ -61,22 +53,13 @@ pub(super) fn reduce_conversation_lifecycle(
         }
         ConversationLifecycleEvent::ConversationLoaded {
             result,
-            template_load_result,
             draft_workspace_directory,
         } => {
             state.conversation_state = match result {
-                Ok(snapshot) => match template_load_result {
-                    Some(template_load_result) => {
-                        ConversationState::ready(ConversationViewModel::from_snapshot(
-                            snapshot,
-                            template_load_result,
-                            draft_workspace_directory,
-                        ))
-                    }
-                    None => ConversationState::Failed(
-                        "loaded snapshot missing follow-up template data".to_string(),
-                    ),
-                },
+                Ok(snapshot) => ConversationState::ready(ConversationViewModel::from_snapshot(
+                    snapshot,
+                    draft_workspace_directory,
+                )),
                 Err(message) => ConversationState::Failed(message),
             };
         }
@@ -88,9 +71,6 @@ pub(super) fn reduce_conversation_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::followup_template::{
-        FollowupTemplateCatalog, FollowupTemplateDefinition, FollowupTemplateSource,
-    };
 
     #[test]
     fn choosing_session_marks_state_loading_and_emits_load_effect() {
@@ -131,7 +111,6 @@ mod tests {
             state,
             ConversationLifecycleEvent::NewDraftOpened {
                 workspace_directory: "/tmp/new-root".to_string(),
-                template_load_result: sample_template_load_result(),
             },
         );
 
@@ -146,23 +125,8 @@ mod tests {
         ConversationLifecycleState {
             conversation_state: ConversationState::ready(ConversationViewModel::new_draft(
                 "/tmp/root".to_string(),
-                sample_template_load_result(),
             )),
             active_session: None,
-        }
-    }
-
-    fn sample_template_load_result() -> FollowupTemplateCatalogLoadResult {
-        FollowupTemplateCatalogLoadResult {
-            catalog: FollowupTemplateCatalog {
-                items: vec![FollowupTemplateDefinition {
-                    id: "builtin-next-task".to_string(),
-                    label: "builtin next-task".to_string(),
-                    body: "follow up".to_string(),
-                    source: FollowupTemplateSource::Builtin,
-                }],
-            },
-            warnings: Vec::new(),
         }
     }
 

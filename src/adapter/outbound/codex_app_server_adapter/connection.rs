@@ -661,11 +661,11 @@ mod tests {
     fn fatal_stderr_is_attached_to_errors_instead_of_warning_bucket() {
         let mut diagnostics = ConnectionDiagnostics::default();
         diagnostics.record_stderr("fatal: transport closed".to_string());
-        diagnostics.record_stderr("workspace template missing".to_string());
+        diagnostics.record_stderr("workspace prompt missing".to_string());
 
         assert_eq!(
             diagnostics.take_warnings(),
-            vec!["workspace template missing".to_string()]
+            vec!["workspace prompt missing".to_string()]
         );
         assert!(
             diagnostics

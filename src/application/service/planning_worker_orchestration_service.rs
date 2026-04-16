@@ -210,8 +210,7 @@ fn build_planning_queue_refresh_prompt(
 - 기존 task/proposal과 의미가 겹치면 새 항목을 남발하지 말고 기존 항목을 갱신하세요.
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
 - builtin next-task 자동 진행을 위해, `proposed`만 있고 바로 이어서 진행해야 할 후속 작업이 분명하면 최상위 proposal 1개를 `ready`로 승격하고 나머지 선택지는 `proposed`로 유지하세요.
-- 같은 task를 계속 진행해야 하면 `progress_note`에 이번 답변으로 완료된 내용, 다음 하위 단계, 남은 blocker를 짧게 적고 `updated_at`도 갱신하세요.
-- queue head를 유지하더라도 title, status, priority, progress_note, updated_at 중 하나도 바뀌지 않은 채 그대로 반복하지 마세요.
+- queue head를 유지하더라도 title, status, priority, updated_at 중 하나도 바뀌지 않은 채 그대로 반복하지 마세요.
 - 마지막에는 이번 refresh에서 queue에 반영한 핵심 변경을 짧게 요약하세요.
 {latest_user_request_section}
 {previous_handoff_section}
@@ -240,7 +239,6 @@ fn build_planning_queue_idle_derive_prompt(
 - 최신 답변에 다음 순서, 이어서 만들 항목, 보완해야 할 목차, numbered checklist가 보이면 그것을 근거로 새 follow-up task를 만들어야 합니다.
 - simple mode처럼 directions가 generic 하더라도, 최신 사용자 요청과 최신 답변이 분명한 다음 단계를 암시하면 queue를 비워 두지 마세요.
 - 이미 done / in_progress / blocked / proposed 로 같은 의미가 관리되고 있으면 중복 생성 대신 기존 항목을 갱신하세요.
-- 같은 task를 이어서 유지한다면 `progress_note`에 이번 답변으로 달라진 진행 상황과 다음 하위 단계를 남기고 `updated_at`도 갱신하세요.
 - 지금 바로 이어서 실행해야 할 항목만 `ready` 또는 `in_progress`로 두고, 나머지는 `proposed`로 남기세요.
 - 최우선 follow-up이 명확하면 1개를 `ready`로 두고, 나머지 가능 작업은 `proposed`로 분리하세요.
 - 정말 이어갈 작업이 없다면 queue를 비운 채 유지하고, 그 이유를 짧게 요약하세요.
@@ -267,14 +265,9 @@ fn latest_user_request_section(latest_user_message: Option<&str>) -> String {
 fn previous_handoff_section(previous_handoff_task: Option<&PlanningTaskHandoff>) -> String {
     previous_handoff_task.map_or_else(String::new, |task| {
         format!(
-            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- progress_note: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이면 `progress_note`와 `updated_at`를 갱신하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
             task.task_id,
             task.task_title,
-            if task.progress_note.trim().is_empty() {
-                "(empty)"
-            } else {
-                task.progress_note.trim()
-            },
             task.updated_at,
             task.status_label
         )
@@ -522,7 +515,6 @@ mod tests {
             task_id: "task-7".to_string(),
             task_title: "정리된 강의 목차를 실제 슬라이드 초안으로 확장".to_string(),
             direction_id: "example-direction".to_string(),
-            progress_note: "목차는 끝났고 슬라이드 1차 초안이 남아 있음".to_string(),
             combined_priority: 90,
             updated_at: "2026-04-14T00:00:00Z".to_string(),
             status_label: "ready".to_string(),
@@ -539,10 +531,8 @@ mod tests {
 
         assert!(prompt.contains("직전에 main session으로 넘긴 task:"));
         assert!(prompt.contains("- task_id: task-7"));
-        assert!(prompt.contains("- progress_note: 목차는 끝났고 슬라이드 1차 초안이 남아 있음"));
         assert!(prompt.contains("- updated_at: 2026-04-14T00:00:00Z"));
         assert!(prompt.contains("그대로 `ready` queue head로 다시 선택하지 마세요."));
-        assert!(prompt.contains("`progress_note`와 `updated_at`를 갱신하세요."));
     }
 
     #[test]

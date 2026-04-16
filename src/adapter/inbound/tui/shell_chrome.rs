@@ -8,7 +8,7 @@ pub enum ShellOverlay {
     Sessions,
     Queue,
     DirectionsMaintenance,
-    FollowupTemplates,
+    Automation,
     PlanningInit,
 }
 
@@ -85,13 +85,13 @@ pub enum ShellChromeEvent {
     },
     QueueOverlayShown,
     DirectionsMaintenanceOverlayShown,
-    FollowupTemplatesOverlayShown,
+    AutomationOverlayShown,
     PlanningInitOverlayShown,
     StartupOverlayToggled,
     SessionsOverlayToggled {
         limit: usize,
     },
-    FollowupTemplatesOverlayToggled,
+    AutomationOverlayToggled,
     OverlayClosed,
     ExitConfirmationShown,
     ExitConfirmationHidden,
@@ -173,9 +173,9 @@ pub fn reduce_shell_chrome(
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::DirectionsMaintenance;
         }
-        ShellChromeEvent::FollowupTemplatesOverlayShown => {
+        ShellChromeEvent::AutomationOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
-            state.shell_overlay = ShellOverlay::FollowupTemplates;
+            state.shell_overlay = ShellOverlay::Automation;
         }
         ShellChromeEvent::PlanningInitOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -198,12 +198,12 @@ pub fn reduce_shell_chrome(
                 queue_session_load_if_allowed(&mut state, limit, &mut effects);
             }
         }
-        ShellChromeEvent::FollowupTemplatesOverlayToggled => {
-            if state.shell_overlay == ShellOverlay::FollowupTemplates {
+        ShellChromeEvent::AutomationOverlayToggled => {
+            if state.shell_overlay == ShellOverlay::Automation {
                 state.shell_overlay = ShellOverlay::Hidden;
             } else {
                 state.exit_confirmation_state = ExitConfirmationState::Hidden;
-                state.shell_overlay = ShellOverlay::FollowupTemplates;
+                state.shell_overlay = ShellOverlay::Automation;
             }
         }
         ShellChromeEvent::OverlayClosed => {
@@ -404,17 +404,17 @@ mod tests {
     }
 
     #[test]
-    fn toggle_followup_templates_hides_exit_confirmation() {
+    fn toggle_automation_overlay_hides_exit_confirmation() {
         let mut state = ShellChromeState::new();
         state.exit_confirmation_state = ExitConfirmationState::Visible;
 
-        let reduced = reduce_shell_chrome(state, ShellChromeEvent::FollowupTemplatesOverlayToggled);
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::AutomationOverlayToggled);
 
         assert_eq!(
             reduced.state.exit_confirmation_state,
             ExitConfirmationState::Hidden
         );
-        assert_eq!(reduced.state.shell_overlay, ShellOverlay::FollowupTemplates);
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::Automation);
     }
 
     #[test]

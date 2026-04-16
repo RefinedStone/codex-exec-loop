@@ -3,7 +3,6 @@ use std::thread;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::followup_template_service::FollowupTemplateService;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -48,17 +47,14 @@ impl NativeTuiApp {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
-        followup_template_service: FollowupTemplateService,
         planning: PlanningServices,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let workspace_directory = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
-        let mut initial_conversation = ConversationViewModel::new_draft(
-            workspace_directory.clone(),
-            followup_template_service.load_catalog(&workspace_directory),
-        );
+        let mut initial_conversation =
+            ConversationViewModel::new_draft(workspace_directory.clone());
         initial_conversation.replace_planning_runtime_snapshot(
             planning
                 .runtime
@@ -81,7 +77,6 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
-            followup_template_service,
             planning,
             active_turn_planning_capture: None,
             planner_worker_panel_state: super::PlannerWorkerPanelState::default(),
@@ -276,16 +271,13 @@ impl NativeTuiApp {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
                 self.reset_planner_worker_panel_state();
                 let workspace_directory = self.current_workspace_directory();
-                let template_load_result =
-                    self.load_followup_template_catalog(&workspace_directory);
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
                     workspace_directory: workspace_directory.clone(),
-                    template_load_result,
                 });
                 self.refresh_ready_conversation_planning_runtime_snapshot();
                 self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                     stop_keyword: self.current_stop_keyword_value(),
-                    max_auto_turns: self.current_max_auto_turns_label(),
+                    max_auto_turns: self.current_max_auto_turns_value().to_string(),
                 });
             }
             ConversationIntentEffect::OpenSession { session } => {
@@ -310,7 +302,7 @@ impl NativeTuiApp {
         self.conversation_state = ConversationState::ready(reduction.state);
         if !self.is_max_auto_turns_editing() {
             self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsValueSynced {
-                value: self.current_max_auto_turns_label(),
+                value: self.current_max_auto_turns_value().to_string(),
             });
         }
         if !self.is_stop_keyword_editing() {
@@ -325,8 +317,11 @@ impl NativeTuiApp {
 
     fn execute_followup_control_effect(&mut self, effect: FollowupControlEffect) {
         match effect {
-            FollowupControlEffect::TemplateOverlayUi => {
-                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::TemplateChanged);
+            FollowupControlEffect::OverlayUi => {
+                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
+                    stop_keyword: self.current_stop_keyword_value(),
+                    max_auto_turns: self.current_max_auto_turns_label(),
+                });
             }
             FollowupControlEffect::MaxAutoTurnsEditor { value } => {
                 self.dispatch_followup_overlay_ui(

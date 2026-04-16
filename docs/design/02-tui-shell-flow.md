@@ -22,7 +22,7 @@ This file describes operator-visible shell behavior. It does not describe how to
 
 - `:diagnostics` toggles startup diagnostics.
 - `:sessions` toggles recent sessions.
-- `:templates` opens follow-up controls.
+- `:auto` opens automation controls.
 - `:queue` opens planning queue state.
 - `:planning` opens planning workspace controls.
 - `:planning on|off` toggles planning mode for the current workspace.
@@ -31,10 +31,10 @@ This file describes operator-visible shell behavior. It does not describe how to
 
 ## Follow-Up And Planning
 
-- Follow-up controls own template selection, stop rules, and planner debug visibility.
+- Automation controls own stop rules, preview rendering, and planner debug visibility.
 - Builtin `next-task` uses accepted planning state only.
 - `:planning` and `:directions` both route through the embedded draft editor.
-- Planning state is reflected in the footer, follow-up overlay, queue overlay, and post-turn automation.
+- Planning state is reflected in the footer, automation overlay, queue overlay, and post-turn automation.
 
 ## Code Entry
 

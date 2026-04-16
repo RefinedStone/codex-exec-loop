@@ -114,14 +114,14 @@ pub(super) fn build_shell_footer_lines_with_context(
                     plan_mode_indicator,
                 )),
                 Line::from(format!(
-                    "startup: {}  |  gh: {}  |  auto: {}  |  progress: {}  |  tmpl: {}",
+                    "startup: {}  |  gh: {}  |  auto: {}  |  progress: {}  |  mode: {}",
                     context.shell_action_availability.status_text(),
                     context.github_review_polling_status_label.as_str(),
                     auto_follow_status_summary(conversation, FOOTER_AUTO_FOLLOW_DETAIL_LIMIT),
                     conversation
                         .auto_follow_state
                         .compact_completed_progress_label(),
-                    inline_template_label(conversation),
+                    inline_mode_label(conversation),
                 )),
             ];
 
@@ -613,13 +613,11 @@ fn inline_thread_label(conversation: &ConversationViewModel) -> String {
 }
 
 #[cfg(test)]
-fn inline_template_label(conversation: &ConversationViewModel) -> String {
-    let label = conversation.auto_follow_state.template_label();
-    let compact_label = label
-        .strip_prefix("builtin ")
-        .or_else(|| label.strip_prefix("workspace "))
-        .unwrap_or(label);
-    compact_inline_detail(compact_label, INLINE_TAIL_TEMPLATE_LABEL_LIMIT)
+fn inline_mode_label(conversation: &ConversationViewModel) -> String {
+    compact_inline_detail(
+        conversation.auto_follow_state.mode_label(),
+        INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
+    )
 }
 
 fn compact_inline_summary_label(summary: &str) -> String {
@@ -627,8 +625,6 @@ fn compact_inline_summary_label(summary: &str) -> String {
         &summary
             .replace("runtime warning:", "rt warn:")
             .replace("runtime warnings", "rt warns")
-            .replace("template warning:", "tmpl warn:")
-            .replace("template warnings", "tmpl warns")
             .replace("warning:", "warn:")
             .replace("warnings:", "warn:")
             .replace("runtime notices", "notices")

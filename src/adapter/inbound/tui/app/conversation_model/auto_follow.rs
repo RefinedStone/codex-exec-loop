@@ -1,13 +1,14 @@
 use std::time::Instant;
 
 use crate::application::service::planning::PlanningRuntimeQueuedAutoFollowPrompt;
-use crate::domain::followup_template::{FollowupTemplateCatalog, FollowupTemplateDefinition};
 
 use super::turn_activity::TurnActivityState;
 use super::{
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
     INFINITE_AUTO_FOLLOW_MAX_TURNS, INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
 };
+
+const AUTO_FOLLOW_MODE_LABEL: &str = "planning queue";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AutoFollowupDecision {
@@ -66,7 +67,7 @@ impl AutoFollowupSkipReason {
                 "the planning queue is idle and queue_idle.policy is stop".to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "the selected auto follow-up template requires an actionable planning queue head"
+                "queue-driven auto follow-up requires an actionable planning queue head"
                     .to_string()
             }
             Self::PlanningRepeatedQueueHead => {
@@ -136,7 +137,6 @@ pub(crate) struct AutoFollowState {
     pub(crate) completed_auto_turns: usize,
     pub(crate) max_auto_turns: usize,
     pub(crate) runtime_phase: AutoFollowRuntimePhase,
-    pub(crate) template_state: AutoFollowTemplateState,
     pub(crate) stop_rules: AutoFollowStopRules,
 }
 
@@ -149,12 +149,10 @@ pub(crate) enum AutoFollowRuntimePhase {
     Queued {
         started_at: Instant,
         turn_index: usize,
-        template_label: String,
     },
     Submitting {
         started_at: Instant,
         turn_index: usize,
-        template_label: String,
     },
     Running {
         started_at: Instant,
@@ -174,37 +172,23 @@ pub(crate) struct StopKeywordRule {
     pub(crate) value: String,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AutoFollowTemplateState {
-    pub(crate) items: Vec<FollowupTemplateDefinition>,
-    pub(crate) selected_index: usize,
-}
-
 impl AutoFollowState {
-    pub(crate) fn new(template_catalog: FollowupTemplateCatalog) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             enabled: true,
             completed_auto_turns: 0,
             max_auto_turns: DEFAULT_AUTO_FOLLOW_MAX_TURNS,
             runtime_phase: AutoFollowRuntimePhase::Idle,
-            template_state: AutoFollowTemplateState::new(template_catalog),
             stop_rules: AutoFollowStopRules::default(),
         }
     }
-}
 
-impl Default for StopKeywordRule {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            value: DEFAULT_AUTO_FOLLOW_STOP_KEYWORD.to_string(),
-        }
-    }
-}
-
-impl AutoFollowState {
     pub(crate) fn status_label(&self) -> &'static str {
         if self.enabled { "on" } else { "off" }
+    }
+
+    pub(crate) fn mode_label(&self) -> &'static str {
+        AUTO_FOLLOW_MODE_LABEL
     }
 
     pub(crate) fn progress_label(&self) -> String {
@@ -234,32 +218,6 @@ impl AutoFollowState {
 
     pub(crate) fn max_auto_turns_value(&self) -> usize {
         self.max_auto_turns
-    }
-
-    pub(crate) fn max_auto_turns_label(&self) -> String {
-        format_max_auto_turns(self.max_auto_turns)
-    }
-
-    pub(crate) fn template_label(&self) -> &str {
-        self.template_state.current().label.as_str()
-    }
-
-    pub(crate) fn selected_template(&self) -> &FollowupTemplateDefinition {
-        self.template_state.current()
-    }
-
-    pub(crate) fn selected_template_index(&self) -> usize {
-        self.template_state.selected_index
-    }
-
-    #[cfg(test)]
-    pub(crate) fn template_source_label(&self) -> String {
-        self.template_state.current().source_label()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn template_count(&self) -> usize {
-        self.template_state.items.len()
     }
 
     pub(crate) fn stop_keyword_label(&self) -> String {
@@ -322,40 +280,30 @@ impl AutoFollowState {
         };
     }
 
-    pub(crate) fn mark_auto_turn_queued(&mut self, template_label: &str) -> usize {
+    pub(crate) fn mark_auto_turn_queued(&mut self) -> usize {
         let turn_index = self.next_auto_turn_index();
         self.runtime_phase = AutoFollowRuntimePhase::Queued {
             started_at: Instant::now(),
             turn_index,
-            template_label: template_label.to_string(),
         };
         turn_index
     }
 
-    pub(crate) fn mark_auto_turn_submitted(&mut self, template_label: &str) -> usize {
+    pub(crate) fn mark_auto_turn_submitted(&mut self) -> usize {
         let turn_index = self
             .active_turn_index()
             .unwrap_or_else(|| self.next_auto_turn_index());
         self.runtime_phase = AutoFollowRuntimePhase::Submitting {
             started_at: Instant::now(),
             turn_index,
-            template_label: template_label.to_string(),
         };
         turn_index
     }
 
-    pub(crate) fn mark_auto_turn_started(&mut self) -> Option<(usize, String)> {
-        let (turn_index, template_label) = match &self.runtime_phase {
-            AutoFollowRuntimePhase::Queued {
-                turn_index,
-                template_label,
-                ..
-            }
-            | AutoFollowRuntimePhase::Submitting {
-                turn_index,
-                template_label,
-                ..
-            } => (*turn_index, template_label.clone()),
+    pub(crate) fn mark_auto_turn_started(&mut self) -> Option<usize> {
+        let turn_index = match &self.runtime_phase {
+            AutoFollowRuntimePhase::Queued { turn_index, .. }
+            | AutoFollowRuntimePhase::Submitting { turn_index, .. } => *turn_index,
             AutoFollowRuntimePhase::Idle
             | AutoFollowRuntimePhase::Evaluating { .. }
             | AutoFollowRuntimePhase::Running { .. } => return None,
@@ -364,7 +312,7 @@ impl AutoFollowState {
             started_at: Instant::now(),
             turn_index,
         };
-        Some((turn_index, template_label))
+        Some(turn_index)
     }
 
     pub(crate) fn complete_auto_turn_if_running(&mut self) -> bool {
@@ -419,21 +367,6 @@ impl AutoFollowState {
         self.stop_rules.stop_on_no_file_changes = !self.stop_rules.stop_on_no_file_changes;
     }
 
-    pub(crate) fn reload_template_catalog(
-        &mut self,
-        template_catalog: FollowupTemplateCatalog,
-    ) -> bool {
-        self.template_state.reload_catalog(template_catalog)
-    }
-
-    pub(crate) fn cycle_template_kind(&mut self) {
-        self.template_state.cycle();
-    }
-
-    pub(crate) fn cycle_template_kind_backward(&mut self) {
-        self.template_state.cycle_previous();
-    }
-
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
         let normalized = candidate.trim();
         if normalized.eq_ignore_ascii_case(INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN) {
@@ -449,6 +382,15 @@ fn format_max_auto_turns(value: usize) -> String {
         INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string()
     } else {
         value.to_string()
+    }
+}
+
+impl Default for StopKeywordRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            value: DEFAULT_AUTO_FOLLOW_STOP_KEYWORD.to_string(),
+        }
     }
 }
 
@@ -530,52 +472,5 @@ impl StopKeywordRule {
 
     pub(crate) fn value(&self) -> &str {
         self.value.as_str()
-    }
-}
-
-impl AutoFollowTemplateState {
-    pub(crate) fn new(template_catalog: FollowupTemplateCatalog) -> Self {
-        Self {
-            items: template_catalog.items,
-            selected_index: 0,
-        }
-    }
-
-    pub(crate) fn current(&self) -> &FollowupTemplateDefinition {
-        self.items
-            .get(self.selected_index)
-            .expect("follow-up template catalog should not be empty")
-    }
-
-    pub(crate) fn cycle(&mut self) {
-        if self.items.len() <= 1 {
-            return;
-        }
-
-        self.selected_index = (self.selected_index + 1) % self.items.len();
-    }
-
-    pub(crate) fn cycle_previous(&mut self) {
-        if self.items.len() <= 1 {
-            return;
-        }
-
-        if self.selected_index == 0 {
-            self.selected_index = self.items.len() - 1;
-        } else {
-            self.selected_index -= 1;
-        }
-    }
-
-    pub(crate) fn reload_catalog(&mut self, template_catalog: FollowupTemplateCatalog) -> bool {
-        let selected_template_id = self.current().id.clone();
-        self.items = template_catalog.items;
-        self.selected_index = self
-            .items
-            .iter()
-            .position(|template| template.id == selected_template_id)
-            .unwrap_or(0);
-
-        self.current().id != selected_template_id
     }
 }

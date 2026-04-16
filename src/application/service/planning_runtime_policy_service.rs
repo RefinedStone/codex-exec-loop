@@ -5,7 +5,6 @@ use crate::application::service::planning_auto_follow_copy::{
 use crate::application::service::planning_prompt_service::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
-use crate::domain::followup_template::FollowupTemplateDefinition;
 use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
 
@@ -28,7 +27,7 @@ pub enum PlanningAutoFollowPolicyDecision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningAutoFollowPromptMode {
-    TemplatePrompt,
+    ContinueQueuedTask,
     RefreshPlanningQueue,
 }
 
@@ -99,7 +98,6 @@ impl PlanningRuntimePolicyService {
 
     pub fn decide_auto_follow(
         &self,
-        template: &FollowupTemplateDefinition,
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningAutoFollowPolicyDecision {
         if snapshot.workspace_present() && !snapshot.plan_enabled() {
@@ -114,55 +112,42 @@ impl PlanningRuntimePolicyService {
             );
         }
 
-        if template.is_builtin_next_task() {
-            if snapshot.auto_followup_pause_reason().is_some() {
-                return PlanningAutoFollowPolicyDecision::Blocked(
-                    PlanningAutoFollowBlockReason::RepeatedQueueHead,
-                );
-            }
-            return match snapshot.workspace_status() {
-                PlanningRuntimeWorkspaceStatus::Uninitialized => {
-                    PlanningAutoFollowPolicyDecision::Blocked(
-                        PlanningAutoFollowBlockReason::ActionableQueueRequired,
-                    )
-                }
-                PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
-                    PlanningAutoFollowPolicyDecision::QueuePrompt(
-                        PlanningAutoFollowPromptMode::RefreshPlanningQueue,
-                    )
-                }
-                PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
-                    PlanningAutoFollowPolicyDecision::QueuePrompt(
-                        PlanningAutoFollowPromptMode::TemplatePrompt,
-                    )
-                }
-                PlanningRuntimeWorkspaceStatus::Invalid => {
-                    PlanningAutoFollowPolicyDecision::Blocked(
-                        PlanningAutoFollowBlockReason::InvalidWorkspace,
-                    )
-                }
-            };
+        if snapshot.auto_followup_pause_reason().is_some() {
+            return PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::RepeatedQueueHead,
+            );
         }
 
-        PlanningAutoFollowPolicyDecision::QueuePrompt(PlanningAutoFollowPromptMode::TemplatePrompt)
+        match snapshot.workspace_status() {
+            PlanningRuntimeWorkspaceStatus::Uninitialized => {
+                PlanningAutoFollowPolicyDecision::Blocked(
+                    PlanningAutoFollowBlockReason::ActionableQueueRequired,
+                )
+            }
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
+                PlanningAutoFollowPolicyDecision::QueuePrompt(
+                    PlanningAutoFollowPromptMode::RefreshPlanningQueue,
+                )
+            }
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
+                PlanningAutoFollowPolicyDecision::QueuePrompt(
+                    PlanningAutoFollowPromptMode::ContinueQueuedTask,
+                )
+            }
+            PlanningRuntimeWorkspaceStatus::Invalid => PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::InvalidWorkspace,
+            ),
+        }
     }
 
     pub fn auto_follow_transcript_text(
         &self,
-        template: &FollowupTemplateDefinition,
         snapshot: &PlanningRuntimeSnapshot,
         prompt_mode: PlanningAutoFollowPromptMode,
     ) -> String {
         match prompt_mode {
-            PlanningAutoFollowPromptMode::TemplatePrompt => {
-                if template.is_builtin_next_task() {
-                    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string()
-                } else {
-                    format!(
-                        "selected auto follow-up template `{}` 기준으로 다음 작업 1개를 진행합니다.",
-                        template.label
-                    )
-                }
+            PlanningAutoFollowPromptMode::ContinueQueuedTask => {
+                BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string()
             }
             PlanningAutoFollowPromptMode::RefreshPlanningQueue => {
                 if snapshot.has_proposal_candidates() {
@@ -228,16 +213,17 @@ impl PlanningRuntimePolicyService {
                 PlanningAutoFollowBlockReason::ActionableQueueRequired => {
                     if let Some(proposal_summary) = snapshot.proposal_summary() {
                         format!(
-                            "selected template requires an actionable planning queue head; {proposal_summary}"
+                            "queue-driven auto follow-up requires an actionable planning queue head; {proposal_summary}"
                         )
                     } else {
-                        "selected template requires an actionable planning queue head".to_string()
+                        "queue-driven auto follow-up requires an actionable planning queue head"
+                            .to_string()
                     }
                 }
                 PlanningAutoFollowBlockReason::RepeatedQueueHead => snapshot
                     .auto_followup_pause_reason()
                     .unwrap_or(
-                        "selected template is paused until the planning queue advances beyond the previously handed-off task",
+                        "queue-driven auto follow-up is paused until the planning queue advances beyond the previously handed-off task",
                     )
                     .to_string(),
             };
@@ -445,28 +431,7 @@ mod tests {
         PlanningRuntimeSummaryRequest,
     };
     use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-    use crate::domain::followup_template::{FollowupTemplateDefinition, FollowupTemplateSource};
     use crate::domain::planning::{PlanningWorkspaceState, PriorityQueueTask, TaskStatus};
-
-    fn builtin_next_task_template() -> FollowupTemplateDefinition {
-        FollowupTemplateDefinition {
-            id: "builtin-next-task".to_string(),
-            label: "builtin next-task".to_string(),
-            body: "body".to_string(),
-            source: FollowupTemplateSource::Builtin,
-        }
-    }
-
-    fn workspace_template() -> FollowupTemplateDefinition {
-        FollowupTemplateDefinition {
-            id: "workspace-review".to_string(),
-            label: "workspace review".to_string(),
-            body: "body".to_string(),
-            source: FollowupTemplateSource::WorkspaceFile {
-                path: "/tmp/workspace/.codex-exec-loop/followups/review.md".to_string(),
-            },
-        }
-    }
 
     fn queue_head() -> PriorityQueueTask {
         PriorityQueueTask {
@@ -475,7 +440,6 @@ mod tests {
             direction_id: "general-workstream".to_string(),
             direction_title: "General workstream".to_string(),
             task_title: "Implement queue-aware policy".to_string(),
-            progress_note: String::new(),
             status: TaskStatus::Ready,
             combined_priority: 10,
             updated_at: "2026-04-10T00:00:00Z".to_string(),
@@ -487,7 +451,7 @@ mod tests {
     fn builtin_next_task_blocks_when_planning_is_uninitialized() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::uninitialized();
-        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
+        let decision = service.decide_auto_follow(&snapshot);
 
         assert_eq!(
             decision,
@@ -512,7 +476,7 @@ mod tests {
             Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
             None,
         );
-        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
+        let decision = service.decide_auto_follow(&snapshot);
 
         assert_eq!(
             decision,
@@ -539,7 +503,7 @@ mod tests {
             None,
             None,
         );
-        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
+        let decision = service.decide_auto_follow(&snapshot);
 
         assert_eq!(
             decision,
@@ -559,7 +523,7 @@ mod tests {
     fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::uninitialized();
-        let decision = service.decide_auto_follow(&builtin_next_task_template(), &snapshot);
+        let decision = service.decide_auto_follow(&snapshot);
 
         assert_eq!(
             decision,
@@ -573,26 +537,13 @@ mod tests {
                 .detail
                 .as_deref()
                 .is_some_and(|detail| {
-                    detail.contains("selected template requires an actionable planning queue head")
+                    detail.contains("queue-driven auto follow-up requires an actionable planning queue head")
                 })
         );
     }
 
     #[test]
-    fn workspace_template_stays_allowed_without_planning_queue_head() {
-        let service = PlanningRuntimePolicyService::new();
-        let snapshot = PlanningRuntimeSnapshot::uninitialized();
-
-        assert_eq!(
-            service.decide_auto_follow(&workspace_template(), &snapshot),
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::TemplatePrompt
-            )
-        );
-    }
-
-    #[test]
-    fn workspace_template_stays_allowed_when_builtin_repeat_pause_is_present() {
+    fn repeated_queue_head_blocks_queue_driven_automation() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
@@ -604,9 +555,9 @@ mod tests {
         );
 
         assert_eq!(
-            service.decide_auto_follow(&workspace_template(), &snapshot),
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::TemplatePrompt
+            service.decide_auto_follow(&snapshot),
+            PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::RepeatedQueueHead
             )
         );
     }
@@ -622,19 +573,39 @@ mod tests {
         );
 
         assert_eq!(
-            service.decide_auto_follow(&builtin_next_task_template(), &snapshot),
+            service.decide_auto_follow(&snapshot),
             PlanningAutoFollowPolicyDecision::QueuePrompt(
                 PlanningAutoFollowPromptMode::RefreshPlanningQueue
             )
         );
         assert!(
             service
-                .auto_follow_transcript_text(
-                    &builtin_next_task_template(),
-                    &snapshot,
-                    PlanningAutoFollowPromptMode::RefreshPlanningQueue
-                )
+                .auto_follow_transcript_text(&snapshot, PlanningAutoFollowPromptMode::RefreshPlanningQueue)
                 .contains("existing proposal 작업 목록을 priority queue에 넣고")
+        );
+    }
+
+    #[test]
+    fn ready_queue_head_uses_continue_mode() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::ready(
+            "Planning Context".to_string(),
+            "next task: rank 1 / task-1".to_string(),
+            Some(queue_head()),
+        );
+
+        assert_eq!(
+            service.decide_auto_follow(&snapshot),
+            PlanningAutoFollowPolicyDecision::QueuePrompt(
+                PlanningAutoFollowPromptMode::ContinueQueuedTask
+            )
+        );
+        assert_eq!(
+            service.auto_follow_transcript_text(
+                &snapshot,
+                PlanningAutoFollowPromptMode::ContinueQueuedTask,
+            ),
+            crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
         );
     }
 

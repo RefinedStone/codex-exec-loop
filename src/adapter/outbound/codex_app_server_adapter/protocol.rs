@@ -842,13 +842,13 @@ mod tests {
     #[test]
     fn partition_runtime_notices_keeps_runtime_messages_out_of_warning_bucket() {
         let (warnings, runtime_notices) = partition_runtime_notices(vec![
-            "workspace template missing".to_string(),
+            "workspace prompt missing".to_string(),
             "shared runtime reconnected after the previous app-server process exited".to_string(),
             "recent sessions request used an isolated app-server connection while a turn stream was active"
                 .to_string(),
         ]);
 
-        assert_eq!(warnings, vec!["workspace template missing".to_string()]);
+        assert_eq!(warnings, vec!["workspace prompt missing".to_string()]);
         assert_eq!(
             runtime_notices,
             vec![

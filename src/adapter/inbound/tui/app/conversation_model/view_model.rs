@@ -13,7 +13,6 @@ use crate::application::service::planning::{
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
-use crate::domain::followup_template::FollowupTemplateCatalogLoadResult;
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
 use super::super::shell_presentation::format_conversation_lines;
@@ -82,7 +81,6 @@ pub(crate) struct ConversationViewModel {
     pub(crate) live_agent_message: Option<ConversationMessage>,
     pub(crate) buffered_tool_messages: Vec<ConversationMessage>,
     pub(crate) base_warnings: Vec<String>,
-    pub(crate) template_warnings: Vec<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) runtime_notices: Vec<String>,
     pub(crate) input_buffer: String,
@@ -99,19 +97,12 @@ pub(crate) struct ConversationViewModel {
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
-    pub(crate) repeated_planning_queue_head_count: usize,
     pub(crate) status_text: String,
 }
 
 impl ConversationViewModel {
-    pub(crate) fn new_draft(
-        cwd: String,
-        template_load_result: FollowupTemplateCatalogLoadResult,
-    ) -> Self {
-        let base_status = format!(
-            "new thread draft / templates: {}",
-            template_load_result.catalog.items.len()
-        );
+    pub(crate) fn new_draft(cwd: String) -> Self {
+        let base_status = "new thread draft".to_string();
         let mut view_model = Self {
             thread_id: String::new(),
             title: "New conversation".to_string(),
@@ -122,8 +113,7 @@ impl ConversationViewModel {
             live_agent_message: None,
             buffered_tool_messages: Vec::new(),
             base_warnings: Vec::new(),
-            template_warnings: template_load_result.warnings.clone(),
-            warnings: template_load_result.warnings,
+            warnings: Vec::new(),
             runtime_notices: Vec::new(),
             input_buffer: String::new(),
             inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
@@ -133,13 +123,12 @@ impl ConversationViewModel {
             active_turn_started_at: None,
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
-            auto_follow_state: AutoFollowState::new(template_load_result.catalog),
+            auto_follow_state: AutoFollowState::new(),
             planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
-            repeated_planning_queue_head_count: 0,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -149,17 +138,12 @@ impl ConversationViewModel {
 
     pub(crate) fn from_snapshot(
         snapshot: ConversationSnapshot,
-        template_load_result: FollowupTemplateCatalogLoadResult,
         draft_workspace_directory: String,
     ) -> Self {
         let base_warnings = snapshot.warnings;
         let runtime_notices = snapshot.runtime_notices;
-        let template_warnings = template_load_result.warnings;
-        let warnings = Self::merge_warnings(&base_warnings, &template_warnings);
-        let base_status = format!(
-            "thread loaded / templates: {}",
-            template_load_result.catalog.items.len()
-        );
+        let warnings = base_warnings.clone();
+        let base_status = "thread loaded".to_string();
 
         let mut view_model = Self {
             thread_id: snapshot.thread_id,
@@ -171,7 +155,6 @@ impl ConversationViewModel {
             live_agent_message: None,
             buffered_tool_messages: Vec::new(),
             base_warnings,
-            template_warnings,
             warnings,
             runtime_notices,
             input_buffer: String::new(),
@@ -182,24 +165,17 @@ impl ConversationViewModel {
             active_turn_started_at: None,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
-            auto_follow_state: AutoFollowState::new(template_load_result.catalog),
+            auto_follow_state: AutoFollowState::new(),
             planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
-            repeated_planning_queue_head_count: 0,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
         view_model.refresh_conversation_lines();
         view_model
-    }
-
-    fn merge_warnings(base_warnings: &[String], template_warnings: &[String]) -> Vec<String> {
-        let mut warnings = base_warnings.to_vec();
-        warnings.extend(template_warnings.iter().cloned());
-        warnings
     }
 
     fn compact_warning_text(warning: &str) -> String {
@@ -230,27 +206,16 @@ impl ConversationViewModel {
     }
 
     fn selected_warning_for_summary(&self) -> Option<&str> {
-        self.base_warnings
-            .last()
-            .map(String::as_str)
-            .or_else(|| self.template_warnings.last().map(String::as_str))
+        self.base_warnings.last().map(String::as_str)
     }
 
     fn warning_status_label(&self) -> Option<String> {
         let runtime_count = self.base_warnings.len();
-        let template_count = self.template_warnings.len();
 
-        match (runtime_count, template_count, self.warnings.len()) {
-            (_, _, 0) => None,
-            (0, 0, 1) => Some("warning".to_string()),
-            (0, 0, warning_count) => Some(format!("warnings ({warning_count})")),
-            (1, 0, _) => Some("runtime warning".to_string()),
-            (runtime_count, 0, _) => Some(format!("runtime warnings ({runtime_count})")),
-            (0, 1, _) => Some("template warning".to_string()),
-            (0, template_count, _) => Some(format!("template warnings ({template_count})")),
-            (runtime_count, template_count, _) => Some(format!(
-                "warnings: runtime {runtime_count}, template {template_count}"
-            )),
+        match runtime_count {
+            0 => None,
+            1 => Some("warning".to_string()),
+            warning_count => Some(format!("warnings ({warning_count})")),
         }
     }
 
@@ -260,21 +225,10 @@ impl ConversationViewModel {
         };
 
         let summary = Self::truncate_warning_text(selected_warning, max_detail_len);
-        let runtime_count = self.base_warnings.len();
-        let template_count = self.template_warnings.len();
-
-        match (runtime_count, template_count, self.warnings.len()) {
-            (0, 0, 1) => format!("warning: {summary}"),
-            (0, 0, warning_count) => format!("warnings ({warning_count}): {summary}"),
-            (1, 0, _) => format!("runtime warning: {summary}"),
-            (runtime_count, 0, _) => format!("runtime warnings ({runtime_count}): {summary}"),
-            (0, 1, _) => format!("template warning: {summary}"),
-            (0, template_count, _) => {
-                format!("template warnings ({template_count}): {summary}")
-            }
-            (runtime_count, template_count, _) => {
-                format!("warnings: runtime {runtime_count}, template {template_count} / {summary}")
-            }
+        match self.base_warnings.len() {
+            0 => "warning: none".to_string(),
+            1 => format!("warning: {summary}"),
+            warning_count => format!("warnings ({warning_count}): {summary}"),
         }
     }
 
@@ -318,11 +272,6 @@ impl ConversationViewModel {
         self.approval_review = Some(review);
     }
 
-    pub(crate) fn replace_template_warnings(&mut self, template_warnings: Vec<String>) {
-        self.template_warnings = template_warnings;
-        self.warnings = Self::merge_warnings(&self.base_warnings, &self.template_warnings);
-    }
-
     pub(crate) fn replace_planning_runtime_snapshot(
         &mut self,
         planning_runtime_snapshot: PlanningRuntimeSnapshot,
@@ -355,29 +304,6 @@ impl ConversationViewModel {
             Some(warning_label) => format!("{base_status} / {warning_label}"),
             None => base_status,
         };
-    }
-
-    pub(crate) fn reload_followup_templates(
-        &mut self,
-        template_load_result: FollowupTemplateCatalogLoadResult,
-    ) -> bool {
-        let template_count = template_load_result.catalog.items.len();
-        let selection_changed = self
-            .auto_follow_state
-            .reload_template_catalog(template_load_result.catalog);
-        self.replace_template_warnings(template_load_result.warnings);
-        self.clear_auto_followup_skip();
-        let selection_label = self.auto_follow_state.template_label();
-        let selection_msg = if selection_changed {
-            format!("selected template reset to {selection_label}")
-        } else {
-            format!("selected: {selection_label}")
-        };
-        let base_status =
-            format!("follow-up templates reloaded / {selection_msg} / templates: {template_count}");
-        self.set_status_with_warnings(base_status);
-
-        selection_changed
     }
 
     pub(crate) fn refresh_conversation_lines(&mut self) {
@@ -419,23 +345,18 @@ impl ConversationViewModel {
     pub(crate) fn sync_draft_workspace(
         &mut self,
         workspace_directory: String,
-        template_load_result: FollowupTemplateCatalogLoadResult,
     ) -> bool {
         if self.has_active_thread() || self.draft_workspace_directory == workspace_directory {
             return false;
         }
 
-        let template_count = template_load_result.catalog.items.len();
-        let warnings = template_load_result.warnings;
         self.draft_workspace_directory = workspace_directory.clone();
         self.cwd = workspace_directory;
-        self.auto_follow_state = AutoFollowState::new(template_load_result.catalog);
+        self.auto_follow_state = AutoFollowState::new();
         self.base_warnings.clear();
-        self.replace_template_warnings(warnings);
+        self.warnings.clear();
         self.clear_auto_followup_skip();
-        self.set_status_with_warnings(format!(
-            "draft workspace synced / templates: {template_count}"
-        ));
+        self.set_status_with_warnings("draft workspace synced".to_string());
 
         true
     }
@@ -465,11 +386,11 @@ impl ConversationViewModel {
     pub(crate) fn record_turn_started(&mut self, turn_id: String) {
         self.mark_turn_started(turn_id);
         self.live_agent_message = None;
-        if let Some((turn_index, template_label)) = self.auto_follow_state.mark_auto_turn_started()
-        {
-            let max_auto_turns = self.auto_follow_state.max_auto_turns_label();
+        if let Some(turn_index) = self.auto_follow_state.mark_auto_turn_started() {
             let status_text = format!(
-                "auto follow-up running / turn {turn_index}/{max_auto_turns} / template: {template_label}"
+                "auto follow-up running / turn {turn_index}/{} / mode: {}",
+                self.auto_follow_state.max_auto_turns_value(),
+                self.auto_follow_state.mode_label(),
             );
             self.status_text = status_text.clone();
             self.append_status_message(status_text);
@@ -724,21 +645,17 @@ impl ConversationViewModel {
 
     pub(crate) fn clear_last_planning_task_handoff(&mut self) {
         self.last_planning_task_handoff = None;
-        self.repeated_planning_queue_head_count = 0;
     }
 
     pub(crate) fn record_auto_followup_submission(
         &mut self,
         _queued_from_turn_id: &str,
-        template_label: &str,
         handoff_task: Option<&PlanningTaskHandoff>,
     ) {
-        let turn_index = self
-            .auto_follow_state
-            .mark_auto_turn_submitted(template_label);
+        let turn_index = self.auto_follow_state.mark_auto_turn_submitted();
         let progress = format!(
             "{turn_index}/{}",
-            self.auto_follow_state.max_auto_turns_label()
+            self.auto_follow_state.max_auto_turns_value()
         );
         self.last_planning_task_handoff = handoff_task.cloned();
         if handoff_task.is_none() {
@@ -746,27 +663,25 @@ impl ConversationViewModel {
         }
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("submitted auto turn {progress}"),
-            detail: format!(
-                "queued after the previous turn completed; submitted with template {template_label}"
-            ),
+            detail: "queued after the previous turn completed; submitted planning auto follow-up"
+                .to_string(),
         });
     }
 
     pub(crate) fn record_auto_followup_queue(
         &mut self,
         _queued_from_turn_id: &str,
-        template_label: &str,
     ) {
-        let turn_index = self.auto_follow_state.mark_auto_turn_queued(template_label);
+        let turn_index = self.auto_follow_state.mark_auto_turn_queued();
         let next_progress = format!(
             "{turn_index}/{}",
             self.auto_follow_state.max_auto_turns_label()
         );
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("queued auto turn {next_progress}"),
-            detail: format!(
-                "queued after the previous turn completed; waiting to submit with template {template_label}"
-            ),
+            detail:
+                "queued after the previous turn completed; waiting to submit planning auto follow-up"
+                    .to_string(),
         });
     }
 
@@ -785,10 +700,6 @@ impl ConversationViewModel {
 
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()
-    }
-
-    pub(crate) fn set_repeated_planning_queue_head_count(&mut self, count: usize) {
-        self.repeated_planning_queue_head_count = count;
     }
 
     pub(crate) fn accepts_post_turn_evaluation(
@@ -864,10 +775,6 @@ impl ConversationViewModel {
         }
 
         match planning_runtime.decide_auto_followup(PlanningRuntimeAutoFollowRequest {
-            template: self.auto_follow_state.selected_template(),
-            auto_turn: self.auto_follow_state.next_auto_turn_index(),
-            max_auto_turns: self.auto_follow_state.max_auto_turns_value(),
-            session_id: &self.thread_id,
             stop_keyword: self.auto_follow_state.stop_keyword_value(),
             last_message: last_message.trim(),
             snapshot: planning_runtime_snapshot,

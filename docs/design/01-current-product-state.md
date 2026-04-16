@@ -8,9 +8,9 @@
 - Startup diagnostics begin immediately and the shell renders before all checks finish.
 - Manual submit can queue while startup is pending, then auto-submit once the shell is ready.
 - The client can open a new draft, resume a thread, load snapshots, and stream turns through the shared app-server boundary.
-- Shell overlays cover diagnostics, recent sessions, follow-up templates, queue state, and planning.
+- Shell overlays cover diagnostics, recent sessions, queue state, automation controls, and planning.
 - Recent sessions support search, paging, and current-workspace filtering.
-- Auto follow-up uses builtin templates plus workspace templates from `.codex-exec-loop/followups/`.
+- Auto follow-up is planning-queue-driven and no longer loads workspace-defined prompt files.
 - Planning is already live: `:planning` stages drafts, opens the embedded editor, promotes accepted files, and exposes queue/proposal state.
 - Invalid planning writes are rolled back and can trigger a bounded repair flow.
 - Runtime warnings, approval state, tool activity, and optional GitHub review polling are visible in normal shell flow.

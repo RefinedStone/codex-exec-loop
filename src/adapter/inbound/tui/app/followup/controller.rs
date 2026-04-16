@@ -9,35 +9,20 @@ use super::super::{
 };
 
 impl NativeTuiApp {
-    pub(crate) fn reload_followup_templates(&mut self) {
-        let workspace_directory = match &self.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.planning_workspace_directory().to_string()
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => return,
-        };
-
-        self.dispatch_followup_controls(FollowupControlEvent::TemplateCatalogReloaded {
-            reload_result: self
-                .followup_template_service
-                .reload_catalog(&workspace_directory),
-        });
-    }
-
-    pub(crate) fn show_followup_template_overlay(&mut self) {
+    pub(crate) fn show_automation_overlay(&mut self) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::OverlayShown {
             stop_keyword: self.current_stop_keyword_value(),
             max_auto_turns: self.current_max_auto_turns_label(),
         });
-        self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayShown);
+        self.dispatch_shell_chrome(ShellChromeEvent::AutomationOverlayShown);
     }
 
-    pub(crate) fn toggle_followup_template_overlay(&mut self) {
-        if self.shell_overlay != ShellOverlay::FollowupTemplates {
-            self.show_followup_template_overlay();
+    pub(crate) fn toggle_automation_overlay(&mut self) {
+        if self.shell_overlay != ShellOverlay::Automation {
+            self.show_automation_overlay();
             return;
         }
-        self.dispatch_shell_chrome(ShellChromeEvent::FollowupTemplatesOverlayToggled);
+        self.dispatch_shell_chrome(ShellChromeEvent::AutomationOverlayToggled);
     }
 
     pub(crate) fn toggle_auto_followup(&mut self) {
@@ -105,10 +90,10 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.shell_overlay != ShellOverlay::FollowupTemplates
+        if self.shell_overlay != ShellOverlay::Automation
             && self.shell_overlay != ShellOverlay::PlanningInit
         {
-            self.show_followup_template_overlay();
+            self.show_automation_overlay();
         }
 
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditStarted {
@@ -151,8 +136,8 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.shell_overlay != ShellOverlay::FollowupTemplates {
-            self.show_followup_template_overlay();
+        if self.shell_overlay != ShellOverlay::Automation {
+            self.show_automation_overlay();
         }
 
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::StopKeywordEditStarted {
@@ -205,37 +190,12 @@ impl NativeTuiApp {
         });
     }
 
-    pub(crate) fn cycle_auto_followup_template(&mut self) {
-        self.dispatch_followup_controls(FollowupControlEvent::TemplateCycledForward);
-    }
-
-    pub(crate) fn cycle_auto_followup_template_backward(&mut self) {
-        self.dispatch_followup_controls(FollowupControlEvent::TemplateCycledBackward);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn followup_template_selection(&self) -> Option<usize> {
-        match &self.conversation_state {
-            ConversationState::Ready(conversation)
-                if !conversation
-                    .auto_follow_state
-                    .template_state
-                    .items
-                    .is_empty() =>
-            {
-                Some(conversation.auto_follow_state.selected_template_index())
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn scroll_followup_template_preview(&mut self, delta: i32) {
+    pub(crate) fn scroll_automation_preview(&mut self, delta: i32) {
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::PreviewScrolled { delta });
     }
 
     pub(crate) fn handle_stop_keyword_editor_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::FollowupTemplates || !self.is_stop_keyword_editing()
-        {
+        if self.shell_overlay != ShellOverlay::Automation || !self.is_stop_keyword_editing() {
             return false;
         }
 
@@ -262,7 +222,7 @@ impl NativeTuiApp {
             return false;
         }
 
-        let editor_supported = self.shell_overlay == ShellOverlay::FollowupTemplates
+        let editor_supported = self.shell_overlay == ShellOverlay::Automation
             || (self.shell_overlay == ShellOverlay::PlanningInit
                 && self.planning_init_overlay_ui_state.step()
                     == PlanningInitOverlayStep::SimpleReview);
@@ -290,22 +250,12 @@ impl NativeTuiApp {
         true
     }
 
-    pub(crate) fn handle_followup_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::FollowupTemplates {
+    pub(crate) fn handle_automation_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::Automation {
             return false;
         }
 
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                self.cycle_auto_followup_template_backward()
-            }
-            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                self.cycle_auto_followup_template()
-            }
-            KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
-                self.cycle_auto_followup_template()
-            }
-            KeyCode::Char('r') if key.modifiers.is_empty() => self.reload_followup_templates(),
             KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
                 self.toggle_auto_followup()
             }
@@ -324,15 +274,17 @@ impl NativeTuiApp {
             KeyCode::Char('b') if key.modifiers == KeyModifiers::CONTROL => {
                 self.toggle_planner_visibility()
             }
-            KeyCode::PageUp if key.modifiers.is_empty() => self
-                .scroll_followup_template_preview(-(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32)),
-            KeyCode::PageDown if key.modifiers.is_empty() => {
-                self.scroll_followup_template_preview(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32)
+            KeyCode::PageUp if key.modifiers.is_empty() => {
+                self.scroll_automation_preview(-(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32))
             }
-            KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => self
-                .scroll_followup_template_preview(-(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32)),
+            KeyCode::PageDown if key.modifiers.is_empty() => {
+                self.scroll_automation_preview(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32)
+            }
+            KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                self.scroll_automation_preview(-(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32))
+            }
             KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => {
-                self.scroll_followup_template_preview(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32)
+                self.scroll_automation_preview(FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP as i32)
             }
             KeyCode::Enter if key.modifiers.is_empty() => self.close_shell_overlay(),
             _ => {}

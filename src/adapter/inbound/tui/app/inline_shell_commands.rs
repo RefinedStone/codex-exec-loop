@@ -1,5 +1,3 @@
-use super::AutoFollowState;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
     Diagnostics,
@@ -7,7 +5,7 @@ pub(crate) enum InlineShellCommand {
     Queue,
     Directions,
     Stop,
-    Templates,
+    Automation,
     PlanningInit,
     MaxAutoTurns,
     NewDraft,
@@ -38,9 +36,8 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :templates  :planning [on|off|doctor]  :turns <n|infinite>  :new  :help";
-const MAX_AUTO_TURNS_USAGE: &str =
-    "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning  :turns <n>  :new  :help";
+const MAX_AUTO_TURNS_USAGE: &str = "Type `:turns <1-50>` and press Enter to update max auto turns.";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -89,12 +86,12 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         requires_argument: false,
     },
     InlineShellCommandSpec {
-        command: InlineShellCommand::Templates,
-        primary_name: ":templates",
-        aliases: &[":template", ":templates"],
-        suggestion_detail: "template inspection",
-        buffered_hint: "Press Enter to open the template inspection.",
-        execution_status: Some("opened template inspection"),
+        command: InlineShellCommand::Automation,
+        primary_name: ":auto",
+        aliases: &[":auto", ":automation"],
+        suggestion_detail: "automation controls",
+        buffered_hint: "Press Enter to open the automation controls.",
+        execution_status: Some("opened automation controls"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -158,11 +155,8 @@ impl InlineShellCommandInput {
                 Some(value) if value.eq_ignore_ascii_case("on") => {
                     "Press Enter to turn Plan on.".to_string()
                 }
-                Some(value) if value.eq_ignore_ascii_case("doctor") => {
-                    "Press Enter to run planning doctor for safe path repairs.".to_string()
-                }
                 Some(value) => format!(
-                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off, doctor."
+                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -171,9 +165,7 @@ impl InlineShellCommandInput {
                     format!("Press Enter to set max auto turns to {value}.")
                 }
                 Some(value) => {
-                    format!(
-                        "Press Enter to apply `:turns {value}`. Max auto turns must be a whole number greater than 0 or `infinite`."
-                    )
+                    format!("Press Enter to apply `:turns {value}`. Max auto turns must be 1-50.")
                 }
                 None => MAX_AUTO_TURNS_USAGE.to_string(),
             },
@@ -312,7 +304,7 @@ impl InlineShellCommand {
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
             | InlineShellCommand::Stop
-            | InlineShellCommand::Templates
+            | InlineShellCommand::Automation
             | InlineShellCommand::PlanningInit
             | InlineShellCommand::NewDraft
             | InlineShellCommand::Help => self.command_name(),
@@ -358,7 +350,11 @@ fn suggestion_prefix_token(input: &str) -> Option<String> {
 }
 
 fn is_valid_max_auto_turn_argument(value: &str) -> bool {
-    AutoFollowState::normalize_max_auto_turns_candidate(value).is_some()
+    value
+        .trim()
+        .parse::<usize>()
+        .map(|candidate| (1..=50).contains(&candidate))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -382,8 +378,8 @@ mod tests {
             (":q", Some((InlineShellCommand::Queue, None))),
             (":queue", Some((InlineShellCommand::Queue, None))),
             (":stop", Some((InlineShellCommand::Stop, None))),
-            (":template", Some((InlineShellCommand::Templates, None))),
-            (":templates", Some((InlineShellCommand::Templates, None))),
+            (":auto", Some((InlineShellCommand::Automation, None))),
+            (":automation", Some((InlineShellCommand::Automation, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
             (
                 ":planning off",
@@ -394,20 +390,12 @@ mod tests {
                 Some((InlineShellCommand::PlanningInit, Some("on"))),
             ),
             (
-                ":planning doctor",
-                Some((InlineShellCommand::PlanningInit, Some("doctor"))),
-            ),
-            (
                 ":planning-init",
                 Some((InlineShellCommand::PlanningInit, None)),
             ),
             (
                 ":turns 5",
                 Some((InlineShellCommand::MaxAutoTurns, Some("5"))),
-            ),
-            (
-                ":turns infinite",
-                Some((InlineShellCommand::MaxAutoTurns, Some("infinite"))),
             ),
             (
                 ":auto-turns 12",
@@ -441,7 +429,7 @@ mod tests {
                 InlineShellCommand::Queue,
                 InlineShellCommand::Directions,
                 InlineShellCommand::Stop,
-                InlineShellCommand::Templates,
+                InlineShellCommand::Automation,
                 InlineShellCommand::PlanningInit,
                 InlineShellCommand::MaxAutoTurns,
                 InlineShellCommand::NewDraft,
@@ -466,10 +454,7 @@ mod tests {
         );
         assert_eq!(
             InlineShellCommand::suggestions(":t"),
-            vec![
-                InlineShellCommand::Templates,
-                InlineShellCommand::MaxAutoTurns,
-            ]
+            vec![InlineShellCommand::MaxAutoTurns]
         );
     }
 
@@ -522,9 +507,8 @@ mod tests {
     fn max_auto_turn_command_hint_is_argument_aware() {
         let no_arg = InlineShellCommandInput::parse(":turns").expect("command should parse");
         let valid_arg = InlineShellCommandInput::parse(":turns 7").expect("command should parse");
-        let infinite_arg =
-            InlineShellCommandInput::parse(":turns infinite").expect("command should parse");
-        let invalid_arg = InlineShellCommandInput::parse(":turns 0").expect("command should parse");
+        let invalid_arg =
+            InlineShellCommandInput::parse(":turns 70").expect("command should parse");
 
         assert_eq!(no_arg.buffered_hint(), MAX_AUTO_TURNS_USAGE);
         assert_eq!(
@@ -532,12 +516,8 @@ mod tests {
             "Press Enter to set max auto turns to 7."
         );
         assert_eq!(
-            infinite_arg.buffered_hint(),
-            "Press Enter to set max auto turns to infinite."
-        );
-        assert_eq!(
             invalid_arg.buffered_hint(),
-            "Press Enter to apply `:turns 0`. Max auto turns must be a whole number greater than 0 or `infinite`."
+            "Press Enter to apply `:turns 70`. Max auto turns must be 1-50."
         );
     }
 
@@ -556,8 +536,6 @@ mod tests {
         let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");
         let off = InlineShellCommandInput::parse(":planning off").expect("command should parse");
         let on = InlineShellCommandInput::parse(":planning on").expect("command should parse");
-        let doctor =
-            InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
         assert_eq!(
             plain.buffered_hint(),
@@ -565,10 +543,6 @@ mod tests {
         );
         assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
         assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");
-        assert_eq!(
-            doctor.buffered_hint(),
-            "Press Enter to run planning doctor for safe path repairs."
-        );
     }
 
     #[test]
@@ -578,7 +552,7 @@ mod tests {
             (":sessions", Some("opened recent sessions inspection")),
             (":queue", Some("opened planning queue inspection")),
             (":stop", None),
-            (":templates", Some("opened template inspection")),
+            (":auto", Some("opened automation controls")),
             (":planning", None),
             (":turns 5", None),
         ];

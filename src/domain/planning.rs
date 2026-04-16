@@ -162,8 +162,6 @@ pub struct TaskDefinition {
     pub direction_id: String,
     #[serde(default)]
     pub direction_relation_note: String,
-    #[serde(default)]
-    pub progress_note: String,
     pub title: String,
     pub description: String,
     pub status: TaskStatus,
@@ -218,7 +216,6 @@ pub struct PriorityQueueTask {
     pub direction_id: String,
     pub direction_title: String,
     pub task_title: String,
-    pub progress_note: String,
     pub status: TaskStatus,
     pub combined_priority: i32,
     pub updated_at: String,
@@ -288,18 +285,6 @@ impl TaskDefinition {
 
     pub fn combined_priority(&self) -> i32 {
         self.base_priority + self.dynamic_priority_delta
-    }
-
-    pub fn progress_note(&self) -> Option<&str> {
-        let note = self.progress_note.trim();
-        (!note.is_empty()).then_some(note)
-    }
-}
-
-impl PriorityQueueTask {
-    pub fn progress_note(&self) -> Option<&str> {
-        let note = self.progress_note.trim();
-        (!note.is_empty()).then_some(note)
     }
 }
 

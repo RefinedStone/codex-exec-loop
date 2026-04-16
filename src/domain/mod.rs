@@ -1,5 +1,4 @@
 pub mod conversation;
-pub mod followup_template;
 pub mod github_review;
 pub mod planning;
 pub mod recent_sessions;
