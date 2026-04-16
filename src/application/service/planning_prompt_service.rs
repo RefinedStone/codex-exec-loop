@@ -13,6 +13,7 @@ use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueSnapshot,
     PriorityQueueTask, QueueIdlePolicy,
 };
+use crate::domain::text::compact_whitespace_detail;
 
 use super::planning_validation_service::PlanningValidationService;
 use super::priority_queue_service::PriorityQueueService;
@@ -21,6 +22,15 @@ const MAX_VISIBLE_QUEUE_TASKS: usize = 5;
 const MAX_SKIPPED_QUEUE_TASKS: usize = 3;
 const MAX_VISIBLE_PROPOSED_TASKS: usize = 3;
 const MAX_PROPOSAL_SUMMARY_TITLES: usize = 2;
+const PREVIEW_DETAIL_LIMIT: usize = 96;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueueFramingDetails {
+    now_detail: String,
+    next_detail: String,
+    proposed_detail: String,
+    blocked_detail: String,
+}
 
 #[derive(Clone)]
 pub struct PlanningPromptService {
@@ -244,11 +254,25 @@ impl PlanningRuntimeSnapshot {
         }
     }
 
-    pub fn preview_detail(&self) -> Option<&str> {
+    pub fn preview_detail(&self) -> Option<String> {
+        self.preview_detail_with_limit(PREVIEW_DETAIL_LIMIT)
+    }
+
+    pub fn preview_detail_with_limit(&self, max_detail_len: usize) -> Option<String> {
         self.auto_followup_pause_reason()
             .or_else(|| self.failure_reason())
-            .or_else(|| self.queue_summary())
-            .or_else(|| self.proposal_summary())
+            .map(|detail| compact_whitespace_detail(detail, max_detail_len))
+            .or_else(|| self.compact_queue_framing_summary(max_detail_len))
+            .or_else(|| self.compact_proposal_summary_detail(max_detail_len))
+    }
+
+    pub fn compact_queue_framing_summary(&self, max_detail_len: usize) -> Option<String> {
+        build_queue_framing_summary(self, max_detail_len)
+    }
+
+    pub fn compact_proposal_summary_detail(&self, max_detail_len: usize) -> Option<String> {
+        self.proposal_summary()
+            .map(|summary| compact_proposal_summary_detail(summary, max_detail_len))
     }
 
     pub fn blocks_auto_followup(&self) -> bool {
@@ -663,6 +687,209 @@ fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<Stri
     ))
 }
 
+fn build_queue_framing_summary(
+    snapshot: &PlanningRuntimeSnapshot,
+    max_detail_len: usize,
+) -> Option<String> {
+    build_queue_framing_details(snapshot, max_detail_len).map(|details| {
+        format!(
+            "now: {}  |  next: {}  |  proposed: {}  |  blocked: {}",
+            details.now_detail,
+            details.next_detail,
+            details.proposed_detail,
+            details.blocked_detail
+        )
+    })
+}
+
+fn build_queue_framing_details(
+    snapshot: &PlanningRuntimeSnapshot,
+    max_detail_len: usize,
+) -> Option<QueueFramingDetails> {
+    let queue_snapshot = snapshot.queue_snapshot();
+    let has_queue_context = snapshot.workspace_present()
+        || snapshot.queue_head().is_some()
+        || snapshot.queue_summary().is_some()
+        || snapshot.proposal_summary().is_some()
+        || queue_snapshot.is_some();
+    if !has_queue_context {
+        return None;
+    }
+
+    let mut details = QueueFramingDetails {
+        now_detail: "none".to_string(),
+        next_detail: "none".to_string(),
+        proposed_detail: "none".to_string(),
+        blocked_detail: "none".to_string(),
+    };
+
+    if let Some(queue_snapshot) = queue_snapshot {
+        details.now_detail = queue_snapshot
+            .next_task
+            .as_ref()
+            .or_else(|| snapshot.queue_head())
+            .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
+            .unwrap_or_else(|| "none".to_string());
+
+        let remaining_tasks = queue_snapshot
+            .next_task
+            .as_ref()
+            .map(|current| {
+                queue_snapshot
+                    .active_tasks
+                    .iter()
+                    .filter(|task| task.task_id != current.task_id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| queue_snapshot.active_tasks.iter().collect::<Vec<_>>());
+        details.next_detail = remaining_tasks
+            .first()
+            .map(|task| {
+                compact_queue_task_summary(
+                    task.task_title.as_str(),
+                    remaining_tasks.len(),
+                    1,
+                    max_detail_len,
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+
+        details.proposed_detail = queue_snapshot
+            .proposed_tasks
+            .first()
+            .map(|task| {
+                compact_queue_task_summary(
+                    task.task_title.as_str(),
+                    queue_snapshot.proposed_tasks.len(),
+                    1,
+                    max_detail_len,
+                )
+            })
+            .or_else(|| snapshot.compact_proposal_summary_detail(max_detail_len))
+            .unwrap_or_else(|| "none".to_string());
+
+        details.blocked_detail = queue_snapshot
+            .skipped_tasks
+            .first()
+            .map(|task| {
+                compact_skipped_queue_task_summary(
+                    task,
+                    queue_snapshot.skipped_tasks.len(),
+                    max_detail_len,
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+
+        return Some(details);
+    }
+
+    if let Some(queue_head) = snapshot.queue_head() {
+        details.now_detail =
+            compact_queue_task_summary(queue_head.task_title.as_str(), 1, 1, max_detail_len);
+    }
+
+    if let Some(queue_summary) = snapshot.queue_summary() {
+        apply_legacy_queue_summary_details(&mut details, queue_summary, max_detail_len);
+    }
+
+    if let Some(proposal_summary) = snapshot.proposal_summary() {
+        details.proposed_detail = compact_proposal_summary_detail(proposal_summary, max_detail_len);
+    }
+
+    Some(details)
+}
+
+fn apply_legacy_queue_summary_details(
+    details: &mut QueueFramingDetails,
+    summary: &str,
+    max_detail_len: usize,
+) {
+    for segment in summary.split("  |  ") {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("now: ") {
+            details.now_detail = compact_whitespace_detail(detail, max_detail_len);
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("next: ") {
+            details.next_detail = compact_whitespace_detail(detail, max_detail_len);
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("proposed: ") {
+            details.proposed_detail = compact_whitespace_detail(detail, max_detail_len);
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("blocked: ") {
+            details.blocked_detail = compact_whitespace_detail(detail, max_detail_len);
+            continue;
+        }
+        if let Some(detail) = trimmed.strip_prefix("next task: ") {
+            if details.now_detail == "none" {
+                details.now_detail = compact_legacy_next_task_detail(detail, max_detail_len);
+            }
+        }
+    }
+}
+
+fn compact_queue_task_summary(
+    task_title: &str,
+    total_count: usize,
+    shown_count: usize,
+    max_detail_len: usize,
+) -> String {
+    let mut summary = compact_whitespace_detail(task_title.trim(), max_detail_len);
+    let hidden_count = total_count.saturating_sub(shown_count);
+    if hidden_count > 0 {
+        summary.push_str(&format!(" (+{hidden_count} more)"));
+    }
+    summary
+}
+
+fn compact_skipped_queue_task_summary(
+    task: &crate::domain::planning::PriorityQueueSkippedTask,
+    total_count: usize,
+    max_detail_len: usize,
+) -> String {
+    let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
+    let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
+    let mut summary = format!("{title} ({reason})");
+    let hidden_count = total_count.saturating_sub(1);
+    if hidden_count > 0 {
+        summary.push_str(&format!(" (+{hidden_count} more)"));
+    }
+    summary
+}
+
+fn compact_legacy_next_task_detail(summary: &str, max_detail_len: usize) -> String {
+    let trimmed = summary.trim();
+    let segments = trimmed.split(" / ").map(str::trim).collect::<Vec<_>>();
+    if segments.len() >= 4
+        && segments
+            .first()
+            .is_some_and(|segment| segment.starts_with("rank "))
+        && segments
+            .last()
+            .is_some_and(|segment| segment.starts_with("priority "))
+    {
+        let title = segments[2..segments.len() - 1].join(" / ");
+        if !title.trim().is_empty() {
+            return compact_whitespace_detail(title.as_str(), max_detail_len);
+        }
+    }
+
+    compact_whitespace_detail(trimmed, max_detail_len)
+}
+
+fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
+    let detail = summary
+        .split_once(": ")
+        .map(|(_, detail)| detail)
+        .unwrap_or(summary);
+    compact_whitespace_detail(detail, max_detail_len)
+}
+
 fn trimmed_non_empty(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
@@ -901,17 +1128,32 @@ mod tests {
             .prompt_fragment()
             .expect("valid workspace should expose a prompt fragment");
         assert!(prompt_fragment.contains("proposed_tasks: top 1 of 1 promotable proposals"));
-        assert!(
-            prompt_fragment
-                .contains("proposal rank 1 | task-followup-1 | Draft a sushi-chef roadmap")
-        );
+        assert!(prompt_fragment
+            .contains("proposal rank 1 | task-followup-1 | Draft a sushi-chef roadmap"));
         assert!(prompt_fragment.contains("combined_priority=30"));
         assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
-        assert!(
-            prompt_fragment
-                .contains("move the actionable worklist into normal queue tasks with priorities")
-        );
+        assert!(prompt_fragment
+            .contains("move the actionable worklist into normal queue tasks with priorities"));
         assert!(result.has_proposal_candidates());
+    }
+
+    #[test]
+    fn preview_detail_reframes_legacy_queue_and_proposal_summaries() {
+        let snapshot = super::PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "next task: rank 1 / task-1 / Draft roadmap / priority 9".to_string(),
+            Some(
+                "2 promotable follow-up proposals available: Draft checklist | +1 more".to_string(),
+            ),
+            None,
+        );
+
+        assert_eq!(
+            snapshot.preview_detail().as_deref(),
+            Some(
+                "now: Draft roadmap  |  next: none  |  proposed: Draft checklist | +1 more  |  blocked: none"
+            )
+        );
     }
 
     #[test]
@@ -1024,12 +1266,10 @@ state = "paused"
         assert!(prompt_fragment.contains("task-1"));
         assert!(prompt_fragment.contains("Result Output Prompt"));
         assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
-        assert!(
-            result
-                .queue_summary()
-                .expect("valid workspace should expose a queue summary")
-                .contains("task-1")
-        );
+        assert!(result
+            .queue_summary()
+            .expect("valid workspace should expose a queue summary")
+            .contains("task-1"));
         assert_eq!(
             result
                 .queue_head()

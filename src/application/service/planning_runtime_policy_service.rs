@@ -1,6 +1,6 @@
 use crate::application::service::planning_auto_follow_copy::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
-    PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
+    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
+    PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
 };
 use crate::application::service::planning_prompt_service::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
@@ -199,14 +199,12 @@ impl PlanningRuntimePolicyService {
 
         PlanningRuntimeSummaryView {
             status_label: workspace_status_label(request.snapshot, workspace_state),
-            queue_summary: build_queue_framing_summary(
-                request.snapshot,
-                INTERNAL_QUEUE_METADATA_DETAIL_LIMIT,
-            ),
+            queue_summary: request
+                .snapshot
+                .compact_queue_framing_summary(INTERNAL_QUEUE_METADATA_DETAIL_LIMIT),
             proposal_summary: request
                 .snapshot
-                .proposal_summary()
-                .map(|summary| compact_proposal_summary_detail(summary, INTERNAL_QUEUE_METADATA_DETAIL_LIMIT)),
+                .compact_proposal_summary_detail(INTERNAL_QUEUE_METADATA_DETAIL_LIMIT),
             failure_summary: request
                 .repair_failure_summary
                 .or_else(|| request.snapshot.auto_followup_pause_reason())
@@ -234,9 +232,11 @@ impl PlanningRuntimePolicyService {
                     if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Uninitialized
                     {
                         "no planning workspace is active for this shell yet".to_string()
-                    } else if let Some(proposal_summary) = snapshot.proposal_summary() {
+                    } else if let Some(proposal_summary) = snapshot
+                        .compact_proposal_summary_detail(INTERNAL_QUEUE_METADATA_DETAIL_LIMIT)
+                    {
                         format!(
-                            "planning is valid but has no next task yet; {proposal_summary}"
+                            "planning is valid but has no next task yet; proposed work: {proposal_summary}"
                         )
                     } else {
                         idle_queue_cause(snapshot)
@@ -257,7 +257,7 @@ impl PlanningRuntimePolicyService {
 
         PlanningRuntimePreviewView {
             status_label: snapshot.preview_status_label(),
-            detail: non_blocked_preview_detail(snapshot),
+            detail: non_blocked_preview_detail(snapshot, INTERNAL_QUEUE_METADATA_DETAIL_LIMIT),
         }
     }
 
@@ -343,9 +343,10 @@ impl PlanningRuntimePolicyService {
                 };
                 format!("{queue_label}: {queue_summary}")
             }),
-            proposal_line: summary.proposal_summary.as_deref().map(|proposal_summary| {
-                format!("planning proposals: {proposal_summary}")
-            }),
+            proposal_line: summary
+                .proposal_summary
+                .as_deref()
+                .map(|proposal_summary| format!("planning proposals: {proposal_summary}")),
             failure_line: summary.failure_summary.as_deref().map(|failure_summary| {
                 format!(
                     "last planning failure: {}",
@@ -354,112 +355,6 @@ impl PlanningRuntimePolicyService {
             }),
         }
     }
-}
-
-fn build_queue_framing_summary(
-    snapshot: &PlanningRuntimeSnapshot,
-    max_detail_len: usize,
-) -> Option<String> {
-    let queue_snapshot = snapshot.queue_snapshot();
-    let has_queue_context = snapshot.workspace_present()
-        || snapshot.queue_head().is_some()
-        || snapshot.proposal_summary().is_some()
-        || queue_snapshot.is_some();
-    if !has_queue_context {
-        return None;
-    }
-
-    let now_detail = queue_snapshot
-        .and_then(|queue_snapshot| queue_snapshot.next_task.as_ref())
-        .or_else(|| snapshot.queue_head())
-        .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
-        .unwrap_or_else(|| "none".to_string());
-
-    let next_detail = queue_snapshot
-        .map(|queue_snapshot| {
-            let remaining_tasks = queue_snapshot
-                .next_task
-                .as_ref()
-                .map(|current| {
-                    queue_snapshot
-                        .active_tasks
-                        .iter()
-                        .filter(|task| task.task_id != current.task_id)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_else(|| queue_snapshot.active_tasks.iter().collect::<Vec<_>>());
-            remaining_tasks
-                .first()
-                .map(|task| {
-                    compact_queue_task_summary(
-                        task.task_title.as_str(),
-                        remaining_tasks.len(),
-                        1,
-                        max_detail_len,
-                    )
-                })
-                .unwrap_or_else(|| "none".to_string())
-        })
-        .unwrap_or_else(|| "none".to_string());
-
-    let proposed_detail = queue_snapshot
-        .and_then(|queue_snapshot| {
-            queue_snapshot.proposed_tasks.first().map(|task| {
-                compact_queue_task_summary(
-                    task.task_title.as_str(),
-                    queue_snapshot.proposed_tasks.len(),
-                    1,
-                    max_detail_len,
-                )
-            })
-        })
-        .or_else(|| {
-            snapshot
-                .proposal_summary()
-                .map(|summary| compact_proposal_summary_detail(summary, max_detail_len))
-        })
-        .unwrap_or_else(|| "none".to_string());
-
-    let blocked_detail = queue_snapshot
-        .and_then(|queue_snapshot| {
-            queue_snapshot.skipped_tasks.first().map(|task| {
-                let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
-                let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
-                let mut summary = format!("{title} ({reason})");
-                let hidden_count = queue_snapshot.skipped_tasks.len().saturating_sub(1);
-                if hidden_count > 0 {
-                    summary.push_str(&format!(" (+{hidden_count} more)"));
-                }
-                summary
-            })
-        })
-        .unwrap_or_else(|| "none".to_string());
-
-    Some(format!(
-        "now: {now_detail}  |  next: {next_detail}  |  proposed: {proposed_detail}  |  blocked: {blocked_detail}"
-    ))
-}
-
-fn compact_queue_task_summary(
-    task_title: &str,
-    total_count: usize,
-    shown_count: usize,
-    max_detail_len: usize,
-) -> String {
-    let mut summary = compact_whitespace_detail(task_title.trim(), max_detail_len);
-    let hidden_count = total_count.saturating_sub(shown_count);
-    if hidden_count > 0 {
-        summary.push_str(&format!(" (+{hidden_count} more)"));
-    }
-    summary
-}
-
-fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
-    let detail = summary
-        .split_once(": ")
-        .map(|(_, detail)| detail)
-        .unwrap_or(summary);
-    compact_whitespace_detail(detail, max_detail_len)
 }
 
 fn workspace_status_label(
@@ -616,15 +511,18 @@ fn build_operator_guidance(
 }
 
 #[cfg(test)]
-fn non_blocked_preview_detail(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
-    match (snapshot.queue_summary(), snapshot.proposal_summary()) {
-        (Some(queue_summary), Some(proposal_summary)) => {
-            Some(format!("{queue_summary}  |  {proposal_summary}"))
-        }
-        (Some(queue_summary), None) => Some(queue_summary.to_string()),
-        (None, Some(proposal_summary)) => Some(proposal_summary.to_string()),
-        (None, None) => snapshot.failure_reason().map(str::to_string),
-    }
+fn non_blocked_preview_detail(
+    snapshot: &PlanningRuntimeSnapshot,
+    max_detail_len: usize,
+) -> Option<String> {
+    snapshot
+        .compact_queue_framing_summary(max_detail_len)
+        .or_else(|| snapshot.compact_proposal_summary_detail(max_detail_len))
+        .or_else(|| {
+            snapshot
+                .failure_reason()
+                .map(|detail| compact_projection_detail(detail, max_detail_len))
+        })
 }
 
 fn compact_projection_detail(text: &str, max_len: usize) -> String {
@@ -662,7 +560,9 @@ fn idle_queue_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
 }
 
 fn proposal_review_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
-    if let Some(proposal_summary) = snapshot.proposal_summary() {
+    if let Some(proposal_summary) =
+        snapshot.compact_proposal_summary_detail(INTERNAL_QUEUE_METADATA_DETAIL_LIMIT)
+    {
         format!("planning has proposals but no executable next task: {proposal_summary}")
     } else {
         "planning has proposals but no executable next task".to_string()
@@ -747,10 +647,10 @@ mod tests {
         let preview = service.build_preview_view_for_decision(decision, &snapshot);
 
         assert_eq!(preview.status_label, "review needed");
-        assert!(preview.detail.as_deref().is_some_and(|detail| {
-            detail.contains("queue idle: no executable planning task")
-                && detail.contains("promotable follow-up proposals available")
-        }));
+        assert_eq!(
+            preview.detail.as_deref(),
+            Some("now: none  |  next: none  |  proposed: Plan A | +1 more  |  blocked: none")
+        );
     }
 
     #[test]
@@ -790,15 +690,13 @@ mod tests {
                 PlanningAutoFollowBlockReason::ActionableQueueRequired
             )
         );
-        assert!(
-            service
-                .build_preview_view_for_decision(decision, &snapshot)
-                .detail
-                .as_deref()
-                .is_some_and(|detail| {
-                    detail.contains("no planning workspace is active for this shell yet")
-                })
-        );
+        assert!(service
+            .build_preview_view_for_decision(decision, &snapshot)
+            .detail
+            .as_deref()
+            .is_some_and(|detail| {
+                detail.contains("no planning workspace is active for this shell yet")
+            }));
     }
 
     #[test]
@@ -837,14 +735,12 @@ mod tests {
                 PlanningAutoFollowPromptMode::RefreshPlanningQueue
             )
         );
-        assert!(
-            service
-                .auto_follow_transcript_text(
-                    &snapshot,
-                    PlanningAutoFollowPromptMode::RefreshPlanningQueue
-                )
-                .contains("existing proposal 작업 목록을 priority queue에 넣고")
-        );
+        assert!(service
+            .auto_follow_transcript_text(
+                &snapshot,
+                PlanningAutoFollowPromptMode::RefreshPlanningQueue
+            )
+            .contains("existing proposal 작업 목록을 priority queue에 넣고"));
     }
 
     #[test]
@@ -1004,16 +900,12 @@ mod tests {
             Some("planning queue head: now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none")
         );
         assert_eq!(projection.current_state_line, "current state: ready");
-        assert!(
-            projection
-                .cause_line
-                .starts_with("cause: the next queued task is Implement queue-aware")
-        );
-        assert!(
-            projection
-                .next_action_line
-                .starts_with("next action: let automation continue")
-        );
+        assert!(projection
+            .cause_line
+            .starts_with("cause: the next queued task is Implement queue-aware"));
+        assert!(projection
+            .next_action_line
+            .starts_with("next action: let automation continue"));
     }
 
     #[test]
