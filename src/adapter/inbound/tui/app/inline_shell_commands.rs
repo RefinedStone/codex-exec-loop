@@ -3,6 +3,7 @@ use super::AutoFollowState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
     Diagnostics,
+    Parallel,
     Sessions,
     Queue,
     Directions,
@@ -41,7 +42,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 const RESET_USAGE: &str =
@@ -55,6 +56,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "diagnostics",
         buffered_hint: "Press Enter to open the diagnostics inspection.",
         execution_status: Some("opened diagnostics inspection"),
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Parallel,
+        primary_name: ":parallel",
+        aliases: &[":parallel"],
+        suggestion_detail: "parallel mode",
+        buffered_hint: "Press Enter to inspect parallel mode readiness.",
+        execution_status: None,
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -183,6 +193,19 @@ impl InlineShellCommandInput {
 
     pub(super) fn buffered_hint(&self) -> String {
         match self.command {
+            InlineShellCommand::Parallel => match self.argument() {
+                Some(value) if value.eq_ignore_ascii_case("off") => {
+                    "Press Enter to turn parallel mode off.".to_string()
+                }
+                Some(value) if value.eq_ignore_ascii_case("on") => {
+                    "Press Enter to inspect readiness and enter parallel mode when allowed."
+                        .to_string()
+                }
+                Some(value) => format!(
+                    "Press Enter to apply `:parallel {value}`. Supported arguments: on, off."
+                ),
+                None => self.command.spec().buffered_hint.to_string(),
+            },
             InlineShellCommand::PlanningInit => match self.argument() {
                 Some(value) if value.eq_ignore_ascii_case("off") => {
                     "Press Enter to turn Plan off.".to_string()
@@ -360,6 +383,7 @@ impl InlineShellCommand {
             InlineShellCommand::Reset => ":reset ",
             InlineShellCommand::MaxAutoTurns => ":turns ",
             InlineShellCommand::Diagnostics
+            | InlineShellCommand::Parallel
             | InlineShellCommand::Sessions
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
@@ -466,6 +490,15 @@ mod tests {
                 ":diagnostics",
                 Some((InlineShellCommand::Diagnostics, None)),
             ),
+            (":parallel", Some((InlineShellCommand::Parallel, None))),
+            (
+                ":parallel on",
+                Some((InlineShellCommand::Parallel, Some("on"))),
+            ),
+            (
+                ":parallel off",
+                Some((InlineShellCommand::Parallel, Some("off"))),
+            ),
             (":DIAG", Some((InlineShellCommand::Diagnostics, None))),
             (":session", Some((InlineShellCommand::Sessions, None))),
             (":sessions", Some((InlineShellCommand::Sessions, None))),
@@ -537,6 +570,7 @@ mod tests {
             suggestions,
             vec![
                 InlineShellCommand::Diagnostics,
+                InlineShellCommand::Parallel,
                 InlineShellCommand::Sessions,
                 InlineShellCommand::Queue,
                 InlineShellCommand::Directions,
@@ -557,7 +591,10 @@ mod tests {
     fn suggestions_filter_by_prefix() {
         assert_eq!(
             InlineShellCommand::suggestions(":p"),
-            vec![InlineShellCommand::PlanningInit]
+            vec![
+                InlineShellCommand::Parallel,
+                InlineShellCommand::PlanningInit
+            ]
         );
         assert_eq!(
             InlineShellCommand::suggestions(":q"),
@@ -603,7 +640,7 @@ mod tests {
     fn palette_state_keeps_selected_command_when_input_refines() {
         let mut state = InlineShellCommandPaletteState::default();
         state.sync_to_input(":", None);
-        assert!(state.move_selection(8));
+        assert!(state.move_selection(9));
         assert_eq!(
             state.selected_command(),
             Some(InlineShellCommand::PlanningInit)
@@ -624,6 +661,7 @@ mod tests {
             InlineShellCommand::PlanningInit.completion_text(),
             ":planning"
         );
+        assert_eq!(InlineShellCommand::Parallel.completion_text(), ":parallel");
         assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
         assert_eq!(InlineShellCommand::Init.completion_text(), ":init");
         assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
@@ -683,6 +721,32 @@ mod tests {
         assert_eq!(
             doctor.buffered_hint(),
             "Press Enter to inspect planning health."
+        );
+    }
+
+    #[test]
+    fn parallel_command_hint_is_argument_aware() {
+        let plain = InlineShellCommandInput::parse(":parallel").expect("command should parse");
+        let on = InlineShellCommandInput::parse(":parallel on").expect("command should parse");
+        let off = InlineShellCommandInput::parse(":parallel off").expect("command should parse");
+        let invalid =
+            InlineShellCommandInput::parse(":parallel later").expect("command should parse");
+
+        assert_eq!(
+            plain.buffered_hint(),
+            "Press Enter to inspect parallel mode readiness."
+        );
+        assert_eq!(
+            on.buffered_hint(),
+            "Press Enter to inspect readiness and enter parallel mode when allowed."
+        );
+        assert_eq!(
+            off.buffered_hint(),
+            "Press Enter to turn parallel mode off."
+        );
+        assert_eq!(
+            invalid.buffered_hint(),
+            "Press Enter to apply `:parallel later`. Supported arguments: on, off."
         );
     }
 

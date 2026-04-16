@@ -2,18 +2,19 @@ use std::rc::Rc;
 
 use ratatui::layout::Position;
 
+use super::shell_presentation::{
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, SupersessionOverlayView, build_automation_overlay_view,
+    build_directions_maintenance_overlay_view, build_inline_tail_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view,
+};
 #[cfg(test)]
 use super::shell_presentation::{
     ConversationShellFrameView, build_conversation_shell_frame_view,
     build_input_prompt_cursor_offset,
-};
-use super::shell_presentation::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_automation_overlay_view, build_inline_tail_view,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
 };
 use super::*;
 
@@ -328,13 +329,14 @@ fn draw_inline_shell_inspection(
         ShellOverlay::Hidden => {}
         ShellOverlay::Startup => draw_inline_startup_inspection(frame, inspection_area, app),
         ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
+        ShellOverlay::Supersession => {
+            draw_inline_supersession_inspection(frame, inspection_area, app)
+        }
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
         ShellOverlay::DirectionsMaintenance => {
             draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
         }
-        ShellOverlay::Automation => {
-            draw_inline_automation_inspection(frame, inspection_area, app)
-        }
+        ShellOverlay::Automation => draw_inline_automation_inspection(frame, inspection_area, app),
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
@@ -479,11 +481,57 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
-fn draw_inline_automation_inspection(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &mut NativeTuiApp,
-) {
+fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_supersession_overlay_view(app);
+    let SupersessionOverlayView {
+        header_lines,
+        summary_lines,
+        capability_lines,
+        board_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 6)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Supersession / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(layout[2]);
+    render_inline_section(
+        frame,
+        content_layout[0],
+        Line::from("Capabilities"),
+        capability_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        content_layout[1],
+        Line::from("Control Tower"),
+        board_lines,
+        false,
+    );
+    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_automation_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let overlay_view = build_automation_overlay_view(app);
     let AutomationOverlayView {
         header_lines,
@@ -843,6 +891,69 @@ fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
 
 #[cfg(test)]
 #[allow(dead_code)]
+fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let overlay_view = build_supersession_overlay_view(app);
+    let SupersessionOverlayView {
+        header_lines,
+        summary_lines,
+        capability_lines,
+        board_lines,
+        key_lines,
+    } = overlay_view;
+    let popup_area = centered_rect(92, 78, frame.area());
+    frame.render_widget(Clear, popup_area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(block_height_for_lines(&header_lines, 3, 4)),
+            Constraint::Length(block_height_for_lines(&summary_lines, 4, 7)),
+            Constraint::Min(12),
+            Constraint::Length(block_height_for_lines(&key_lines, 3, 5)),
+        ])
+        .split(popup_area);
+
+    frame.render_widget(
+        Paragraph::new(header_lines)
+            .block(Block::default().borders(Borders::ALL).title("Supersession")),
+        layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(summary_lines)
+            .block(Block::default().borders(Borders::ALL).title("Summary"))
+            .wrap(Wrap { trim: true }),
+        layout[1],
+    );
+
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(layout[2]);
+    frame.render_widget(
+        Paragraph::new(capability_lines)
+            .block(Block::default().borders(Borders::ALL).title("Capabilities"))
+            .wrap(Wrap { trim: false }),
+        content_layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(board_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Control Tower"),
+            )
+            .wrap(Wrap { trim: false }),
+        content_layout[1],
+    );
+    frame.render_widget(
+        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        layout[3],
+    );
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
 fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
     let overlay_view = build_automation_overlay_view(app);
     let AutomationOverlayView {
@@ -1070,11 +1181,7 @@ fn draw_automation_list_panel(
 ) {
     if let Some(message_lines) = list_view.message_lines {
         let widget = Paragraph::new(message_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Automation"),
-            )
+            .block(Block::default().borders(Borders::ALL).title("Automation"))
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
         return;
@@ -1086,11 +1193,7 @@ fn draw_automation_list_panel(
             .into_iter()
             .map(|item| ListItem::new(item.lines)),
     )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Automation"),
-    )
+    .block(Block::default().borders(Borders::ALL).title("Automation"))
     .highlight_style(
         Style::default()
             .fg(Color::Black)

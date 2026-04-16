@@ -66,6 +66,11 @@ impl NativeTuiApp {
     }
 
     pub(super) fn show_session_overlay(&mut self) {
+        if self.parallel_mode_enabled() {
+            self.inspect_parallel_mode_shell();
+            return;
+        }
+
         self.dispatch_shell_chrome(ShellChromeEvent::SessionsOverlayShown {
             limit: SESSION_PAGE_SIZE,
         });
@@ -81,6 +86,11 @@ impl NativeTuiApp {
     }
 
     pub(super) fn toggle_session_overlay(&mut self) {
+        if self.parallel_mode_enabled() {
+            self.toggle_supersession_overlay();
+            return;
+        }
+
         self.dispatch_shell_chrome(ShellChromeEvent::SessionsOverlayToggled {
             limit: SESSION_PAGE_SIZE,
         });
@@ -111,6 +121,9 @@ impl NativeTuiApp {
     ) {
         match command_input.command() {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
+            InlineShellCommand::Parallel => {
+                self.handle_parallel_shell_command(command_input.argument())
+            }
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Queue => self.show_queue_overlay(),
             InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
@@ -125,8 +138,9 @@ impl NativeTuiApp {
             InlineShellCommand::MaxAutoTurns => {
                 let Some(value) = command_input.argument().map(str::to_string) else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text: "usage: :turns <n|infinite>  |  alias: :auto-turns <n|infinite>"
-                            .to_string(),
+                        status_text:
+                            "usage: :turns <n|infinite>  |  alias: :auto-turns <n|infinite>"
+                                .to_string(),
                     });
                     self.clear_input_buffer();
                     return;
@@ -139,7 +153,14 @@ impl NativeTuiApp {
             InlineShellCommand::Help => {}
         }
 
-        if let Some(status_text) = command_input.execution_status() {
+        let status_text = match command_input.command() {
+            InlineShellCommand::Sessions if self.parallel_mode_enabled() => {
+                Some("opened supersession control tower".to_string())
+            }
+            _ => command_input.execution_status(),
+        };
+
+        if let Some(status_text) = status_text {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text,
             });
@@ -300,6 +321,10 @@ impl NativeTuiApp {
         }
 
         if self.handle_automation_overlay_key(key) {
+            return true;
+        }
+
+        if self.handle_supersession_overlay_key(key) {
             return true;
         }
 

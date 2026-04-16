@@ -26,6 +26,14 @@ pub(crate) struct SessionOverlayView {
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
+pub(crate) struct SupersessionOverlayView {
+    pub(crate) header_lines: Vec<Line<'static>>,
+    pub(crate) summary_lines: Vec<Line<'static>>,
+    pub(crate) capability_lines: Vec<Line<'static>>,
+    pub(crate) board_lines: Vec<Line<'static>>,
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
 pub(crate) struct AutomationOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) list_view: OverlayListView,
@@ -81,6 +89,8 @@ mod directions;
 
 #[path = "overlays/planning.rs"]
 mod planning;
+#[path = "overlays/supersession.rs"]
+mod supersession;
 
 #[cfg(test)]
 pub(crate) use base::{
@@ -94,3 +104,4 @@ pub(crate) use planning::{
     build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
 };
 pub(crate) use queue::{build_automation_overlay_view, build_queue_overlay_view};
+pub(crate) use supersession::build_supersession_overlay_view;

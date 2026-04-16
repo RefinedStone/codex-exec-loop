@@ -22,8 +22,8 @@ use crate::application::service::planning::{
 #[cfg(test)]
 use super::{
     FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT,
-    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT,
-    FOOTER_WARNING_DETAIL_LIMIT, INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
+    FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT, FOOTER_WARNING_DETAIL_LIMIT,
+    INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
 };
 
 #[derive(Clone)]
@@ -44,6 +44,8 @@ pub(super) struct PlanModeIndicatorView {
 pub(super) fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     plan_mode_indicator: PlanModeIndicatorView,
+    parallel_mode_summary_line: String,
+    parallel_mode_alert_line: Option<String>,
     github_review_recent_changes_summary: Option<String>,
     planning_summary_line: Option<String>,
     planning_notice_line: Option<String>,
@@ -124,6 +126,10 @@ pub(super) fn build_shell_footer_lines_with_context(
                 ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
+            lines.push(Line::from(parallel_mode_summary_line));
+            if let Some(parallel_mode_alert_line) = parallel_mode_alert_line {
+                lines.push(Line::from(parallel_mode_alert_line));
+            }
             if let Some(working_line) = build_working_line(conversation, FOOTER_STATUS_DETAIL_LIMIT)
             {
                 lines.push(working_line);
@@ -275,6 +281,10 @@ fn build_inline_tail_lines_with_context(
                 ));
             }
             lines.push(Line::from(status_segments.join("  |  ")));
+            lines.push(Line::from(parallel_mode_summary_line(app)));
+            if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(app) {
+                lines.push(Line::from(parallel_mode_alert_line));
+            }
             if let Some(working_line) =
                 build_working_line(conversation, INLINE_TAIL_STATUS_DETAIL_LIMIT)
             {
@@ -601,6 +611,29 @@ fn inline_mode_label(conversation: &ConversationViewModel) -> String {
         conversation.auto_follow_state.mode_label(),
         INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
     )
+}
+
+pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
+    match app.parallel_mode_readiness_snapshot() {
+        Some(snapshot) if app.parallel_mode_enabled() => format!(
+            "parallel: {}  |  mode: parallel  |  pool: pending reconcile  |  queue: distributor idle",
+            snapshot.readiness_label()
+        ),
+        Some(snapshot) => format!(
+            "parallel: last {}  |  mode: normal  |  pool: inactive  |  queue: inactive",
+            snapshot.readiness_label()
+        ),
+        None if app.parallel_mode_enabled() => {
+            "parallel: preparing  |  mode: parallel  |  pool: pending reconcile  |  queue: distributor idle".to_string()
+        }
+        None => "parallel: off  |  mode: normal  |  pool: inactive  |  queue: inactive".to_string(),
+    }
+}
+
+pub(super) fn parallel_mode_alert_line(app: &NativeTuiApp) -> Option<String> {
+    app.parallel_mode_readiness_snapshot()
+        .and_then(|snapshot| snapshot.top_alert.as_deref())
+        .map(|alert| format!("parallel alert: {alert}"))
 }
 
 fn compact_inline_summary_label(summary: &str) -> String {

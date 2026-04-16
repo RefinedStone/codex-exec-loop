@@ -1,8 +1,6 @@
 use std::time::{Duration, Instant};
 
-pub(super) use super::planning::{
-    build_automation_preview_lines, build_automation_status_lines,
-};
+pub(super) use super::planning::{build_automation_preview_lines, build_automation_status_lines};
 use super::*;
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 use crate::application::service::session_service::{
@@ -179,12 +177,12 @@ mod overlays;
 mod status_panels;
 
 pub(super) use overlays::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListEntryView,
-    OverlayListView, PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView,
-    SessionOverlayView, StartupOverlayView, build_directions_maintenance_overlay_view,
-    build_automation_overlay_view, build_planning_draft_editor_overlay_view,
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListEntryView, OverlayListView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, SupersessionOverlayView, build_automation_overlay_view,
+    build_directions_maintenance_overlay_view, build_planning_draft_editor_overlay_view,
     build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_banner_lines, build_startup_overlay_view,
+    build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
 };
 #[cfg(test)]
 pub(super) use overlays::{
@@ -196,6 +194,8 @@ pub(super) use status_panels::InlineTailView;
 fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     plan_mode_indicator: status_panels::PlanModeIndicatorView,
+    parallel_mode_summary_line: String,
+    parallel_mode_alert_line: Option<String>,
     github_review_recent_changes_summary: Option<String>,
     planning_summary_line: Option<String>,
     planning_notice_line: Option<String>,
@@ -204,6 +204,8 @@ fn build_shell_footer_lines_with_context(
     status_panels::build_shell_footer_lines_with_context(
         context,
         plan_mode_indicator,
+        parallel_mode_summary_line,
+        parallel_mode_alert_line,
         github_review_recent_changes_summary,
         planning_summary_line,
         planning_notice_line,
@@ -632,9 +634,7 @@ pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static
         Line::from(
             "Ctrl+a: automation on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword",
         ),
-        Line::from(
-            "Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Ctrl+b: planner detail",
-        ),
+        Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Ctrl+b: planner detail"),
         Line::from("Enter/Esc/Ctrl+C: close"),
     ]
 }

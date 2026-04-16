@@ -13,12 +13,14 @@ use crate::adapter::inbound::tui::shell_chrome::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::parallel_mode_service::ParallelModeService;
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+use crate::domain::parallel_mode::ParallelModeReadinessSnapshot;
 use crate::domain::session_summary::SessionSummary;
 
 const SESSION_PAGE_SIZE: usize = 10;
@@ -73,6 +75,8 @@ mod followup_overlay_ui;
 mod github_polling;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/parallel_mode.rs"]
+mod parallel_mode;
 #[path = "app/planner_debug_preview.rs"]
 mod planner_debug_preview;
 #[path = "app/planning/mod.rs"]
@@ -208,6 +212,8 @@ struct NativeTuiApp {
     exit_confirmation_state: ExitConfirmationState,
     startup_state: StartupState,
     session_state: SessionState,
+    parallel_mode_enabled: bool,
+    parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
@@ -219,6 +225,7 @@ struct NativeTuiApp {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
+    parallel_mode_service: ParallelModeService,
     planning: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
