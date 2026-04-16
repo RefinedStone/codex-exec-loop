@@ -402,7 +402,7 @@ mod tests {
                     mode_label: "planning queue".to_string(),
                     transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
                     debug_detail: Some(
-                        "planner temp session: refresh / refresh ok\nplanner response:\n  queued next task"
+                        "planner session: refresh  |  state: refresh ok\nPlanner Reply\n  queued next task"
                             .to_string(),
                     ),
                     handoff_task: None,
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(
             reduced.state.messages[0].debug_detail.as_deref(),
             Some(
-                "planner temp session: refresh / refresh ok\nplanner response:\n  queued next task"
+                "planner session: refresh  |  state: refresh ok\nPlanner Reply\n  queued next task"
             )
         );
     }

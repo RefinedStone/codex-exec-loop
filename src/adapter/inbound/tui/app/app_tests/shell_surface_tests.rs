@@ -5,17 +5,19 @@ use crossterm::event::Event;
 
 use super::super::shell_runtime;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::planning::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
 
 use super::{
-    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent,
-    ConversationState, KeyCode, KeyEvent, KeyModifiers, PlannerWorkerStatus,
-    PlanningExecutionSnapshot, PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay,
-    StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
-    build_startup_overlay_view, create_temp_workspace, make_test_app, ready_conversation,
-    ready_turn_planning_capture, sample_planning_runtime_snapshot, sample_startup_diagnostics,
+    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
+    KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
+    RecordedAutoFollowupActivity, ShellActionAvailability, ShellOverlay, StartupState,
+    TASK_LEDGER_FILE_PATH, build_automation_overlay_view, build_automation_preview_lines,
+    build_automation_status_lines, build_inline_tail_lines, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_ready_input_lines, build_startup_overlay_view,
+    create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
+    sample_planning_runtime_snapshot, sample_startup_diagnostics,
 };
 
 #[test]
@@ -357,6 +359,40 @@ fn planner_debug_surfaces_use_operator_facing_labels() {
 }
 
 #[test]
+fn auto_follow_transcript_debug_detail_uses_operator_facing_labels() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.toggle_planner_visibility();
+    app.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshSucceeded;
+    app.planner_worker_panel_state.last_operation_label = Some("refresh".to_string());
+    app.planner_worker_panel_state.last_summary =
+        Some("worker promoted the next queued task".to_string());
+    app.planner_worker_panel_state.last_prompt = Some("planner prompt".to_string());
+    app.planner_worker_panel_state.last_response = Some("planner response".to_string());
+
+    app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+        prompt: "ship it".to_string(),
+        queued_from_turn_id: "turn-1".to_string(),
+        mode_label: "planning queue".to_string(),
+        transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
+        handoff_task: None,
+    });
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+    let debug_detail = conversation.messages[0]
+        .debug_detail
+        .as_deref()
+        .expect("auto-follow message should keep debug detail");
+
+    assert!(debug_detail.contains("planner session: refresh  |  state: refresh ok"));
+    assert!(debug_detail.contains("planner update: worker promoted the next queued task"));
+    assert!(debug_detail.contains("Submitted Prompt"));
+    assert!(debug_detail.contains("Planner Reply"));
+}
+
+#[test]
 fn startup_checks_overlay_uses_current_state_cause_and_next_action() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
@@ -436,6 +472,74 @@ fn queue_overlay_uses_current_state_cause_and_next_action_summary() {
     assert!(
         rendered.contains("next action: review the queue and promote the next actionable task")
     );
+}
+
+#[test]
+fn queue_overlay_loading_and_failed_states_use_operator_facing_summary_lines() {
+    let (mut app, _) = make_test_app();
+    app.conversation_state = ConversationState::Loading;
+
+    let loading_summary = build_queue_overlay_view(&app)
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(loading_summary.contains("current state: waiting"));
+    assert!(loading_summary.contains("cause: conversation planning state is still loading"));
+    assert!(loading_summary.contains("next action: wait for the thread to finish loading"));
+
+    app.conversation_state = ConversationState::Failed("transport closed".to_string());
+
+    let failed_view = build_queue_overlay_view(&app);
+    let failed_summary = failed_view
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let failed_notes = failed_view
+        .note_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(failed_summary.contains("current state: blocked"));
+    assert!(failed_summary.contains(
+        "cause: conversation planning state is unavailable because the thread failed to load"
+    ));
+    assert!(failed_summary.contains("next action: reload the session or open a new draft"));
+    assert!(failed_notes.contains("conversation error: transport closed"));
+}
+
+#[test]
+fn inline_notice_uses_operator_action_label_for_recent_auto_follow_activity() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+        summary: "queued the next turn".to_string(),
+        detail: "host accepted the refreshed queue".to_string(),
+    });
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(
+        "notice: automation update: queued the next turn  |  operator action: host accepted the refreshed queue"
+    ));
 }
 
 #[test]

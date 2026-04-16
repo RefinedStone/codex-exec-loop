@@ -656,7 +656,7 @@ fn build_operator_notice_line(
 
     if let Some(activity) = conversation.last_auto_followup_activity.as_ref() {
         return Some(format!(
-            "automation update: {}  |  detail: {}",
+            "automation update: {}  |  operator action: {}",
             activity.summary,
             compact_inline_detail(&activity.detail, max_detail_len)
         ));

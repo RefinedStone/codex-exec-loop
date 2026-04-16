@@ -508,7 +508,7 @@ mod tests {
                 None,
             )
             .with_display_label("Auto Follow-up")
-            .with_debug_detail("planner temp session: refresh / refresh ok"),
+            .with_debug_detail("planner session: refresh  |  state: refresh ok"),
         );
         conversation.refresh_conversation_lines();
 
@@ -517,7 +517,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!normal_lines.contains("planner temp session"));
+        assert!(!normal_lines.contains("planner session"));
 
         app.planner_visibility = PlannerVisibility::Debug;
         let debug_lines = current_inline_history_lines(&app)
@@ -525,7 +525,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
+        assert!(debug_lines.contains("planner session: refresh  |  state: refresh ok"));
     }
 
     struct FakeCodexAppServerPort;

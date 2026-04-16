@@ -269,14 +269,14 @@ impl NativeTuiApp {
         }
 
         let mut lines = vec![format!(
-            "planner temp session: {operation_label} / {}",
+            "planner session: {operation_label}  |  state: {}",
             planner.status.label()
         )];
         if let Some(summary) = summary.filter(|summary: &&str| !summary.trim().is_empty()) {
-            lines.push(format!("planner summary: {summary}"));
+            lines.push(format!("planner update: {summary}"));
         }
-        append_debug_detail_preview_block(&mut lines, "planner prompt:", prompt);
-        append_debug_detail_preview_block(&mut lines, "planner response:", response);
+        append_debug_detail_preview_block(&mut lines, "Submitted Prompt", prompt);
+        append_debug_detail_preview_block(&mut lines, "Planner Reply", response);
 
         Some(lines.join("\n"))
     }

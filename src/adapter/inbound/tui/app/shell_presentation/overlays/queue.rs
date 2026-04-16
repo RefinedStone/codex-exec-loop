@@ -28,22 +28,26 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     match &app.conversation_state {
         ConversationState::Loading => QueueOverlayView {
             header_lines,
-            summary_lines: vec![Line::from("status: loading conversation planning state")],
+            summary_lines: queue_overlay_loading_summary_lines(),
             queue_lines: vec![Line::from(
-                "Queue inspection becomes available after the thread loads.",
+                "Queued work appears after the thread finishes loading.",
             )],
-            proposal_lines: vec![Line::from("Proposal data is unavailable while loading.")],
-            note_lines: vec![Line::from("No planner notes yet.")],
+            proposal_lines: vec![Line::from(
+                "Proposal data appears after the thread finishes loading.",
+            )],
+            note_lines: vec![Line::from(
+                "Planner updates appear after the thread finishes loading.",
+            )],
             key_lines: build_queue_overlay_key_lines(),
         },
         ConversationState::Failed(message) => QueueOverlayView {
             header_lines,
-            summary_lines: vec![Line::from("status: conversation unavailable")],
+            summary_lines: queue_overlay_failed_summary_lines(),
             queue_lines: vec![Line::from(
-                "Queue inspection is unavailable while the conversation failed to load.",
+                "Queued work is unavailable because the conversation failed to load.",
             )],
             proposal_lines: vec![Line::from(
-                "Open a new draft or reload a session to restore planning state.",
+                "Reload the session or open a new draft to restore queued work.",
             )],
             note_lines: vec![Line::from(format!(
                 "conversation error: {}",
@@ -213,6 +217,24 @@ fn build_queue_task_lines(
     }
 
     lines
+}
+
+fn queue_overlay_loading_summary_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("current state: waiting"),
+        Line::from("cause: conversation planning state is still loading"),
+        Line::from("next action: wait for the thread to finish loading"),
+    ]
+}
+
+fn queue_overlay_failed_summary_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("current state: blocked"),
+        Line::from(
+            "cause: conversation planning state is unavailable because the thread failed to load",
+        ),
+        Line::from("next action: reload the session or open a new draft"),
+    ]
 }
 
 fn build_skipped_queue_note_line(
