@@ -1,41 +1,41 @@
-# Architecture boundaries for UX iteration
+# Architecture boundaries for operator UX
 
 ## Outcome
 
-Keep UX and runtime improvements shippable by reducing structural hotspots only when they unlock safer operator-facing work.
+Create smaller seams that let status, queue, automation, and planning-entry work ship without repeatedly reopening the same hotspots.
 
 ## Why this direction exists
 
-Large shell and planning hotspots make status-language work, queue presentation work, and planning authoring work harder to ship coherently. The target is not elegance for its own sake; it is safer iteration.
+Several shell and planning hotspots still mix projection, runtime state, and layout work. That makes otherwise small operator-facing changes expensive and harder to review safely.
 
 ## Long-horizon plan
 
-- separate status wording and projection from layout and rendering
-- separate conversation lifecycle from automation lifecycle
-- separate planning authoring flow from planning runtime flow
-- organize tests around operator journeys instead of only current file boundaries
+- separate status projection from layout and rendering concerns
+- separate conversation runtime concerns from automation-runtime concerns where it reduces coupling
+- isolate planning-entry flow from the broader planning runtime surface
+- organize tests around operator-facing journeys instead of only current file ownership
 
 ## Near-term bias
 
-- extract presentation seams that unblock Phase 1 operator copy work
-- create smaller reviewable slices around shell status, queue presentation, or planning authoring
-- use the architecture debt map as the refactor source of truth
+- extract only the seams needed for the first four active directions
+- keep refactors tied to one visible operator benefit at a time
+- reduce hotspot size without inventing a broad architectural rewrite
 
 ## Relevant inputs
 
 - `docs/plan/17-structure-and-architecture-debt-map.md`
-- `src/adapter/inbound/tui/app/shell_presentation.rs`
 - `src/adapter/inbound/tui/app/conversation_runtime.rs`
+- `src/adapter/inbound/tui/app/shell_presentation.rs`
 - `src/adapter/inbound/tui/app/planning/controller.rs`
-- `src/application/service/planning_runtime_facade_service.rs`
+- `src/application/service/session_service.rs`
 
 ## Task derivation guidance
 
-- only derive refactor tasks that unlock a specific operator-visible improvement
-- make the user-facing benefit explicit in `direction_relation_note`
-- keep test changes aligned with the extracted boundary
+- every refactor slice should name the operator-visible change it unlocks
+- prefer extracting shared projections and reducers before splitting rendering files further
+- keep tests close to the operator flow affected by the extraction
 
 ## Avoid
 
-- broad cleanup tasks with no clear product outcome
-- refactors that touch many hotspots without reducing conceptual coupling
+- abstract cleanups with no visible product unlock
+- multi-hotspot rewrites that block ongoing UX work for too long
