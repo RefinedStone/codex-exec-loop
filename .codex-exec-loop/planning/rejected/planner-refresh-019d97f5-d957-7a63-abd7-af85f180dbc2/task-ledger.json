@@ -122,13 +122,13 @@
     {
       "id": "task-supersession-worktree-pool-runtime-lease-wiring",
       "direction_id": "supersession-git-worktree-pool",
-      "direction_relation_note": "Promoted as the next executable queue head because the latest main-session reply explicitly says the lease APIs are implemented but the actual agent/session runtime still does not call them, making runtime wiring the direct follow-up before roster and distributor panels can trust slot state.",
-      "title": "Wire agent session runtime into slot lease lifecycle APIs",
-      "description": "Connect the real agent and session runtime flow to `acquire_slot_lease`, `mark_slot_running`, and `mark_slot_cleanup_pending` so slot ownership, running-state entry, and merged-cleanup readiness are driven by actual execution events rather than service-only helpers.",
+      "direction_relation_note": "The latest main-session reply partially completed runtime wiring by connecting `running` and failed-start release transitions, but it explicitly leaves the actual supervisor or agent launcher lease acquire path and normal-exit cleanup handoff unfinished, so this stays the queue head with narrowed remaining scope.",
+      "title": "Finish launcher lease acquire wiring and runtime slot ownership handoff",
+      "description": "Connect the real supervisor or agent launcher path to `acquire_slot_lease` before execution begins, and ensure the runtime carries the leased slot identity forward so later lifecycle transitions are anchored to an actually acquired persisted lease instead of workspace-only fallback matching.",
       "status": "ready",
-      "base_priority": 96,
+      "base_priority": 97,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply names missing runtime calls into the new lease APIs as the first unfinished item, so this is the clearest executable next task for builtin next-task automation.",
+      "priority_reason": "PR #257 shipped `running` transition wiring and failed-start release, and the latest main-session reply explicitly says the lease acquire path is still missing; that makes launcher-side acquire wiring the clearest executable next task for builtin next-task automation.",
       "depends_on": [
         "task-supersession-mode-readiness-skeleton",
         "task-supersession-control-tower-empty-board",
@@ -140,47 +140,67 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-16T20:35:38Z"
     },
     {
       "id": "task-supersession-worktree-pool-explicit-lease-release",
       "direction_id": "supersession-git-worktree-pool",
-      "direction_relation_note": "Created from the latest main-session reply, which explicitly leaves bootstrap-failure handling and clean-slot idle restoration as a separate follow-up beyond the newly added persisted lease transition APIs.",
+      "direction_relation_note": "Completed as part of PR #257 when the runtime gained a failed-start release path that returns clean slots to idle and refuses release for dirty worktrees, removing this as a separate follow-up slice.",
       "title": "Add explicit lease release for bootstrap failure recovery",
-      "description": "Introduce a dedicated release path that can return a clean leased slot back to idle when bootstrap or early runtime setup fails before the session reaches durable running state, instead of leaving recovery to ad hoc cleanup behavior.",
-      "status": "proposed",
+      "description": "Shipped the dedicated failed-start release path so a clean leased slot can return to idle before durable running state, while dirty worktrees stay protected from accidental release during bootstrap failure recovery.",
+      "status": "done",
       "base_priority": 87,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply directly calls out missing explicit release behavior for bootstrap failure, but wiring the runtime into the lease lifecycle APIs is the more immediate prerequisite.",
-      "depends_on": [],
-      "blocked_by": [
-        "task-supersession-worktree-pool-runtime-lease-wiring"
-      ],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
-    },
-    {
-      "id": "task-supersession-agent-roster-lifecycle-runtime",
-      "direction_id": "supersession-agent-control-tower",
-      "direction_relation_note": "Still follows the shipped placeholder board, but the latest main-session reply now makes runtime wiring the immediate prerequisite: roster state should wait until actual agent/session execution drives the persisted lease lifecycle so task ownership and durations reflect real runtime events instead of service-only transitions.",
-      "title": "Wire supervisor roster to live agent lifecycle state",
-      "description": "Replace static agent roster placeholders with runtime lifecycle projection that shows task ownership, slot identity, lease state, running duration, and latest summary for active and recently completed agents once actual agent/session execution is wired into the persisted lease lifecycle.",
-      "status": "proposed",
-      "base_priority": 84,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply still leaves roster runtime binding unfinished, but it now depends on the new runtime lease wiring before the board can project trustworthy ownership and duration data.",
+      "priority_reason": "Completed in main session via commit 85678c3 and PR #257 after adding `release_workspace_slot_lease_after_failed_start`, atomic persistence, and tests for clean-slot release plus dirty-worktree rejection.",
       "depends_on": [
-        "task-supersession-control-tower-empty-board",
-        "task-supersession-worktree-pool-reconcile",
         "task-supersession-worktree-pool-runtime-lease-wiring"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-16T20:35:38Z"
+    },
+    {
+      "id": "task-supersession-runtime-cleanup-pending-distributor-handoff",
+      "direction_id": "supersession-distributor-merge-queue",
+      "direction_relation_note": "Created from the latest main-session reply, which explicitly says normal-exit `cleanup_pending` transition and distributor-side follow-up wiring are still missing even after runtime `running` plus failed-start release support shipped.",
+      "title": "Mark normal agent completion as cleanup_pending and hand off distributor follow-up",
+      "description": "Wire the successful agent completion path so a leased running slot transitions to `cleanup_pending`, then connect the distributor or queue-head follow-up state to that transition so slot return and merge sequencing start from real runtime completion instead of placeholder board state.",
+      "status": "proposed",
+      "base_priority": 90,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply names normal-exit cleanup handoff as the next concrete gap after launcher-side lease acquire wiring, but it should stay behind that prerequisite so builtin next-task automation keeps a single clearer queue head.",
+      "depends_on": [
+        "task-supersession-worktree-pool-runtime-lease-wiring"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T20:35:38Z"
+    },
+    {
+      "id": "task-supersession-agent-roster-lifecycle-runtime",
+      "direction_id": "supersession-agent-control-tower",
+      "direction_relation_note": "Still follows the shipped placeholder board, but the latest main-session reply now makes launcher-side lease acquisition and cleanup handoff the concrete prerequisites: roster state should wait until actual execution owns a lease from launch through completion.",
+      "title": "Wire supervisor roster to live agent lifecycle state",
+      "description": "Replace static agent roster placeholders with runtime lifecycle projection that shows task ownership, slot identity, lease state, running duration, and latest summary for active and recently completed agents once actual agent/session execution is wired from lease acquire through cleanup-pending handoff.",
+      "status": "proposed",
+      "base_priority": 84,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply still leaves roster runtime binding unfinished, and the board should wait until launcher-side lease acquire plus completion handoff make ownership and duration trustworthy.",
+      "depends_on": [
+        "task-supersession-control-tower-empty-board",
+        "task-supersession-worktree-pool-reconcile",
+        "task-supersession-worktree-pool-runtime-lease-wiring",
+        "task-supersession-runtime-cleanup-pending-distributor-handoff"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T20:35:38Z"
     },
     {
       "id": "task-supersession-worktree-pool-operator-recovery",
@@ -205,23 +225,24 @@
     {
       "id": "task-supersession-distributor-queue-runtime-bindings",
       "direction_id": "supersession-distributor-merge-queue",
-      "direction_relation_note": "Updated from the latest main-session reply, which now makes the missing runtime connection explicit: distributor and agent bindings should wait until actual agent/session execution drives the persisted lease lifecycle, then connect the board to real runtime ownership and queue execution rather than placeholders.",
+      "direction_relation_note": "The latest main-session reply narrows the distributor prerequisite further: queue and detail bindings should wait until runtime launch acquires a persisted lease and normal completion drives `cleanup_pending`, then connect the board to real queue execution rather than placeholders.",
       "title": "Bind distributor queue and selected detail to runtime data",
-      "description": "Replace placeholder distributor and selected-detail panels with runtime queue-head, queue membership, selected item data, and agent or distributor linkage once actual agent/session execution is wired into the persisted lease lifecycle and exposes real slot ownership and execution context.",
+      "description": "Replace placeholder distributor and selected-detail panels with runtime queue-head, queue membership, selected item data, and agent or distributor linkage once execution is wired from launcher-side lease acquire through `cleanup_pending` handoff and exposes real slot ownership plus queue context.",
       "status": "proposed",
       "base_priority": 82,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply still leaves agent and distributor runtime connection unfinished, but runtime lease wiring plus roster lifecycle are the higher-confidence prerequisites for meaningful queue-state projection.",
+      "priority_reason": "The latest main-session reply still leaves distributor runtime connection unfinished, but launcher-side lease acquire, cleanup handoff, and roster lifecycle are the higher-confidence prerequisites for meaningful queue-state projection.",
       "depends_on": [
         "task-supersession-control-tower-empty-board",
         "task-supersession-worktree-pool-runtime-lease-wiring",
+        "task-supersession-runtime-cleanup-pending-distributor-handoff",
         "task-supersession-agent-roster-lifecycle-runtime"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-16T20:35:38Z"
     }
   ]
 }

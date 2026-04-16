@@ -1,0 +1,116 @@
+{
+  "next_task": {
+    "rank": 1,
+    "task_id": "task-supersession-worktree-pool-runtime-lease-wiring",
+    "direction_id": "supersession-git-worktree-pool",
+    "direction_title": "Supersession git worktree pool",
+    "task_title": "Wire agent session runtime into slot lease lifecycle APIs",
+    "status": "ready",
+    "combined_priority": 96,
+    "updated_at": "2026-04-17T05:20:00Z",
+    "rank_reasons": [
+      "status=ready",
+      "combined_priority=96 (base 96 + delta 0)",
+      "dependencies_ready=5"
+    ]
+  },
+  "active_tasks": [
+    {
+      "rank": 1,
+      "task_id": "task-supersession-worktree-pool-runtime-lease-wiring",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_title": "Supersession git worktree pool",
+      "task_title": "Wire agent session runtime into slot lease lifecycle APIs",
+      "status": "ready",
+      "combined_priority": 96,
+      "updated_at": "2026-04-17T05:20:00Z",
+      "rank_reasons": [
+        "status=ready",
+        "combined_priority=96 (base 96 + delta 0)",
+        "dependencies_ready=5"
+      ]
+    }
+  ],
+  "proposed_tasks": [
+    {
+      "rank": 1,
+      "task_id": "task-supersession-ledger-refresh-contract",
+      "direction_id": "supersession-ledger-feedback-loop",
+      "direction_title": "Supersession ledger feedback loop",
+      "task_title": "Define serialized completion refresh contract for official ledger updates",
+      "status": "proposed",
+      "combined_priority": 80,
+      "updated_at": "2026-04-16T19:34:28Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=80 (base 80 + delta 0)",
+        "dependencies_ready=1"
+      ]
+    }
+  ],
+  "skipped_tasks": [
+    {
+      "task_id": "task-supersession-mode-readiness-skeleton",
+      "task_title": "Add parallel mode readiness snapshot and shell entry skeleton",
+      "direction_id": "supersession-mode-entry-and-readiness",
+      "status": "done",
+      "reason": "status done is not executable"
+    },
+    {
+      "task_id": "task-supersession-control-tower-empty-board",
+      "task_title": "Build supervisor board with roster, pool, and distributor placeholders",
+      "direction_id": "supersession-agent-control-tower",
+      "status": "done",
+      "reason": "status done is not executable"
+    },
+    {
+      "task_id": "task-supersession-worktree-pool-reconcile",
+      "task_title": "Implement akra pool reconcile and slot lease cleanup state",
+      "direction_id": "supersession-git-worktree-pool",
+      "status": "done",
+      "reason": "status done is not executable"
+    },
+    {
+      "task_id": "task-supersession-worktree-pool-slot-lifecycle-actions",
+      "task_title": "Implement akra slot provisioning and cleanup execution flow",
+      "direction_id": "supersession-git-worktree-pool",
+      "status": "done",
+      "reason": "status done is not executable"
+    },
+    {
+      "task_id": "task-supersession-worktree-pool-lease-runtime-transitions",
+      "task_title": "Persist akra slot leases and running-state transitions",
+      "direction_id": "supersession-git-worktree-pool",
+      "status": "done",
+      "reason": "status done is not executable"
+    },
+    {
+      "task_id": "task-supersession-worktree-pool-explicit-lease-release",
+      "task_title": "Add explicit lease release for bootstrap failure recovery",
+      "direction_id": "supersession-git-worktree-pool",
+      "status": "proposed",
+      "reason": "blocked by tasks: task-supersession-worktree-pool-runtime-lease-wiring(ready)"
+    },
+    {
+      "task_id": "task-supersession-agent-roster-lifecycle-runtime",
+      "task_title": "Wire supervisor roster to live agent lifecycle state",
+      "direction_id": "supersession-agent-control-tower",
+      "status": "proposed",
+      "reason": "waiting on dependencies: task-supersession-worktree-pool-runtime-lease-wiring(ready)"
+    },
+    {
+      "task_id": "task-supersession-worktree-pool-operator-recovery",
+      "task_title": "Handle operator recovery for non-merged slot branches",
+      "direction_id": "supersession-git-worktree-pool",
+      "status": "proposed",
+      "reason": "waiting on dependencies: task-supersession-worktree-pool-runtime-lease-wiring(ready), task-supersession-worktree-pool-explicit-lease-release(proposed)"
+    },
+    {
+      "task_id": "task-supersession-distributor-queue-runtime-bindings",
+      "task_title": "Bind distributor queue and selected detail to runtime data",
+      "direction_id": "supersession-distributor-merge-queue",
+      "status": "proposed",
+      "reason": "waiting on dependencies: task-supersession-worktree-pool-runtime-lease-wiring(ready), task-supersession-agent-roster-lifecycle-runtime(proposed)"
+    }
+  ]
+}
