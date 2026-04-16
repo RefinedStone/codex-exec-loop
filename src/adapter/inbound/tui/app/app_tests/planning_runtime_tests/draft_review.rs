@@ -33,17 +33,12 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
         panic!("app should stay in ready state");
     };
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-    assert!(
-        conversation
-            .status_text
-            .contains("planning draft: promoted")
-    );
-    assert!(conversation.status_text.contains("promoted files:"));
+    assert!(conversation.status_text.contains("planning draft promoted"));
     assert_eq!(
         conversation
             .planning_runtime_snapshot
             .preview_status_label(),
-        "waiting"
+        "ready"
     );
 
     let planning_dir = std::path::Path::new(&workspace_dir)
@@ -85,11 +80,7 @@ fn directions_editor_still_opens_when_supporting_paths_are_invalid() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    assert!(
-        conversation
-            .status_text
-            .contains("operator surface: direction draft")
-    );
+    assert!(conversation.status_text.contains("directions editor ready"));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -194,7 +185,7 @@ fn planning_simple_mode_review_can_open_embedded_editor() {
     assert!(
         conversation
             .status_text
-            .contains("operator surface: planning draft")
+            .contains("planning simple draft editor ready")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -262,7 +253,7 @@ fn planning_detail_manual_selection_opens_embedded_editor() {
     assert!(
         conversation
             .status_text
-            .contains("operator surface: planning draft")
+            .contains("planning draft editor ready")
     );
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(

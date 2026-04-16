@@ -1,4 +1,3 @@
-use super::super::super::planning::build_queue_framing_lines_from_snapshot;
 use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
 use super::super::status_panels::plan_runtime_substate_label;
 use super::super::{
@@ -25,39 +24,22 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             } else {
                 "Plan off".to_string()
             };
+            let queue_summary = snapshot
+                .queue_summary()
+                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
+                .unwrap_or_else(|| "queue state unavailable".to_string());
             let failure_summary = snapshot
                 .failure_reason()
                 .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
-            let queue_framing_lines =
-                build_queue_framing_lines_from_snapshot(&snapshot, FOOTER_NOTICE_DETAIL_LIMIT);
-            let mut option_lines = vec![
-                Line::from(format!("workspace: {workspace_directory}")),
-                Line::from(format!("planning state: {plan_state_label}")),
-                Line::from(format!(
-                    "queue idle policy: {}",
-                    snapshot.queue_idle_policy().label()
-                )),
-            ];
-            if queue_framing_lines.is_empty() {
-                option_lines.push(Line::from("queue state: unavailable"));
-            } else {
-                option_lines.extend(queue_framing_lines);
-            }
             let mut status_lines = if snapshot.plan_enabled() {
                 vec![
-                    Line::from(
-                        "next action: Enter opens queue inspection for the existing planning workspace.",
-                    ),
-                    Line::from("other actions: D opens directions maintenance. O turns Plan off."),
+                    Line::from("Enter opens queue inspection for the existing planning workspace."),
+                    Line::from("Press D to maintain directions, or O to turn Plan off."),
                 ]
             } else {
                 vec![
-                    Line::from(
-                        "next action: Enter turns Plan on and resumes the existing planning workspace.",
-                    ),
-                    Line::from(
-                        "other actions: directions maintenance stays blocked while Plan off.",
-                    ),
+                    Line::from("Enter turns Plan on and resumes the existing planning workspace."),
+                    Line::from("Directions maintenance stays blocked while Plan off."),
                 ]
             };
 
@@ -70,10 +52,10 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / operator inspection"),
+                        Span::raw(" / existing workspace"),
                     ]),
                     Line::from(
-                        "Existing workspace: manage the current planning runtime instead of staging a new scaffold.",
+                        "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
                     ),
                 ],
                 summary_lines: vec![
@@ -84,7 +66,15 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
                     ),
                 ],
-                option_lines,
+                option_lines: vec![
+                    Line::from(format!("workspace: {workspace_directory}")),
+                    Line::from(format!("planning state: {plan_state_label}")),
+                    Line::from(format!("queue state: {queue_summary}")),
+                    Line::from(format!(
+                        "queue idle policy: {}",
+                        snapshot.queue_idle_policy().label()
+                    )),
+                ],
                 status_lines: {
                     if let Some(failure_summary) = failure_summary {
                         status_lines
@@ -236,13 +226,13 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 ],
                 summary_lines: vec![
                     Line::from(
-                        "After promote, planning starts with one generic direction and an empty task ledger, so there is no next task yet.",
+                        "After promote, planning starts with one generic direction and no active queue task yet.",
                     ),
                     Line::from(
-                        "The shell only treats accepted queue work as the next task, so simple mode waits for real queued work instead of inventing one upfront.",
+                        "The default queue-idle review prompt is already staged so the first reply can justify follow-up work when needed.",
                     ),
                     Line::from(
-                        "Queue-idle review is already staged, so this scaffold still has a safe fallback when planning is valid but no task is queued.",
+                        "No active planning files change until you explicitly promote this review.",
                     ),
                 ],
                 option_lines: vec![
@@ -251,7 +241,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         "reviewed artifacts: {staged_file_count} staged planning files"
                     )),
                     Line::from(
-                        "promote outcome: generic direction catalog, empty task ledger, and queue-idle review ready for no-next-task turns",
+                        "promote outcome: generic direction catalog, empty task ledger, and default queue-idle review prompt",
                     ),
                     Line::from(
                         "advanced path: press D to branch into detail-mode authoring instead of promoting the simple scaffold",
@@ -278,9 +268,6 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                             app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                         )));
                     } else {
-                        lines.push(Line::from(
-                            "simple behavior: no next task yet / queue-idle review stays enabled after promote.",
-                        ));
                         lines.push(Line::from(
                             "next action: Enter or Ctrl+P promotes the staged simple scaffold.",
                         ));
@@ -494,15 +481,12 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
         header_lines: vec![
             Line::from(vec![
                 Span::styled(
-                    "Planning Draft Editor",
+                    "Planning Draft",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(match app.planning_init_overlay_ui_state.selected_mode() {
-                    PlanningInitModeSelection::Simple => " / simple scaffold editor",
-                    PlanningInitModeSelection::Detail => " / detail draft editor",
-                }),
+                Span::raw(" / operator inspection"),
             ]),
             Line::from(format!(
                 "draft dir: {}",
