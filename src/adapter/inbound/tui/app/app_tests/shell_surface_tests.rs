@@ -12,13 +12,13 @@ use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind,
     ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
     KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
-    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellOverlay,
-    StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
-    build_session_overlay_view, build_startup_overlay_view, create_temp_workspace, make_test_app,
-    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
-    sample_startup_diagnostics,
+    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellFrontendMode,
+    ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
+    build_automation_preview_lines, build_automation_status_lines, build_conversation_shell_view,
+    build_inline_tail_lines, build_planning_init_overlay_view, build_queue_overlay_view,
+    build_ready_input_lines, build_session_overlay_view, build_startup_overlay_view,
+    create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
+    sample_planning_runtime_snapshot, sample_startup_diagnostics,
 };
 
 #[test]
@@ -620,6 +620,141 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
     assert!(keys.contains("r: reload"));
     assert!(keys.contains("n: draft"));
     assert!(keys.contains("Ctrl+d: startup checks"));
+}
+
+#[test]
+fn selected_session_detail_uses_operator_facing_metadata_labels() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.session_state = SessionState::Ready(crate::domain::recent_sessions::RecentSessions {
+        items: vec![crate::domain::session_summary::SessionSummary {
+            id: "thread-1".to_string(),
+            name: Some("Session thread-1".to_string()),
+            preview: "Preview line".to_string(),
+            cwd: "/tmp/root".to_string(),
+            source: "native".to_string(),
+            model_provider: "openai".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: "/tmp/root/thread-1.json".to_string(),
+            git_branch: Some("feature/demo".to_string()),
+        }],
+        warnings: Vec::new(),
+        next_cursor: Some("cursor-2".to_string()),
+    });
+    app.selected_session_index = 0;
+    app.session_overlay_ui_state
+        .set_selected_session_id(Some("thread-1".to_string()));
+    app.session_overlay_ui_state.sync_selected_session(Some(0));
+
+    let detail_lines = build_session_overlay_view(&app)
+        .detail_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    let detail = detail_lines.join("\n");
+
+    assert!(detail.contains("thread id: thread-1"));
+    assert!(detail.contains("last updated: 2023-11-15 07:13"));
+    assert!(detail.contains("workspace: /tmp/root"));
+    assert!(detail.contains("thread source: native"));
+    assert!(detail.contains("model provider: openai"));
+    assert!(detail.contains("current state: ready"));
+    assert!(detail.contains("git branch: feature/demo"));
+    assert!(detail.contains("latest preview"));
+    assert!(detail.contains("session file: /tmp/root/thread-1.json"));
+    assert!(detail.contains("more threads are available in the next cursor"));
+    assert!(
+        !detail_lines
+            .iter()
+            .any(|line| line.starts_with("updated: "))
+    );
+    assert!(!detail_lines.iter().any(|line| line.starts_with("source: ")));
+    assert!(!detail_lines.iter().any(|line| line.starts_with("status: ")));
+    assert!(!detail.contains("\npreview\n"));
+    assert!(!detail_lines.iter().any(|line| line.starts_with("path: ")));
+}
+
+#[test]
+fn loading_and_blocked_shell_views_use_canonical_operator_copy() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::Loading;
+
+    let loading_view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+    let loading_header = loading_view
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let loading_transcript = loading_view
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let loading_input = loading_view
+        .input_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(loading_header.contains("Conversation Shell / waiting"));
+    assert!(loading_header.contains("current state: waiting"));
+    assert!(
+        loading_header.contains("cause: thread history is still loading from codex app-server")
+    );
+    assert!(loading_header.contains("next action: wait for the thread history to load"));
+    assert_eq!(loading_view.input_title.to_string(), "Prompt / waiting");
+    assert!(loading_transcript.contains("current state: waiting"));
+    assert!(
+        loading_transcript.contains("cause: thread history is still loading from codex app-server")
+    );
+    assert!(loading_transcript.contains("next action: wait for the thread history to load"));
+    assert!(loading_input.contains("current state: waiting"));
+    assert!(loading_input.contains("cause: thread history is still loading from codex app-server"));
+    assert!(loading_input.contains("next action: wait for the thread history to load"));
+
+    app.conversation_state = ConversationState::Failed("transport closed".to_string());
+
+    let blocked_view = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer);
+    let blocked_header = blocked_view
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let blocked_transcript = blocked_view
+        .conversation_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let blocked_input = blocked_view
+        .input_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(blocked_header.contains("Conversation Shell / blocked"));
+    assert!(blocked_header.contains("current state: blocked"));
+    assert!(blocked_header.contains("cause: thread history is unavailable because loading failed"));
+    assert!(blocked_header.contains("next action: reload the session or open a new draft"));
+    assert!(blocked_header.contains("conversation error: transport closed"));
+    assert_eq!(blocked_view.input_title.to_string(), "Prompt / blocked");
+    assert!(blocked_transcript.contains("current state: blocked"));
+    assert!(
+        blocked_transcript.contains("cause: thread history is unavailable because loading failed")
+    );
+    assert!(blocked_transcript.contains("next action: reload the session or open a new draft"));
+    assert!(blocked_transcript.contains("conversation error: transport closed"));
+    assert!(blocked_input.contains("current state: blocked"));
+    assert!(blocked_input.contains("cause: thread history is unavailable because loading failed"));
+    assert!(blocked_input.contains("next action: reload the session or open a new draft"));
+    assert!(blocked_input.contains("conversation error: transport closed"));
 }
 
 #[test]

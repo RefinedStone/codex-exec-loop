@@ -237,8 +237,17 @@ fn build_conversation_lines_with_context(
     }
 
     match context.conversation_state {
-        ShellConversationState::Loading => vec![Line::from("Loading thread history...")],
-        ShellConversationState::Failed(message) => vec![Line::from(message.to_string())],
+        ShellConversationState::Loading => vec![
+            Line::from("current state: waiting"),
+            Line::from("cause: thread history is still loading from codex app-server"),
+            Line::from("next action: wait for the thread history to load"),
+        ],
+        ShellConversationState::Failed(message) => vec![
+            Line::from("current state: blocked"),
+            Line::from("cause: thread history is unavailable because loading failed"),
+            Line::from("next action: reload the session or open a new draft"),
+            Line::from(format!("conversation error: {message}")),
+        ],
         ShellConversationState::Ready(conversation) => {
             if context.planner_shows_debug_details {
                 format_conversation_lines_with_debug(&conversation.messages, true)
@@ -340,10 +349,16 @@ fn build_input_lines_with_context(
 ) -> Vec<Line<'static>> {
     match context.conversation_state {
         ShellConversationState::Loading => vec![
-            Line::from("Thread is still loading."),
-            Line::from("Input becomes available when the shell reaches ready state."),
+            Line::from("current state: waiting"),
+            Line::from("cause: thread history is still loading from codex app-server"),
+            Line::from("next action: wait for the thread history to load"),
         ],
-        ShellConversationState::Failed(message) => vec![Line::from(message.to_string())],
+        ShellConversationState::Failed(message) => vec![
+            Line::from("current state: blocked"),
+            Line::from("cause: thread history is unavailable because loading failed"),
+            Line::from("next action: reload the session or open a new draft"),
+            Line::from(format!("conversation error: {message}")),
+        ],
         ShellConversationState::Ready(conversation) => {
             build_ready_input_lines(conversation, context.shell_action_availability)
         }
@@ -645,9 +660,11 @@ fn build_shell_header_lines_with_context(
         ShellConversationState::Loading => vec![
             Line::from(vec![
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-                Span::raw(" / loading thread"),
+                Span::raw(" / waiting"),
             ]),
-            Line::from("Reading thread history from codex app-server."),
+            Line::from("current state: waiting"),
+            Line::from("cause: thread history is still loading from codex app-server"),
+            Line::from("next action: wait for the thread history to load"),
         ],
         ShellConversationState::Ready(conversation) => vec![
             Line::from(vec![
@@ -677,9 +694,12 @@ fn build_shell_header_lines_with_context(
         ShellConversationState::Failed(message) => vec![
             Line::from(vec![
                 Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
-                Span::raw(" / failed"),
+                Span::raw(" / blocked"),
             ]),
-            Line::from(message.to_string()),
+            Line::from("current state: blocked"),
+            Line::from("cause: thread history is unavailable because loading failed"),
+            Line::from("next action: reload the session or open a new draft"),
+            Line::from(format!("conversation error: {message}")),
         ],
     }
 }
@@ -705,10 +725,10 @@ pub(super) fn build_status_title() -> Line<'static> {
 fn build_input_title_with_context(context: &ShellCorePresentationContext<'_>) -> Line<'static> {
     match context.conversation_state {
         ShellConversationState::Loading => {
-            Line::from(vec![Span::raw("Prompt"), Span::raw(" / loading")])
+            Line::from(vec![Span::raw("Prompt"), Span::raw(" / waiting")])
         }
         ShellConversationState::Failed(_) => {
-            Line::from(vec![Span::raw("Prompt"), Span::raw(" / unavailable")])
+            Line::from(vec![Span::raw("Prompt"), Span::raw(" / blocked")])
         }
         ShellConversationState::Ready(conversation) => {
             let submit_hint = build_primary_submit_hint_with_context(context);
@@ -963,15 +983,18 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
             };
 
             let mut lines = vec![
-                Line::from(format!("id: {}", selected_session.id)),
-                Line::from(format!("updated: {}", selected_session.updated_at_label())),
+                Line::from(format!("thread id: {}", selected_session.id)),
+                Line::from(format!(
+                    "last updated: {}",
+                    selected_session.updated_at_label()
+                )),
                 Line::from(format!("workspace: {}", selected_session.cwd)),
-                Line::from(format!("source: {}", selected_session.source)),
+                Line::from(format!("thread source: {}", selected_session.source)),
                 Line::from(format!(
                     "model provider: {}",
                     selected_session.model_provider
                 )),
-                Line::from(format!("status: {}", selected_session.status_type)),
+                Line::from(format!("current state: {}", selected_session.status_type)),
             ];
 
             if let Some(branch) = &selected_session.git_branch {
@@ -985,10 +1008,13 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
             }
 
             lines.push(Line::from(""));
-            lines.push(Line::from("preview"));
+            lines.push(Line::from("latest preview"));
             lines.push(Line::from(selected_session.preview_block()));
             lines.push(Line::from(""));
-            lines.push(Line::from(format!("path: {}", selected_session.path)));
+            lines.push(Line::from(format!(
+                "session file: {}",
+                selected_session.path
+            )));
             (
                 OverlayListView {
                     message_lines: None,
