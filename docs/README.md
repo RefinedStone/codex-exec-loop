@@ -6,6 +6,7 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - `docs/releases/`: curated change summaries between notable tags and the current product
 - `docs/validation/`: captured terminal validation records and naming rules
 - `docs/plan/`: operator runbooks plus roadmap and architecture references
+- `docs/supersession/`: target parallel-mode and supersession architecture planning
 - `docs/agent/`: contributor guidance for repo-specific workflows
 
 ## Start Here
@@ -33,6 +34,10 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - [plan/15-ux-flow-rearchitecture.md](plan/15-ux-flow-rearchitecture.md)
 - [plan/16-planning-and-automation-evolution.md](plan/16-planning-and-automation-evolution.md)
 
+## Supersession Planning
+
+- [supersession/README.md](supersession/README.md)
+
 ## Repo Workflow References
 
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md)
@@ -44,5 +49,6 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - Keep shipped behavior in `docs/design/`.
 - Keep release-delta summaries in `docs/releases/`.
 - Keep runbooks and active roadmap work in `docs/plan/`.
+- Keep target supersession and parallel-mode architecture planning in `docs/supersession/` until contracts are shipped.
 - Delete superseded plan docs once the shipped contract has moved back into `docs/design/`.
 - Prefer linking to code entrypoints instead of embedding long implementation walkthroughs.
