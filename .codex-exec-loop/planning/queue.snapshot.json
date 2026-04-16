@@ -1,39 +1,84 @@
 {
   "next_task": {
     "rank": 1,
-    "task_id": "phase1-state-language-taxonomy",
-    "direction_id": "operator-state-language",
-    "direction_title": "Operator-facing state language",
-    "task_title": "Unify operator-facing shell state language around current state, cause, and next action",
+    "task_id": "external-planning-doctor-command",
+    "direction_id": "workspace-lifecycle-commands",
+    "direction_title": "Planning workspace lifecycle commands",
+    "task_title": "Add external `akra doctor` for planning health before shell startup",
     "status": "ready",
-    "combined_priority": 104,
-    "updated_at": "2026-04-16T08:03:26Z",
+    "combined_priority": 109,
+    "updated_at": "2026-04-16T08:15:47Z",
     "rank_reasons": [
       "status=ready",
-      "combined_priority=104 (base 92 + delta 12)",
-      "priority_reason=Phase 1 begins by making the current system legible before adding more capability."
+      "combined_priority=109 (base 95 + delta 14)",
+      "priority_reason=The operator explicitly needs pre-launch planning visibility to trust long-running self-host automation."
     ]
   },
   "active_tasks": [
     {
       "rank": 1,
-      "task_id": "phase1-state-language-taxonomy",
-      "direction_id": "operator-state-language",
-      "direction_title": "Operator-facing state language",
-      "task_title": "Unify operator-facing shell state language around current state, cause, and next action",
+      "task_id": "external-planning-doctor-command",
+      "direction_id": "workspace-lifecycle-commands",
+      "direction_title": "Planning workspace lifecycle commands",
+      "task_title": "Add external `akra doctor` for planning health before shell startup",
       "status": "ready",
-      "combined_priority": 104,
-      "updated_at": "2026-04-16T08:03:26Z",
+      "combined_priority": 109,
+      "updated_at": "2026-04-16T08:15:47Z",
       "rank_reasons": [
         "status=ready",
-        "combined_priority=104 (base 92 + delta 12)",
-        "priority_reason=Phase 1 begins by making the current system legible before adding more capability."
+        "combined_priority=109 (base 95 + delta 14)",
+        "priority_reason=The operator explicitly needs pre-launch planning visibility to trust long-running self-host automation."
       ]
     }
   ],
   "proposed_tasks": [
     {
       "rank": 1,
+      "task_id": "phase1-state-language-taxonomy",
+      "direction_id": "operator-state-language",
+      "direction_title": "Operator-facing state language",
+      "task_title": "Unify operator-facing shell state language around current state, cause, and next action",
+      "status": "proposed",
+      "combined_priority": 104,
+      "updated_at": "2026-04-16T08:15:47Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=104 (base 92 + delta 12)",
+        "priority_reason=Still the main Phase 1 UX follow-up once workspace lifecycle visibility exists."
+      ]
+    },
+    {
+      "rank": 2,
+      "task_id": "external-planning-init-command",
+      "direction_id": "workspace-lifecycle-commands",
+      "direction_title": "Planning workspace lifecycle commands",
+      "task_title": "Add external `akra init` for default planning scaffold creation",
+      "status": "proposed",
+      "combined_priority": 97,
+      "updated_at": "2026-04-16T08:15:47Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=97 (base 89 + delta 8)",
+        "priority_reason=The product should let operators bootstrap planning before opening the TUI, but this follows shared doctor visibility."
+      ]
+    },
+    {
+      "rank": 3,
+      "task_id": "planning-reset-command-family",
+      "direction_id": "workspace-lifecycle-commands",
+      "direction_title": "Planning workspace lifecycle commands",
+      "task_title": "Add shared reset semantics for `akra reset` and `:reset`",
+      "status": "proposed",
+      "combined_priority": 94,
+      "updated_at": "2026-04-16T08:15:47Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=94 (base 87 + delta 7)",
+        "priority_reason=Reset becomes important once doctor and init exist, but it must land with explicit safety semantics."
+      ]
+    },
+    {
+      "rank": 4,
       "task_id": "queue-workboard-projection",
       "direction_id": "queue-and-automation-trust",
       "direction_title": "Queue and automation trust",
@@ -48,7 +93,22 @@
       ]
     },
     {
-      "rank": 2,
+      "rank": 5,
+      "task_id": "in-shell-lifecycle-command-entrypoints",
+      "direction_id": "workspace-lifecycle-commands",
+      "direction_title": "Planning workspace lifecycle commands",
+      "task_title": "Wire `:doctor`, `:init`, and `:reset` to the shared planning lifecycle services",
+      "status": "proposed",
+      "combined_priority": 90,
+      "updated_at": "2026-04-16T08:15:47Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=90 (base 84 + delta 6)",
+        "priority_reason=Internal command parity matters, but shared services and external operators come first."
+      ]
+    },
+    {
+      "rank": 6,
       "task_id": "automation-pause-recovery-surface",
       "direction_id": "queue-and-automation-trust",
       "direction_title": "Queue and automation trust",
@@ -63,7 +123,7 @@
       ]
     },
     {
-      "rank": 3,
+      "rank": 7,
       "task_id": "simple-mode-first-success-review",
       "direction_id": "planning-authoring-ergonomics",
       "direction_title": "Planning authoring ergonomics",
@@ -78,7 +138,7 @@
       ]
     },
     {
-      "rank": 4,
+      "rank": 8,
       "task_id": "resume-context-summary",
       "direction_id": "session-continuity-and-recovery",
       "direction_title": "Session continuity and recovery",
@@ -92,7 +152,7 @@
       ]
     },
     {
-      "rank": 5,
+      "rank": 9,
       "task_id": "presentation-boundary-extraction",
       "direction_id": "architecture-boundaries",
       "direction_title": "Architecture boundaries for UX iteration",
@@ -107,7 +167,7 @@
       ]
     },
     {
-      "rank": 6,
+      "rank": 10,
       "task_id": "phase1-terminal-validation-routine",
       "direction_id": "validation-and-release-confidence",
       "direction_title": "Validation and release confidence",
