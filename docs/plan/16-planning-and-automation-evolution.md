@@ -119,11 +119,9 @@ The operator should not need to rediscover:
 
 ### Workspace Lifecycle Commands
 
-- add `akra doctor` as a non-interactive planning health check for the current workspace before the TUI starts
-- add `akra init` as a non-interactive planning bootstrap command that defaults to the simple scaffold
-- add `akra reset` as a safe reset command that can target queue-only, directions-only, or the full planning workspace
-- add in-shell counterparts `:doctor`, `:init`, and `:reset`
-- keep command semantics aligned with planning authoring and validation rules instead of creating a second planning model
+- `akra doctor`, `akra init`, `akra reset`, `:doctor`, `:init`, and `:reset` are shipped on `prerelease`
+- keep their copy and affordances aligned with planning authoring and validation rules instead of creating a second planning model
+- treat lifecycle commands as operator entry and recovery helpers, not as a replacement for planning review or queue inspection
 
 ### Queue Inspection
 
@@ -150,14 +148,14 @@ The operator should not need to rediscover:
 - document the operator vocabulary
 - simplify current explanations of queue and pause state
 - reframe repair and queue-idle behavior in the docs and UI copy
-- define the command contract for `akra doctor`, `akra init`, `akra reset`, and their in-shell counterparts
+- keep lifecycle command copy aligned with the same operator vocabulary
 
 ### Phase 2
 
 - tighten first-run planning flow around simple mode
 - improve queue overlay semantics and proposal visibility
 - reduce the number of places an operator must visit to recover from a paused automation cycle
-- implement workspace lifecycle commands on top of the same planning bootstrap, validation, and reset rules used by the TUI
+- keep the shipped lifecycle command family aligned with simpler authoring and recovery flows
 
 ### Phase 3
 

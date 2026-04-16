@@ -96,7 +96,7 @@ Own:
 
 They should be treated as authoring flows, not generic inspection overlays.
 
-### Pre-Launch And In-Shell Lifecycle Commands
+### Shared Lifecycle Commands
 
 Own:
 
@@ -104,7 +104,7 @@ Own:
 - read-only planning health inspection before entering the TUI
 - safe reset flows for queue-only, directions-only, or full planning workspace reset
 
-The external `akra` command surface and the in-shell `:` command surface should use the same underlying planning lifecycle concepts even if the interaction style differs.
+The external `akra` command surface and the in-shell `:` command surface already share one lifecycle model. Future UX work should treat them as fixed entry and recovery affordances, not as a separate redesign track.
 
 ## Chosen Overlay Purpose Map
 

@@ -95,7 +95,7 @@ Repair, rollback, validation, and operator runbooks should be part of the main v
 - tighten the relationship between session resume, accepted planning state, and automation continuity
 - make "come back to work" faster than "start over and rediscover state"
 - expose next-task intent more clearly in queue and automation surfaces
-- add workspace lifecycle commands so planning can be bootstrapped, inspected, and safely reset before or during interactive use
+- build on the shipped workspace lifecycle commands so planning recovery and bootstrap feel lighter during interactive use
 
 ### D. Reliability And Distribution
 
@@ -134,7 +134,7 @@ Primary work:
 - tighten directions and queue-idle authoring ergonomics
 - improve proposal visibility and promotion semantics
 - make repair flow more operator-legible and less surprising
-- add non-interactive and in-shell planning lifecycle commands for init, doctor, and reset flows
+- refine the shipped planning lifecycle commands so they stay aligned with simpler authoring and recovery flows
 
 Acceptance signals:
 

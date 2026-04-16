@@ -19,6 +19,7 @@
 - Recent sessions support search, paging, and current-workspace filtering.
 - Auto follow-up is planning-queue-driven and no longer loads workspace-defined prompt files.
 - Planning is live: `:planning` stages drafts, opens the embedded editor, promotes accepted files, and exposes queue and proposal state.
+- Shared planning lifecycle commands are live: `akra doctor`, `akra init`, `akra reset`, `:doctor`, `:init`, and `:reset` all use the same validation, bootstrap, and reset rules.
 - Invalid planning writes are rolled back and may trigger a bounded repair flow.
 - Runtime warnings, approval-review state, tool activity, and optional GitHub review polling are visible in normal shell flow.
 

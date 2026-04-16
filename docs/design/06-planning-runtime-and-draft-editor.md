@@ -18,7 +18,13 @@ This file records the active planning contract on `prerelease`.
 
 ## Operator Entry
 
+- `akra doctor` inspects planning health from a normal shell prompt without mutating files.
+- `akra init` writes the default simple planning scaffold into the active workspace.
+- `akra reset {queue|directions|all}` rewrites active planning artifacts with explicit target semantics.
 - `:planning` opens planning workspace controls.
+- `:doctor` reports planning health inside the shell and routes absent workspaces toward initialization.
+- `:init` stages the default simple scaffold review inside the shell.
+- `:reset {queue|directions|all}` runs the same reset targets from inside the shell.
 - `:planning on|off` toggles plan execution without deleting the workspace.
 - `:directions` opens directions maintenance.
 - Simple mode stages a minimal planning workspace and can promote immediately or open the draft editor.
@@ -53,6 +59,18 @@ This file records the active planning contract on `prerelease`.
 - Builtin `next-task` uses the accepted queue head only.
 - Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
 
+## Lifecycle Command Contract
+
+| Surface | Contract |
+| --- | --- |
+| `akra doctor`, `:doctor` | read-only planning inspection that reports `absent`, `incomplete`, `invalid`, `ready_without_task`, or `ready_with_task`, plus queue-idle policy, queue summary, proposal summary, and the first blocking issue when relevant |
+| `akra init` | creates the default simple scaffold directly in active planning files and refuses to overwrite an existing workspace |
+| `:init` | stages the same default scaffold for in-shell review; when a workspace already exists it reuses planning controls instead of overwriting files |
+| `akra reset queue` | rewrites `task-ledger.json` and clears derived queue state |
+| `akra reset directions` | rewrites directions-side defaults, removes generated direction detail docs and queue-idle prompt artifacts, and refuses when live non-done tasks still exist |
+| `akra reset all` | replaces the full active planning scaffold and clears derived queue state |
+| `:reset` | uses the same reset targets; `directions` and `all` require explicit `confirm` before the shell applies them |
+
 ## Protection And Recovery Rules
 
 - `directions.toml`, `task-ledger.schema.json`, `result-output.md`, and `queue.snapshot.json` are protected during automated execution.
@@ -65,3 +83,4 @@ This file records the active planning contract on `prerelease`.
 
 - Application entrypoint: `src/application/service/planning`
 - TUI entrypoint: `src/adapter/inbound/tui/app/planning`
+- CLI lifecycle entrypoint: `src/adapter/inbound/cli.rs`
