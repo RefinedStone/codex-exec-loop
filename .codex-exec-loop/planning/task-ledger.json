@@ -144,13 +144,13 @@
     {
       "id": "compact-status-workboard-framing-followthrough",
       "direction_id": "queue-and-automation-trust",
-      "direction_relation_note": "Direct continuation from the completed inline-status rollout so any remaining compact operator-visible status surfaces pick up the same executable queue framing instead of falling back to older summaries.",
+      "direction_relation_note": "Completed the remaining compact-status follow-through by switching the planning-setup existing-workspace view onto the shared queue framing helper and validating both executable and proposal-only queue states there.",
       "title": "Extend now, next, proposed, and blocked framing to remaining compact status surfaces",
-      "description": "Audit the compact status surfaces that still do not reuse the shared queue framing helper and extend `Now / Next / Proposed / Blocked` rendering to them, keeping proposal-only states compact and preserving one clear executable head outside the full queue inspector.",
-      "status": "ready",
+      "description": "Completed the compact-status follow-through by replacing the planning setup existing-workspace `queue summary: ...` line with snapshot-based `Now / Next / Proposed / Blocked` framing through the shared helper, preserving compact proposal-only rendering, and adding regression coverage for both executable and proposal-only queue states in commit `75bd546` after `cargo test` passed with 438 tests.",
+      "status": "done",
       "base_priority": 88,
-      "dynamic_priority_delta": 14,
-      "priority_reason": "The latest main-session reply says there is no remaining code in the shipped inline-status slice and identifies widening the same framing into other compact status surfaces as the next likely extension, making this the clearest executable follow-up to keep builtin next-task moving.",
+      "dynamic_priority_delta": 15,
+      "priority_reason": "Finished in main session commit `75bd546` after `cargo test` passed with 438 tests, so this queue head should close and only a narrower audit for any still-unconverted auxiliary compact queue-summary surfaces should remain.",
       "depends_on": [
         "inline-status-workboard-framing"
       ],
@@ -158,7 +158,121 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-16T12:50:00Z"
+      "updated_at": "2026-04-16T13:05:00Z"
+    },
+    {
+      "id": "auxiliary-compact-queue-summary-audit",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Completed the residual auxiliary compact-status audit by normalizing planner panel, queue overlay note, and persisted planner queue-summary records onto the shared compact workboard framing, including legacy-summary fallback handling at the display boundary.",
+      "title": "Audit auxiliary compact status surfaces for leftover queue summary strings",
+      "description": "Completed the auxiliary compact-status audit by replacing remaining raw `next task: ...` style queue summary rendering in planner panel and queue overlay note surfaces with shared `Now / Next / Proposed / Blocked` compact framing, ensuring newly recorded planner queue summaries persist in the same framing while legacy raw summaries still display through the normalized surface path, and updating regression coverage in commit `3f0ece7` after `cargo test` passed with 439 tests.",
+      "status": "done",
+      "base_priority": 86,
+      "dynamic_priority_delta": 15,
+      "priority_reason": "Finished in main session commit `3f0ece7` after `cargo test` passed with 439 tests, so this prior queue head should close and the next audit should move outside queue or trust surfaces to any remaining planner-internal compact summary metadata.",
+      "depends_on": [
+        "compact-status-workboard-framing-followthrough"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T13:16:00Z"
+    },
+    {
+      "id": "planner-internal-compact-summary-metadata-audit",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Completed the planner-internal metadata follow-up by normalizing runtime policy and facade metadata handoff paths onto the shared compact workboard framing and removing proposal-count summary shorthand from internal planner records.",
+      "title": "Audit planner-internal metadata for leftover compact queue summary strings",
+      "description": "Completed the planner-internal metadata audit by switching planning runtime policy and facade metadata exports away from raw `next task: ...` compact queue summaries to shared `Now / Next / Proposed / Blocked` framing, removing `1 promotable ...` style proposal shorthand so proposal details stay canonical, and updating stale planner metadata fixture expectations in commit `d61a143` after `cargo test` passed with 440 tests.",
+      "status": "done",
+      "base_priority": 85,
+      "dynamic_priority_delta": 17,
+      "priority_reason": "Finished in main session commit `d61a143` after `cargo test` passed with 440 tests, so this queue head should close and the next follow-up should move outside planner metadata to any remaining internal diagnostic surfaces that still relay legacy compact queue summaries.",
+      "depends_on": [
+        "auxiliary-compact-queue-summary-audit"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T13:28:00Z"
+    },
+    {
+      "id": "internal-diagnostic-compact-summary-residual-audit",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Completed the diagnostic-surface follow-up by teaching planner debug and queue overlay note rendering to absorb legacy compact queue-summary payloads and re-project them through the shared compact workboard framing instead of exposing raw metadata.",
+      "title": "Audit internal diagnostic surfaces for leftover compact queue summary strings",
+      "description": "Completed the internal diagnostic audit by normalizing planner debug panel and queue overlay note handling for legacy `next task: ... / id / priority ...` queue summary payloads, applying the same fallback to proposal-appended legacy strings, and adding focused regression coverage for both surfaces in commit `6566c92` after `cargo test` passed with 442 tests.",
+      "status": "done",
+      "base_priority": 84,
+      "dynamic_priority_delta": 18,
+      "priority_reason": "Finished in main session commit `6566c92` after `cargo test` passed with 442 tests, so this queue head should close and any further audit should move beyond queue or trust surfaces to other legacy planner summary consumers only if another residual path still exists.",
+      "depends_on": [
+        "planner-internal-compact-summary-metadata-audit"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T13:42:00Z"
+    },
+    {
+      "id": "planner-summary-consumer-audit-outside-trust-surfaces",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Completed the non-trust consumer follow-up by routing planner summary preview and proposal-cause consumers through the canonical compact workboard helper instead of exposing raw legacy compact strings.",
+      "title": "Audit non-trust planner summary consumers for leftover legacy compact strings",
+      "description": "Completed the non-trust planner summary consumer audit by adding a canonical compact-summary helper on `PlanningRuntimeSnapshot`, switching `preview_detail()` plus planning runtime policy preview and proposal cause rendering onto the shared `Now / Next / Proposed / Blocked` framing, and adding regression coverage for legacy ranked queue-summary inputs in commit `01efceb` after `cargo test` passed with 443 tests.",
+      "status": "done",
+      "base_priority": 83,
+      "dynamic_priority_delta": 18,
+      "priority_reason": "Finished in main session commit `01efceb` after `cargo test` passed with 443 tests, so this queue head should close and only a narrower residual sweep for other non-surface metadata consumers should remain if another legacy compact-summary path still exists.",
+      "depends_on": [
+        "internal-diagnostic-compact-summary-residual-audit"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T13:55:00Z"
+    },
+    {
+      "id": "residual-non-surface-metadata-consumer-audit",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Completed the last confirmed non-surface consumer sweep by converting the `idle_queue_cause` fallback to canonical compact queue detail before it can echo legacy ranked summary strings.",
+      "title": "Sweep residual non-surface metadata consumers for legacy planner summary strings",
+      "description": "Completed the residual non-surface metadata consumer sweep by replacing the last raw `queue_summary` fallback in `idle_queue_cause` with canonical compact queue detail, preserving the existing idle message only for truly empty queues, and adding regression coverage so legacy `next task: rank ...` strings no longer leak into summary lines in commit `30355aa` after `cargo test` passed with 444 tests.",
+      "status": "done",
+      "base_priority": 82,
+      "dynamic_priority_delta": 19,
+      "priority_reason": "Finished in main session commit `30355aa` after `cargo test` passed with 444 tests, so this queue head should close and the next follow-up should move upstream to any remaining legacy planner summary producers rather than re-auditing already cleaned consumers.",
+      "depends_on": [
+        "planner-summary-consumer-audit-outside-trust-surfaces"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T14:16:00Z"
+    },
+    {
+      "id": "legacy-planner-summary-producer-reduction-audit",
+      "direction_id": "queue-and-automation-trust",
+      "direction_relation_note": "Natural upstream follow-up after consumer cleanup, focused on reducing or removing legacy compact summary string production paths now that visible and non-visible consumers normalize them safely.",
+      "title": "Audit planner summary producers for removable legacy compact strings",
+      "description": "Inspect planner summary producer paths that still emit legacy compact queue-summary strings, determine whether they can switch to canonical compact queue detail or structured fields without widening scope, and add focused regression coverage only where producer-side legacy output is actually reduced.",
+      "status": "ready",
+      "base_priority": 81,
+      "dynamic_priority_delta": 21,
+      "priority_reason": "The latest main-session reply says no consumer-side code remains in scope and names only one likely extension: check whether the summary producer side can reduce legacy planner summary strings themselves, so builtin next-task should promote this single executable follow-up.",
+      "depends_on": [
+        "residual-non-surface-metadata-consumer-audit"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-16T14:16:00Z"
     },
     {
       "id": "automation-pause-recovery-surface",
