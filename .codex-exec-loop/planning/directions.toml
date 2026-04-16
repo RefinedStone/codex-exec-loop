@@ -56,6 +56,23 @@ detail_doc_path = ".codex-exec-loop/planning/directions/planning-authoring-ergon
 state = "active"
 
 [[directions]]
+id = "workspace-lifecycle-commands"
+title = "Planning workspace lifecycle commands"
+summary = "Let the operator inspect, bootstrap, and safely reset planning state before entering the TUI and from inside it. The external `akra doctor`, `akra init`, and `akra reset` commands, together with `:doctor`, `:init`, and `:reset`, should share one validation, bootstrap, and reset model so long-lived self-hosted workspaces stay trustworthy over many hours of queue-driven improvement."
+success_criteria = [
+    "An operator can run `akra doctor` from a workspace root and immediately understand whether planning is absent, invalid, queue-idle, or executable.",
+    "An operator can create or restore the default planning scaffold with predictable safety rules through `akra init` and `akra reset {queue|directions|all}`.",
+    "The in-shell lifecycle commands feel like richer versions of the same lifecycle operations rather than a second planning model.",
+]
+scope_hints = [
+    "Start with shared application-layer validation, bootstrap, and reset rules before adding separate CLI or TUI affordances.",
+    "Prefer one command family at a time: doctor visibility, then init bootstrap, then reset safety semantics and richer in-shell entrypoints.",
+    "Keep destructive reset behavior explicit about rewritten artifacts, refusal rules, and confirmation requirements.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/workspace-lifecycle-commands.md"
+state = "active"
+
+[[directions]]
 id = "session-continuity-and-recovery"
 title = "Session continuity and recovery"
 summary = "Make resumed work feel like resumed context, not just reopened transcript history. When the operator returns to a workspace, the shell should immediately reveal whether planning is active, what work remains, and which recovery path applies if the workflow is paused or blocked."
