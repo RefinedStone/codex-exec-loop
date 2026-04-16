@@ -92,6 +92,12 @@ pub trait PlanningWorkspacePort: Send + Sync {
         body: Option<&str>,
     ) -> Result<()>;
 
+    fn remove_planning_workspace_entry(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<()>;
+
     fn archive_rejected_planning_file(
         &self,
         workspace_dir: &str,

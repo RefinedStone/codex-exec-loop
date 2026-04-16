@@ -14,9 +14,9 @@ impl ShellActionAvailability {
 
     pub(super) fn status_text(self) -> &'static str {
         match self {
-            Self::Ready => "startup ready",
-            Self::Pending => "startup checks still running",
-            Self::Blocked => "startup diagnostics need attention",
+            Self::Ready => "startup checks ready",
+            Self::Pending => "waiting for startup checks",
+            Self::Blocked => "startup checks need attention",
         }
     }
 }
@@ -43,13 +43,13 @@ impl NativeTuiApp {
         match (prompt_origin, self.shell_action_availability()) {
             (_, ShellActionAvailability::Ready) => "ready".to_string(),
             (PromptOrigin::Manual, state) => {
-                format!("{}; open diagnostics with Ctrl+d", state.status_text())
+                format!("{}; open startup checks with Ctrl+d", state.status_text())
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Pending) => {
-                "auto follow-up paused while startup checks are still running".to_string()
+                "automation paused while waiting for startup checks".to_string()
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
-                "auto follow-up paused because startup diagnostics need attention".to_string()
+                "automation paused because startup checks need attention".to_string()
             }
         }
     }
@@ -119,6 +119,7 @@ impl NativeTuiApp {
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
             }
+            InlineShellCommand::Reset => self.handle_reset_shell_command(command_input.argument()),
             InlineShellCommand::MaxAutoTurns => {
                 let Some(value) = command_input.argument().map(str::to_string) else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {

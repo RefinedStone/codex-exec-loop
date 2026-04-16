@@ -11,6 +11,7 @@ use super::planning_init_service::PlanningInitService;
 use super::planning_prompt_service::PlanningPromptService;
 use super::planning_proposal_promotion_service::PlanningProposalPromotionService;
 use super::planning_reconciliation_service::PlanningReconciliationService;
+use super::planning_reset_service::PlanningResetService;
 use super::planning_runtime_facade_service::PlanningRuntimeFacadeService;
 use super::planning_runtime_policy_service::PlanningRuntimePolicyService;
 use super::planning_validation_service::PlanningValidationService;
@@ -37,6 +38,7 @@ pub use super::planning_reconciliation_service::{
     PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueSnapshotAction,
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
+pub use super::planning_reset_service::{PlanningResetTarget, PlanningWorkspaceResetResult};
 pub use super::planning_runtime_facade_service::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimePreviewRequest,
@@ -70,6 +72,10 @@ impl PlanningFeature {
             PlanningBootstrapService::new(),
             validation_service.clone(),
         );
+        let reset_service = PlanningResetService::new(
+            planning_workspace_port.clone(),
+            PlanningBootstrapService::new(),
+        );
         let directions_service = PlanningDirectionsService::new(
             planning_workspace_port.clone(),
             validation_service.clone(),
@@ -99,7 +105,11 @@ impl PlanningFeature {
         );
 
         Self {
-            workspace: PlanningWorkspaceUseCases::new(init_service, directions_service.clone()),
+            workspace: PlanningWorkspaceUseCases::new(
+                init_service,
+                reset_service,
+                directions_service.clone(),
+            ),
             runtime: PlanningRuntimeUseCases::new(runtime_facade.clone()),
             worker: PlanningWorkerUseCases::new(
                 directions_service,
@@ -117,16 +127,19 @@ impl PlanningFeature {
 #[derive(Clone)]
 pub struct PlanningWorkspaceUseCases {
     init_service: PlanningInitService,
+    reset_service: PlanningResetService,
     directions_service: PlanningDirectionsService,
 }
 
 impl PlanningWorkspaceUseCases {
     fn new(
         init_service: PlanningInitService,
+        reset_service: PlanningResetService,
         directions_service: PlanningDirectionsService,
     ) -> Self {
         Self {
             init_service,
+            reset_service,
             directions_service,
         }
     }
@@ -140,6 +153,14 @@ impl PlanningWorkspaceUseCases {
         workspace_dir: &str,
     ) -> anyhow::Result<PlanningWorkspaceInitResult> {
         self.init_service.initialize_simple_workspace(workspace_dir)
+    }
+
+    pub fn reset_workspace(
+        &self,
+        workspace_dir: &str,
+        target: PlanningResetTarget,
+    ) -> anyhow::Result<PlanningWorkspaceResetResult> {
+        self.reset_service.reset_workspace(workspace_dir, target)
     }
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> anyhow::Result<()> {

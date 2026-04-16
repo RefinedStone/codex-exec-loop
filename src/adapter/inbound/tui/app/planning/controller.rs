@@ -8,7 +8,10 @@ use super::super::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     ShellChromeEvent, ShellOverlay,
 };
-use crate::application::service::planning::{PlanningDoctorOutcome, PlanningDraftEditorSession};
+use crate::application::service::planning::{
+    PlanningDoctorOutcome, PlanningDraftEditorSession, PlanningResetTarget,
+    PlanningWorkspaceResetResult,
+};
 
 type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
 
@@ -171,8 +174,9 @@ impl NativeTuiApp {
                         } else {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
-                                    status_text: "Plan off - turn Plan on before opening queue"
-                                        .to_string(),
+                                    status_text:
+                                        "planning mode: off / next action: turn Plan on before opening queue"
+                                            .to_string(),
                                 },
                             );
                         }
@@ -186,8 +190,9 @@ impl NativeTuiApp {
                         } else {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
-                                    status_text: "Plan off - turn Plan on in this menu first"
-                                        .to_string(),
+                                    status_text:
+                                        "planning mode: off / next action: turn Plan on in this menu first"
+                                            .to_string(),
                                 },
                             );
                         }
@@ -308,12 +313,14 @@ impl NativeTuiApp {
         let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
         if !snapshot.plan_enabled() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "Plan off - initialize with :planning first".to_string(),
+                status_text:
+                    "planning mode: off / next action: open :planning to initialize the workspace"
+                        .to_string(),
             });
             return;
         }
         self.present_directions_maintenance_overview(
-            "opened directions maintenance".to_string(),
+            "operator surface: direction maintenance".to_string(),
             true,
         );
     }
@@ -362,12 +369,12 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: if snapshot.workspace_present() {
                 if snapshot.plan_enabled() {
-                    "opened planning workspace controls".to_string()
+                    "operator surface: planning setup / planning mode: on".to_string()
                 } else {
-                    "opened planning workspace controls / Plan off".to_string()
+                    "operator surface: planning setup / planning mode: off".to_string()
                 }
             } else {
-                "opened planning initialization selector".to_string()
+                "operator surface: planning setup / workspace: not initialized".to_string()
             },
         });
     }
@@ -391,6 +398,65 @@ impl NativeTuiApp {
         }
     }
 
+    pub(in crate::adapter::inbound::tui::app) fn handle_reset_shell_command(
+        &mut self,
+        argument: Option<&str>,
+    ) {
+        let parsed = match parse_reset_shell_argument(argument) {
+            Ok(parsed) => parsed,
+            Err(usage) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: usage,
+                });
+                return;
+            }
+        };
+
+        if matches!(
+            parsed.target,
+            PlanningResetTarget::Directions | PlanningResetTarget::All
+        ) && !parsed.confirmed
+        {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: planning_reset_preview_text(parsed.target),
+            });
+            return;
+        }
+
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning
+            .workspace
+            .reset_workspace(&workspace_directory, parsed.target)
+        {
+            Ok(result) => {
+                self.stop_post_turn_automation();
+                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                    &workspace_directory,
+                );
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: planning_reset_status_text(&result),
+                });
+            }
+            Err(error) => {
+                let fallback_status = if !self
+                    .planning
+                    .workspace
+                    .has_planning_workspace(&workspace_directory)
+                    .unwrap_or(false)
+                {
+                    self.show_planning_init_overlay();
+                    "planning workspace missing; open :planning to initialize it".to_string()
+                } else {
+                    format!("planning reset failed: {error}")
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: fallback_status,
+                });
+            }
+        }
+    }
+
     pub(super) fn turn_plan_on(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
         if let Err(error) = self
@@ -405,9 +471,10 @@ impl NativeTuiApp {
                 .unwrap_or(false)
             {
                 self.show_planning_init_overlay();
-                "planning workspace missing; open :planning to initialize it".to_string()
+                "planning workspace: missing / next action: open :planning to initialize it"
+                    .to_string()
             } else {
-                format!("failed to enable planning mode: {error}")
+                format!("planning mode: failed to turn on / cause: {error}")
             };
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: fallback_status,
@@ -423,7 +490,8 @@ impl NativeTuiApp {
                 .open_existing_workspace();
         }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: "Plan on / using the existing planning workspace".to_string(),
+            status_text: "planning mode: on / workspace: using the existing planning workspace"
+                .to_string(),
         });
     }
 
@@ -446,13 +514,13 @@ impl NativeTuiApp {
                         .open_existing_workspace();
                 }
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: "Plan off / planning workspace retained for later resume"
+                    status_text: "planning mode: off / workspace: retained for later resume"
                         .to_string(),
                 });
             }
             Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("failed to turn Plan off: {error}"),
+                    status_text: format!("planning mode: failed to turn off / cause: {error}"),
                 })
             }
         }
@@ -510,7 +578,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_manual_editor_session(&workspace_directory),
-            "planning draft editor ready",
+            "operator surface: planning draft",
             PlanningInitModeSelection::Detail,
         );
     }
@@ -521,7 +589,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_editor_session(&workspace_directory),
-            "directions editor ready",
+            "operator surface: direction draft",
         );
     }
 
@@ -531,7 +599,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_detail_doc_editor_session(&workspace_directory, direction_id),
-            "directions detail doc editor ready",
+            "operator surface: direction detail doc draft",
         );
     }
 
@@ -541,7 +609,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .stage_queue_idle_prompt_editor_session(&workspace_directory),
-            "queue-idle prompt editor ready",
+            "operator surface: queue-idle prompt draft",
         );
     }
 
@@ -567,7 +635,7 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state
                     .apply_save_result(result.validation_report.clone());
                 format!(
-                    "planning draft saved / draft: {} / validation: {} / next: {}",
+                    "planning draft: saved / staged draft: {} / validation state: {} / next action: {}",
                     result.draft_name,
                     if validation_ok {
                         "ok"
@@ -581,7 +649,7 @@ impl NativeTuiApp {
                     },
                 )
             }
-            Err(error) => format!("planning draft save failed: {error}"),
+            Err(error) => format!("planning draft: save failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -610,7 +678,7 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state
                     .apply_save_result(result.validation_report.clone());
                 format!(
-                    "directions draft saved / draft: {} / validation: {} / next: {}",
+                    "direction draft: saved / staged draft: {} / validation state: {} / next action: {}",
                     result.draft_name,
                     if validation_ok {
                         "ok"
@@ -624,7 +692,7 @@ impl NativeTuiApp {
                     },
                 )
             }
-            Err(error) => format!("directions draft save failed: {error}"),
+            Err(error) => format!("direction draft: save failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -658,7 +726,7 @@ impl NativeTuiApp {
                     .apply_save_result(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "planning draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
+                        "planning draft: promote blocked / staged draft: {} / validation state: {} / next action: fix validation issues or keep editing",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -669,12 +737,12 @@ impl NativeTuiApp {
                 } else {
                     self.close_shell_overlay();
                     format!(
-                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                        "planning draft: promoted / staged draft: {} / promoted files: {} / next action: continue with the refreshed planning context",
                         result.draft_name, result.promoted_file_count
                     )
                 }
             }
-            Err(error) => format!("planning draft promote failed: {error}"),
+            Err(error) => format!("planning draft: promote failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -708,7 +776,7 @@ impl NativeTuiApp {
                     .apply_save_result(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "directions draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
+                        "direction draft: promote blocked / staged draft: {} / validation state: {} / next action: fix validation issues or keep editing",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -719,7 +787,7 @@ impl NativeTuiApp {
                 } else {
                     self.present_directions_maintenance_overview(
                         format!(
-                            "directions draft promoted / draft: {} / files: {} / planning context refreshed",
+                            "direction draft: promoted / staged draft: {} / promoted files: {} / next action: continue with the refreshed planning context",
                             result.draft_name, result.promoted_file_count
                         ),
                         true,
@@ -727,7 +795,7 @@ impl NativeTuiApp {
                     return;
                 }
             }
-            Err(error) => format!("directions draft promote failed: {error}"),
+            Err(error) => format!("direction draft: promote failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -875,7 +943,7 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state
                     .open_simple_review(stage_result);
                 format!(
-                    "planning simple draft staged / draft: {} / validation: {} / next: Enter or Ctrl+P to promote, Ctrl+E to inspect",
+                    "planning draft: staged / staged draft: {} / validation state: {} / next action: Enter or Ctrl+P promotes the staged scaffold. Ctrl+E inspects the draft.",
                     draft_name,
                     if validation_ok {
                         "ok"
@@ -884,7 +952,7 @@ impl NativeTuiApp {
                     }
                 )
             }
-            Err(error) => format!("planning init failed: {error}"),
+            Err(error) => format!("planning setup: failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -904,7 +972,7 @@ impl NativeTuiApp {
             self.planning
                 .workspace
                 .load_manual_editor_session(&workspace_directory, &draft_name),
-            "planning simple draft editor ready",
+            "operator surface: planning draft",
             PlanningInitModeSelection::Simple,
         );
     }
@@ -932,7 +1000,7 @@ impl NativeTuiApp {
                     .apply_simple_review_validation(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "planning simple draft promote blocked / draft: {} / validation: {} / next: press Ctrl+E to inspect or fix the staged draft",
+                        "planning draft: promote blocked / staged draft: {} / validation state: {} / next action: press Ctrl+E to inspect or fix the staged draft",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -943,12 +1011,12 @@ impl NativeTuiApp {
                 } else {
                     self.close_shell_overlay();
                     format!(
-                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                        "planning draft: promoted / staged draft: {} / promoted files: {} / next action: continue with the refreshed planning context",
                         result.draft_name, result.promoted_file_count
                     )
                 }
             }
-            Err(error) => format!("planning draft promote failed: {error}"),
+            Err(error) => format!("planning draft: promote failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -965,7 +1033,7 @@ impl NativeTuiApp {
             Ok(session) => {
                 let validation_ok = session.validation_report.is_valid();
                 let status_text = format!(
-                    "{ready_status_prefix} / draft: {} / validation: {}",
+                    "{ready_status_prefix} / staged draft: {} / validation state: {}",
                     session.draft_name,
                     if validation_ok {
                         "ok"
@@ -984,7 +1052,7 @@ impl NativeTuiApp {
                 }
                 status_text
             }
-            Err(error) => format!("planning init failed: {error}"),
+            Err(error) => format!("planning draft: open failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -1000,7 +1068,7 @@ impl NativeTuiApp {
             Ok(session) => {
                 let validation_ok = session.validation_report.is_valid();
                 let status_text = format!(
-                    "{ready_status_prefix} / draft: {} / validation: {}",
+                    "{ready_status_prefix} / staged draft: {} / validation state: {}",
                     session.draft_name,
                     if validation_ok {
                         "ok"
@@ -1013,7 +1081,7 @@ impl NativeTuiApp {
                     .open_manual_editor();
                 status_text
             }
-            Err(error) => format!("directions editor failed: {error}"),
+            Err(error) => format!("direction draft: open failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -1143,4 +1211,75 @@ fn planning_doctor_status_text(outcome: &PlanningDoctorOutcome) -> String {
     } else {
         format!("{leading_text} / remaining: planning validation failed")
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedResetShellCommand {
+    target: PlanningResetTarget,
+    confirmed: bool,
+}
+
+fn parse_reset_shell_argument(argument: Option<&str>) -> Result<ParsedResetShellCommand, String> {
+    let Some(argument) = argument.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err(
+            "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                .to_string(),
+        );
+    };
+    let mut parts = argument.split_whitespace();
+    let Some(target) = parts.next() else {
+        return Err(
+            "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                .to_string(),
+        );
+    };
+    let confirmation = parts.next();
+    let confirmed = match confirmation {
+        None => false,
+        Some(value) if value.eq_ignore_ascii_case("confirm") => true,
+        Some(_) => {
+            return Err(
+                "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                    .to_string(),
+            );
+        }
+    };
+    if parts.next().is_some() {
+        return Err(
+            "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                .to_string(),
+        );
+    }
+    let target = match target.to_ascii_lowercase().as_str() {
+        "queue" => PlanningResetTarget::Queue,
+        "directions" => PlanningResetTarget::Directions,
+        "all" => PlanningResetTarget::All,
+        _ => {
+            return Err(
+                "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all"
+                    .to_string(),
+            );
+        }
+    };
+    Ok(ParsedResetShellCommand { target, confirmed })
+}
+
+fn planning_reset_preview_text(target: PlanningResetTarget) -> String {
+    match target {
+        PlanningResetTarget::Queue => {
+            "reset queue preview: rewrites task-ledger.json and clears derived queue state"
+                .to_string()
+        }
+        PlanningResetTarget::Directions => "reset directions preview: rewrites directions.toml, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue".to_string(),
+        PlanningResetTarget::All => "reset all preview: replaces the full active planning scaffold, clears derived queue state, and turns Plan back on / rerun `:reset all confirm` to continue".to_string(),
+    }
+}
+
+fn planning_reset_status_text(result: &PlanningWorkspaceResetResult) -> String {
+    format!(
+        "planning reset applied / target: {} / rewritten: {} / removed: {}",
+        result.target.label(),
+        result.rewritten_paths.len(),
+        result.removed_paths.len(),
+    )
 }
