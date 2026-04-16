@@ -54,6 +54,6 @@
 
 ## Code Entry
 
-- Shell runtime entrypoint: `src/adapter/inbound/tui/app`
-- Planning feature entrypoint: `src/adapter/inbound/tui/app/planning`
-- Application planning services: `src/application/service/planning`
+- Shell runtime entrypoint: `src/adapter/inbound/tui/app.rs`
+- Planning feature entrypoint: `src/adapter/inbound/tui/app/planning/`
+- Application planning services: `src/application/service/planning/`

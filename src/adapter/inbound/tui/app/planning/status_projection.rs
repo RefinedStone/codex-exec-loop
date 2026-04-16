@@ -7,6 +7,7 @@ use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
 
 const RESUMED_SESSION_DETAIL_LIMIT: usize = 96;
+const STATUS_SEGMENT_SEPARATOR: &str = "  |  ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlanningStatusSurfaceProjection {
@@ -31,6 +32,14 @@ struct QueueFramingDetails {
     next_detail: String,
     proposed_detail: String,
     blocked_detail: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PartialQueueFramingDetails {
+    now_detail: Option<String>,
+    next_detail: Option<String>,
+    proposed_detail: Option<String>,
+    blocked_detail: Option<String>,
 }
 
 pub(crate) fn build_planning_status_surface_projection(
@@ -99,7 +108,10 @@ pub(crate) fn build_resumed_session_status_text(snapshot: &PlanningRuntimeSnapsh
         status_text.push_str(&queue_summary);
     } else if let Some(detail) = snapshot.preview_detail() {
         status_text.push_str(" / planning detail: ");
-        status_text.push_str(&compact_whitespace_detail(detail, RESUMED_SESSION_DETAIL_LIMIT));
+        status_text.push_str(&compact_whitespace_detail(
+            detail,
+            RESUMED_SESSION_DETAIL_LIMIT,
+        ));
     }
 
     status_text
@@ -174,7 +186,14 @@ pub(crate) fn compact_queue_framing_summary(summary: &str, max_detail_len: usize
         return queue_framing_summary_from_parts("none", "none", "none", "none");
     }
 
-    if let Some(details) = parse_queue_framing_details(trimmed, max_detail_len) {
+    if let Some(parsed_details) = parse_queue_framing_details(trimmed, max_detail_len) {
+        let mut details = QueueFramingDetails {
+            now_detail: "none".to_string(),
+            next_detail: "none".to_string(),
+            proposed_detail: "none".to_string(),
+            blocked_detail: "none".to_string(),
+        };
+        merge_queue_framing_details(&mut details, parsed_details);
         return queue_framing_summary_from_details(&details);
     }
 
@@ -184,44 +203,57 @@ pub(crate) fn compact_queue_framing_summary(summary: &str, max_detail_len: usize
 fn parse_queue_framing_details(
     summary: &str,
     max_detail_len: usize,
-) -> Option<QueueFramingDetails> {
-    let mut details = QueueFramingDetails {
-        now_detail: "none".to_string(),
-        next_detail: "none".to_string(),
-        proposed_detail: "none".to_string(),
-        blocked_detail: "none".to_string(),
-    };
+) -> Option<PartialQueueFramingDetails> {
+    let mut details = PartialQueueFramingDetails::default();
     let mut matched = false;
 
-    for segment in summary.split("  |  ") {
+    for segment in summary.split(STATUS_SEGMENT_SEPARATOR) {
         let trimmed = segment.trim();
         if trimmed.is_empty() {
             continue;
         }
 
         if let Some(detail) = trimmed.strip_prefix("now: ") {
-            details.now_detail = compact_whitespace_detail(detail, max_detail_len);
+            details.now_detail = Some(compact_whitespace_detail(detail, max_detail_len));
             matched = true;
             continue;
         }
         if let Some(detail) = trimmed.strip_prefix("next: ") {
-            details.next_detail = compact_whitespace_detail(detail, max_detail_len);
+            details.next_detail = Some(compact_whitespace_detail(detail, max_detail_len));
             matched = true;
             continue;
         }
         if let Some(detail) = trimmed.strip_prefix("proposed: ") {
-            details.proposed_detail = compact_whitespace_detail(detail, max_detail_len);
+            details.proposed_detail = Some(compact_whitespace_detail(detail, max_detail_len));
             matched = true;
             continue;
         }
         if let Some(detail) = trimmed.strip_prefix("blocked: ") {
-            details.blocked_detail = compact_whitespace_detail(detail, max_detail_len);
+            details.blocked_detail = Some(compact_whitespace_detail(detail, max_detail_len));
             matched = true;
             continue;
         }
     }
 
     matched.then_some(details)
+}
+
+fn merge_queue_framing_details(
+    details: &mut QueueFramingDetails,
+    parsed: PartialQueueFramingDetails,
+) {
+    if let Some(now_detail) = parsed.now_detail {
+        details.now_detail = now_detail;
+    }
+    if let Some(next_detail) = parsed.next_detail {
+        details.next_detail = next_detail;
+    }
+    if let Some(proposed_detail) = parsed.proposed_detail {
+        details.proposed_detail = proposed_detail;
+    }
+    if let Some(blocked_detail) = parsed.blocked_detail {
+        details.blocked_detail = blocked_detail;
+    }
 }
 
 fn build_queue_framing_details_from_snapshot(
@@ -246,16 +278,16 @@ fn build_queue_framing_details_from_snapshot(
     };
 
     if let Some(queue_snapshot) = queue_snapshot {
-        let now_detail = queue_snapshot
+        let current_task = queue_snapshot
             .next_task
             .as_ref()
-            .or_else(|| snapshot.queue_head())
+            .or_else(|| queue_snapshot.active_tasks.first())
+            .or_else(|| snapshot.queue_head());
+        let now_detail = current_task
             .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
             .unwrap_or_else(|| "none".to_string());
 
-        let remaining_tasks = queue_snapshot
-            .next_task
-            .as_ref()
+        let remaining_tasks = current_task
             .map(|current| {
                 queue_snapshot
                     .active_tasks
@@ -324,7 +356,7 @@ fn build_queue_framing_details_from_snapshot(
 
     if let Some(queue_summary) = snapshot.queue_summary() {
         if let Some(parsed_details) = parse_queue_framing_details(queue_summary, max_detail_len) {
-            details = parsed_details;
+            merge_queue_framing_details(&mut details, parsed_details);
         }
     }
 
@@ -356,11 +388,11 @@ fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> Stri
 fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'static>> {
     vec![
         Line::from(format!(
-            "now: {}  |  next: {}",
+            "now: {}{STATUS_SEGMENT_SEPARATOR}next: {}",
             details.now_detail, details.next_detail
         )),
         Line::from(format!(
-            "proposed: {}  |  blocked: {}",
+            "proposed: {}{STATUS_SEGMENT_SEPARATOR}blocked: {}",
             details.proposed_detail, details.blocked_detail
         )),
     ]
@@ -382,14 +414,18 @@ fn queue_framing_summary_from_parts(
     blocked_detail: &str,
 ) -> String {
     format!(
-        "now: {now_detail}  |  next: {next_detail}  |  proposed: {proposed_detail}  |  blocked: {blocked_detail}"
+        "now: {now_detail}{STATUS_SEGMENT_SEPARATOR}next: {next_detail}{STATUS_SEGMENT_SEPARATOR}proposed: {proposed_detail}{STATUS_SEGMENT_SEPARATOR}blocked: {blocked_detail}"
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_resumed_session_status_text;
+    use super::{
+        build_queue_framing_summary_from_snapshot, build_resumed_session_status_text,
+        compact_queue_framing_summary,
+    };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::domain::planning::{PriorityQueueSnapshot, PriorityQueueTask, TaskStatus};
 
     #[test]
     fn resumed_session_status_prefers_queue_summary_projection() {
@@ -406,5 +442,72 @@ mod tests {
         assert!(status_text.contains("thread loaded / planning status: ready"));
         assert!(status_text.contains("queue summary: now: Ship resume status"));
         assert!(status_text.contains("next: Review overlays"));
+    }
+
+    #[test]
+    fn queue_framing_summary_skips_duplicate_next_when_snapshot_has_no_explicit_next_task() {
+        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_snapshot(
+            "Planning Context".to_string(),
+            "queue ready".to_string(),
+            None,
+            None,
+            PriorityQueueSnapshot {
+                next_task: None,
+                active_tasks: vec![
+                    queue_task("task-1", "Ship resume status", 1),
+                    queue_task("task-2", "Review overlays", 2),
+                ],
+                proposed_tasks: Vec::new(),
+                skipped_tasks: Vec::new(),
+            },
+        );
+
+        let summary = build_queue_framing_summary_from_snapshot(&snapshot, 96)
+            .expect("queue framing summary should exist");
+
+        assert!(summary.contains("now: Ship resume status"));
+        assert!(summary.contains("next: Review overlays"));
+        assert!(!summary.contains("next: Ship resume status"));
+    }
+
+    #[test]
+    fn queue_framing_summary_merges_partial_queue_summary_with_existing_details() {
+        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "now: Review overlays".to_string(),
+            Some("Promote follow-up proposal".to_string()),
+            None,
+        )
+        .with_workspace_present(true);
+
+        let summary = build_queue_framing_summary_from_snapshot(&snapshot, 96)
+            .expect("queue framing summary should exist");
+
+        assert_eq!(
+            summary,
+            "now: Review overlays  |  next: none  |  proposed: Promote follow-up proposal  |  blocked: none"
+        );
+    }
+
+    #[test]
+    fn compact_queue_framing_summary_fills_missing_fields_with_none() {
+        assert_eq!(
+            compact_queue_framing_summary("now: Review overlays", 96),
+            "now: Review overlays  |  next: none  |  proposed: none  |  blocked: none"
+        );
+    }
+
+    fn queue_task(task_id: &str, title: &str, rank: usize) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank,
+            task_id: task_id.to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_title: "Direction".to_string(),
+            task_title: title.to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 100,
+            updated_at: "2026-04-17T00:00:00Z".to_string(),
+            rank_reasons: vec!["test".to_string()],
+        }
     }
 }

@@ -151,7 +151,7 @@ $report = @(
     "term: $Term"
     "check_profile: $CheckProfile"
     "checks:"
-    $checks
+    ($checks -join [Environment]::NewLine)
     "result: $Result"
     "notes: $Notes"
 ) -join [Environment]::NewLine

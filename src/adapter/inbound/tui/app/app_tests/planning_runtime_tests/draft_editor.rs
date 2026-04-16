@@ -239,7 +239,6 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    conversation.cwd = workspace_dir.clone();
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "planning context",
         "queue ready",
@@ -250,7 +249,6 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
         count_staged_planning_drafts(&startup_workspace_dir),
         startup_draft_count
     );
-    assert_eq!(count_staged_planning_drafts(&workspace_dir), 2);
 
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)));
     assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE,)));

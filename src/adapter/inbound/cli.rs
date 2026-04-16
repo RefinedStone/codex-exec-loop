@@ -243,25 +243,26 @@ fn resolve_workspace_path(workspace_arg: Option<&OsStr>) -> Result<PathBuf> {
     }
 }
 
-fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
-    let workspace_label = workspace_path.display().to_string();
+fn validate_workspace_path(workspace_path: &Path) -> Result<(), String> {
     if !workspace_path.exists() {
-        return DoctorReport::path_issue(
-            workspace_label,
-            format!(
-                "workspace path does not exist: {}",
-                workspace_path.display()
-            ),
-        );
+        return Err(format!(
+            "workspace path does not exist: {}",
+            workspace_path.display()
+        ));
     }
     if !workspace_path.is_dir() {
-        return DoctorReport::path_issue(
-            workspace_label,
-            format!(
-                "workspace path is not a directory: {}",
-                workspace_path.display()
-            ),
-        );
+        return Err(format!(
+            "workspace path is not a directory: {}",
+            workspace_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
+    let workspace_label = workspace_path.display().to_string();
+    if let Err(issue) = validate_workspace_path(workspace_path) {
+        return DoctorReport::path_issue(workspace_label, issue);
     }
 
     let planning =
@@ -274,23 +275,8 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
 
 fn initialize_workspace(workspace_path: &Path) -> InitReport {
     let workspace_label = workspace_path.display().to_string();
-    if !workspace_path.exists() {
-        return InitReport::path_issue(
-            workspace_label,
-            format!(
-                "workspace path does not exist: {}",
-                workspace_path.display()
-            ),
-        );
-    }
-    if !workspace_path.is_dir() {
-        return InitReport::path_issue(
-            workspace_label,
-            format!(
-                "workspace path is not a directory: {}",
-                workspace_path.display()
-            ),
-        );
+    if let Err(issue) = validate_workspace_path(workspace_path) {
+        return InitReport::path_issue(workspace_label, issue);
     }
 
     let planning =
@@ -311,23 +297,8 @@ fn initialize_workspace(workspace_path: &Path) -> InitReport {
 
 fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetReport {
     let workspace_label = workspace_path.display().to_string();
-    if !workspace_path.exists() {
-        return ResetReport::path_issue(
-            workspace_label,
-            format!(
-                "workspace path does not exist: {}",
-                workspace_path.display()
-            ),
-        );
-    }
-    if !workspace_path.is_dir() {
-        return ResetReport::path_issue(
-            workspace_label,
-            format!(
-                "workspace path is not a directory: {}",
-                workspace_path.display()
-            ),
-        );
+    if let Err(issue) = validate_workspace_path(workspace_path) {
+        return ResetReport::path_issue(workspace_label, issue);
     }
 
     let planning =
