@@ -236,13 +236,13 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 ],
                 summary_lines: vec![
                     Line::from(
-                        "After promote, planning starts with one generic direction and no active queue task yet.",
+                        "After promote, planning starts with one generic direction and an empty task ledger, so there is no next task yet.",
                     ),
                     Line::from(
-                        "The default queue-idle review prompt is already staged so the first reply can justify follow-up work when needed.",
+                        "The shell only treats accepted queue work as the next task, so simple mode waits for real queued work instead of inventing one upfront.",
                     ),
                     Line::from(
-                        "No active planning files change until you explicitly promote this review.",
+                        "Queue-idle review is already staged, so this scaffold still has a safe fallback when planning is valid but no task is queued.",
                     ),
                 ],
                 option_lines: vec![
@@ -251,7 +251,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         "reviewed artifacts: {staged_file_count} staged planning files"
                     )),
                     Line::from(
-                        "promote outcome: generic direction catalog, empty task ledger, and default queue-idle review prompt",
+                        "promote outcome: generic direction catalog, empty task ledger, and queue-idle review ready for no-next-task turns",
                     ),
                     Line::from(
                         "advanced path: press D to branch into detail-mode authoring instead of promoting the simple scaffold",
@@ -278,6 +278,9 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                             app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                         )));
                     } else {
+                        lines.push(Line::from(
+                            "simple behavior: no next task yet / queue-idle review stays enabled after promote.",
+                        ));
                         lines.push(Line::from(
                             "next action: Enter or Ctrl+P promotes the staged simple scaffold.",
                         ));

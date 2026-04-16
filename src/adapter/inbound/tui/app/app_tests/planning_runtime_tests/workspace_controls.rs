@@ -35,6 +35,16 @@ fn planning_command_opens_first_run_simple_review() {
             .status_text
             .contains("planning simple review ready")
     );
+    assert!(
+        conversation
+            .status_text
+            .contains("simple behavior: no next task yet")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("queue-idle review stays enabled")
+    );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
@@ -228,6 +238,16 @@ fn init_command_stages_simple_review_immediately() {
         conversation
             .status_text
             .contains("planning simple review ready")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("simple behavior: no next task yet")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("queue-idle review stays enabled")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
