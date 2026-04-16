@@ -333,7 +333,11 @@ pub(super) fn format_conversation_lines_with_debug(
     }
 
     if lines.is_empty() {
-        lines.push(Line::from("No messages in this thread yet."));
+        lines.extend([
+            Line::from("current state: ready"),
+            Line::from("cause: no messages have been recorded in this conversation yet"),
+            Line::from("next action: send the first prompt to start the conversation"),
+        ]);
     }
 
     if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
@@ -762,19 +766,23 @@ fn build_shell_header_lines_with_context(
 
 #[cfg(test)]
 fn build_shell_title() -> Line<'static> {
-    Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
+    Line::from("Shell / current conversation and operator controls")
 }
 
 #[cfg(test)]
 fn build_transcript_title_with_context(
-    _context: &ShellCorePresentationContext<'_>,
+    context: &ShellCorePresentationContext<'_>,
 ) -> Line<'static> {
-    Line::from("Transcript / live scrollback")
+    match context.conversation_state {
+        ShellConversationState::Loading => Line::from("Conversation / waiting"),
+        ShellConversationState::Failed(_) => Line::from("Conversation / blocked"),
+        ShellConversationState::Ready(_) => Line::from("Conversation / ready"),
+    }
 }
 
 #[cfg(test)]
 pub(super) fn build_status_title() -> Line<'static> {
-    Line::from("Controls / shell shortcuts and live status")
+    Line::from("Status / current state, cause, and next action")
 }
 
 #[cfg(test)]
@@ -806,7 +814,7 @@ fn build_input_title_with_context(context: &ShellCorePresentationContext<'_>) ->
 #[cfg(test)]
 fn build_frontend_summary_line() -> Line<'static> {
     Line::from(
-        "frontend: inline main buffer  |  history: host terminal scrollback  |  tail: prompt anchored",
+        "current surface: inline main buffer  |  conversation history: host terminal scrollback  |  prompt tail: anchored",
     )
 }
 

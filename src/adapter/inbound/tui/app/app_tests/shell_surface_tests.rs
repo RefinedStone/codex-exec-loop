@@ -2,6 +2,7 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::event::Event;
+use ratatui::prelude::Rect;
 
 use super::super::shell_runtime;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
@@ -14,11 +15,12 @@ use super::{
     KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
     RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellFrontendMode,
     ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_conversation_shell_view,
-    build_inline_tail_lines, build_planning_init_overlay_view, build_queue_overlay_view,
-    build_ready_input_lines, build_session_overlay_view, build_startup_overlay_view,
-    create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
-    sample_planning_runtime_snapshot, sample_startup_diagnostics,
+    build_automation_preview_lines, build_automation_status_lines,
+    build_conversation_shell_frame_view, build_conversation_shell_view, build_inline_tail_lines,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
+    build_session_overlay_view, build_startup_overlay_view, create_temp_workspace, make_test_app,
+    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
+    sample_startup_diagnostics,
 };
 
 #[test]
@@ -833,6 +835,78 @@ fn ready_shell_header_uses_operator_facing_thread_labels() {
 
     assert!(ready_header.contains("thread: Existing session  |  input: ready"));
     assert!(!ready_header.contains("thread-1"));
+}
+
+#[test]
+fn framed_shell_titles_and_empty_transcript_use_operator_facing_copy() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+    let frame_view = build_conversation_shell_frame_view(
+        &mut app,
+        ShellFrontendMode::InlineMainBuffer,
+        Rect::new(0, 0, 96, 28),
+    );
+    let transcript = frame_view
+        .transcript_view
+        .lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let header = frame_view
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(
+        frame_view.shell_title.to_string(),
+        "Shell / current conversation and operator controls"
+    );
+    assert_eq!(
+        frame_view.transcript_view.title.to_string(),
+        "Conversation / ready"
+    );
+    assert_eq!(
+        frame_view.status_title.to_string(),
+        "Status / current state, cause, and next action"
+    );
+    assert!(header.contains("current surface: inline main buffer"));
+    assert!(header.contains("conversation history: host terminal scrollback"));
+    assert!(transcript.contains("current state: ready"));
+    assert!(transcript.contains("cause: no messages have been recorded in this conversation yet"));
+    assert!(transcript.contains("next action: send the first prompt to start the conversation"));
+}
+
+#[test]
+fn framed_transcript_title_tracks_loading_and_blocked_states() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::Loading;
+
+    let loading_frame = build_conversation_shell_frame_view(
+        &mut app,
+        ShellFrontendMode::InlineMainBuffer,
+        Rect::new(0, 0, 96, 28),
+    );
+    assert_eq!(
+        loading_frame.transcript_view.title.to_string(),
+        "Conversation / waiting"
+    );
+
+    app.conversation_state = ConversationState::Failed("transport closed".to_string());
+
+    let blocked_frame = build_conversation_shell_frame_view(
+        &mut app,
+        ShellFrontendMode::InlineMainBuffer,
+        Rect::new(0, 0, 96, 28),
+    );
+    assert_eq!(
+        blocked_frame.transcript_view.title.to_string(),
+        "Conversation / blocked"
+    );
 }
 
 #[test]
