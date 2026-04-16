@@ -35,15 +35,15 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Directions Maintenance",
+                            "Direction Maintenance",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / shell inspection"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "Review operator-owned planning directions and queue-idle policy without editing raw files first.",
+                        "Review operator-owned directions and the queue-idle rule before staging edits.",
                     ),
                 ],
                 summary_lines: vec![
@@ -148,15 +148,15 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Directions Maintenance",
+                            "Direction Maintenance",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / detail docs"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "Choose a direction whose detail-doc mapping should be created or repaired.",
+                        "Current step: choose a direction whose detail-doc mapping should be created or repaired.",
                     ),
                 ],
                 summary_lines: vec![
@@ -195,15 +195,15 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Directions Maintenance",
+                            "Direction Maintenance",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / confirm detail doc"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "Open a staged detail document for the selected direction and repair the mapping if needed?",
+                        "Current step: confirm the staged detail-doc repair for the selected direction.",
                     ),
                 ],
                 summary_lines: vec![
@@ -243,14 +243,14 @@ pub(crate) fn build_directions_maintenance_overlay_view(
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Directions Maintenance",
+                        "Direction Draft",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / staged editor"),
+                    Span::raw(" / operator inspection"),
                 ]),
-                Line::from("Edit the staged directions draft and save to re-run validation."),
+                Line::from("Edit the staged direction draft and save to re-run validation."),
             ],
             summary_lines: vec![Line::from(
                 "This state renders through the dedicated draft editor view.",

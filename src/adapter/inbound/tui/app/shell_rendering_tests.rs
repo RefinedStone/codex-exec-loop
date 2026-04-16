@@ -532,7 +532,8 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(header.contains("simple mode"));
+    assert!(header.contains("Planning Setup / operator inspection"));
+    assert!(header.contains("Simple mode review"));
     assert!(options.contains("bootstrap-1"));
     assert!(status.contains("turn budget: 3"));
     assert!(keys.contains("Enter/Ctrl+P: promote staged scaffold"));

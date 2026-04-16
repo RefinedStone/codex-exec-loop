@@ -47,15 +47,15 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Planning Controls",
+                            "Planning Setup",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / existing workspace"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
+                        "Existing workspace: manage the current planning runtime instead of staging a new scaffold.",
                     ),
                 ],
                 summary_lines: vec![
@@ -89,12 +89,12 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Planning Initialization",
+                        "Planning Setup",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / shell guidance"),
+                    Span::raw(" / operator inspection"),
                 ]),
                 Line::from("Pick the planning entry path before any files are staged."),
             ],
@@ -143,14 +143,14 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Planning Initialization",
+                        "Planning Setup",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / detail mode"),
+                    Span::raw(" / operator inspection"),
                 ]),
-                Line::from("Choose how detail-mode drafts should be prepared."),
+                Line::from("Current step: choose how detail-mode drafts should be prepared."),
             ],
             summary_lines: vec![
                 Line::from("Manual opens the staged draft editor inside the shell."),
@@ -212,15 +212,15 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 header_lines: vec![
                     Line::from(vec![
                         Span::styled(
-                            "Planning Initialization",
+                            "Planning Setup",
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(" / simple mode"),
+                        Span::raw(" / operator inspection"),
                     ]),
                     Line::from(
-                        "Review the staged generic scaffold before it becomes active planning.",
+                        "Simple mode review: inspect the staged generic scaffold before it becomes active planning.",
                     ),
                 ],
                 summary_lines: vec![
@@ -294,12 +294,12 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             header_lines: vec![
                 Line::from(vec![
                     Span::styled(
-                        "Planning Draft Editor",
+                        "Planning Draft",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" / staged detail draft"),
+                    Span::raw(" / operator inspection"),
                 ]),
                 Line::from("Edit the staged planning draft and save to re-run validation."),
             ],

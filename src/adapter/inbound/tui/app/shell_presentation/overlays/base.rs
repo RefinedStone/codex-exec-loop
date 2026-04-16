@@ -94,9 +94,9 @@ pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / shell inspection"),
+                Span::raw(" / operator inspection"),
             ]),
-            Line::from("Inspect readiness without leaving the live shell."),
+            Line::from("Review startup readiness without leaving the current conversation."),
         ],
         summary_lines: build_startup_operator_lines_from_state(&app.startup_state, 56),
         check_lines: build_startup_check_lines(app),
@@ -196,9 +196,9 @@ pub(crate) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / shell inspection"),
+                Span::raw(" / operator inspection"),
             ]),
-            Line::from("Resume a thread without leaving the shell view."),
+            Line::from("Review and reopen a thread without leaving the current conversation."),
         ],
         list_view,
         detail_lines,

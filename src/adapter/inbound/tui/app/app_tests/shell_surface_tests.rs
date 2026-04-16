@@ -4,10 +4,16 @@ use std::time::Duration;
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
+use super::super::shell_presentation::build_directions_maintenance_overlay_view;
 use super::super::shell_runtime;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+use crate::application::service::planning::{
+    DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
+    DirectionsSupportingFileStatus,
+};
 use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
+use crate::domain::planning::QueueIdlePolicy;
 
 use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind,
@@ -428,6 +434,100 @@ fn startup_checks_overlay_uses_current_state_cause_and_next_action() {
     );
     assert!(checks.contains("[ready] codex CLI: ok"));
     assert!(checks.contains("[ready] app-server readiness: ok"));
+}
+
+#[test]
+fn non_rendering_overlay_headers_use_canonical_operator_titles() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+    let startup_header = build_startup_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(startup_header.contains("Startup Checks / operator inspection"));
+    assert!(!startup_header.contains("shell inspection"));
+
+    let session_header = build_session_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(session_header.contains("Recent Sessions / operator inspection"));
+    assert!(!session_header.contains("shell inspection"));
+
+    let automation_header = build_automation_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(automation_header.contains("Automation Controls / operator inspection"));
+    assert!(!automation_header.contains("shell inspection"));
+
+    let queue_header = build_queue_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(queue_header.contains("Planning Queue / operator inspection"));
+    assert!(!queue_header.contains("shell inspection"));
+
+    let planning_setup_header = build_planning_init_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(planning_setup_header.contains("Planning Setup / operator inspection"));
+    assert!(!planning_setup_header.contains("shell guidance"));
+
+    app.planning_init_overlay_ui_state.open_manual_editor();
+    let planning_draft_header = build_planning_init_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(planning_draft_header.contains("Planning Draft / operator inspection"));
+
+    app.directions_maintenance_overlay_ui_state
+        .open_summary(DirectionsMaintenanceSummary {
+            directions: vec![DirectionsMaintenanceDirectionSummary {
+                id: "operator-copy".to_string(),
+                title: "Operator Copy".to_string(),
+                detail_doc_path: None,
+                detail_doc_status: DirectionsSupportingFileStatus::MissingMapping,
+            }],
+            missing_detail_doc_count: 1,
+            broken_detail_doc_count: 0,
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: None,
+            queue_idle_prompt_status: DirectionsSupportingFileStatus::MissingMapping,
+            parse_error: None,
+        });
+    let directions_header = build_directions_maintenance_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(directions_header.contains("Direction Maintenance / operator inspection"));
+    assert!(!directions_header.contains("shell inspection"));
+
+    app.directions_maintenance_overlay_ui_state
+        .open_manual_editor();
+    let direction_draft_header = build_directions_maintenance_overlay_view(&app)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(direction_draft_header.contains("Direction Draft / operator inspection"));
 }
 
 #[test]
@@ -873,8 +973,8 @@ fn framed_shell_titles_and_empty_transcript_use_operator_facing_copy() {
         frame_view.status_title.to_string(),
         "Status / current state, cause, and next action"
     );
-    assert!(header.contains("current surface: inline main buffer"));
-    assert!(header.contains("conversation history: host terminal scrollback"));
+    assert!(header.contains("operator surface: inline main buffer"));
+    assert!(header.contains("transcript source: host terminal scrollback"));
     assert!(transcript.contains("current state: ready"));
     assert!(transcript.contains("cause: no messages have been recorded in this conversation yet"));
     assert!(transcript.contains("next action: send the first prompt to start the conversation"));

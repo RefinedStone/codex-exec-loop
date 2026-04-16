@@ -20,9 +20,9 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" / shell inspection"),
+            Span::raw(" / operator inspection"),
         ]),
-        Line::from("Review the next actionable work without opening raw planning files."),
+        Line::from("Review queued work, proposals, and planner updates before the next turn."),
     ];
 
     match &app.conversation_state {
@@ -171,9 +171,9 @@ pub(crate) fn build_automation_overlay_view(app: &NativeTuiApp) -> AutomationOve
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" / shell inspection"),
+                Span::raw(" / operator inspection"),
             ]),
-            Line::from("Inspect planning-driven automation before the next auto-follow turn."),
+            Line::from("Review planning-driven automation before the next auto-follow turn."),
         ],
         list_view: build_automation_list_view(app),
         preview_lines: build_automation_preview_lines(app),

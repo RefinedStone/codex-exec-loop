@@ -814,7 +814,7 @@ fn build_input_title_with_context(context: &ShellCorePresentationContext<'_>) ->
 #[cfg(test)]
 fn build_frontend_summary_line() -> Line<'static> {
     Line::from(
-        "current surface: inline main buffer  |  conversation history: host terminal scrollback  |  prompt tail: anchored",
+        "operator surface: inline main buffer  |  transcript source: host terminal scrollback  |  prompt tail: anchored",
     )
 }
 
