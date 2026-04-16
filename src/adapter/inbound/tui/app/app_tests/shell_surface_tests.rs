@@ -12,12 +12,13 @@ use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind,
     ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
     KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
-    RecordedAutoFollowupActivity, ShellActionAvailability, ShellOverlay, StartupState,
-    TASK_LEDGER_FILE_PATH, build_automation_overlay_view, build_automation_preview_lines,
-    build_automation_status_lines, build_inline_tail_lines, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_ready_input_lines, build_startup_overlay_view,
-    create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
-    sample_planning_runtime_snapshot, sample_startup_diagnostics,
+    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellOverlay,
+    StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
+    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
+    build_session_overlay_view, build_startup_overlay_view, create_temp_workspace, make_test_app,
+    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
+    sample_startup_diagnostics,
 };
 
 #[test]
@@ -511,6 +512,114 @@ fn queue_overlay_loading_and_failed_states_use_operator_facing_summary_lines() {
     ));
     assert!(failed_summary.contains("next action: reload the session or open a new draft"));
     assert!(failed_notes.contains("conversation error: transport closed"));
+}
+
+#[test]
+fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Loading;
+    app.session_state = SessionState::Idle;
+
+    let waiting_view = build_session_overlay_view(&app);
+    let waiting_list = waiting_view
+        .list_view
+        .message_lines
+        .expect("waiting state should expose list copy")
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let waiting_detail = waiting_view
+        .detail_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(waiting_list.contains("waiting for startup checks"));
+    assert!(waiting_detail.contains("current state: waiting"));
+    assert!(waiting_detail.contains("cause: startup checks have not finished yet"));
+    assert!(
+        waiting_detail
+            .contains("next action: wait for startup checks to finish, then load recent sessions")
+    );
+
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", false));
+    app.session_state = SessionState::Idle;
+
+    let blocked_idle_detail = build_session_overlay_view(&app)
+        .detail_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(blocked_idle_detail.contains("current state: blocked"));
+    assert!(
+        blocked_idle_detail
+            .contains("cause: startup checks must succeed before recent sessions are available")
+    );
+    assert!(blocked_idle_detail.contains(
+        "next action: open startup checks with Ctrl+d, fix them, then reload recent sessions"
+    ));
+
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.session_state = SessionState::Loading;
+
+    let loading_view = build_session_overlay_view(&app);
+    let loading_list = loading_view
+        .list_view
+        .message_lines
+        .expect("loading state should expose list copy")
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let loading_detail = loading_view
+        .detail_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(loading_list.contains("loading recent sessions"));
+    assert!(loading_detail.contains("current state: waiting"));
+    assert!(loading_detail.contains("cause: recent sessions are loading from codex app-server"));
+    assert!(loading_detail.contains("next action: wait for the session list to load"));
+
+    app.session_state = SessionState::Failed("request timed out".to_string());
+
+    let failed_view = build_session_overlay_view(&app);
+    let failed_list = failed_view
+        .list_view
+        .message_lines
+        .expect("failed state should expose list copy")
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let failed_detail = failed_view
+        .detail_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let keys = failed_view
+        .key_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(failed_list.contains("recent sessions blocked"));
+    assert!(failed_detail.contains("current state: blocked"));
+    assert!(
+        failed_detail.contains("cause: recent sessions are unavailable because loading failed")
+    );
+    assert!(failed_detail.contains("next action: press r to retry, or start a new draft with n"));
+    assert!(failed_detail.contains("recent sessions error: request timed out"));
+    assert!(keys.contains("r: reload"));
+    assert!(keys.contains("n: draft"));
+    assert!(keys.contains("Ctrl+d: startup checks"));
 }
 
 #[test]

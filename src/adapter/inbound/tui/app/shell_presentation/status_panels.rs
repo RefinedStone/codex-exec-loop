@@ -59,8 +59,9 @@ pub(super) fn build_shell_footer_lines_with_context(
                 ),
                 plan_mode_indicator,
             )),
-            Line::from("conversation state: loading thread metadata"),
-            Line::from("status: waiting for thread history from codex app-server"),
+            Line::from("current state: waiting"),
+            Line::from("cause: thread history is still loading from codex app-server"),
+            Line::from("next action: wait for the thread history to load"),
         ],
         ShellConversationState::Failed(message) => vec![
             Line::from(plan_mode_prefixed_spans(
@@ -72,8 +73,13 @@ pub(super) fn build_shell_footer_lines_with_context(
                 ),
                 plan_mode_indicator,
             )),
-            Line::from("conversation state: failed"),
-            Line::from(format!("status: {message}")),
+            Line::from("current state: blocked"),
+            Line::from("cause: thread history is unavailable because loading failed"),
+            Line::from("next action: reload the session or open a new draft"),
+            Line::from(format!(
+                "conversation error: {}",
+                compact_inline_detail(message, FOOTER_STATUS_DETAIL_LIMIT)
+            )),
         ],
         ShellConversationState::Ready(conversation) => {
             let warning_summary = conversation.warning_summary(FOOTER_WARNING_DETAIL_LIMIT);
@@ -171,6 +177,29 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
     build_inline_tail_view(app, 0).lines
 }
 
+fn build_conversation_loading_operator_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("current state: waiting"),
+        Line::from("cause: thread history is still loading from codex app-server"),
+        Line::from("next action: wait for the thread history to load"),
+    ]
+}
+
+fn build_conversation_failed_operator_lines(
+    message: &str,
+    max_detail_len: usize,
+) -> Vec<Line<'static>> {
+    vec![
+        Line::from("current state: blocked"),
+        Line::from("cause: thread history is unavailable because loading failed"),
+        Line::from("next action: reload the session or open a new draft"),
+        Line::from(format!(
+            "conversation error: {}",
+            compact_inline_detail(message, max_detail_len)
+        )),
+    ]
+}
+
 fn build_inline_tail_lines_with_context(
     app: &NativeTuiApp,
     context: &ShellCorePresentationContext<'_>,
@@ -200,7 +229,7 @@ fn build_inline_tail_lines_with_context(
         ShellConversationState::Loading => {
             lines.push(Line::from(plan_mode_prefixed_spans(
                 format!(
-                    "thread: loading  |  startup: {}  |  sessions: {}",
+                    "thread: waiting  |  startup: {}  |  sessions: {}",
                     context.shell_action_availability.status_text(),
                     context.recent_session_status_label.as_str(),
                 ),
@@ -210,14 +239,12 @@ fn build_inline_tail_lines_with_context(
                 "github: {}  |  flow: terminal main buffer",
                 context.github_review_polling_status_label.as_str(),
             )));
-            lines.push(Line::from(
-                "status: waiting for thread history from codex app-server",
-            ));
+            lines.extend(build_conversation_loading_operator_lines());
         }
         ShellConversationState::Failed(message) => {
             lines.push(Line::from(plan_mode_prefixed_spans(
                 format!(
-                    "thread: unavailable  |  startup: {}  |  sessions: {}",
+                    "thread: blocked  |  startup: {}  |  sessions: {}",
                     context.shell_action_availability.status_text(),
                     context.recent_session_status_label.as_str(),
                 ),
@@ -227,7 +254,10 @@ fn build_inline_tail_lines_with_context(
                 "github: {}  |  flow: terminal main buffer",
                 context.github_review_polling_status_label.as_str(),
             )));
-            lines.push(Line::from(format!("status: {message}")));
+            lines.extend(build_conversation_failed_operator_lines(
+                message,
+                INLINE_TAIL_STATUS_DETAIL_LIMIT,
+            ));
         }
         ShellConversationState::Ready(conversation) => {
             let warning_summary = compact_inline_summary_label(
@@ -464,10 +494,12 @@ fn build_inline_tail_prompt_lines_with_context(
     shell_action_availability: ShellActionAvailability,
 ) -> Vec<Line<'static>> {
     match context.conversation_state {
-        ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
-        ShellConversationState::Failed(message) => {
-            vec![Line::from(format!("prompt: unavailable  |  {message}"))]
+        ShellConversationState::Loading => {
+            vec![Line::from("prompt: waiting while thread history loads")]
         }
+        ShellConversationState::Failed(_) => vec![Line::from(
+            "prompt: blocked until you reload the session or open a new draft",
+        )],
         ShellConversationState::Ready(conversation) => {
             build_inline_ready_prompt_lines(conversation, shell_action_availability)
         }

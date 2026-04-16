@@ -847,36 +847,39 @@ fn build_session_overlay_content(app: &NativeTuiApp) -> (OverlayListView, Vec<Li
         SessionState::Idle => (
             OverlayListView {
                 message_lines: Some(vec![Line::from(if app.can_open_session_list() {
-                    "session list has not loaded yet"
+                    "waiting for recent sessions"
                 } else {
-                    "recent sessions unlock after startup checks succeed"
+                    session_idle_message_line(&app.startup_state)
                 })]),
                 items: Vec::new(),
                 selected_index: None,
             },
-            vec![Line::from(if app.can_open_session_list() {
-                "session details are not available yet"
-            } else {
-                "startup checks must succeed before recent-session detail is available"
-            })],
+            build_session_unavailable_operator_lines(&app.startup_state),
         ),
         SessionState::Loading => (
             OverlayListView {
-                message_lines: Some(vec![Line::from(
-                    "loading recent sessions from codex app-server",
-                )]),
+                message_lines: Some(vec![Line::from("loading recent sessions")]),
                 items: Vec::new(),
                 selected_index: None,
             },
-            vec![Line::from("waiting for session list response")],
+            vec![
+                Line::from("current state: waiting"),
+                Line::from("cause: recent sessions are loading from codex app-server"),
+                Line::from("next action: wait for the session list to load"),
+            ],
         ),
         SessionState::Failed(message) => (
             OverlayListView {
-                message_lines: Some(vec![Line::from(message.clone())]),
+                message_lines: Some(vec![Line::from("recent sessions blocked")]),
                 items: Vec::new(),
                 selected_index: None,
             },
-            vec![Line::from(message.clone())],
+            vec![
+                Line::from("current state: blocked"),
+                Line::from("cause: recent sessions are unavailable because loading failed"),
+                Line::from("next action: press r to retry, or start a new draft with n"),
+                Line::from(format!("recent sessions error: {message}")),
+            ],
         ),
         SessionState::Ready(recent_sessions) => {
             let browser_view = build_session_browser_view(
@@ -1064,6 +1067,46 @@ fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         Line::from("/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
         Line::from("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
         Line::from("n: draft    r: reload    Ctrl+d: startup checks"),
+    ]
+}
+
+fn session_idle_message_line(startup_state: &StartupState) -> &'static str {
+    match startup_state {
+        StartupState::Ready(diagnostics) if diagnostics.can_continue() => {
+            "waiting for recent sessions"
+        }
+        StartupState::Ready(_) | StartupState::Failed(_) => "recent sessions blocked",
+        StartupState::Idle | StartupState::Loading => "waiting for startup checks",
+    }
+}
+
+fn build_session_unavailable_operator_lines(startup_state: &StartupState) -> Vec<Line<'static>> {
+    match startup_state {
+        StartupState::Ready(diagnostics) if diagnostics.can_continue() => {
+            return vec![
+                Line::from("current state: waiting"),
+                Line::from("cause: recent sessions have not loaded yet"),
+                Line::from("next action: press r to load recent sessions"),
+            ];
+        }
+        StartupState::Idle | StartupState::Loading => {
+            return vec![
+                Line::from("current state: waiting"),
+                Line::from("cause: startup checks have not finished yet"),
+                Line::from(
+                    "next action: wait for startup checks to finish, then load recent sessions",
+                ),
+            ];
+        }
+        StartupState::Ready(_) | StartupState::Failed(_) => {}
+    }
+
+    vec![
+        Line::from("current state: blocked"),
+        Line::from("cause: startup checks must succeed before recent sessions are available"),
+        Line::from(
+            "next action: open startup checks with Ctrl+d, fix them, then reload recent sessions",
+        ),
     ]
 }
 
