@@ -9,6 +9,8 @@ use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
 
 const INTERNAL_QUEUE_METADATA_DETAIL_LIMIT: usize = 96;
+const EMPTY_QUEUE_FRAMING_SUMMARY: &str =
+    "now: none  |  next: none  |  proposed: none  |  blocked: none";
 
 #[derive(Debug, Clone, Default)]
 pub struct PlanningRuntimePolicyService;
@@ -554,8 +556,16 @@ fn idle_queue_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
         "planning is valid but has no next task yet".to_string()
     } else if queue_summary.trim().is_empty() {
         "planning is valid but has no next task yet".to_string()
+    } else if let Some(summary) =
+        snapshot.compact_queue_framing_summary(INTERNAL_QUEUE_METADATA_DETAIL_LIMIT)
+    {
+        if summary == EMPTY_QUEUE_FRAMING_SUMMARY {
+            "planning is valid but has no next task yet".to_string()
+        } else {
+            format!("planning is valid but has no next task yet; queue detail: {summary}")
+        }
     } else {
-        queue_summary.to_string()
+        "planning is valid but has no next task yet".to_string()
     }
 }
 
@@ -676,6 +686,36 @@ mod tests {
                 .status_label,
             "waiting"
         );
+    }
+
+    #[test]
+    fn summary_line_reframes_legacy_idle_queue_metadata_without_raw_next_task_string() {
+        let service = PlanningRuntimePolicyService::new();
+        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "next task: rank 1 / task-1 / Draft roadmap / priority 9".to_string(),
+            None,
+            None,
+        )
+        .with_queue_idle_policy(crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue, None);
+
+        let summary_line = service.build_summary_line(PlanningRuntimeSummaryLineRequest {
+            snapshot: &snapshot,
+            has_running_turn: false,
+            is_repairing: false,
+            repair_failure_summary: None,
+            repair_attempt: None,
+            has_notice: false,
+            max_detail_len: 160,
+            always_show: true,
+        });
+
+        let summary_line = summary_line.expect("summary line should be projected");
+        assert!(summary_line.contains(
+            "cause: planning is valid but has no next task yet; queue detail: now: Draft roadmap"
+        ));
+        assert!(summary_line.contains("proposed: none"));
+        assert!(!summary_line.contains("next task: rank 1 / task-1"));
     }
 
     #[test]
