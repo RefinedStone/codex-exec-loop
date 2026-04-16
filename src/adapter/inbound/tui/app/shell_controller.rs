@@ -14,9 +14,9 @@ impl ShellActionAvailability {
 
     pub(super) fn status_text(self) -> &'static str {
         match self {
-            Self::Ready => "startup checks ready",
-            Self::Pending => "waiting for startup checks",
-            Self::Blocked => "startup checks need attention",
+            Self::Ready => "startup ready",
+            Self::Pending => "startup checks still running",
+            Self::Blocked => "startup diagnostics need attention",
         }
     }
 }
@@ -43,13 +43,13 @@ impl NativeTuiApp {
         match (prompt_origin, self.shell_action_availability()) {
             (_, ShellActionAvailability::Ready) => "ready".to_string(),
             (PromptOrigin::Manual, state) => {
-                format!("{}; open startup checks with Ctrl+d", state.status_text())
+                format!("{}; open diagnostics with Ctrl+d", state.status_text())
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Pending) => {
-                "automation paused while waiting for startup checks".to_string()
+                "auto follow-up paused while startup checks are still running".to_string()
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
-                "automation paused because startup checks need attention".to_string()
+                "auto follow-up paused because startup diagnostics need attention".to_string()
             }
         }
     }
@@ -116,7 +116,7 @@ impl NativeTuiApp {
             InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Automation => self.show_automation_overlay(),
-            InlineShellCommand::Doctor => self.handle_doctor_shell_command(),
+            InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::Init => self.handle_init_shell_command(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())

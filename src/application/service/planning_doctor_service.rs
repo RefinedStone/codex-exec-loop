@@ -1,4 +1,5 @@
 use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;
+use crate::domain::text::compact_whitespace_detail;
 
 use super::planning_prompt_service::PlanningPromptService;
 use super::planning_prompt_service::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
@@ -115,11 +116,9 @@ impl PlanningDoctorReport {
         Self {
             planning_state,
             queue_idle_policy: is_ready.then(|| snapshot.queue_idle_policy().label().to_string()),
-            queue_summary: is_ready
-                .then(|| snapshot.queue_summary().map(str::to_string))
-                .flatten(),
+            queue_summary: is_ready.then(|| doctor_queue_summary(snapshot)).flatten(),
             proposal_summary: is_ready
-                .then(|| snapshot.proposal_summary().map(str::to_string))
+                .then(|| doctor_proposal_summary(snapshot))
                 .flatten(),
             health,
             issue: matches!(
@@ -131,6 +130,26 @@ impl PlanningDoctorReport {
             note,
         }
     }
+}
+
+fn doctor_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
+    snapshot
+        .queue_head()
+        .map(|queue_head| {
+            format!(
+                "now: {}",
+                compact_whitespace_detail(queue_head.task_title.trim(), 80)
+            )
+        })
+        .or_else(|| snapshot.queue_summary().map(str::to_string))
+}
+
+fn doctor_proposal_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
+    snapshot
+        .queue_snapshot()
+        .and_then(|queue_snapshot| queue_snapshot.proposed_tasks.first())
+        .map(|task| compact_whitespace_detail(task.task_title.trim(), 80))
+        .or_else(|| snapshot.proposal_summary().map(str::to_string))
 }
 
 #[derive(Clone)]

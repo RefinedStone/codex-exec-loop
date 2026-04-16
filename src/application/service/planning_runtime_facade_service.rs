@@ -35,10 +35,6 @@ pub struct PlanningRuntimePreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
     pub snapshot: &'a PlanningRuntimeSnapshot,
-    pub has_running_turn: bool,
-    pub is_repairing: bool,
-    pub repair_failure_summary: Option<&'a str>,
-    pub max_detail_len: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,9 +53,8 @@ pub struct PlanningRuntimeQueuedAutoFollowPrompt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeRenderedPreview {
     pub rendered_prompt: String,
-    pub current_state_line: String,
-    pub cause_line: String,
-    pub next_action_line: String,
+    pub planning_status_line: String,
+    pub planning_detail_line: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +196,9 @@ impl PlanningRuntimeFacadeService {
         let policy_decision = self
             .planning_runtime_policy_service
             .decide_auto_follow(request.snapshot);
+        let planning_view = self
+            .planning_runtime_policy_service
+            .build_preview_view_for_decision(policy_decision, request.snapshot);
         let rendered_prompt = match policy_decision {
             PlanningAutoFollowPolicyDecision::QueuePrompt(
                 PlanningAutoFollowPromptMode::RefreshPlanningQueue,
@@ -219,20 +217,12 @@ impl PlanningRuntimeFacadeService {
                 PlanningAutoFollowPromptMode::ContinueQueuedTask,
             ) => self.builtin_next_task_preview_prompt(request.snapshot),
         };
-        let planning_projection =
-            self.build_followup_status_projection(PlanningRuntimeStatusProjectionRequest {
-                snapshot: request.snapshot,
-                has_running_turn: request.has_running_turn,
-                is_repairing: request.is_repairing,
-                repair_failure_summary: request.repair_failure_summary,
-                repair_attempt: None,
-                max_detail_len: request.max_detail_len,
-            });
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
-            current_state_line: planning_projection.current_state_line,
-            cause_line: planning_projection.cause_line,
-            next_action_line: planning_projection.next_action_line,
+            planning_status_line: format!("planning: {}", planning_view.status_label),
+            planning_detail_line: planning_view
+                .detail
+                .map(|detail| format!("planning detail: {detail}")),
         }
     }
 
@@ -337,7 +327,9 @@ mod tests {
     };
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
+    use crate::application::service::planning_runtime_policy_service::{
+        PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
+    };
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
@@ -472,7 +464,7 @@ mod tests {
     -> crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot {
         crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "now: Implement planning runtime facade  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+            "next task: rank 1 / task-1".to_string(),
             Some(PriorityQueueTask {
                 rank: 1,
                 task_id: "task-1".to_string(),
@@ -539,7 +531,7 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
                 "Planning Context".to_string(),
-                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                "next_task: none".to_string(),
                 None,
             );
 
@@ -566,8 +558,11 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context\nRuntime Follow-up Proposal Rules".to_string(),
-                "now: none  |  next: none  |  proposed: Draft roadmap (+1 more)  |  blocked: none".to_string(),
-                Some("Draft roadmap (+1 more)".to_string()),
+                "queue idle: no executable planning task".to_string(),
+                Some(
+                    "2 promotable follow-up proposals available: Draft roadmap | +1 more"
+                        .to_string(),
+                ),
                 None,
             );
 
@@ -597,10 +592,6 @@ mod tests {
             stop_keyword: "AUTO_STOP",
             last_message: None,
             snapshot: &ready_snapshot(),
-            has_running_turn: false,
-            is_repairing: false,
-            repair_failure_summary: None,
-            max_detail_len: 48,
         });
 
         assert!(
@@ -613,16 +604,10 @@ mod tests {
                 .rendered_prompt
                 .contains("Implement planning runtime facade")
         );
-        assert_eq!(preview.current_state_line, "current state: ready");
-        assert!(
-            preview
-                .cause_line
-                .starts_with("cause: the next queued task is Implement planning")
-        );
-        assert!(
-            preview
-                .next_action_line
-                .starts_with("next action: let automation continue, or run the queued")
+        assert_eq!(preview.planning_status_line, "planning: ready");
+        assert_eq!(
+            preview.planning_detail_line.as_deref(),
+            Some("planning detail: next task: rank 1 / task-1")
         );
     }
 
@@ -632,7 +617,7 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
                 "Planning Context".to_string(),
-                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                "queue idle: no executable planning task".to_string(),
                 None,
             )
             .with_queue_idle_policy(
@@ -644,10 +629,6 @@ mod tests {
             stop_keyword: "AUTO_STOP",
             last_message: None,
             snapshot: &snapshot,
-            has_running_turn: false,
-            is_repairing: false,
-            repair_failure_summary: None,
-            max_detail_len: 48,
         });
 
         assert!(
@@ -655,20 +636,15 @@ mod tests {
                 .rendered_prompt
                 .contains("planning priority queue를 갱신하세요.")
         );
-        assert_eq!(preview.current_state_line, "current state: waiting");
+        assert_eq!(preview.planning_status_line, "planning: ready");
         assert_eq!(
-            preview.cause_line,
-            "cause: planning is valid but has no next task yet"
-        );
-        assert!(
-            preview
-                .next_action_line
-                .starts_with("next action: finish the next turn or review the queue")
+            preview.planning_detail_line.as_deref(),
+            Some("planning detail: queue idle: no executable planning task")
         );
     }
 
     #[test]
-    fn build_summary_line_uses_current_state_cause_and_next_action() {
+    fn build_summary_line_compacts_queue_and_failure_segments() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot = ready_snapshot();
 
@@ -689,20 +665,23 @@ mod tests {
         });
 
         let summary_line = summary_line.expect("summary line should be projected");
-        assert!(summary_line.contains("current state: repairing"));
-        assert!(summary_line.contains("cause: planning needs rep"));
-        assert!(summary_line.contains("next action: wait for repair"));
-        assert!(summary_line.contains("repair attempt: 1/2"));
+        assert!(summary_line.contains("planning: repairing"));
+        assert!(summary_line.contains("repair: 1/2"));
+        assert!(summary_line.contains("failure: task-ledger.json is m..."));
+        assert!(summary_line.contains("queue: next task: rank 1 / t..."));
     }
 
     #[test]
-    fn build_summary_line_projects_review_needed_when_queue_has_only_proposals() {
+    fn build_summary_line_includes_proposals_when_queue_is_idle() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context".to_string(),
-                "now: none  |  next: none  |  proposed: Draft roadmap (+1 more)  |  blocked: none".to_string(),
-                Some("Draft roadmap (+1 more)".to_string()),
+                "queue idle: no executable planning task".to_string(),
+                Some(
+                    "2 promotable follow-up proposals available: Draft roadmap | Draft checklist"
+                        .to_string(),
+                ),
                 None,
             );
 
@@ -718,9 +697,8 @@ mod tests {
         });
 
         let summary_line = summary_line.expect("summary line should be projected");
-        assert!(summary_line.contains("current state: review needed"));
-        assert!(summary_line.contains("cause: planning has proposals but no"));
-        assert!(summary_line.contains("next action: review the queue and promote"));
+        assert!(summary_line.contains("queue: queue idle:"));
+        assert!(summary_line.contains("proposals: 2 promotable"));
     }
 
     #[test]
@@ -743,22 +721,13 @@ mod tests {
             projection.planning_status_line,
             "planning status: repairing"
         );
-        assert_eq!(projection.current_state_line, "current state: repairing");
-        assert!(projection.cause_line.contains("planning needs repair"));
-        assert!(
-            projection
-                .next_action_line
-                .starts_with("next action: wait for repair to finish")
-        );
         assert_eq!(
             projection.repair_attempt_line.as_deref(),
             Some("planning repair attempt: 1/2")
         );
         assert_eq!(
             projection.queue_head_line.as_deref(),
-            Some(
-                "planning queue head: now: Implement planning runtime facade  |  next: none  |  proposed: none  |  blocked: none"
-            )
+            Some("planning queue head: next task: rank 1 / task-1")
         );
         assert!(
             projection
@@ -775,8 +744,11 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context".to_string(),
-                "now: none  |  next: none  |  proposed: Draft sushi roadmap  |  blocked: none".to_string(),
-                Some("Draft sushi roadmap".to_string()),
+                "queue idle: no executable planning task".to_string(),
+                Some(
+                    "1 promotable follow-up proposal available: Draft sushi roadmap"
+                        .to_string(),
+                ),
                 None,
             );
 
@@ -790,11 +762,8 @@ mod tests {
                 max_detail_len: 48,
             });
 
-        assert!(
-            projection
-                .proposal_line
-                .as_deref()
-                .is_some_and(|line| { line == "planning proposals: Draft sushi roadmap" })
-        );
+        assert!(projection.proposal_line.as_deref().is_some_and(|line| {
+            line.starts_with("planning proposals: 1 promotable follow-up proposal")
+        }));
     }
 }
