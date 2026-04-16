@@ -33,7 +33,8 @@ fn planning_simple_mode_promote_copies_active_files_and_refreshes_prompt_context
         panic!("app should stay in ready state");
     };
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-    assert!(conversation.status_text.contains("planning draft promoted"));
+    assert!(conversation.status_text.contains("planning draft: promoted"));
+    assert!(conversation.status_text.contains("promoted files:"));
     assert_eq!(
         conversation
             .planning_runtime_snapshot

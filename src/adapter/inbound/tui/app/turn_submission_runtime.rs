@@ -224,7 +224,7 @@ impl NativeTuiApp {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
                                     status_text: format!(
-                                        "planning bootstrap promote blocked / draft: {} / validation needs attention",
+                                        "planning draft: promote blocked / staged draft: {} / validation state: needs attention / next action: review the staged draft before retrying",
                                         result.draft_name
                                     ),
                                 },
@@ -235,7 +235,9 @@ impl NativeTuiApp {
                     Err(error) => {
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
-                                status_text: format!("planning bootstrap promote failed: {error}"),
+                                status_text: format!(
+                                    "planning draft: promote failed / cause: {error}"
+                                ),
                             },
                         );
                         false
@@ -244,7 +246,7 @@ impl NativeTuiApp {
             }
             Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("planning bootstrap failed: {error}"),
+                    status_text: format!("planning setup: failed / cause: {error}"),
                 });
                 false
             }

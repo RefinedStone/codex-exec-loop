@@ -530,6 +530,64 @@ fn non_rendering_overlay_headers_use_canonical_operator_titles() {
 }
 
 #[test]
+fn directions_maintenance_status_lines_use_canonical_operator_labels() {
+    let (mut app, _) = make_test_app();
+    app.directions_maintenance_overlay_ui_state
+        .open_summary(DirectionsMaintenanceSummary {
+            directions: vec![DirectionsMaintenanceDirectionSummary {
+                id: "operator-copy".to_string(),
+                title: "Operator Copy".to_string(),
+                detail_doc_path: None,
+                detail_doc_status: DirectionsSupportingFileStatus::MissingMapping,
+            }],
+            missing_detail_doc_count: 1,
+            broken_detail_doc_count: 0,
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: None,
+            queue_idle_prompt_status: DirectionsSupportingFileStatus::MissingMapping,
+            parse_error: None,
+        });
+
+    let overview_status = build_directions_maintenance_overlay_view(&app)
+        .status_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(overview_status.contains("direction coverage: 1 total / 1 missing docs / 0 broken docs"));
+    assert!(overview_status.contains("queue idle rule: policy review_and_enqueue / prompt state: unset / prompt path: <none>"));
+    assert!(overview_status.contains("direction parsing: ok"));
+
+    app.directions_maintenance_overlay_ui_state
+        .open_detail_doc_selection();
+    let selection_status = build_directions_maintenance_overlay_view(&app)
+        .status_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(selection_status.contains("current selection: Operator Copy"));
+
+    app.directions_maintenance_overlay_ui_state
+        .open_detail_doc_confirm();
+    let confirm_view = build_directions_maintenance_overlay_view(&app);
+    let confirm_summary = confirm_view
+        .summary_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let confirm_status = confirm_view
+        .status_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(confirm_summary.contains("current direction: Operator Copy"));
+    assert!(confirm_status.contains("current state: ready to stage the detail doc repair"));
+}
+
+#[test]
 fn queue_overlay_notice_drops_legacy_planning_prefix_duplication() {
     let (mut app, _) = make_test_app();
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
@@ -1085,7 +1143,7 @@ fn planning_controls_existing_workspace_uses_canonical_state_label() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("state: Plan on / review needed"));
+    assert!(rendered.contains("planning state: Plan on / review needed"));
 }
 
 #[test]

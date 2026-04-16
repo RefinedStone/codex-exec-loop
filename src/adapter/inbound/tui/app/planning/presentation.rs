@@ -352,12 +352,12 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
 
             if app.is_max_auto_turns_editing() {
                 lines.push(Line::from(format!(
-                    "editing turn budget: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                    "current state: editing turn budget / value: {} / controls: Enter saves, Esc/Ctrl+C cancels",
                     app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                 )));
             } else if app.is_stop_keyword_editing() {
                 lines.push(Line::from(format!(
-                    "editing stop keyword rule: {}  |  Enter save  |  Esc/Ctrl+C cancel",
+                    "current state: editing stop keyword rule / value: {} / controls: Enter saves, Esc/Ctrl+C cancels",
                     app.followup_overlay_ui_state.stop_keyword_editor.buffer
                 )));
             } else {

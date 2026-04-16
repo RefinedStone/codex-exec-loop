@@ -79,17 +79,17 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 ],
                 status_lines: vec![
                     Line::from(format!(
-                        "directions: {total_direction_count} total / {missing_doc_count} missing docs / {broken_doc_count} broken docs"
+                        "direction coverage: {total_direction_count} total / {missing_doc_count} missing docs / {broken_doc_count} broken docs"
                     )),
                     Line::from(format!(
-                        "queue idle: policy {queue_idle_policy} / prompt {queue_idle_prompt_status} / {queue_idle_prompt}"
+                        "queue idle rule: policy {queue_idle_policy} / prompt state: {queue_idle_prompt_status} / prompt path: {queue_idle_prompt}"
                     )),
                     Line::from(match parse_error {
                         Some(error) => format!(
-                            "directions parse error: {}",
+                            "direction parsing: blocked / cause: {}",
                             compact_whitespace_detail(error, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                         ),
-                        None => "directions parsing: ok".to_string(),
+                        None => "direction parsing: ok".to_string(),
                     }),
                 ],
                 key_lines: vec![
@@ -169,7 +169,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 ],
                 option_lines,
                 status_lines: vec![Line::from(format!(
-                    "selected: {}",
+                    "current selection: {}",
                     selected_direction
                         .map(|direction| direction.title.as_str())
                         .unwrap_or("none")
@@ -207,7 +207,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                     ),
                 ],
                 summary_lines: vec![
-                    Line::from(format!("direction: {direction_title}")),
+                    Line::from(format!("current direction: {direction_title}")),
                     Line::from(format!(
                         "default repair path: .codex-exec-loop/planning/directions/{direction_id}.md"
                     )),
@@ -232,7 +232,9 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                         false,
                     ),
                 ],
-                status_lines: vec![Line::from("confirmation: generate a staged doc file now")],
+                status_lines: vec![Line::from(
+                    "current state: ready to stage the detail doc repair",
+                )],
                 key_lines: vec![
                     Line::from("Up/Down or j/k changes selection."),
                     Line::from("Enter acts. Backspace/Left goes back. Esc/Ctrl+C closes this surface."),

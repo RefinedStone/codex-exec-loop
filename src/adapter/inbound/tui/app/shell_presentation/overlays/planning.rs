@@ -72,13 +72,17 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 ],
                 option_lines: vec![
                     Line::from(format!("workspace: {workspace_directory}")),
-                    Line::from(format!("state: {plan_state_label}")),
-                    Line::from(format!("queue: {queue_summary}")),
-                    Line::from(format!("policy: {}", snapshot.queue_idle_policy().label())),
+                    Line::from(format!("planning state: {plan_state_label}")),
+                    Line::from(format!("queue summary: {queue_summary}")),
+                    Line::from(format!(
+                        "queue idle policy: {}",
+                        snapshot.queue_idle_policy().label()
+                    )),
                 ],
                 status_lines: {
                     if let Some(failure_summary) = failure_summary {
-                        status_lines.push(Line::from(format!("failure: {failure_summary}")));
+                        status_lines
+                            .push(Line::from(format!("planning failure: {failure_summary}")));
                     }
                     status_lines
                 },
@@ -130,7 +134,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             ],
             status_lines: vec![
                 Line::from(format!(
-                    "selected: {}",
+                    "current selection: {}",
                     match app.planning_init_overlay_ui_state.selected_mode() {
                         PlanningInitModeSelection::Simple => "simple mode",
                         PlanningInitModeSelection::Detail => "detail mode",
@@ -180,7 +184,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             ],
             status_lines: vec![
                 Line::from(format!(
-                    "selected: {}",
+                    "current selection: {}",
                     match app.planning_init_overlay_ui_state.selected_detail() {
                         PlanningInitDetailSelection::Manual => "manual",
                         PlanningInitDetailSelection::LlmAssisted => "llm-assisted (disabled)",
@@ -239,7 +243,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     ),
                 ],
                 option_lines: vec![
-                    Line::from(format!("draft: {draft_name}")),
+                    Line::from(format!("staged draft: {draft_name}")),
                     Line::from(format!("draft dir: {draft_directory}")),
                     Line::from(format!("staged files: {staged_file_count}")),
                     Line::from(
@@ -249,7 +253,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 status_lines: {
                     let mut lines = vec![
                         Line::from(format!(
-                            "validation: {}",
+                            "validation state: {}",
                             if validation_ok {
                                 "ok"
                             } else {
@@ -263,7 +267,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     ];
                     if app.is_max_auto_turns_editing() {
                         lines.push(Line::from(format!(
-                            "editing turn budget: {}  |  controls: Enter saves, Esc/Ctrl+C cancels",
+                            "current state: editing turn budget / value: {} / controls: Enter saves, Esc/Ctrl+C cancels",
                             app.followup_overlay_ui_state.max_auto_turns_editor.buffer
                         )));
                     } else {
@@ -384,19 +388,19 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
 
     let mut status_lines = vec![
         Line::from(format!(
-            "draft: {}",
+            "staged draft: {}",
             app.planning_draft_editor_ui_state
                 .draft_name()
                 .unwrap_or("unknown")
         )),
         Line::from(format!(
-            "file: {} ({}/{})",
+            "current file: {} ({}/{})",
             selected_buffer.active_path(),
             selected_index + 1,
             buffers.len()
         )),
         Line::from(vec![
-            Span::styled("validation: ", Style::default().fg(Color::Gray)),
+            Span::styled("validation state: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 if validation_report.is_valid() {
                     "ok"

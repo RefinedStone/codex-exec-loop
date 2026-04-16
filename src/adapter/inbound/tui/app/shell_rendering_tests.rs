@@ -405,6 +405,9 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
     assert!(rendered.contains("Draft Files"));
     assert!(rendered.contains("Operator Status"));
     assert!(rendered.contains("Operator Actions"));
+    assert!(rendered.contains("staged draft:"));
+    assert!(rendered.contains("current file:"));
+    assert!(rendered.contains("validation state: ok"));
     assert!(rendered.contains("directions.toml"));
     assert!(rendered.contains("Ctrl+S saves and validates"));
     assert!(rendered.contains("Ctrl+P saves and promotes active planning"));

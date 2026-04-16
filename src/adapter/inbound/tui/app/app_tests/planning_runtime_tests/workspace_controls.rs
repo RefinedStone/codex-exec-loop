@@ -249,8 +249,10 @@ fn planning_simple_mode_selection_stages_bootstrap_files_in_current_workspace() 
     assert!(
         conversation
             .status_text
-            .contains("planning simple draft staged")
+            .contains("planning draft: staged")
     );
+    assert!(conversation.status_text.contains("staged draft:"));
+    assert!(conversation.status_text.contains("validation state: ok"));
     assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
     assert_eq!(
         app.planning_init_overlay_ui_state.step(),

@@ -573,7 +573,7 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state
                     .apply_save_result(result.validation_report.clone());
                 format!(
-                    "planning draft saved / draft: {} / validation: {} / next: {}",
+                    "planning draft: saved / staged draft: {} / validation state: {} / next action: {}",
                     result.draft_name,
                     if validation_ok {
                         "ok"
@@ -587,7 +587,7 @@ impl NativeTuiApp {
                     },
                 )
             }
-            Err(error) => format!("planning draft save failed: {error}"),
+            Err(error) => format!("planning draft: save failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -616,7 +616,7 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state
                     .apply_save_result(result.validation_report.clone());
                 format!(
-                    "directions draft saved / draft: {} / validation: {} / next: {}",
+                    "direction draft: saved / staged draft: {} / validation state: {} / next action: {}",
                     result.draft_name,
                     if validation_ok {
                         "ok"
@@ -630,7 +630,7 @@ impl NativeTuiApp {
                     },
                 )
             }
-            Err(error) => format!("directions draft save failed: {error}"),
+            Err(error) => format!("direction draft: save failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -664,7 +664,7 @@ impl NativeTuiApp {
                     .apply_save_result(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "planning draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
+                        "planning draft: promote blocked / staged draft: {} / validation state: {} / next action: fix validation issues or keep editing",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -675,12 +675,12 @@ impl NativeTuiApp {
                 } else {
                     self.close_shell_overlay();
                     format!(
-                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                        "planning draft: promoted / staged draft: {} / promoted files: {} / next action: continue with the refreshed planning context",
                         result.draft_name, result.promoted_file_count
                     )
                 }
             }
-            Err(error) => format!("planning draft promote failed: {error}"),
+            Err(error) => format!("planning draft: promote failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -714,7 +714,7 @@ impl NativeTuiApp {
                     .apply_save_result(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "directions draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
+                        "direction draft: promote blocked / staged draft: {} / validation state: {} / next action: fix validation issues or keep editing",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -725,7 +725,7 @@ impl NativeTuiApp {
                 } else {
                     self.present_directions_maintenance_overview(
                         format!(
-                            "directions draft promoted / draft: {} / files: {} / planning context refreshed",
+                            "direction draft: promoted / staged draft: {} / promoted files: {} / next action: continue with the refreshed planning context",
                             result.draft_name, result.promoted_file_count
                         ),
                         true,
@@ -733,7 +733,7 @@ impl NativeTuiApp {
                     return;
                 }
             }
-            Err(error) => format!("directions draft promote failed: {error}"),
+            Err(error) => format!("direction draft: promote failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -881,7 +881,7 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state
                     .open_simple_review(stage_result);
                 format!(
-                    "planning simple draft staged / draft: {} / validation: {} / next: Enter or Ctrl+P to promote, Ctrl+E to inspect",
+                    "planning draft: staged / staged draft: {} / validation state: {} / next action: Enter or Ctrl+P promotes the staged scaffold. Ctrl+E inspects the draft.",
                     draft_name,
                     if validation_ok {
                         "ok"
@@ -890,7 +890,7 @@ impl NativeTuiApp {
                     }
                 )
             }
-            Err(error) => format!("planning init failed: {error}"),
+            Err(error) => format!("planning setup: failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -938,7 +938,7 @@ impl NativeTuiApp {
                     .apply_simple_review_validation(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
                     format!(
-                        "planning simple draft promote blocked / draft: {} / validation: {} / next: press Ctrl+E to inspect or fix the staged draft",
+                        "planning draft: promote blocked / staged draft: {} / validation state: {} / next action: press Ctrl+E to inspect or fix the staged draft",
                         result.draft_name,
                         if validation_ok {
                             "ok"
@@ -949,12 +949,12 @@ impl NativeTuiApp {
                 } else {
                     self.close_shell_overlay();
                     format!(
-                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                        "planning draft: promoted / staged draft: {} / promoted files: {} / next action: continue with the refreshed planning context",
                         result.draft_name, result.promoted_file_count
                     )
                 }
             }
-            Err(error) => format!("planning draft promote failed: {error}"),
+            Err(error) => format!("planning draft: promote failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -971,7 +971,7 @@ impl NativeTuiApp {
             Ok(session) => {
                 let validation_ok = session.validation_report.is_valid();
                 let status_text = format!(
-                    "{ready_status_prefix} / draft: {} / validation: {}",
+                    "{ready_status_prefix} / staged draft: {} / validation state: {}",
                     session.draft_name,
                     if validation_ok {
                         "ok"
@@ -990,7 +990,7 @@ impl NativeTuiApp {
                 }
                 status_text
             }
-            Err(error) => format!("planning init failed: {error}"),
+            Err(error) => format!("planning draft: open failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -1006,7 +1006,7 @@ impl NativeTuiApp {
             Ok(session) => {
                 let validation_ok = session.validation_report.is_valid();
                 let status_text = format!(
-                    "{ready_status_prefix} / draft: {} / validation: {}",
+                    "{ready_status_prefix} / staged draft: {} / validation state: {}",
                     session.draft_name,
                     if validation_ok {
                         "ok"
@@ -1019,7 +1019,7 @@ impl NativeTuiApp {
                     .open_manual_editor();
                 status_text
             }
-            Err(error) => format!("directions editor failed: {error}"),
+            Err(error) => format!("direction draft: open failed / cause: {error}"),
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
