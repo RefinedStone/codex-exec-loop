@@ -1,16 +1,13 @@
 use super::super::{
+    Color, ConversationState, Line, Modifier, NativeTuiApp, PriorityQueueSkippedTask,
+    PriorityQueueTask, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
+    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, Span, Style,
     build_automation_key_lines, build_automation_list_view, build_automation_preview_lines,
-    build_automation_status_lines, compact_whitespace_detail, Color, ConversationState, Line,
-    Modifier, NativeTuiApp, PriorityQueueSkippedTask, PriorityQueueTask, Span, Style,
-    QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
-    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT,
+    build_automation_status_lines, compact_whitespace_detail,
 };
 use super::{AutomationOverlayView, QueueOverlayView};
 use crate::adapter::inbound::tui::app::planning::{
-    build_planning_notice_line, compact_queue_framing_summary,
-};
-use crate::application::service::planning::{
-    PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjectionRequest,
+    build_planning_followup_surface_projection, compact_queue_framing_summary,
 };
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
@@ -21,8 +18,8 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" / operator inspection"),
+            ),
+            Span::raw(" / operator inspection"),
         ]),
         Line::from(
             "Review work that is actionable now, coming next, still proposed, or currently blocked before the next turn.",
@@ -74,23 +71,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         ConversationState::Ready(conversation) => {
             let snapshot = &conversation.planning_runtime_snapshot;
             let queue_snapshot = snapshot.queue_snapshot();
-            let planning_projection = app.planning.runtime.build_followup_status_projection(
-                PlanningRuntimeStatusProjectionRequest {
-                    snapshot,
-                    has_running_turn: conversation.has_running_turn(),
-                    is_repairing: conversation.planning_repair_state.is_some(),
-                    repair_failure_summary: conversation
-                        .planning_repair_state
-                        .as_ref()
-                        .map(|state| state.latest_request.failure_summary.as_str()),
-                    repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
-                        PlanningRuntimeRepairAttempt {
-                            attempts_used: state.attempts_used,
-                            max_attempts: state.max_attempts,
-                        }
-                    }),
-                    max_detail_len: QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
-                },
+            let planning_projection = build_planning_followup_surface_projection(
+                app,
+                conversation,
+                QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
             );
             let now_lines = queue_snapshot
                 .map(|queue_snapshot| {
@@ -146,9 +130,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             ];
 
             let mut note_lines = Vec::new();
-            if let Some(planning_notice_line) =
-                build_planning_notice_line(conversation, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-            {
+            if let Some(planning_notice_line) = planning_projection.notice_line {
                 note_lines.push(Line::from(planning_notice_line));
             }
             if let Some(queue_summary) =

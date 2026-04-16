@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::super::super::planning::{
-    build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
+    build_planner_panel_lines, build_planning_status_surface_projection,
 };
 #[cfg(test)]
 use super::super::{
@@ -48,12 +48,19 @@ pub(crate) fn build_conversation_shell_view(
     let _ = mode;
     let context = ShellCorePresentationContext::from_app(app);
     let plan_mode_indicator = current_plan_mode_indicator(app);
-    let planning_summary_line = context.ready_conversation().and_then(|conversation| {
-        build_planning_summary_line(app, conversation, FOOTER_PLANNING_DETAIL_LIMIT, false)
-    });
-    let planning_notice_line = context.ready_conversation().and_then(|conversation| {
-        build_planning_notice_line(conversation, FOOTER_NOTICE_DETAIL_LIMIT)
-    });
+    let (planning_summary_line, planning_notice_line) = context
+        .ready_conversation()
+        .map(|conversation| {
+            let projection = build_planning_status_surface_projection(
+                app,
+                conversation,
+                FOOTER_PLANNING_DETAIL_LIMIT,
+                FOOTER_NOTICE_DETAIL_LIMIT,
+                false,
+            );
+            (projection.summary_line, projection.notice_line)
+        })
+        .unwrap_or((None, None));
     let planner_panel_lines = build_planner_panel_lines(app, FOOTER_NOTICE_DETAIL_LIMIT);
     let mut header_lines = build_shell_header_lines_with_context(&context);
     header_lines.push(build_frontend_summary_line());
