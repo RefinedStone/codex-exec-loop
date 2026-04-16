@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModeReadinessState {
     Ready,
@@ -187,6 +189,91 @@ impl ParallelModePoolSlotState {
             Self::Missing => "missing",
             Self::Unavailable => "unavailable",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelModeSlotLeaseState {
+    Leased,
+    Running,
+    CleanupPending,
+}
+
+impl ParallelModeSlotLeaseState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Leased => "leased",
+            Self::Running => "running",
+            Self::CleanupPending => "cleanup_pending",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeSlotLeaseRequest {
+    pub task_id: String,
+    pub task_title: String,
+    pub agent_id: String,
+    pub task_slug: String,
+}
+
+impl ParallelModeSlotLeaseRequest {
+    pub fn new(
+        task_id: impl Into<String>,
+        task_title: impl Into<String>,
+        agent_id: impl Into<String>,
+        task_slug: impl Into<String>,
+    ) -> Self {
+        Self {
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+            agent_id: agent_id.into(),
+            task_slug: task_slug.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeSlotLeaseSnapshot {
+    pub slot_id: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub agent_id: String,
+    pub branch_name: String,
+    pub worktree_path: String,
+    pub state: ParallelModeSlotLeaseState,
+    pub leased_at: String,
+    pub running_started_at: Option<String>,
+}
+
+impl ParallelModeSlotLeaseSnapshot {
+    pub fn new(
+        slot_id: impl Into<String>,
+        task_id: impl Into<String>,
+        task_title: impl Into<String>,
+        agent_id: impl Into<String>,
+        branch_name: impl Into<String>,
+        worktree_path: impl Into<String>,
+        state: ParallelModeSlotLeaseState,
+        leased_at: impl Into<String>,
+        running_started_at: Option<String>,
+    ) -> Self {
+        Self {
+            slot_id: slot_id.into(),
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+            agent_id: agent_id.into(),
+            branch_name: branch_name.into(),
+            worktree_path: worktree_path.into(),
+            state,
+            leased_at: leased_at.into(),
+            running_started_at,
+        }
+    }
+
+    pub fn owner_label(&self) -> String {
+        format!("{} / {}", self.agent_id, self.task_id)
     }
 }
 

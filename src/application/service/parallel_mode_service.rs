@@ -1,7 +1,10 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use chrono::Utc;
 
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
@@ -11,6 +14,7 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityState, ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
     ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
     ParallelModeQueueItemState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
@@ -78,6 +82,17 @@ impl PoolReconcileExecution {
             || self.provisioned_slots > 0
             || self.cleaned_slots > 0
     }
+}
+
+#[derive(Debug, Clone)]
+struct PoolRuntimeContext {
+    repo_root: String,
+    canonical_repo_root: PathBuf,
+    pool_root: PathBuf,
+    akra_head: String,
+    worktree_records: Vec<GitWorktreeRecord>,
+    slot_leases: BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+    invalid_slot_leases: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -207,6 +222,177 @@ impl ParallelModeService {
             build_placeholder_distributor(mode_enabled, readiness_snapshot),
             top_notice,
         )
+    }
+
+    pub fn acquire_slot_lease(
+        &self,
+        workspace_dir: &str,
+        request: ParallelModeSlotLeaseRequest,
+    ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
+        let _ = reconcile_pool_board(workspace_dir);
+        let context =
+            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+
+        if context
+            .slot_leases
+            .values()
+            .any(|lease| lease.task_id == request.task_id)
+        {
+            return Err(format!(
+                "task `{}` already has an active slot lease",
+                request.task_id
+            ));
+        }
+        if context
+            .slot_leases
+            .values()
+            .any(|lease| lease.agent_id == request.agent_id)
+        {
+            return Err(format!(
+                "agent `{}` already owns an active slot lease",
+                request.agent_id
+            ));
+        }
+
+        let Some(idle_slot) = build_pool_slots(&context)
+            .into_iter()
+            .find(|slot| slot.state == ParallelModePoolSlotState::Idle)
+        else {
+            return Err("no idle slot is available for lease".to_string());
+        };
+
+        let slot_path = context.pool_root.join(&idle_slot.slot_id);
+        let slot_path_string = slot_path.display().to_string();
+        let branch_name = allocate_agent_branch_name(
+            &context.repo_root,
+            &idle_slot.slot_id,
+            &request.task_slug,
+            &request.task_id,
+            &request.task_title,
+        );
+        if !command_succeeds(
+            "git",
+            [
+                "-C",
+                slot_path_string.as_str(),
+                "checkout",
+                "-b",
+                branch_name.as_str(),
+                AKRA_BRANCH,
+            ],
+        ) {
+            return Err(format!(
+                "failed to create branch `{branch_name}` in slot `{}`",
+                idle_slot.slot_id
+            ));
+        }
+
+        let lease = ParallelModeSlotLeaseSnapshot::new(
+            idle_slot.slot_id.clone(),
+            request.task_id,
+            request.task_title,
+            request.agent_id,
+            branch_name.clone(),
+            slot_path_string.clone(),
+            ParallelModeSlotLeaseState::Leased,
+            current_timestamp(),
+            None,
+        );
+        if let Err(error) = write_slot_lease(&context.pool_root, &lease) {
+            let _ =
+                discard_unstarted_slot_branch(&context.repo_root, &slot_path, branch_name.as_str());
+            return Err(error);
+        }
+
+        Ok(lease)
+    }
+
+    pub fn mark_slot_running(
+        &self,
+        workspace_dir: &str,
+        slot_id: &str,
+        agent_id: &str,
+    ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
+        let context =
+            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let mut lease = context
+            .slot_leases
+            .get(slot_id)
+            .cloned()
+            .ok_or_else(|| format!("slot `{slot_id}` does not have an active lease"))?;
+
+        if lease.agent_id != agent_id {
+            return Err(format!(
+                "slot `{slot_id}` is leased by `{}` instead of `{agent_id}`",
+                lease.agent_id
+            ));
+        }
+        if lease.state == ParallelModeSlotLeaseState::CleanupPending {
+            return Err(format!("slot `{slot_id}` is already waiting for cleanup",));
+        }
+        if current_branch_name(Path::new(&lease.worktree_path)).as_deref()
+            != Some(lease.branch_name.as_str())
+        {
+            return Err(format!(
+                "slot `{slot_id}` is no longer checked out to `{}`",
+                lease.branch_name
+            ));
+        }
+
+        lease.state = ParallelModeSlotLeaseState::Running;
+        if lease.running_started_at.is_none() {
+            lease.running_started_at = Some(current_timestamp());
+        }
+        write_slot_lease(&context.pool_root, &lease)?;
+        Ok(lease)
+    }
+
+    pub fn mark_slot_cleanup_pending(
+        &self,
+        workspace_dir: &str,
+        slot_id: &str,
+        agent_id: &str,
+    ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
+        let context =
+            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let mut lease = context
+            .slot_leases
+            .get(slot_id)
+            .cloned()
+            .ok_or_else(|| format!("slot `{slot_id}` does not have an active lease"))?;
+
+        if lease.agent_id != agent_id {
+            return Err(format!(
+                "slot `{slot_id}` is leased by `{}` instead of `{agent_id}`",
+                lease.agent_id
+            ));
+        }
+        if lease.state == ParallelModeSlotLeaseState::Leased {
+            return Err(format!(
+                "slot `{slot_id}` has not entered running state yet",
+            ));
+        }
+        if lease.state == ParallelModeSlotLeaseState::CleanupPending {
+            return Ok(lease);
+        }
+        if current_branch_name(Path::new(&lease.worktree_path)).as_deref()
+            != Some(lease.branch_name.as_str())
+        {
+            return Err(format!(
+                "slot `{slot_id}` is no longer checked out to `{}`",
+                lease.branch_name
+            ));
+        }
+        if !branch_is_cleanup_ready(&context.repo_root, &lease.branch_name) {
+            return Err(format!(
+                "slot `{slot_id}` branch `{}` is not integrated into `{AKRA_BRANCH}` yet",
+                lease.branch_name
+            ));
+        }
+
+        lease.state = ParallelModeSlotLeaseState::CleanupPending;
+        write_slot_lease(&context.pool_root, &lease)?;
+        Ok(lease)
     }
 }
 
@@ -583,12 +769,16 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
     };
 
     let pool_root = derive_default_pool_root(&canonical_repo_root);
-    let created_pool_root = ensure_directory_exists(&pool_root).is_ok();
-    let Some(worktree_output) = run_command(
-        "git",
-        ["-C", repo_root.as_str(), "worktree", "list", "--porcelain"],
-        None,
-    ) else {
+    let pool_root_existed = pool_root.exists();
+    if ensure_directory_exists(&pool_root).is_err() {
+        return build_blocked_pool_board(
+            workspace_dir,
+            "reconcile failed / pool root could not be created",
+            "pool root creation failed",
+        );
+    }
+    let created_pool_root = !pool_root_existed;
+    let Some(worktree_records) = load_worktree_records(&repo_root) else {
         return build_blocked_pool_board(
             workspace_dir,
             "reconcile failed / git worktree inventory could not be loaded",
@@ -596,76 +786,49 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
         );
     };
 
-    let worktree_records = parse_worktree_records(&worktree_output);
     let provisioned_slots = provision_missing_slots(&repo_root, &pool_root, &worktree_records);
-    let cleaned_slots = cleanup_reusable_slots(&repo_root, &pool_root, &worktree_records);
+    let Some(reloaded_worktree_records) = load_worktree_records(&repo_root) else {
+        return build_blocked_pool_board(
+            workspace_dir,
+            "reconcile failed / git worktree inventory could not be reloaded",
+            "worktree list reload failed",
+        );
+    };
+    let cleaned_slots = cleanup_reusable_slots(&repo_root, &pool_root, &reloaded_worktree_records);
 
-    let mut pool_board = inspect_pool_board(workspace_dir);
-    pool_board.reconcile_status = summarize_pool_reconcile_status(
-        &pool_board.slots,
-        &pool_root,
-        Some(PoolReconcileExecution {
-            created_akra_branch,
-            created_pool_root,
-            provisioned_slots,
-            cleaned_slots,
-        }),
-    );
+    let Ok(context) = load_pool_runtime_context_from_roots(&repo_root, &canonical_repo_root) else {
+        return build_blocked_pool_board(
+            workspace_dir,
+            "reconcile failed / pool runtime state could not be loaded",
+            "pool runtime load failed",
+        );
+    };
 
-    pool_board
+    build_pool_board_from_context(
+        &context,
+        summarize_pool_reconcile_status(
+            &build_pool_slots(&context),
+            &context.pool_root,
+            Some(PoolReconcileExecution {
+                created_akra_branch,
+                created_pool_root,
+                provisioned_slots,
+                cleaned_slots,
+            }),
+        ),
+    )
 }
 
 fn inspect_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
-    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
-        return build_blocked_pool_board(
-            workspace_dir,
-            "reconcile failed / git repository is unavailable",
-            "repository inspection failed",
-        );
-    };
-    let Some(canonical_repo_root) = detect_canonical_repo_root(workspace_dir) else {
-        return build_blocked_pool_board(
-            workspace_dir,
-            "reconcile failed / canonical repository root is unavailable",
-            "canonical root inspection failed",
-        );
-    };
-    let Some(akra_head) = resolve_branch_head(&repo_root, AKRA_BRANCH) else {
-        return build_blocked_pool_board(
-            workspace_dir,
-            "reconcile blocked / `akra` baseline could not be resolved",
-            "`akra` is unavailable during reconcile",
-        );
-    };
-    let Some(worktree_output) = run_command(
-        "git",
-        ["-C", repo_root.as_str(), "worktree", "list", "--porcelain"],
-        None,
-    ) else {
-        return build_blocked_pool_board(
-            workspace_dir,
-            "reconcile failed / git worktree inventory could not be loaded",
-            "worktree list inspection failed",
-        );
-    };
-
-    let pool_root = derive_default_pool_root(&canonical_repo_root);
-    let pool_root_label = display_pool_path(&canonical_repo_root, &pool_root);
-    let worktree_records = parse_worktree_records(&worktree_output);
-    let slots = (1..=DEFAULT_POOL_SIZE)
-        .map(|slot_number| {
-            inspect_pool_slot(
-                &canonical_repo_root,
-                &pool_root,
-                &slot_id(slot_number),
-                &akra_head,
-                &worktree_records,
-            )
-        })
-        .collect::<Vec<_>>();
-    let reconcile_status = summarize_pool_reconcile_status(&slots, &pool_root, None);
-
-    ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
+    match load_pool_runtime_context(workspace_dir) {
+        Ok(context) => build_pool_board_from_context(
+            &context,
+            summarize_pool_reconcile_status(&build_pool_slots(&context), &context.pool_root, None),
+        ),
+        Err((reconcile_status, detail)) => {
+            build_blocked_pool_board(workspace_dir, reconcile_status, detail)
+        }
+    }
 }
 
 fn ensure_akra_branch(repo_root: &str) -> Result<(String, bool), ()> {
@@ -715,6 +878,79 @@ fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
     }
 
     fs::create_dir_all(path)
+}
+
+fn load_pool_runtime_context(
+    workspace_dir: &str,
+) -> Result<PoolRuntimeContext, (&'static str, &'static str)> {
+    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+        return Err((
+            "reconcile failed / git repository is unavailable",
+            "repository inspection failed",
+        ));
+    };
+    let Some(canonical_repo_root) = detect_canonical_repo_root(workspace_dir) else {
+        return Err((
+            "reconcile failed / canonical repository root is unavailable",
+            "canonical root inspection failed",
+        ));
+    };
+
+    load_pool_runtime_context_from_roots(&repo_root, &canonical_repo_root).map_err(|detail| {
+        (
+            "reconcile failed / pool runtime state could not be loaded",
+            detail,
+        )
+    })
+}
+
+fn load_pool_runtime_context_from_roots(
+    repo_root: &str,
+    canonical_repo_root: &Path,
+) -> Result<PoolRuntimeContext, &'static str> {
+    let Some(akra_head) = resolve_branch_head(repo_root, AKRA_BRANCH) else {
+        return Err("`akra` is unavailable during inspection");
+    };
+    let Some(worktree_records) = load_worktree_records(repo_root) else {
+        return Err("worktree list inspection failed");
+    };
+    let pool_root = derive_default_pool_root(canonical_repo_root);
+    let (slot_leases, invalid_slot_leases) = read_slot_leases(&pool_root);
+
+    Ok(PoolRuntimeContext {
+        repo_root: repo_root.to_string(),
+        canonical_repo_root: canonical_repo_root.to_path_buf(),
+        pool_root,
+        akra_head,
+        worktree_records,
+        slot_leases,
+        invalid_slot_leases,
+    })
+}
+
+fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
+    let worktree_output = run_command(
+        "git",
+        ["-C", repo_root, "worktree", "list", "--porcelain"],
+        None,
+    )?;
+    Some(parse_worktree_records(&worktree_output))
+}
+
+fn build_pool_board_from_context(
+    context: &PoolRuntimeContext,
+    reconcile_status: impl Into<String>,
+) -> ParallelModePoolBoardSnapshot {
+    let slots = build_pool_slots(context);
+    let pool_root_label = display_pool_path(&context.canonical_repo_root, &context.pool_root);
+
+    ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
+}
+
+fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelModePoolSlotSnapshot> {
+    (1..=DEFAULT_POOL_SIZE)
+        .map(|slot_number| inspect_pool_slot(context, &slot_id(slot_number)))
+        .collect::<Vec<_>>()
 }
 
 fn provision_missing_slots(
@@ -767,6 +1003,7 @@ fn cleanup_reusable_slots(
     worktree_records: &[GitWorktreeRecord],
 ) -> usize {
     let mut cleaned_slots = 0;
+    let (slot_leases, _) = read_slot_leases(pool_root);
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -784,10 +1021,19 @@ fn cleanup_reusable_slots(
         if !branch_name.starts_with(&expected_agent_prefix) {
             continue;
         }
-        if !branch_is_integrated_into_akra(repo_root, branch_name) {
+        let slot_lease = slot_leases.get(&slot_id);
+        let cleanup_ready = match slot_lease.map(|lease| lease.state) {
+            Some(ParallelModeSlotLeaseState::CleanupPending) => true,
+            Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running) => false,
+            None => {
+                inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
+                    && branch_is_cleanup_ready(repo_root, branch_name)
+            }
+        };
+        if !cleanup_ready {
             continue;
         }
-        if cleanup_slot(repo_root, &slot_path, branch_name) {
+        if cleanup_slot(repo_root, pool_root, &slot_id, &slot_path, branch_name) {
             cleaned_slots += 1;
         }
     }
@@ -809,7 +1055,17 @@ fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {
     )
 }
 
-fn cleanup_slot(repo_root: &str, slot_path: &Path, branch_name: &str) -> bool {
+fn branch_is_cleanup_ready(repo_root: &str, branch_name: &str) -> bool {
+    branch_is_integrated_into_akra(repo_root, branch_name)
+}
+
+fn cleanup_slot(
+    repo_root: &str,
+    pool_root: &Path,
+    slot_id: &str,
+    slot_path: &Path,
+    branch_name: &str,
+) -> bool {
     let slot_path_string = slot_path.display().to_string();
     if !command_succeeds(
         "git",
@@ -835,10 +1091,13 @@ fn cleanup_slot(repo_root: &str, slot_path: &Path, branch_name: &str) -> bool {
     ) {
         return false;
     }
-    if !command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fd"]) {
+    if !command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fdx"]) {
         return false;
     }
     if !command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name]) {
+        return false;
+    }
+    if !remove_slot_lease(pool_root, slot_id) {
         return false;
     }
 
@@ -889,19 +1148,38 @@ fn build_blocked_pool_board(
     ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
 }
 
-fn inspect_pool_slot(
-    canonical_repo_root: &Path,
-    pool_root: &Path,
-    slot_id: &str,
-    akra_head: &str,
-    worktree_records: &[GitWorktreeRecord],
-) -> ParallelModePoolSlotSnapshot {
-    let slot_path = pool_root.join(slot_id);
-    let base_worktree_label = display_pool_path(canonical_repo_root, &slot_path);
-    let Some(worktree_record) = worktree_records
+fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelModePoolSlotSnapshot {
+    let slot_path = context.pool_root.join(slot_id);
+    let base_worktree_label = display_pool_path(&context.canonical_repo_root, &slot_path);
+    let slot_lease = context.slot_leases.get(slot_id);
+
+    if context.invalid_slot_leases.contains(slot_id) {
+        return ParallelModePoolSlotSnapshot::new(
+            slot_id,
+            ParallelModePoolSlotState::Blocked,
+            "unknown",
+            annotate_worktree_label(base_worktree_label, "invalid lease metadata"),
+            "operator recovery",
+        );
+    }
+
+    let Some(worktree_record) = context
+        .worktree_records
         .iter()
         .find(|record| record.path == slot_path)
     else {
+        if let Some(slot_lease) = slot_lease {
+            return ParallelModePoolSlotSnapshot::new(
+                slot_id,
+                ParallelModePoolSlotState::Blocked,
+                slot_lease.branch_name.clone(),
+                annotate_worktree_label(
+                    base_worktree_label,
+                    "lease exists but worktree is missing",
+                ),
+                slot_lease.owner_label(),
+            );
+        }
         if slot_path.exists() {
             return ParallelModePoolSlotSnapshot::new(
                 slot_id,
@@ -928,20 +1206,34 @@ fn inspect_pool_slot(
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
             ParallelModePoolSlotState::Blocked,
-            "unknown",
+            slot_lease
+                .map(|lease| lease.branch_name.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
             annotate_worktree_label(base_worktree_label, "git status inspection failed"),
-            "operator recovery",
+            slot_lease
+                .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                .unwrap_or_else(|| "operator recovery".to_string()),
         );
     };
 
     if worktree_record.branch_name.as_deref() == Some(AKRA_BRANCH)
-        || (worktree_record.detached && worktree_record.head_sha == akra_head)
+        || (worktree_record.detached && worktree_record.head_sha == context.akra_head)
     {
         let branch_label = if worktree_record.detached {
             format!("{AKRA_BRANCH} (detached)")
         } else {
             AKRA_BRANCH.to_string()
         };
+
+        if let Some(slot_lease) = slot_lease {
+            return ParallelModePoolSlotSnapshot::new(
+                slot_id,
+                ParallelModePoolSlotState::Blocked,
+                branch_label,
+                annotate_worktree_label(base_worktree_label, "lease exists on idle baseline"),
+                slot_lease.owner_label(),
+            );
+        }
 
         return if slot_status.is_clean_baseline() {
             ParallelModePoolSlotSnapshot::new(
@@ -971,16 +1263,75 @@ fn inspect_pool_slot(
                     ParallelModePoolSlotState::Blocked,
                     branch_name,
                     annotate_worktree_label(base_worktree_label, &slot_status.detail_label()),
+                    slot_lease
+                        .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                        .unwrap_or_else(|| "operator recovery".to_string()),
+                );
+            }
+            if slot_lease.is_none()
+                && slot_status.is_clean_baseline()
+                && branch_is_cleanup_ready(&context.repo_root, branch_name)
+            {
+                return ParallelModePoolSlotSnapshot::new(
+                    slot_id,
+                    ParallelModePoolSlotState::AwaitingCleanup,
+                    branch_name,
+                    annotate_worktree_label(base_worktree_label, &slot_status.detail_label()),
+                    slot_lease
+                        .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                        .unwrap_or_else(|| "cleanup pending".to_string()),
+                );
+            }
+
+            let Some(slot_lease) = slot_lease else {
+                return ParallelModePoolSlotSnapshot::new(
+                    slot_id,
+                    ParallelModePoolSlotState::Blocked,
+                    branch_name,
+                    annotate_worktree_label(
+                        base_worktree_label,
+                        "agent branch exists without lease",
+                    ),
                     "operator recovery",
+                );
+            };
+            if slot_lease.branch_name != branch_name {
+                return ParallelModePoolSlotSnapshot::new(
+                    slot_id,
+                    ParallelModePoolSlotState::Blocked,
+                    branch_name,
+                    annotate_worktree_label(
+                        base_worktree_label,
+                        "lease branch does not match worktree branch",
+                    ),
+                    slot_lease.owner_label(),
+                );
+            }
+            if slot_lease.worktree_path != slot_path.display().to_string() {
+                return ParallelModePoolSlotSnapshot::new(
+                    slot_id,
+                    ParallelModePoolSlotState::Blocked,
+                    branch_name,
+                    annotate_worktree_label(
+                        base_worktree_label,
+                        "lease worktree path does not match slot path",
+                    ),
+                    slot_lease.owner_label(),
                 );
             }
 
             return ParallelModePoolSlotSnapshot::new(
                 slot_id,
-                ParallelModePoolSlotState::AwaitingCleanup,
+                match slot_lease.state {
+                    ParallelModeSlotLeaseState::Leased => ParallelModePoolSlotState::Leased,
+                    ParallelModeSlotLeaseState::Running => ParallelModePoolSlotState::Running,
+                    ParallelModeSlotLeaseState::CleanupPending => {
+                        ParallelModePoolSlotState::AwaitingCleanup
+                    }
+                },
                 branch_name,
                 annotate_worktree_label(base_worktree_label, &slot_status.detail_label()),
-                "cleanup pending",
+                slot_lease.owner_label(),
             );
         }
 
@@ -995,7 +1346,9 @@ fn inspect_pool_slot(
             ParallelModePoolSlotState::Blocked,
             branch_name,
             annotate_worktree_label(base_worktree_label, detail),
-            "operator recovery",
+            slot_lease
+                .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                .unwrap_or_else(|| "operator recovery".to_string()),
         );
     }
 
@@ -1005,7 +1358,9 @@ fn inspect_pool_slot(
         ParallelModePoolSlotState::Blocked,
         detached_label,
         annotate_worktree_label(base_worktree_label, "detached away from `akra` baseline"),
-        "operator recovery",
+        slot_lease
+            .map(ParallelModeSlotLeaseSnapshot::owner_label)
+            .unwrap_or_else(|| "operator recovery".to_string()),
     )
 }
 
@@ -1286,6 +1641,180 @@ fn short_sha(commit_sha: &str) -> String {
     commit_sha.chars().take(7).collect::<String>()
 }
 
+fn slot_leases_root(pool_root: &Path) -> PathBuf {
+    pool_root.join(".leases")
+}
+
+fn slot_lease_file_path(pool_root: &Path, slot_id: &str) -> PathBuf {
+    slot_leases_root(pool_root).join(format!("{slot_id}.json"))
+}
+
+fn read_slot_leases(
+    pool_root: &Path,
+) -> (
+    BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+    BTreeSet<String>,
+) {
+    let leases_root = slot_leases_root(pool_root);
+    let Ok(entries) = fs::read_dir(&leases_root) else {
+        return (BTreeMap::new(), BTreeSet::new());
+    };
+
+    let mut slot_leases = BTreeMap::new();
+    let mut invalid_slot_leases = BTreeSet::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let slot_id = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        if slot_id.is_empty() {
+            continue;
+        }
+
+        let Ok(contents) = fs::read_to_string(&path) else {
+            invalid_slot_leases.insert(slot_id);
+            continue;
+        };
+        let Ok(lease) = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&contents) else {
+            invalid_slot_leases.insert(slot_id);
+            continue;
+        };
+        if lease.slot_id != slot_id {
+            invalid_slot_leases.insert(slot_id);
+            continue;
+        }
+
+        slot_leases.insert(slot_id, lease);
+    }
+
+    (slot_leases, invalid_slot_leases)
+}
+
+fn write_slot_lease(pool_root: &Path, lease: &ParallelModeSlotLeaseSnapshot) -> Result<(), String> {
+    let leases_root = slot_leases_root(pool_root);
+    ensure_directory_exists(&leases_root)
+        .map_err(|error| format!("failed to create lease directory: {error}"))?;
+    let lease_path = slot_lease_file_path(pool_root, &lease.slot_id);
+    let lease_body = serde_json::to_string_pretty(lease)
+        .map_err(|error| format!("failed to serialize slot lease: {error}"))?;
+    fs::write(&lease_path, lease_body)
+        .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
+}
+
+fn remove_slot_lease(pool_root: &Path, slot_id: &str) -> bool {
+    let lease_path = slot_lease_file_path(pool_root, slot_id);
+    !lease_path.exists() || fs::remove_file(lease_path).is_ok()
+}
+
+fn current_timestamp() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn allocate_agent_branch_name(
+    repo_root: &str,
+    slot_id: &str,
+    task_slug: &str,
+    task_id: &str,
+    task_title: &str,
+) -> String {
+    let base_slug = sanitize_task_slug(task_slug)
+        .or_else(|| sanitize_task_slug(task_id))
+        .or_else(|| sanitize_task_slug(task_title))
+        .unwrap_or_else(|| "task".to_string());
+    let base_branch_name = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/{base_slug}");
+
+    let mut candidate = base_branch_name.clone();
+    let mut suffix = 2;
+    while branch_exists(repo_root, &candidate) {
+        candidate = format!("{base_branch_name}-{suffix}");
+        suffix += 1;
+    }
+
+    candidate
+}
+
+fn sanitize_task_slug(input: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_dash = false;
+
+    for ch in input.chars() {
+        let normalized = ch.to_ascii_lowercase();
+        if normalized.is_ascii_alphanumeric() {
+            slug.push(normalized);
+            previous_was_dash = false;
+            continue;
+        }
+        if !previous_was_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_was_dash = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    (!slug.is_empty()).then_some(slug)
+}
+
+fn branch_exists(repo_root: &str, branch_name: &str) -> bool {
+    command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch_name}"),
+        ],
+    )
+}
+
+fn current_branch_name(worktree_path: &Path) -> Option<String> {
+    let worktree_path_string = worktree_path.display().to_string();
+    run_command(
+        "git",
+        [
+            "-C",
+            worktree_path_string.as_str(),
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+        ],
+        None,
+    )
+}
+
+fn discard_unstarted_slot_branch(repo_root: &str, slot_path: &Path, branch_name: &str) -> bool {
+    let slot_path_string = slot_path.display().to_string();
+    command_succeeds(
+        "git",
+        [
+            "-C",
+            slot_path_string.as_str(),
+            "checkout",
+            "--detach",
+            AKRA_BRANCH,
+        ],
+    ) && command_succeeds(
+        "git",
+        [
+            "-C",
+            slot_path_string.as_str(),
+            "reset",
+            "--hard",
+            AKRA_BRANCH,
+        ],
+    ) && command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fdx"])
+        && command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name])
+}
+
 fn build_placeholder_roster(
     mode_enabled: bool,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
@@ -1419,10 +1948,13 @@ mod tests {
         ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
         ParallelModeService, ParallelModeSupervisorState, build_pool_board,
         derive_default_pool_root, derive_readiness, inspect_planning, parse_https_remote,
-        reconcile_pool_board, slot_id,
+        reconcile_pool_board, slot_id, slot_lease_file_path,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
-    use crate::domain::parallel_mode::ParallelModePoolSlotState;
+    use crate::domain::parallel_mode::{
+        ParallelModePoolSlotState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+        ParallelModeSlotLeaseState,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1450,7 +1982,9 @@ mod tests {
                 &["config", "user.email", "chem.en.9273@gmail.com"],
             );
             fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
+            fs::write(repo_root.join(".gitignore"), "*.tmp\n").expect("gitignore should write");
             run_git(&repo_root, &["add", "README.md"]);
+            run_git(&repo_root, &["add", ".gitignore"]);
             run_git(&repo_root, &["commit", "-qm", "init"]);
             run_git(&repo_root, &["branch", "akra"]);
 
@@ -1463,6 +1997,16 @@ mod tests {
 
         fn pool_root(&self) -> PathBuf {
             derive_default_pool_root(&self.repo_root)
+        }
+
+        fn slot_lease_path(&self, slot_number: usize) -> PathBuf {
+            slot_lease_file_path(&self.pool_root(), &slot_id(slot_number))
+        }
+
+        fn read_slot_lease(&self, slot_number: usize) -> ParallelModeSlotLeaseSnapshot {
+            let lease_body = fs::read_to_string(self.slot_lease_path(slot_number))
+                .expect("slot lease should be readable");
+            serde_json::from_str(&lease_body).expect("slot lease should deserialize")
         }
 
         fn create_detached_slot(&self, slot_number: usize) -> PathBuf {
@@ -1590,6 +2134,15 @@ mod tests {
             .expect("branch name should be utf-8")
             .trim()
             .to_string()
+    }
+
+    fn sample_lease_request(
+        task_id: &str,
+        task_title: &str,
+        agent_id: &str,
+        task_slug: &str,
+    ) -> ParallelModeSlotLeaseRequest {
+        ParallelModeSlotLeaseRequest::new(task_id, task_title, agent_id, task_slug)
     }
 
     #[test]
@@ -1737,6 +2290,9 @@ mod tests {
     fn agent_branch_slot_is_marked_awaiting_cleanup() {
         let repo = TempGitRepo::new("cleanup-slot");
         repo.create_agent_slot(1, "task-one");
+        let slot_path = repo.pool_root().join(slot_id(1));
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        repo.merge_agent_slot_into_akra(&slot_path);
         let readiness = ParallelModeReadinessSnapshot::new(
             repo.workspace_dir(),
             ParallelModeReadinessState::Ready,
@@ -1803,10 +2359,23 @@ mod tests {
     #[test]
     fn reconcile_cleans_merged_agent_slot_back_to_idle() {
         let repo = TempGitRepo::new("cleanup-execution");
-        let slot_path = repo.create_agent_slot(1, "task-one");
+        let service = ParallelModeService::new();
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
         repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
-        let branch_name = current_branch(&slot_path);
+        let branch_name = lease.branch_name.clone();
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
         repo.merge_agent_slot_into_akra(&slot_path);
+        service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to cleanup pending");
         fs::write(slot_path.join("scratch.tmp"), "transient\n")
             .expect("untracked file should be written");
 
@@ -1817,6 +2386,147 @@ mod tests {
         assert!(slot.branch_name.starts_with("akra"));
         assert!(!slot_path.join("scratch.tmp").exists());
         assert!(!repo.branch_exists(&branch_name));
+        assert!(!repo.slot_lease_path(1).exists());
         assert!(pool.reconcile_status.contains("cleaned 1"));
+    }
+
+    #[test]
+    fn acquire_slot_lease_persists_metadata_and_marks_slot_leased() {
+        let repo = TempGitRepo::new("lease-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task one"),
+            )
+            .expect("slot lease should be acquired");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+        let pool = build_pool_board(&repo.workspace_dir(), Some(&readiness));
+        let persisted = repo.read_slot_lease(1);
+
+        assert_eq!(lease.slot_id, "slot-1");
+        assert_eq!(lease.state, ParallelModeSlotLeaseState::Leased);
+        assert_eq!(persisted.state, ParallelModeSlotLeaseState::Leased);
+        assert_eq!(persisted.agent_id, "agent-1");
+        assert_eq!(persisted.task_id, "task-1");
+        assert!(
+            persisted
+                .branch_name
+                .starts_with("akra-agent/slot-1/task-one")
+        );
+        assert_eq!(pool.leased_slots, 1);
+        assert_eq!(pool.running_slots, 0);
+        assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Leased);
+        assert_eq!(pool.slots[0].owner_label, "agent-1 / task-1");
+    }
+
+    #[test]
+    fn mark_slot_running_updates_persisted_lease_and_pool_state() {
+        let repo = TempGitRepo::new("running-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let running_lease = service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+        let pool = build_pool_board(&repo.workspace_dir(), Some(&readiness));
+        let persisted = repo.read_slot_lease(1);
+
+        assert_eq!(running_lease.state, ParallelModeSlotLeaseState::Running);
+        assert!(running_lease.running_started_at.is_some());
+        assert_eq!(persisted.state, ParallelModeSlotLeaseState::Running);
+        assert!(persisted.running_started_at.is_some());
+        assert_eq!(pool.leased_slots, 0);
+        assert_eq!(pool.running_slots, 1);
+        assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Running);
+    }
+
+    #[test]
+    fn mark_slot_cleanup_pending_requires_running_state_and_merged_branch() {
+        let repo = TempGitRepo::new("cleanup-pending-guards");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+
+        let not_running_error = service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect_err("cleanup pending should require the running state");
+        assert!(not_running_error.contains("has not entered running state"));
+
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+        let not_merged_error = service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect_err("cleanup pending should require an integrated branch");
+        assert!(not_merged_error.contains("is not integrated into `akra` yet"));
+    }
+
+    #[test]
+    fn mark_slot_cleanup_pending_updates_persisted_lease_and_pool_state() {
+        let repo = TempGitRepo::new("cleanup-pending-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+        repo.merge_agent_slot_into_akra(&slot_path);
+
+        let cleanup_pending_lease = service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to cleanup pending");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+        let pool = build_pool_board(&repo.workspace_dir(), Some(&readiness));
+        let persisted = repo.read_slot_lease(1);
+
+        assert_eq!(
+            cleanup_pending_lease.state,
+            ParallelModeSlotLeaseState::CleanupPending
+        );
+        assert_eq!(persisted.state, ParallelModeSlotLeaseState::CleanupPending);
+        assert_eq!(pool.awaiting_cleanup_slots, 1);
+        assert_eq!(pool.running_slots, 0);
+        assert_eq!(
+            pool.slots[0].state,
+            ParallelModePoolSlotState::AwaitingCleanup
+        );
+        assert_eq!(pool.slots[0].owner_label, "agent-1 / task-1");
     }
 }
