@@ -169,7 +169,10 @@ impl ParallelModeSupervisorState {
 pub enum ParallelModePoolSlotState {
     Idle,
     Leased,
+    Running,
+    AwaitingCleanup,
     Blocked,
+    Missing,
     Unavailable,
 }
 
@@ -178,7 +181,10 @@ impl ParallelModePoolSlotState {
         match self {
             Self::Idle => "idle",
             Self::Leased => "leased",
+            Self::Running => "running",
+            Self::AwaitingCleanup => "awaiting_cleanup",
             Self::Blocked => "blocked",
+            Self::Missing => "missing",
             Self::Unavailable => "unavailable",
         }
     }
@@ -214,9 +220,13 @@ impl ParallelModePoolSlotSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModePoolBoardSnapshot {
     pub configured_size: usize,
+    pub pool_root_label: String,
     pub idle_slots: usize,
     pub leased_slots: usize,
+    pub running_slots: usize,
+    pub awaiting_cleanup_slots: usize,
     pub blocked_slots: usize,
+    pub missing_slots: usize,
     pub unavailable_slots: usize,
     pub exhausted: bool,
     pub reconcile_status: String,
@@ -226,6 +236,7 @@ pub struct ParallelModePoolBoardSnapshot {
 impl ParallelModePoolBoardSnapshot {
     pub fn new(
         configured_size: usize,
+        pool_root_label: impl Into<String>,
         reconcile_status: impl Into<String>,
         slots: Vec<ParallelModePoolSlotSnapshot>,
     ) -> Self {
@@ -237,21 +248,39 @@ impl ParallelModePoolBoardSnapshot {
             .iter()
             .filter(|slot| slot.state == ParallelModePoolSlotState::Leased)
             .count();
+        let running_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Running)
+            .count();
+        let awaiting_cleanup_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::AwaitingCleanup)
+            .count();
         let blocked_slots = slots
             .iter()
             .filter(|slot| slot.state == ParallelModePoolSlotState::Blocked)
+            .count();
+        let missing_slots = slots
+            .iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Missing)
             .count();
         let unavailable_slots = slots
             .iter()
             .filter(|slot| slot.state == ParallelModePoolSlotState::Unavailable)
             .count();
-        let exhausted = configured_size > 0 && idle_slots == 0;
+        let exhausted = configured_size > 0
+            && idle_slots == 0
+            && leased_slots + running_slots + awaiting_cleanup_slots > 0;
 
         Self {
             configured_size,
+            pool_root_label: pool_root_label.into(),
             idle_slots,
             leased_slots,
+            running_slots,
+            awaiting_cleanup_slots,
             blocked_slots,
+            missing_slots,
             unavailable_slots,
             exhausted,
             reconcile_status: reconcile_status.into(),
@@ -260,17 +289,28 @@ impl ParallelModePoolBoardSnapshot {
     }
 
     pub fn compact_summary(&self) -> String {
+        let mut parts = vec![format!("idle {}/{}", self.idle_slots, self.configured_size)];
+
+        if self.leased_slots > 0 {
+            parts.push(format!("leased {}", self.leased_slots));
+        }
+        if self.running_slots > 0 {
+            parts.push(format!("running {}", self.running_slots));
+        }
+        if self.awaiting_cleanup_slots > 0 {
+            parts.push(format!("cleanup {}", self.awaiting_cleanup_slots));
+        }
+        if self.blocked_slots > 0 {
+            parts.push(format!("blocked {}", self.blocked_slots));
+        }
+        if self.missing_slots > 0 {
+            parts.push(format!("missing {}", self.missing_slots));
+        }
         if self.unavailable_slots > 0 {
-            return format!(
-                "idle {}/{} / blocked {} / unavailable {}",
-                self.idle_slots, self.configured_size, self.blocked_slots, self.unavailable_slots
-            );
+            parts.push(format!("unavailable {}", self.unavailable_slots));
         }
 
-        format!(
-            "idle {}/{} / blocked {}",
-            self.idle_slots, self.configured_size, self.blocked_slots
-        )
+        parts.join(" / ")
     }
 }
 

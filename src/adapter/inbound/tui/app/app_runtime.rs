@@ -68,6 +68,7 @@ impl NativeTuiApp {
             session_state: SessionState::Idle,
             parallel_mode_enabled: false,
             parallel_mode_readiness_snapshot: None,
+            parallel_mode_supervisor_snapshot: None,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
