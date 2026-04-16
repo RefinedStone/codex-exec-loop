@@ -73,6 +73,7 @@ impl ShellRuntime {
                     self.app.session_overlay_ui_state.reset();
                 }
                 BackgroundMessage::ConversationLoaded(result) => {
+                    let loaded_successfully = result.is_ok();
                     let draft_workspace_directory = self.app.current_workspace_directory();
                     self.app.reset_planner_worker_panel_state();
                     self.app.dispatch_conversation_lifecycle(
@@ -83,6 +84,9 @@ impl ShellRuntime {
                     );
                     self.app
                         .refresh_ready_conversation_planning_runtime_snapshot();
+                    if loaded_successfully {
+                        self.app.surface_resumed_session_planning_context();
+                    }
                     self.app
                         .dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
                             stop_keyword: self.app.current_stop_keyword_value(),
@@ -260,6 +264,7 @@ impl ShellRuntime {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -391,6 +396,34 @@ mod tests {
         }
     }
 
+    fn create_temp_workspace(prefix: &str) -> String {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+        fs::create_dir_all(&path).expect("temp workspace should be created");
+        path.display().to_string()
+    }
+
+    fn bootstrap_active_planning_workspace(workspace_dir: &str) {
+        let planning = PlanningServices::from_workspace_port(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        let stage_result = planning
+            .workspace
+            .stage_simple_mode_draft(workspace_dir)
+            .expect("planning workspace should stage");
+        let promote_result = planning
+            .workspace
+            .promote_staged_draft(workspace_dir, &stage_result.draft_name)
+            .expect("planning workspace should promote");
+        assert!(
+            promote_result.promoted_file_count > 0,
+            "bootstrap planning workspace should become ready"
+        );
+    }
+
     #[test]
     fn ctrl_q_requests_quit() {
         let mut runtime = make_test_runtime();
@@ -415,6 +448,54 @@ mod tests {
         }));
 
         assert!(!runtime.should_quit());
+    }
+
+    #[test]
+    fn resumed_session_status_surfaces_planning_and_queue_context() {
+        let mut runtime = make_test_runtime();
+        let workspace_dir = create_temp_workspace("resume-planning-context");
+        bootstrap_active_planning_workspace(&workspace_dir);
+        runtime.app_mut().startup_state =
+            StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
+        runtime.take_redraw_request();
+
+        runtime
+            .app
+            .tx
+            .send(BackgroundMessage::ConversationLoaded(Ok(
+                ConversationSnapshot {
+                    thread_id: "thread-1".to_string(),
+                    title: "Loaded thread".to_string(),
+                    cwd: workspace_dir.clone(),
+                    messages: Vec::new(),
+                    warnings: Vec::new(),
+                    runtime_notices: Vec::new(),
+                },
+            )))
+            .expect("background message should enqueue");
+
+        runtime.poll_background_messages();
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert!(
+            conversation
+                .status_text
+                .contains("thread loaded / planning status: waiting")
+        );
+        assert!(
+            conversation
+                .status_text
+                .contains("queue summary: now: none  |  next: none")
+        );
+        assert!(
+            conversation
+                .status_text
+                .contains("proposed: none  |  blocked: none")
+        );
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
 
     #[test]
