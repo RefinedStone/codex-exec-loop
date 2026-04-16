@@ -1,0 +1,141 @@
+version = 1
+
+[queue_idle]
+policy = "review_and_enqueue"
+prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
+
+[[directions]]
+id = "operator-state-language"
+title = "Operator-facing state language"
+summary = "Make the shell, queue, planning, and automation surfaces speak one operator-facing language centered on current state, cause, and next action. This is the first active direction because the product already has strong capabilities, but its status and recovery story still feels more internal than legible."
+success_criteria = [
+    "The operator can tell whether the system is ready, waiting, running, paused, blocked, or repairing from one surface without interpreting internal jargon.",
+    "Pause reasons explain what stopped, why it stopped, and which action or surface resumes progress.",
+    "Shell summaries, queue inspection, automation controls, and planning recovery use the same core vocabulary.",
+]
+scope_hints = [
+    "Prioritize operator-visible wording, state taxonomy, and projection seams before changing automation policy behavior.",
+    "Focus on compact shell summaries, queue and automation overlays, and planning invalid or repair messaging.",
+    "Keep work slices reviewable and tie each slice to a user-facing clarity gain.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/operator-state-language.md"
+state = "active"
+
+[[directions]]
+id = "queue-and-automation-trust"
+title = "Queue and automation trust"
+summary = "Turn queue-driven continuation into a work board the operator can trust. The queue should clearly separate now, next, optional candidates, and blocked or skipped work, while automation should clearly state whether it continued, paused, or stopped and why."
+success_criteria = [
+    "Queue inspection shows current executable work, near-future work, promotable candidates, and blocked or skipped items in a stable information architecture.",
+    "Automation controls show policy, preview, pause reason, and recovery path without relying on planner jargon.",
+    "Repeated queue head, queue idle, and invalid planning all read as recoverable operator states rather than obscure guards.",
+]
+scope_hints = [
+    "Prefer work that improves explainability before adding more hidden autonomy.",
+    "Keep one executable queue head and move alternatives into proposed tasks unless there is a justified reason to promote them.",
+    "Use the product blueprint and UX rearchitecture docs as the source of truth for how queue and automation should feel.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/queue-and-automation-trust.md"
+state = "active"
+
+[[directions]]
+id = "planning-authoring-ergonomics"
+title = "Planning authoring ergonomics"
+summary = "Lower the cost of first planning success so that a new workspace can reach a valid, trusted queue-driven loop without feeling like it is filling out a framework. Simple mode should become the obvious happy path, while detail mode stays powerful without being the first thing an operator must master."
+success_criteria = [
+    "Simple mode is clearly the fastest safe path to a first accepted planning workspace and first queue-driven continuation.",
+    "Staged review emphasizes what becomes active and what behavior it enables instead of foregrounding raw file mechanics.",
+    "Directions maintenance and queue-idle prompt maintenance feel like extensions of planning authoring rather than separate subsystems.",
+]
+scope_hints = [
+    "Invest in copy, review framing, and maintenance affordances before reopening guided or LLM-assisted authoring.",
+    "Treat queue-idle policy explanation as part of first-run onboarding, not advanced trivia.",
+    "Keep the accepted planning contract explicit even when simplifying the entry flow.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/planning-authoring-ergonomics.md"
+state = "active"
+
+[[directions]]
+id = "session-continuity-and-recovery"
+title = "Session continuity and recovery"
+summary = "Make resumed work feel like resumed context, not just reopened transcript history. When the operator returns to a workspace, the shell should immediately reveal whether planning is active, what work remains, and which recovery path applies if the workflow is paused or blocked."
+success_criteria = [
+    "Resumed sessions expose accepted planning state, queue summary, and automation availability without forcing the operator through multiple overlays.",
+    "Recovery states map to one primary surface and one next action.",
+    "The shell supports long-lived solo use by reducing the cost of reconstructing where work stopped.",
+]
+scope_hints = [
+    "Prioritize resume surfaces, compact summaries, and recovery affordances over deep new session features.",
+    "Keep diagnostics, queue inspection, and planning recovery clearly separated by purpose.",
+    "Treat continuity as both conversation continuity and work-management continuity.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/session-continuity-and-recovery.md"
+state = "active"
+
+[[directions]]
+id = "architecture-boundaries"
+title = "Architecture boundaries for UX iteration"
+summary = "Reduce code hotspots only when the boundary change makes operator-facing work easier to ship safely. The structural target is not abstract elegance; it is smaller, clearer seams for status wording, queue projection, automation state, planning authoring, and recovery behavior."
+success_criteria = [
+    "Status wording and projection can change without repeatedly editing unrelated layout or runtime plumbing.",
+    "Conversation lifecycle, automation lifecycle, planning authoring, and planning runtime concepts are easier to evolve independently.",
+    "Large hotspot files and mixed-responsibility test clusters shrink in ways that map back to operator-visible flows.",
+]
+scope_hints = [
+    "Favor boundary extraction that unlocks concrete UX work over broad refactors with no immediate user-facing payoff.",
+    "Use the architecture debt map to tie each refactor slice to one operator-visible improvement.",
+    "Keep refactors small enough that queue-driven work can advance one reviewable slice at a time.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/architecture-boundaries.md"
+state = "active"
+
+[[directions]]
+id = "validation-and-release-confidence"
+title = "Validation and release confidence"
+summary = "Keep reliability as a first-class product feature while operator-facing flows evolve. Real-terminal validation, operator runbooks, and release confidence should tighten alongside UX improvements so the shell remains dependable in everyday use."
+success_criteria = [
+    "Shell, queue, planning, and resume changes consistently record what manual terminal validation actually ran.",
+    "Operator runbooks stay aligned with the evolving product flow instead of lagging behind it.",
+    "Release confidence improves as UX changes land, rather than becoming a separate clean-up stream.",
+]
+scope_hints = [
+    "Treat docs and validation routines as part of the product surface for power users, not just internal process.",
+    "Keep validation work concrete and paired with operator-facing changes.",
+    "Prefer focused runbook and validation updates over broad process rewrites.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/validation-and-release-confidence.md"
+state = "active"
+
+[[directions]]
+id = "approval-review-operability"
+title = "Approval review operability"
+summary = "Prepare the product for a future state where approval review is not merely visible but operable from the shell. This direction remains paused until app-server protocol and schema support make interactive approve or deny actions a reliable product slice."
+success_criteria = [
+    "Approval review states become actionable from the shell once upstream protocol support is ready.",
+    "Review summaries, risk levels, and next actions are integrated into the main operator loop without forcing out-of-band ritual.",
+    "The eventual interaction model aligns with the same current-state, cause, next-action pattern used elsewhere.",
+]
+scope_hints = [
+    "Do not promote tasks in this direction until upstream protocol support is available and the current Phase 1 to Phase 3 operator surfaces are stable.",
+    "Prefer low-risk visibility and copy groundwork over speculative UI wiring.",
+    "Keep this direction as a roadmap marker, not active queue pressure.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/approval-review-operability.md"
+state = "paused"
+
+[[directions]]
+id = "guided-planning-authoring"
+title = "Guided planning authoring"
+summary = "Revisit LLM-assisted or guided planning authoring only after the manual and simple-mode paths are clearly successful. This direction captures the future desire for richer scaffolding without letting it outrank the need to make the current planning contract simple, trustworthy, and explicit."
+success_criteria = [
+    "Any future guided authoring path produces a valid accepted planning contract without obscuring what became active.",
+    "The manual and simple-mode flows remain trustworthy and easier to understand than the guided path they unlock.",
+    "Guided authoring expands planning usefulness without weakening operator ownership of planning files.",
+]
+scope_hints = [
+    "Keep paused until simple-mode-first-success and planning maintenance flows are clearly strong.",
+    "Treat future guided authoring as an extension of the accepted planning contract, not a replacement for it.",
+    "Do not let this direction create immediate queue work unless the user explicitly reprioritizes it.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/guided-planning-authoring.md"
+state = "paused"

@@ -1,0 +1,125 @@
+{
+  "next_task": {
+    "rank": 1,
+    "task_id": "phase1-state-language-taxonomy",
+    "direction_id": "operator-state-language",
+    "direction_title": "Operator-facing state language",
+    "task_title": "Unify operator-facing shell state language around current state, cause, and next action",
+    "status": "ready",
+    "combined_priority": 104,
+    "updated_at": "2026-04-16T08:03:26Z",
+    "rank_reasons": [
+      "status=ready",
+      "combined_priority=104 (base 92 + delta 12)",
+      "priority_reason=Phase 1 begins by making the current system legible before adding more capability."
+    ]
+  },
+  "active_tasks": [
+    {
+      "rank": 1,
+      "task_id": "phase1-state-language-taxonomy",
+      "direction_id": "operator-state-language",
+      "direction_title": "Operator-facing state language",
+      "task_title": "Unify operator-facing shell state language around current state, cause, and next action",
+      "status": "ready",
+      "combined_priority": 104,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=ready",
+        "combined_priority=104 (base 92 + delta 12)",
+        "priority_reason=Phase 1 begins by making the current system legible before adding more capability."
+      ]
+    }
+  ],
+  "proposed_tasks": [
+    {
+      "rank": 1,
+      "task_id": "queue-workboard-projection",
+      "direction_id": "queue-and-automation-trust",
+      "direction_title": "Queue and automation trust",
+      "task_title": "Reframe queue inspection as now, next, candidates, and blocked work",
+      "status": "proposed",
+      "combined_priority": 94,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=94 (base 88 + delta 6)",
+        "priority_reason=High-leverage follow-up once shell vocabulary is stable."
+      ]
+    },
+    {
+      "rank": 2,
+      "task_id": "automation-pause-recovery-surface",
+      "direction_id": "queue-and-automation-trust",
+      "direction_title": "Queue and automation trust",
+      "task_title": "Make automation pause reasons point to one recovery action",
+      "status": "proposed",
+      "combined_priority": 90,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=90 (base 86 + delta 4)",
+        "priority_reason=Directly supports explainable automation, the main differentiator."
+      ]
+    },
+    {
+      "rank": 3,
+      "task_id": "simple-mode-first-success-review",
+      "direction_id": "planning-authoring-ergonomics",
+      "direction_title": "Planning authoring ergonomics",
+      "task_title": "Simplify first-run planning review around the simple-mode happy path",
+      "status": "proposed",
+      "combined_priority": 84,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=84 (base 82 + delta 2)",
+        "priority_reason=Phase 2 depends on making the first planning loop easier to understand."
+      ]
+    },
+    {
+      "rank": 4,
+      "task_id": "resume-context-summary",
+      "direction_id": "session-continuity-and-recovery",
+      "direction_title": "Session continuity and recovery",
+      "task_title": "Surface planning and queue context immediately after session resume",
+      "status": "proposed",
+      "combined_priority": 80,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=80 (base 80 + delta 0)"
+      ]
+    },
+    {
+      "rank": 5,
+      "task_id": "presentation-boundary-extraction",
+      "direction_id": "architecture-boundaries",
+      "direction_title": "Architecture boundaries for UX iteration",
+      "task_title": "Extract a status and projection layer from shell presentation hotspots",
+      "status": "proposed",
+      "combined_priority": 77,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=77 (base 76 + delta 1)",
+        "priority_reason=Needed to keep follow-up UX changes reviewable and decoupled from layout churn."
+      ]
+    },
+    {
+      "rank": 6,
+      "task_id": "phase1-terminal-validation-routine",
+      "direction_id": "validation-and-release-confidence",
+      "direction_title": "Validation and release confidence",
+      "task_title": "Codify terminal validation expectations for Phase 1 operator-surface work",
+      "status": "proposed",
+      "combined_priority": 70,
+      "updated_at": "2026-04-16T08:03:26Z",
+      "rank_reasons": [
+        "status=proposed",
+        "combined_priority=70 (base 70 + delta 0)"
+      ]
+    }
+  ],
+  "skipped_tasks": []
+}
