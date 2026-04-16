@@ -487,7 +487,10 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         header_lines,
         summary_lines,
         capability_lines,
-        board_lines,
+        pool_lines,
+        roster_lines,
+        detail_lines,
+        distributor_lines,
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
@@ -495,8 +498,8 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 6)),
-            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&summary_lines, 8)),
+            Constraint::Min(12),
             Constraint::Length(inline_section_height(&key_lines, 4)),
         ])
         .split(area);
@@ -512,20 +515,57 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
 
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(layout[2]);
+    let left_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&capability_lines, 8)),
+            Constraint::Length(inline_section_height(&pool_lines, 8)),
+            Constraint::Min(6),
+        ])
+        .split(content_layout[0]);
+    let right_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&detail_lines, 7)),
+            Constraint::Min(7),
+        ])
+        .split(content_layout[1]);
+
     render_inline_section(
         frame,
-        content_layout[0],
+        left_layout[0],
         Line::from("Capabilities"),
         capability_lines,
         false,
     );
     render_inline_section(
         frame,
-        content_layout[1],
-        Line::from("Control Tower"),
-        board_lines,
+        left_layout[1],
+        Line::from("Pool Board"),
+        pool_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        left_layout[2],
+        Line::from("Agent Roster"),
+        roster_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        right_layout[0],
+        Line::from("Selected Detail"),
+        detail_lines,
+        false,
+    );
+    render_inline_section(
+        frame,
+        right_layout[1],
+        Line::from("Distributor / Queue"),
+        distributor_lines,
         false,
     );
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
@@ -897,7 +937,10 @@ fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         header_lines,
         summary_lines,
         capability_lines,
-        board_lines,
+        pool_lines,
+        roster_lines,
+        detail_lines,
+        distributor_lines,
         key_lines,
     } = overlay_view;
     let popup_area = centered_rect(92, 78, frame.area());
@@ -908,8 +951,8 @@ fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         .margin(1)
         .constraints([
             Constraint::Length(block_height_for_lines(&header_lines, 3, 4)),
-            Constraint::Length(block_height_for_lines(&summary_lines, 4, 7)),
-            Constraint::Min(12),
+            Constraint::Length(block_height_for_lines(&summary_lines, 6, 9)),
+            Constraint::Min(16),
             Constraint::Length(block_height_for_lines(&key_lines, 3, 5)),
         ])
         .split(popup_area);
@@ -928,23 +971,61 @@ fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
 
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(layout[2]);
+    let left_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(block_height_for_lines(&capability_lines, 5, 9)),
+            Constraint::Length(block_height_for_lines(&pool_lines, 5, 9)),
+            Constraint::Min(6),
+        ])
+        .split(content_layout[0]);
+    let right_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(block_height_for_lines(&detail_lines, 5, 8)),
+            Constraint::Min(8),
+        ])
+        .split(content_layout[1]);
+
     frame.render_widget(
         Paragraph::new(capability_lines)
             .block(Block::default().borders(Borders::ALL).title("Capabilities"))
             .wrap(Wrap { trim: false }),
-        content_layout[0],
+        left_layout[0],
     );
     frame.render_widget(
-        Paragraph::new(board_lines)
+        Paragraph::new(pool_lines)
+            .block(Block::default().borders(Borders::ALL).title("Pool Board"))
+            .wrap(Wrap { trim: false }),
+        left_layout[1],
+    );
+    frame.render_widget(
+        Paragraph::new(roster_lines)
+            .block(Block::default().borders(Borders::ALL).title("Agent Roster"))
+            .wrap(Wrap { trim: false }),
+        left_layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(detail_lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Control Tower"),
+                    .title("Selected Detail"),
             )
             .wrap(Wrap { trim: false }),
-        content_layout[1],
+        right_layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(distributor_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Distributor / Queue"),
+            )
+            .wrap(Wrap { trim: false }),
+        right_layout[1],
     );
     frame.render_widget(
         Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),

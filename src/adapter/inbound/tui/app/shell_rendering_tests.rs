@@ -347,8 +347,11 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
 
     assert!(rendered.contains("Supersession / inline inspection"));
     assert!(rendered.contains("Capabilities"));
-    assert!(rendered.contains("Control Tower"));
-    assert!(rendered.contains("pool board: not reconciled yet"));
+    assert!(rendered.contains("Pool Board"));
+    assert!(rendered.contains("Agent Roster"));
+    assert!(rendered.contains("Distributor / Queue"));
+    assert!(rendered.contains("configured size: 3"));
+    assert!(rendered.contains("active count: 0"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }
@@ -370,6 +373,8 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
         .join("\n");
 
     assert!(rendered.contains("parallel: ready  |  mode: parallel"));
+    assert!(rendered.contains("agents: 0 active"));
+    assert!(rendered.contains("queue: idle"));
     assert!(rendered.contains("parallel alert:"));
 }
 

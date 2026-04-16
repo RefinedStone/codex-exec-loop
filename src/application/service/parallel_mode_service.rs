@@ -5,12 +5,16 @@ use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+    ParallelModeCapabilityState, ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeQueueItemState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
 const AKRA_BRANCH: &str = "akra";
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
+const DEFAULT_POOL_SIZE: usize = 3;
 
 #[derive(Debug, Clone, Default)]
 pub struct ParallelModeService;
@@ -85,6 +89,30 @@ impl ParallelModeService {
             .map(ParallelModeCapabilitySnapshot::summary);
 
         ParallelModeReadinessSnapshot::new(workspace_dir, readiness, capabilities, top_alert)
+    }
+
+    pub fn build_supervisor_snapshot(
+        &self,
+        workspace_dir: &str,
+        mode_enabled: bool,
+        readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+    ) -> ParallelModeSupervisorSnapshot {
+        let state = derive_supervisor_state(mode_enabled, readiness_snapshot);
+        let workspace_path = readiness_snapshot
+            .map(|snapshot| snapshot.workspace_path.clone())
+            .unwrap_or_else(|| workspace_dir.to_string());
+        let top_notice = readiness_snapshot
+            .and_then(|snapshot| snapshot.top_alert.clone())
+            .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot));
+
+        ParallelModeSupervisorSnapshot::new(
+            state,
+            workspace_path,
+            build_placeholder_pool_board(readiness_snapshot),
+            build_placeholder_roster(mode_enabled, readiness_snapshot),
+            build_placeholder_distributor(mode_enabled, readiness_snapshot),
+            top_notice,
+        )
     }
 }
 
@@ -381,6 +409,170 @@ fn derive_readiness(capabilities: &[ParallelModeCapabilitySnapshot]) -> Parallel
     ParallelModeReadinessState::Ready
 }
 
+fn derive_supervisor_state(
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModeSupervisorState {
+    if mode_enabled && readiness_snapshot.is_some_and(|snapshot| !snapshot.allows_parallel_mode()) {
+        return ParallelModeSupervisorState::Recover;
+    }
+
+    if mode_enabled {
+        return ParallelModeSupervisorState::Supervise;
+    }
+
+    ParallelModeSupervisorState::Prepare
+}
+
+fn default_supervisor_notice(
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> Option<String> {
+    match (mode_enabled, readiness_snapshot) {
+        (true, Some(snapshot)) if snapshot.allows_parallel_mode() => {
+            Some("control tower is live in read-only placeholder mode".to_string())
+        }
+        (true, Some(_)) => Some("repair readiness blockers before assigning agents".to_string()),
+        (false, Some(_)) => Some("run `:parallel on` after reviewing the board".to_string()),
+        (true, None) => Some("rerun readiness to hydrate the supervisor board".to_string()),
+        (false, None) => None,
+    }
+}
+
+fn build_placeholder_pool_board(
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModePoolBoardSnapshot {
+    match readiness_snapshot {
+        Some(snapshot) if snapshot.allows_parallel_mode() => {
+            let slots = (1..=DEFAULT_POOL_SIZE)
+                .map(|slot_number| {
+                    let slot_id = format!("slot-{slot_number:02}");
+                    ParallelModePoolSlotSnapshot::new(
+                        slot_id.clone(),
+                        ParallelModePoolSlotState::Idle,
+                        format!("akra/{slot_id}"),
+                        format!("pool/{slot_id} placeholder"),
+                        "unassigned",
+                    )
+                })
+                .collect::<Vec<_>>();
+            let reconcile_status = match snapshot.readiness {
+                ParallelModeReadinessState::Ready => {
+                    "placeholder reconcile complete / all slots are synthetic".to_string()
+                }
+                ParallelModeReadinessState::Degraded => {
+                    "placeholder reconcile complete / degraded capabilities may still pause later slices"
+                        .to_string()
+                }
+                ParallelModeReadinessState::Blocked | ParallelModeReadinessState::Repairing => {
+                    "placeholder reconcile pending".to_string()
+                }
+            };
+
+            ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, reconcile_status, slots)
+        }
+        Some(snapshot) => {
+            let slots = (1..=DEFAULT_POOL_SIZE)
+                .map(|slot_number| {
+                    let slot_id = format!("slot-{slot_number:02}");
+                    ParallelModePoolSlotSnapshot::new(
+                        slot_id,
+                        ParallelModePoolSlotState::Unavailable,
+                        "not leased",
+                        "reconcile blocked by readiness gate",
+                        "supervisor gate",
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            ParallelModePoolBoardSnapshot::new(
+                DEFAULT_POOL_SIZE,
+                format!(
+                    "reconcile blocked / readiness: {}",
+                    snapshot.readiness_label()
+                ),
+                slots,
+            )
+        }
+        None => {
+            let slots = (1..=DEFAULT_POOL_SIZE)
+                .map(|slot_number| {
+                    let slot_id = format!("slot-{slot_number:02}");
+                    ParallelModePoolSlotSnapshot::new(
+                        slot_id,
+                        ParallelModePoolSlotState::Unavailable,
+                        "not inspected",
+                        "readiness has not been checked",
+                        "n/a",
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            ParallelModePoolBoardSnapshot::new(
+                DEFAULT_POOL_SIZE,
+                "reconcile pending / run readiness first",
+                slots,
+            )
+        }
+    }
+}
+
+fn build_placeholder_roster(
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModeAgentRosterSnapshot {
+    let empty_state = match (mode_enabled, readiness_snapshot) {
+        (true, Some(snapshot)) if snapshot.allows_parallel_mode() => {
+            "no agent sessions launched in this slice"
+        }
+        (true, Some(_)) => "readiness must recover before agent launch is allowed",
+        (true, None) => "rerun readiness before agent launch is available",
+        (false, Some(_)) => "parallel mode is off / agent roster is read-only",
+        (false, None) => "parallel mode is off / no supervisor roster loaded",
+    };
+
+    ParallelModeAgentRosterSnapshot::new(Vec::new(), empty_state)
+}
+
+fn build_placeholder_distributor(
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModeDistributorSnapshot {
+    let (head_summary, note) = match (mode_enabled, readiness_snapshot) {
+        (true, Some(snapshot)) if snapshot.allows_parallel_mode() => (
+            ParallelModeQueueItemState::Idle.label(),
+            "queue is read-only until distributor runtime lands",
+        ),
+        (true, Some(_)) => (
+            "paused",
+            "distributor waits for readiness recovery before queue processing",
+        ),
+        (true, None) => (
+            "pending",
+            "rerun readiness before distributor state can be trusted",
+        ),
+        (false, Some(_)) => (
+            "inactive",
+            "enable parallel mode to surface live distributor activity",
+        ),
+        (false, None) => ("inactive", "parallel mode is off"),
+    };
+
+    ParallelModeDistributorSnapshot::new(
+        Vec::new(),
+        vec![
+            ParallelModeCompletionFeedEntry::new("reported", "no agent results reported yet"),
+            ParallelModeCompletionFeedEntry::new(
+                "ledger refreshing",
+                "no official refresh workers are active",
+            ),
+            ParallelModeCompletionFeedEntry::new("official", "nothing is queued for merge"),
+        ],
+        head_summary,
+        note,
+    )
+}
+
 fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
     let stripped = push_url.trim().strip_prefix("https://")?;
     let mut parts = stripped.splitn(2, '/');
@@ -454,8 +646,10 @@ fn run_command_with_stdin<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-        ParallelModeReadinessState, derive_readiness, inspect_planning, parse_https_remote,
+        DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+        ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+        ParallelModeService, ParallelModeSupervisorState, build_placeholder_pool_board,
+        derive_readiness, inspect_planning, parse_https_remote,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
 
@@ -524,6 +718,53 @@ mod tests {
         assert_eq!(
             parse_https_remote("git@github.com:RefinedStone/codex-exec-loop.git"),
             None
+        );
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_marks_prepare_when_mode_is_off() {
+        let service = ParallelModeService::new();
+        let snapshot = service.build_supervisor_snapshot("/tmp/root", false, None);
+
+        assert_eq!(snapshot.state, ParallelModeSupervisorState::Prepare);
+        assert_eq!(snapshot.pool.configured_size, DEFAULT_POOL_SIZE);
+        assert_eq!(snapshot.roster.active_count(), 0);
+        assert_eq!(snapshot.distributor.head_summary, "inactive");
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_uses_recover_when_mode_enabled_but_blocked() {
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            "/tmp/root",
+            ParallelModeReadinessState::Blocked,
+            vec![],
+            Some("planning: blocked".to_string()),
+        );
+
+        let snapshot = service.build_supervisor_snapshot("/tmp/root", true, Some(&readiness));
+
+        assert_eq!(snapshot.state, ParallelModeSupervisorState::Recover);
+        assert_eq!(snapshot.pool.unavailable_slots, DEFAULT_POOL_SIZE);
+        assert_eq!(snapshot.distributor.head_summary, "paused");
+    }
+
+    #[test]
+    fn placeholder_pool_board_is_idle_when_readiness_allows_parallel_mode() {
+        let readiness = ParallelModeReadinessSnapshot::new(
+            "/tmp/root",
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let pool = build_placeholder_pool_board(Some(&readiness));
+
+        assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+        assert_eq!(pool.blocked_slots, 0);
+        assert!(
+            pool.reconcile_status
+                .contains("placeholder reconcile complete")
         );
     }
 }

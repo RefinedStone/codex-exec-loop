@@ -30,7 +30,10 @@ pub(crate) struct SupersessionOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) summary_lines: Vec<Line<'static>>,
     pub(crate) capability_lines: Vec<Line<'static>>,
-    pub(crate) board_lines: Vec<Line<'static>>,
+    pub(crate) pool_lines: Vec<Line<'static>>,
+    pub(crate) roster_lines: Vec<Line<'static>>,
+    pub(crate) detail_lines: Vec<Line<'static>>,
+    pub(crate) distributor_lines: Vec<Line<'static>>,
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
