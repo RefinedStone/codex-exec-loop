@@ -87,6 +87,30 @@ V1 merge policy is linear integration into `akra`.
 - if merge conflict occurs, mark the queue item `blocked`
 - blocked merge conflict keeps the slot unavailable until operator resolves or discards the item
 
+## Akra Drift And Rebase Strategy
+
+If `akra` advanced after the agent became `commit_ready`, distributor must reconcile the source
+branch before integration.
+
+Required strategy:
+
+1. fetch latest remote refs
+2. refresh local `akra` to the expected integration head
+3. compare the source branch base against current `akra`
+4. if `akra` moved, rebase the source branch onto latest `akra`
+5. if rebase succeeds, update the queue item's head commit reference
+6. push the rebased branch with `--force-with-lease`
+7. continue PR and merge checks against the rebased head only
+
+If rebase conflicts:
+
+- mark the queue item `blocked`
+- preserve both pre-rebase and attempted-head provenance in the queue item detail
+- do not advance to local integration or slot cleanup
+
+This keeps the policy linear while removing ambiguity about how stale agent branches re-enter the
+integration path.
+
 ## Cleanup And Slot Return
 
 Distributor owns slot return after integration. A queue item is not `done` until:

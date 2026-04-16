@@ -26,10 +26,11 @@ It is not a hidden worker and it is not a detached planning helper.
 | `ledger_refreshing` | hidden planning worker is refreshing official task state | `reported_complete` | `commit_ready`, `failed` |
 | `commit_ready` | agent result and ledger state now agree that execution milestone finished | `ledger_refreshing` | `merge_queued`, `failed` |
 | `merge_queued` | distributor accepted the result for integration | `commit_ready` | `merged`, `failed` |
-| `merged` | distributor integrated the result into `akra` | `merge_queued` | `cleaned`, `failed` |
-| `cleaned` | slot returned to clean `akra` state and lease released | `merged` | terminal |
-| `failed` | session, planning, git, or integration step needs operator action | any | `requested`, terminal |
-| `cancelled` | operator explicitly stopped the session before commit-ready completion | `running`, `assigned` | terminal |
+| `merged` | distributor integrated the result into `akra` | `merge_queued` | `cleanup_pending`, `failed` |
+| `cleanup_pending` | agent execution is over but the leased slot still needs reconcile or release | `merged`, `failed`, `cancelled` | `cleaned`, `failed` |
+| `cleaned` | slot returned to clean `akra` state and lease released | `cleanup_pending` | terminal |
+| `failed` | session, planning, git, or integration step needs operator action | any | `cleanup_pending`, `requested`, terminal |
+| `cancelled` | operator explicitly stopped the session before commit-ready completion | `running`, `assigned` | `cleanup_pending`, terminal |
 
 ## Assignment Preconditions
 
@@ -83,22 +84,31 @@ This distinction is mandatory because the ledger remains the official source of 
 ### Cancel
 
 - operator may cancel an agent before `commit_ready`
-- cancelled agents keep their slot lease until supervisor decides whether to archive, inspect, or clean the worktree
+- cancelled agents keep their slot lease until supervisor moves them into `cleanup_pending`
+- `cleanup_pending` may archive, inspect, or clean the worktree before the slot becomes reusable
 
 ### Hung Session
 
 - if no event, tool activity, or summary update appears for the configured timeout window, mark the agent `failed`
-- a failed hung session does not auto-release the slot
+- a failed hung session does not auto-release the slot and must later enter `cleanup_pending`
 
 ### Planning Refresh Failure
 
 - if hidden planning worker cannot refresh the ledger, the agent stops at `failed`
 - the slot stays reserved because the completion result is not yet official
+- operator recovery may either retry planning or move the slot into `cleanup_pending` to discard execution state
 
 ### Distributor Failure
 
 - once an agent reaches `merge_queued`, execution is finished but integration may still fail
 - the session itself does not resume; the queue item carries the failure forward
+
+### Cleanup Pending
+
+- `cleanup_pending` bridges agent-terminal states and slot-terminal reuse
+- merged agents always pass through `cleanup_pending` before `cleaned`
+- failed or cancelled agents also pass through `cleanup_pending` when the operator chooses discard, archive, or reset
+- a slot is never reusable directly from `failed` or `cancelled`
 
 ## Reassignment Rules
 

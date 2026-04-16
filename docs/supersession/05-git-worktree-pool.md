@@ -26,11 +26,13 @@ creation and assignment may be blocked.
 | integration branch | `akra` |
 | pool size | `3` |
 | slot id format | `slot-1`, `slot-2`, `slot-3` |
-| default pool root | sibling directory `../<repo-name>-worktrees/akra-pool` |
+| default pool root | sibling directory `../<repo-name>-worktrees/<repo-root-hash>/akra-pool` |
 | agent branch prefix | `akra-agent/<slot-id>/` |
 
-The pool root may be overridden by configuration, but the default should stay predictable and
-outside the integration checkout.
+`<repo-root-hash>` is a stable short hash derived from the repository's canonical absolute root.
+This avoids collisions when multiple clones of the same repository name live under one parent
+directory. The pool root may still be overridden by configuration, but the default should stay
+predictable and outside the integration checkout.
 
 ## Slot State Model
 
@@ -53,6 +55,9 @@ Parallel mode enable must reconcile the pool:
 4. create missing slots from `akra`
 5. verify existing slots point to the expected branch/worktree state
 6. mark inconsistent slots `blocked` instead of silently reusing them
+
+If the configured pool root is absent, supervisor computes the default root from the canonical repo
+root and repo-name hash before step 2.
 
 ## Branch Rules
 
