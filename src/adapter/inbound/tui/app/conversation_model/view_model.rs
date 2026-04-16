@@ -384,9 +384,9 @@ impl ConversationViewModel {
         self.mark_turn_started(turn_id);
         self.live_agent_message = None;
         if let Some(turn_index) = self.auto_follow_state.mark_auto_turn_started() {
+            let max_auto_turns = self.auto_follow_state.max_auto_turns_label();
             let status_text = format!(
-                "auto follow-up running / turn {turn_index}/{} / mode: {}",
-                self.auto_follow_state.max_auto_turns_value(),
+                "auto follow-up running / turn {turn_index}/{max_auto_turns} / mode: {}",
                 self.auto_follow_state.mode_label(),
             );
             self.status_text = status_text.clone();
@@ -652,7 +652,7 @@ impl ConversationViewModel {
         let turn_index = self.auto_follow_state.mark_auto_turn_submitted();
         let progress = format!(
             "{turn_index}/{}",
-            self.auto_follow_state.max_auto_turns_value()
+            self.auto_follow_state.max_auto_turns_label()
         );
         self.last_planning_task_handoff = handoff_task.cloned();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {

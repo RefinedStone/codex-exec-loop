@@ -111,8 +111,8 @@ pub(super) fn reduce_conversation_runtime(
                 state
                     .auto_follow_state
                     .active_turn_index()
-                    .unwrap_or_else(|| { state.auto_follow_state.next_auto_turn_index() }),
-                state.auto_follow_state.max_auto_turns_value()
+                    .unwrap_or_else(|| state.auto_follow_state.next_auto_turn_index()),
+                state.auto_follow_state.max_auto_turns_label()
             );
             let transcript_message = match &origin {
                 PromptOrigin::AutoFollow(context) => {
@@ -256,7 +256,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
     use crate::adapter::inbound::tui::app::{
         AutoFollowRuntimePhase, AutoFollowState, AutoFollowupSubmitContext, ConversationInputState,
-        TurnActivityState, format_conversation_lines,
+        INFINITE_AUTO_FOLLOW_MAX_TURNS, TurnActivityState, format_conversation_lines,
     };
     use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
     use crate::application::service::planning::PlanningRepairRequest;
@@ -350,6 +350,43 @@ mod tests {
         assert_eq!(
             conversation_message_label(&reduced.state.messages[0]),
             "Auto Follow-up"
+        );
+    }
+
+    #[test]
+    fn auto_follow_submit_uses_infinite_label_in_status_and_activity() {
+        let mut state = sample_conversation();
+        state
+            .auto_follow_state
+            .set_max_auto_turns(INFINITE_AUTO_FOLLOW_MAX_TURNS);
+        state.input_buffer = "continue from the last result".to_string();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue from the last result".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
+                    queued_from_turn_id: "turn-1".to_string(),
+                    mode_label: "planning queue".to_string(),
+                    transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                    debug_detail: None,
+                    handoff_task: None,
+                })),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.status_text,
+            "auto follow-up submitted / turn 1/infinite / mode: planning queue"
+        );
+        assert_eq!(
+            reduced
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("submitted auto turn 1/infinite")
         );
     }
 

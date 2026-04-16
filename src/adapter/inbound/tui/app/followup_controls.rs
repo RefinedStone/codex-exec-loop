@@ -117,7 +117,6 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{
         AutoFollowupSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-        INFINITE_AUTO_FOLLOW_MAX_TURNS,
     };
 
     #[test]

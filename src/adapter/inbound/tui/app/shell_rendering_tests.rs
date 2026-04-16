@@ -508,7 +508,7 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
 
     assert!(keys.contains("next action: type the new turn budget directly."));
     assert!(keys.contains("controls: Enter saves"));
-    assert!(keys.contains("validation: use a whole number between 1 and 50."));
+    assert!(keys.contains("validation: use a whole number greater than 0, or type infinite."));
     assert!(!keys.contains("promote staged scaffold"));
 }
 

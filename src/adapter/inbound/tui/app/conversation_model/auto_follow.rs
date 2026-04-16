@@ -216,6 +216,7 @@ impl AutoFollowState {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn max_auto_turns_value(&self) -> usize {
         self.max_auto_turns
     }

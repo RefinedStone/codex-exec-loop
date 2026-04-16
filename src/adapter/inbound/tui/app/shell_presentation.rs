@@ -615,7 +615,7 @@ pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static
         return vec![
             Line::from("Type the new max-turn value directly. Backspace deletes."),
             Line::from("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
-            Line::from("Use a whole number between 1 and 50."),
+            Line::from("Use a whole number greater than 0, or type infinite."),
         ];
     }
 
@@ -1433,21 +1433,19 @@ fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<St
 }
 
 fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
+    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
     match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => "idle".to_string(),
         AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
-            "auto turn {turn_index}/{} queued for submission",
-            conversation.auto_follow_state.max_auto_turns_value()
-        ),
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => format!(
-            "auto turn {turn_index}/{} starting",
-            conversation.auto_follow_state.max_auto_turns_value()
-        ),
-        AutoFollowRuntimePhase::Running { turn_index, .. } => format!(
-            "auto turn {turn_index}/{} running",
-            conversation.auto_follow_state.max_auto_turns_value()
-        ),
+        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
+            format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
+        }
+        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
+            format!("auto turn {turn_index}/{max_auto_turns} starting")
+        }
+        AutoFollowRuntimePhase::Running { turn_index, .. } => {
+            format!("auto turn {turn_index}/{max_auto_turns} running")
+        }
     }
 }
 
@@ -1455,21 +1453,19 @@ fn auto_follow_prompt_status_line(
     conversation: &ConversationViewModel,
     inline: bool,
 ) -> Option<String> {
+    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
     let detail = match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => return None,
         AutoFollowRuntimePhase::Evaluating { .. } => "auto follow-up evaluating".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => format!(
-            "auto turn {turn_index}/{} queued",
-            conversation.auto_follow_state.max_auto_turns_value()
-        ),
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => format!(
-            "auto turn {turn_index}/{} starting",
-            conversation.auto_follow_state.max_auto_turns_value()
-        ),
-        AutoFollowRuntimePhase::Running { turn_index, .. } => format!(
-            "auto turn {turn_index}/{} running",
-            conversation.auto_follow_state.max_auto_turns_value()
-        ),
+        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
+            format!("auto turn {turn_index}/{max_auto_turns} queued")
+        }
+        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
+            format!("auto turn {turn_index}/{max_auto_turns} starting")
+        }
+        AutoFollowRuntimePhase::Running { turn_index, .. } => {
+            format!("auto turn {turn_index}/{max_auto_turns} running")
+        }
     };
 
     Some(if inline {
@@ -1535,6 +1531,10 @@ fn label_style(kind: ConversationMessageKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::{
+        AutoFollowRuntimePhase, AutoFollowState, ConversationViewModel,
+        INFINITE_AUTO_FOLLOW_MAX_TURNS,
+    };
     use crate::application::service::session_service::{
         SessionBrowserProjection, SessionProjectFilter, SessionProjectFilterOption,
     };
@@ -1609,6 +1609,28 @@ mod tests {
         assert_eq!(
             detail,
             "no current-workspace session detail is available for query \"release\""
+        );
+    }
+
+    #[test]
+    fn auto_follow_status_lines_use_infinite_label() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        conversation.auto_follow_state = AutoFollowState::new();
+        conversation
+            .auto_follow_state
+            .set_max_auto_turns(INFINITE_AUTO_FOLLOW_MAX_TURNS);
+        conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Running {
+            started_at: Instant::now(),
+            turn_index: 2,
+        };
+
+        assert_eq!(
+            auto_follow_working_detail(&conversation),
+            "auto turn 2/infinite running"
+        );
+        assert_eq!(
+            auto_follow_prompt_status_line(&conversation, true).as_deref(),
+            Some("prompt: auto turn 2/infinite running  |  type now, Enter when idle")
         );
     }
 

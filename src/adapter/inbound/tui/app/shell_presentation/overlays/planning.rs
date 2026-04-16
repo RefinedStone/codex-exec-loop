@@ -289,7 +289,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         Line::from(
                             "controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes",
                         ),
-                        Line::from("validation: use a whole number between 1 and 50."),
+                        Line::from("validation: use a whole number greater than 0, or type infinite."),
                     ]
                 } else {
                     vec![
