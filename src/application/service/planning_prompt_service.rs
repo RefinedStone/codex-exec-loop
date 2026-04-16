@@ -810,7 +810,7 @@ fn build_queue_framing_details(
     }
 
     if let Some(queue_summary) = snapshot.queue_summary() {
-        apply_legacy_queue_summary_details(&mut details, queue_summary, max_detail_len);
+        apply_queue_framing_details(&mut details, queue_summary, max_detail_len);
     }
 
     if let Some(proposal_summary) = snapshot.proposal_summary() {
@@ -820,7 +820,7 @@ fn build_queue_framing_details(
     Some(details)
 }
 
-fn apply_legacy_queue_summary_details(
+fn apply_queue_framing_details(
     details: &mut QueueFramingDetails,
     summary: &str,
     max_detail_len: usize,
@@ -845,11 +845,6 @@ fn apply_legacy_queue_summary_details(
         if let Some(detail) = trimmed.strip_prefix("blocked: ") {
             details.blocked_detail = compact_whitespace_detail(detail, max_detail_len);
             continue;
-        }
-        if let Some(detail) = trimmed.strip_prefix("next task: ") {
-            if details.now_detail == "none" {
-                details.now_detail = compact_legacy_next_task_detail(detail, max_detail_len);
-            }
         }
     }
 }
@@ -883,32 +878,8 @@ fn compact_skipped_queue_task_summary(
     summary
 }
 
-fn compact_legacy_next_task_detail(summary: &str, max_detail_len: usize) -> String {
-    let trimmed = summary.trim();
-    let segments = trimmed.split(" / ").map(str::trim).collect::<Vec<_>>();
-    if segments.len() >= 4
-        && segments
-            .first()
-            .is_some_and(|segment| segment.starts_with("rank "))
-        && segments
-            .last()
-            .is_some_and(|segment| segment.starts_with("priority "))
-    {
-        let title = segments[2..segments.len() - 1].join(" / ");
-        if !title.trim().is_empty() {
-            return compact_whitespace_detail(title.as_str(), max_detail_len);
-        }
-    }
-
-    compact_whitespace_detail(trimmed, max_detail_len)
-}
-
 fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
-    let detail = summary
-        .split_once(": ")
-        .map(|(_, detail)| detail)
-        .unwrap_or(summary);
-    compact_whitespace_detail(detail, max_detail_len)
+    compact_whitespace_detail(summary, max_detail_len)
 }
 
 fn trimmed_non_empty(value: &str) -> Option<&str> {
@@ -1155,30 +1126,32 @@ mod tests {
             .prompt_fragment()
             .expect("valid workspace should expose a prompt fragment");
         assert!(prompt_fragment.contains("proposed_tasks: top 1 of 1 promotable proposals"));
-        assert!(prompt_fragment
-            .contains("proposal rank 1 | task-followup-1 | Draft a sushi-chef roadmap"));
+        assert!(
+            prompt_fragment
+                .contains("proposal rank 1 | task-followup-1 | Draft a sushi-chef roadmap")
+        );
         assert!(prompt_fragment.contains("combined_priority=30"));
         assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
-        assert!(prompt_fragment
-            .contains("move the actionable worklist into normal queue tasks with priorities"));
+        assert!(
+            prompt_fragment
+                .contains("move the actionable worklist into normal queue tasks with priorities")
+        );
         assert!(result.has_proposal_candidates());
     }
 
     #[test]
-    fn preview_detail_reframes_legacy_queue_and_proposal_summaries() {
+    fn preview_detail_uses_canonical_queue_and_proposal_summaries() {
         let snapshot = super::PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1 / Draft roadmap / priority 9".to_string(),
-            Some(
-                "2 promotable follow-up proposals available: Draft checklist | +1 more".to_string(),
-            ),
+            "now: Draft roadmap  |  next: none  |  proposed: Draft checklist (+1 more)  |  blocked: none".to_string(),
+            Some("Draft checklist (+1 more)".to_string()),
             None,
         );
 
         assert_eq!(
             snapshot.preview_detail().as_deref(),
             Some(
-                "now: Draft roadmap  |  next: none  |  proposed: Draft checklist | +1 more  |  blocked: none"
+                "now: Draft roadmap  |  next: none  |  proposed: Draft checklist (+1 more)  |  blocked: none"
             )
         );
     }
@@ -1293,10 +1266,12 @@ state = "paused"
         assert!(prompt_fragment.contains("task-1"));
         assert!(prompt_fragment.contains("Result Output Prompt"));
         assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
-        assert!(result
-            .queue_summary()
-            .expect("valid workspace should expose a queue summary")
-            .contains("now: Implement the next slice"));
+        assert!(
+            result
+                .queue_summary()
+                .expect("valid workspace should expose a queue summary")
+                .contains("now: Implement the next slice")
+        );
         assert_eq!(
             result
                 .queue_head()

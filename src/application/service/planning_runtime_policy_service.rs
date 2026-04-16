@@ -1,6 +1,6 @@
 use crate::application::service::planning_auto_follow_copy::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
-    PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
+    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
+    PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
 };
 use crate::application::service::planning_prompt_service::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
@@ -551,10 +551,10 @@ fn ready_queue_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
 }
 
 fn idle_queue_cause(snapshot: &PlanningRuntimeSnapshot) -> String {
-    let queue_summary = snapshot.queue_summary().unwrap_or_default();
-    if queue_summary.contains("queue idle") || queue_summary.contains("no executable") {
-        "planning is valid but has no next task yet".to_string()
-    } else if queue_summary.trim().is_empty() {
+    if snapshot
+        .queue_summary()
+        .is_none_or(|queue_summary| queue_summary.trim().is_empty())
+    {
         "planning is valid but has no next task yet".to_string()
     } else if let Some(summary) =
         snapshot.compact_queue_framing_summary(INTERNAL_QUEUE_METADATA_DETAIL_LIMIT)
@@ -641,8 +641,8 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "queue idle: no executable planning task".to_string(),
-            Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
+            "now: none  |  next: none  |  proposed: Plan A (+1 more)  |  blocked: none".to_string(),
+            Some("Plan A (+1 more)".to_string()),
             None,
         );
         let decision = service.decide_auto_follow(&snapshot);
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(preview.status_label, "review needed");
         assert_eq!(
             preview.detail.as_deref(),
-            Some("now: none  |  next: none  |  proposed: Plan A | +1 more  |  blocked: none")
+            Some("now: none  |  next: none  |  proposed: Plan A (+1 more)  |  blocked: none")
         );
     }
 
@@ -668,7 +668,7 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "queue idle: no executable planning task".to_string(),
+            "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
             None,
             None,
         );
@@ -689,15 +689,18 @@ mod tests {
     }
 
     #[test]
-    fn summary_line_reframes_legacy_idle_queue_metadata_without_raw_next_task_string() {
+    fn summary_line_uses_canonical_idle_queue_metadata_as_queue_detail() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1 / Draft roadmap / priority 9".to_string(),
+            "now: Draft roadmap  |  next: none  |  proposed: none  |  blocked: none".to_string(),
             None,
             None,
         )
-        .with_queue_idle_policy(crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue, None);
+        .with_queue_idle_policy(
+            crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue,
+            None,
+        );
 
         let summary_line = service.build_summary_line(PlanningRuntimeSummaryLineRequest {
             snapshot: &snapshot,
@@ -715,7 +718,6 @@ mod tests {
             "cause: planning is valid but has no next task yet; queue detail: now: Draft roadmap"
         ));
         assert!(summary_line.contains("proposed: none"));
-        assert!(!summary_line.contains("next task: rank 1 / task-1"));
     }
 
     #[test]
@@ -730,13 +732,15 @@ mod tests {
                 PlanningAutoFollowBlockReason::ActionableQueueRequired
             )
         );
-        assert!(service
-            .build_preview_view_for_decision(decision, &snapshot)
-            .detail
-            .as_deref()
-            .is_some_and(|detail| {
-                detail.contains("no planning workspace is active for this shell yet")
-            }));
+        assert!(
+            service
+                .build_preview_view_for_decision(decision, &snapshot)
+                .detail
+                .as_deref()
+                .is_some_and(|detail| {
+                    detail.contains("no planning workspace is active for this shell yet")
+                })
+        );
     }
 
     #[test]
@@ -744,7 +748,8 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1".to_string(),
+            "now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none"
+                .to_string(),
             Some(queue_head()),
         )
         .with_auto_followup_pause_reason(
@@ -764,8 +769,8 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "queue idle: no executable planning task".to_string(),
-            Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
+            "now: none  |  next: none  |  proposed: Plan A (+1 more)  |  blocked: none".to_string(),
+            Some("Plan A (+1 more)".to_string()),
             None,
         );
 
@@ -775,12 +780,14 @@ mod tests {
                 PlanningAutoFollowPromptMode::RefreshPlanningQueue
             )
         );
-        assert!(service
-            .auto_follow_transcript_text(
-                &snapshot,
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue
-            )
-            .contains("existing proposal 작업 목록을 priority queue에 넣고"));
+        assert!(
+            service
+                .auto_follow_transcript_text(
+                    &snapshot,
+                    PlanningAutoFollowPromptMode::RefreshPlanningQueue
+                )
+                .contains("existing proposal 작업 목록을 priority queue에 넣고")
+        );
     }
 
     #[test]
@@ -788,7 +795,8 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1".to_string(),
+            "now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none"
+                .to_string(),
             Some(queue_head()),
         );
 
@@ -812,7 +820,8 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1".to_string(),
+            "now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none"
+                .to_string(),
             Some(queue_head()),
         );
 
@@ -827,7 +836,9 @@ mod tests {
         assert_eq!(summary.status_label, "running");
         assert_eq!(
             summary.queue_summary.as_deref(),
-            Some("now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none")
+            Some(
+                "now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none"
+            )
         );
     }
 
@@ -836,8 +847,9 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "queue idle: no executable planning task".to_string(),
-            Some("1 promotable follow-up proposal available: Draft sushi roadmap".to_string()),
+            "now: none  |  next: none  |  proposed: Draft sushi roadmap  |  blocked: none"
+                .to_string(),
+            Some("Draft sushi roadmap".to_string()),
             None,
         );
 
@@ -886,11 +898,9 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
-            "queue idle: no executable planning task".to_string(),
-            Some(
-                "2 promotable follow-up proposals available: Draft roadmap | Draft checklist"
-                    .to_string(),
-            ),
+            "now: none  |  next: none  |  proposed: Draft roadmap (+1 more)  |  blocked: none"
+                .to_string(),
+            Some("Draft roadmap (+1 more)".to_string()),
             None,
         );
 
@@ -922,7 +932,8 @@ mod tests {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1".to_string(),
+            "now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none"
+                .to_string(),
             Some(queue_head()),
         );
 
@@ -937,15 +948,21 @@ mod tests {
 
         assert_eq!(
             projection.queue_head_line.as_deref(),
-            Some("planning queue head: now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none")
+            Some(
+                "planning queue head: now: Implement queue-aware policy  |  next: none  |  proposed: none  |  blocked: none"
+            )
         );
         assert_eq!(projection.current_state_line, "current state: ready");
-        assert!(projection
-            .cause_line
-            .starts_with("cause: the next queued task is Implement queue-aware"));
-        assert!(projection
-            .next_action_line
-            .starts_with("next action: let automation continue"));
+        assert!(
+            projection
+                .cause_line
+                .starts_with("cause: the next queued task is Implement queue-aware")
+        );
+        assert!(
+            projection
+                .next_action_line
+                .starts_with("next action: let automation continue")
+        );
     }
 
     #[test]
@@ -954,8 +971,8 @@ mod tests {
         let queue_head = queue_head();
         let snapshot = PlanningRuntimeSnapshot::ready_with_queue_snapshot(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1".to_string(),
-            Some("1 promotable follow-up proposal available: Draft sushi roadmap".to_string()),
+            "now: Implement queue-aware policy  |  next: Follow-up queue reconciliation  |  proposed: Draft sushi roadmap  |  blocked: none".to_string(),
+            Some("Draft sushi roadmap".to_string()),
             Some(queue_head.clone()),
             crate::domain::planning::PriorityQueueSnapshot {
                 next_task: Some(queue_head.clone()),

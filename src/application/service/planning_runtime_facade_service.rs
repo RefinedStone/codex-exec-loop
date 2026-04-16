@@ -219,16 +219,15 @@ impl PlanningRuntimeFacadeService {
                 PlanningAutoFollowPromptMode::ContinueQueuedTask,
             ) => self.builtin_next_task_preview_prompt(request.snapshot),
         };
-        let planning_projection = self.build_followup_status_projection(
-            PlanningRuntimeStatusProjectionRequest {
+        let planning_projection =
+            self.build_followup_status_projection(PlanningRuntimeStatusProjectionRequest {
                 snapshot: request.snapshot,
                 has_running_turn: request.has_running_turn,
                 is_repairing: request.is_repairing,
                 repair_failure_summary: request.repair_failure_summary,
                 repair_attempt: None,
                 max_detail_len: request.max_detail_len,
-            },
-        );
+            });
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
             current_state_line: planning_projection.current_state_line,
@@ -465,7 +464,7 @@ mod tests {
     -> crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot {
         crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "next task: rank 1 / task-1".to_string(),
+            "now: Implement planning runtime facade  |  next: none  |  proposed: none  |  blocked: none".to_string(),
             Some(PriorityQueueTask {
                 rank: 1,
                 task_id: "task-1".to_string(),
@@ -532,7 +531,7 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
                 "Planning Context".to_string(),
-                "next_task: none".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
                 None,
             );
 
@@ -559,11 +558,8 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context\nRuntime Follow-up Proposal Rules".to_string(),
-                "queue idle: no executable planning task".to_string(),
-                Some(
-                    "2 promotable follow-up proposals available: Draft roadmap | +1 more"
-                        .to_string(),
-                ),
+                "now: none  |  next: none  |  proposed: Draft roadmap (+1 more)  |  blocked: none".to_string(),
+                Some("Draft roadmap (+1 more)".to_string()),
                 None,
             );
 
@@ -628,7 +624,7 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
                 "Planning Context".to_string(),
-                "queue idle: no executable planning task".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
                 None,
             )
             .with_queue_idle_policy(
@@ -652,7 +648,10 @@ mod tests {
                 .contains("planning priority queue를 갱신하세요.")
         );
         assert_eq!(preview.current_state_line, "current state: waiting");
-        assert_eq!(preview.cause_line, "cause: planning is valid but has no next task yet");
+        assert_eq!(
+            preview.cause_line,
+            "cause: planning is valid but has no next task yet"
+        );
         assert!(
             preview
                 .next_action_line
@@ -694,11 +693,8 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context".to_string(),
-                "queue idle: no executable planning task".to_string(),
-                Some(
-                    "2 promotable follow-up proposals available: Draft roadmap | Draft checklist"
-                        .to_string(),
-                ),
+                "now: none  |  next: none  |  proposed: Draft roadmap (+1 more)  |  blocked: none".to_string(),
+                Some("Draft roadmap (+1 more)".to_string()),
                 None,
             );
 
@@ -771,11 +767,8 @@ mod tests {
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context".to_string(),
-                "queue idle: no executable planning task".to_string(),
-                Some(
-                    "1 promotable follow-up proposal available: Draft sushi roadmap"
-                        .to_string(),
-                ),
+                "now: none  |  next: none  |  proposed: Draft sushi roadmap  |  blocked: none".to_string(),
+                Some("Draft sushi roadmap".to_string()),
                 None,
             );
 
@@ -789,8 +782,11 @@ mod tests {
                 max_detail_len: 48,
             });
 
-        assert!(projection.proposal_line.as_deref().is_some_and(|line| {
-            line == "planning proposals: Draft sushi roadmap"
-        }));
+        assert!(
+            projection
+                .proposal_line
+                .as_deref()
+                .is_some_and(|line| { line == "planning proposals: Draft sushi roadmap" })
+        );
     }
 }

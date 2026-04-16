@@ -17,14 +17,16 @@ pub(crate) fn sample_queue_head() -> PriorityQueueTask {
     }
 }
 
-pub(crate) fn sample_planning_runtime_snapshot(
-    prompt_fragment: &str,
-    queue_summary: &str,
-) -> PlanningRuntimeSnapshot {
+pub(crate) fn sample_planning_runtime_snapshot(prompt_fragment: &str) -> PlanningRuntimeSnapshot {
     let queue_head = sample_queue_head();
     PlanningRuntimeSnapshot::ready_with_queue_snapshot(
         prompt_fragment.to_string(),
-        queue_summary.to_string(),
+        queue_framing_summary(
+            "Implement shell planning status",
+            "Trim legacy shell code",
+            "none",
+            "Follow blocked review thread (blocked by tasks: task-2(in_progress))",
+        ),
         None,
         Some(queue_head.clone()),
         PriorityQueueSnapshot {
@@ -57,12 +59,11 @@ pub(crate) fn sample_planning_runtime_snapshot(
 
 pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
     prompt_fragment: &str,
-    queue_summary: &str,
     proposal_summary: &str,
 ) -> PlanningRuntimeSnapshot {
     PlanningRuntimeSnapshot::ready_with_queue_snapshot(
         prompt_fragment.to_string(),
-        queue_summary.to_string(),
+        queue_framing_summary("none", "none", proposal_summary, "none"),
         Some(proposal_summary.to_string()),
         None,
         PriorityQueueSnapshot {
@@ -81,5 +82,16 @@ pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
             }],
             skipped_tasks: Vec::new(),
         },
+    )
+}
+
+fn queue_framing_summary(
+    now_detail: &str,
+    next_detail: &str,
+    proposed_detail: &str,
+    blocked_detail: &str,
+) -> String {
+    format!(
+        "now: {now_detail}  |  next: {next_detail}  |  proposed: {proposed_detail}  |  blocked: {blocked_detail}"
     )
 }

@@ -152,10 +152,8 @@ fn planning_runtime() -> PlanningRuntimeUseCases {
 #[test]
 fn queue_handoff_prompt_renders_for_auto_follow() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context",
-        "next task: task-1",
-    ));
+    conversation
+        .replace_planning_runtime_snapshot(sample_planning_runtime_snapshot("Planning Context"));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -356,10 +354,8 @@ fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
 #[test]
 fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context",
-        "next task: task-1",
-    ));
+    conversation
+        .replace_planning_runtime_snapshot(sample_planning_runtime_snapshot("Planning Context"));
     conversation
         .auto_follow_state
         .stop_rules
@@ -392,8 +388,7 @@ fn auto_followup_refresh_prompt_appends_planning_fragment_when_queue_is_idle() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
         "Planning Context\nRuntime Follow-up Proposal Rules",
-        "queue idle: no executable planning task",
-        "2 promotable follow-up proposals available: Plan A | +1 more",
+        "Plan A (+1 more)",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,

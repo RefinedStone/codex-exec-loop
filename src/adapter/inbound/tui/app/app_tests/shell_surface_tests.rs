@@ -16,17 +16,17 @@ use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FI
 use crate::domain::planning::QueueIdlePolicy;
 
 use super::{
-    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
+    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
+    KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
+    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellFrontendMode,
+    ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH, build_automation_overlay_view,
+    build_automation_preview_lines, build_automation_status_lines,
     build_conversation_shell_frame_view, build_conversation_shell_view, build_inline_tail_lines,
     build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
     build_session_overlay_view, build_startup_overlay_view, create_temp_workspace, make_test_app,
     ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
     sample_proposal_only_planning_runtime_snapshot, sample_startup_diagnostics,
-    ConversationInputState, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, KeyCode, KeyEvent,
-    KeyModifiers, PlannerWorkerStatus, PlanningExecutionSnapshot, PlanningRuntimeSnapshot,
-    RecordedAutoFollowupActivity, SessionState, ShellActionAvailability, ShellFrontendMode,
-    ShellOverlay, StartupState, TASK_LEDGER_FILE_PATH,
 };
 
 #[test]
@@ -64,11 +64,13 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
         },
     ));
 
-    assert!(codex_port
-        .turn_calls
-        .lock()
-        .expect("turn call mutex poisoned")
-        .is_empty());
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
@@ -78,10 +80,12 @@ fn stale_planning_capture_blocks_reconciliation_for_other_workspace() {
             .preview_status_label(),
         "blocked"
     );
-    assert!(conversation
-        .planning_runtime_snapshot
-        .preview_detail()
-        .is_some_and(|detail| detail.contains("stale planning snapshot")));
+    assert!(
+        conversation
+            .planning_runtime_snapshot
+            .preview_detail()
+            .is_some_and(|detail| detail.contains("stale planning snapshot"))
+    );
     assert!(conversation.runtime_notices.iter().any(|notice| {
         notice.contains(&stale_workspace) && notice.contains(&current_workspace)
     }));
@@ -102,7 +106,6 @@ fn stream_worker_forces_failure_when_service_exits_without_terminal_event() {
     conversation.thread_id = "thread-123".to_string();
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context\nQueue Summary",
-        "next task: task-1",
     ));
     codex_port
         .turn_stream_behavior
@@ -182,9 +185,11 @@ fn automation_inline_command_opens_overlay() {
     };
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Automation);
     assert!(conversation.input_buffer.is_empty());
-    assert!(conversation
-        .status_text
-        .contains("operator surface: automation controls"));
+    assert!(
+        conversation
+            .status_text
+            .contains("operator surface: automation controls")
+    );
 }
 
 #[test]
@@ -195,7 +200,6 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
     };
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context\nQueue Summary",
-        "next task: task-1",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -283,7 +287,7 @@ fn automation_preview_surfaces_queue_refresh_copy_when_queue_is_idle() {
     conversation.replace_planning_runtime_snapshot(
         PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
-            "queue idle: no executable planning task".to_string(),
+            "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
             None,
         )
         .with_queue_idle_policy(
@@ -318,7 +322,6 @@ fn automation_status_lines_include_runtime_and_warning_summary() {
     conversation.runtime_notices = vec!["planning reconciliation completed".to_string()];
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context\nQueue Summary",
-        "next task: task-1",
     ));
 
     let rendered = build_automation_status_lines(&app)
@@ -348,7 +351,8 @@ fn planner_debug_surfaces_use_operator_facing_labels() {
     app.toggle_planner_visibility();
     app.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshSucceeded;
     app.planner_worker_panel_state.last_operation_label = Some("refresh".to_string());
-    app.planner_worker_panel_state.last_queue_summary = Some("next task: task-1".to_string());
+    app.planner_worker_panel_state.last_queue_summary =
+        Some("now: task-1  |  next: none  |  proposed: none  |  blocked: none".to_string());
     app.planner_worker_panel_state.last_summary =
         Some("worker promoted the next queued task".to_string());
     app.planner_worker_panel_state.last_host_detail =
@@ -379,13 +383,13 @@ fn planner_debug_surfaces_use_operator_facing_labels() {
 }
 
 #[test]
-fn planner_debug_surfaces_reframe_legacy_ranked_queue_summary_metadata() {
+fn planner_debug_surfaces_show_canonical_queue_summary_metadata() {
     let (mut app, _) = make_test_app();
     app.toggle_planner_visibility();
     app.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshSucceeded;
     app.planner_worker_panel_state.last_operation_label = Some("refresh".to_string());
     app.planner_worker_panel_state.last_queue_summary = Some(
-        "next task: rank 1 / task-1 / Implement shell planning status / priority 10  |  1 promotable follow-up proposal available: Draft queue inspection overlay".to_string(),
+        "now: Implement shell planning status  |  next: none  |  proposed: Draft queue inspection overlay  |  blocked: none".to_string(),
     );
 
     let status = build_automation_status_lines(&app)
@@ -397,8 +401,6 @@ fn planner_debug_surfaces_reframe_legacy_ranked_queue_summary_metadata() {
     assert!(status.contains(
         "queued work: now: Implement shell planning status  |  next: none  |  proposed: Draft queue inspection overlay  |  blocked: none"
     ));
-    assert!(!status.contains("queued work: next task: rank 1 / task-1"));
-    assert!(!status.contains("queued work: now: rank 1 / task-1"));
 }
 
 #[test]
@@ -647,9 +649,10 @@ fn queue_overlay_notice_drops_legacy_planning_prefix_duplication() {
 }
 
 #[test]
-fn queue_overlay_notes_reframe_legacy_queue_summary_strings() {
+fn queue_overlay_notes_show_canonical_queue_summary_strings() {
     let (mut app, _) = make_test_app();
-    app.planner_worker_panel_state.last_queue_summary = Some("next task: task-1".to_string());
+    app.planner_worker_panel_state.last_queue_summary =
+        Some("now: task-1  |  next: none  |  proposed: none  |  blocked: none".to_string());
 
     let rendered = build_queue_overlay_view(&app)
         .note_lines
@@ -658,17 +661,19 @@ fn queue_overlay_notes_reframe_legacy_queue_summary_strings() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(
-        "queued work: now: task-1  |  next: none  |  proposed: none  |  blocked: none"
-    ));
+    assert!(
+        rendered.contains(
+            "queued work: now: task-1  |  next: none  |  proposed: none  |  blocked: none"
+        )
+    );
     assert!(!rendered.contains("queued work: next task:"));
 }
 
 #[test]
-fn queue_overlay_notes_reframe_legacy_ranked_queue_summary_metadata() {
+fn queue_overlay_notes_show_canonical_queue_summary_metadata() {
     let (mut app, _) = make_test_app();
     app.planner_worker_panel_state.last_queue_summary = Some(
-        "next task: rank 1 / task-1 / Implement shell planning status / priority 10  |  1 promotable follow-up proposal available: Draft queue inspection overlay".to_string(),
+        "now: Implement shell planning status  |  next: none  |  proposed: Draft queue inspection overlay  |  blocked: none".to_string(),
     );
 
     let rendered = build_queue_overlay_view(&app)
@@ -681,8 +686,6 @@ fn queue_overlay_notes_reframe_legacy_ranked_queue_summary_metadata() {
     assert!(rendered.contains(
         "queued work: now: Implement shell planning status  |  next: none  |  proposed: Draft queue inspection overlay  |  blocked: none"
     ));
-    assert!(!rendered.contains("queued work: next task: rank 1 / task-1"));
-    assert!(!rendered.contains("queued work: now: rank 1 / task-1"));
 }
 
 #[test]
@@ -693,8 +696,8 @@ fn queue_overlay_uses_current_state_cause_and_next_action_summary() {
     };
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
-        "queue idle: no executable planning task".to_string(),
-        Some("1 promotable follow-up proposal available: Draft queue review".to_string()),
+        "now: none  |  next: none  |  proposed: Draft queue review  |  blocked: none".to_string(),
+        Some("Draft queue review".to_string()),
         None,
     ));
 
@@ -707,7 +710,9 @@ fn queue_overlay_uses_current_state_cause_and_next_action_summary() {
 
     assert!(rendered.contains("current state: review needed"));
     assert!(rendered.contains("cause: planning has proposals but no executable next task"));
-    assert!(rendered.contains("next action: review the queue and promote the next actionable task"));
+    assert!(
+        rendered.contains("next action: review the queue and promote the next actionable task")
+    );
 }
 
 #[test]
@@ -716,10 +721,8 @@ fn queue_overlay_reframes_detail_as_now_next_proposed_and_blocked_work() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("conversation should be ready");
     };
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "Planning Context",
-        "next task: task-1",
-    ));
+    conversation
+        .replace_planning_runtime_snapshot(sample_planning_runtime_snapshot("Planning Context"));
 
     let queue_view = build_queue_overlay_view(&app);
     let now_lines = queue_view
@@ -762,8 +765,7 @@ fn queue_overlay_shows_proposal_only_state_without_now_or_next_work() {
     };
     conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
         "Planning Context",
-        "queue idle: no executable planning task",
-        "1 promotable follow-up proposal available: Draft a queue inspection overlay",
+        "Draft a queue inspection overlay",
     ));
 
     let queue_view = build_queue_overlay_view(&app);
@@ -862,8 +864,10 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
     assert!(waiting_list.contains("waiting for startup checks"));
     assert!(waiting_detail.contains("current state: waiting"));
     assert!(waiting_detail.contains("cause: startup checks have not finished yet"));
-    assert!(waiting_detail
-        .contains("next action: wait for startup checks to finish, then load recent sessions"));
+    assert!(
+        waiting_detail
+            .contains("next action: wait for startup checks to finish, then load recent sessions")
+    );
 
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", false));
     app.session_state = SessionState::Idle;
@@ -875,8 +879,10 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(blocked_idle_detail.contains("current state: blocked"));
-    assert!(blocked_idle_detail
-        .contains("cause: startup checks must succeed before recent sessions are available"));
+    assert!(
+        blocked_idle_detail
+            .contains("cause: startup checks must succeed before recent sessions are available")
+    );
     assert!(blocked_idle_detail.contains(
         "next action: open startup checks with Ctrl+d, fix them, then reload recent sessions"
     ));
@@ -931,7 +937,9 @@ fn recent_sessions_overlay_waiting_and_blocked_states_use_operator_language() {
 
     assert!(failed_list.contains("recent sessions blocked"));
     assert!(failed_detail.contains("current state: blocked"));
-    assert!(failed_detail.contains("cause: recent sessions are unavailable because loading failed"));
+    assert!(
+        failed_detail.contains("cause: recent sessions are unavailable because loading failed")
+    );
     assert!(failed_detail.contains("next action: press r to retry, or start a new draft with n"));
     assert!(failed_detail.contains("recent sessions error: request timed out"));
     assert!(keys.contains("r reloads recent sessions"));
@@ -981,9 +989,11 @@ fn selected_session_detail_uses_operator_facing_metadata_labels() {
     assert!(detail.contains("latest preview"));
     assert!(detail.contains("session file: /tmp/root/thread-1.json"));
     assert!(detail.contains("more threads are available in the next cursor"));
-    assert!(!detail_lines
-        .iter()
-        .any(|line| line.starts_with("updated: ")));
+    assert!(
+        !detail_lines
+            .iter()
+            .any(|line| line.starts_with("updated: "))
+    );
     assert!(!detail_lines.iter().any(|line| line.starts_with("source: ")));
     assert!(!detail_lines.iter().any(|line| line.starts_with("status: ")));
     assert!(!detail.contains("\npreview\n"));
@@ -1063,7 +1073,9 @@ fn loading_and_blocked_shell_views_use_canonical_operator_copy() {
 
     assert!(loading_header.contains("Conversation Shell / waiting"));
     assert!(loading_header.contains("current state: waiting"));
-    assert!(loading_header.contains("cause: thread history is still loading from codex app-server"));
+    assert!(
+        loading_header.contains("cause: thread history is still loading from codex app-server")
+    );
     assert!(loading_header.contains("next action: wait for the thread history to load"));
     assert_eq!(loading_view.input_title.to_string(), "Prompt / waiting");
     assert!(loading_transcript.contains("current state: waiting"));
@@ -1259,8 +1271,8 @@ fn inline_tail_uses_canonical_planning_summary_and_plan_badge() {
     };
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
-        "queue idle: no executable planning task".to_string(),
-        Some("1 promotable follow-up proposal available: Draft queue review".to_string()),
+        "now: none  |  next: none  |  proposed: Draft queue review  |  blocked: none".to_string(),
+        Some("Draft queue review".to_string()),
         None,
     ));
 
@@ -1290,7 +1302,6 @@ fn inline_tail_surfaces_now_next_proposed_and_blocked_queue_state() {
     };
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context\nQueue Summary",
-        "next task: task-1",
     ));
 
     let rendered = build_inline_tail_lines(&app)
@@ -1313,8 +1324,8 @@ fn planning_controls_existing_workspace_uses_canonical_state_label() {
     };
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
-        "queue idle: no executable planning task".to_string(),
-        Some("1 promotable follow-up proposal available: Draft queue review".to_string()),
+        "now: none  |  next: none  |  proposed: Draft queue review  |  blocked: none".to_string(),
+        Some("Draft queue review".to_string()),
         None,
     ));
     app.planning_init_overlay_ui_state.open_existing_workspace();
@@ -1341,7 +1352,6 @@ fn planning_controls_existing_workspace_reframes_actionable_queue_state() {
     };
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context\nQueue Summary",
-        "next task: task-1",
     ));
     app.planning_init_overlay_ui_state.open_existing_workspace();
 

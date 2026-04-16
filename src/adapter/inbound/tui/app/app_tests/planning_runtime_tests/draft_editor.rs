@@ -208,7 +208,11 @@ fn planning_manual_editor_promote_copies_active_files_and_refreshes_prompt_conte
         panic!("app should stay in ready state");
     };
     assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-    assert!(conversation.status_text.contains("planning draft: promoted"));
+    assert!(
+        conversation
+            .status_text
+            .contains("planning draft: promoted")
+    );
     assert!(conversation.status_text.contains("promoted files:"));
     assert_eq!(
         conversation
@@ -243,10 +247,8 @@ fn planning_manual_editor_promote_stays_open_when_validation_fails() {
         panic!("app should stay in ready state");
     };
     conversation.cwd = workspace_dir.clone();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
-        "planning context",
-        "queue ready",
-    ));
+    conversation
+        .replace_planning_runtime_snapshot(sample_planning_runtime_snapshot("planning context"));
 
     open_planning_manual_editor(&mut app);
     assert_eq!(

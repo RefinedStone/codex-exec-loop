@@ -98,14 +98,14 @@ pub(crate) fn compact_queue_framing_summary(summary: &str, max_detail_len: usize
         return queue_framing_summary_from_parts("none", "none", "none", "none");
     }
 
-    if let Some(details) = parse_legacy_queue_framing_details(trimmed, max_detail_len) {
+    if let Some(details) = parse_queue_framing_details(trimmed, max_detail_len) {
         return queue_framing_summary_from_details(&details);
     }
 
     compact_whitespace_detail(trimmed, max_detail_len)
 }
 
-fn parse_legacy_queue_framing_details(
+fn parse_queue_framing_details(
     summary: &str,
     max_detail_len: usize,
 ) -> Option<QueueFramingDetails> {
@@ -142,19 +142,6 @@ fn parse_legacy_queue_framing_details(
             details.blocked_detail = compact_whitespace_detail(detail, max_detail_len);
             matched = true;
             continue;
-        }
-        if let Some(detail) = trimmed.strip_prefix("next task: ") {
-            details.now_detail = compact_legacy_next_task_detail(detail, max_detail_len);
-            matched = true;
-            continue;
-        }
-        if trimmed.starts_with("queue idle:") || trimmed.contains("no executable planning task") {
-            matched = true;
-            continue;
-        }
-        if trimmed.contains("promotable") {
-            details.proposed_detail = compact_proposal_summary_detail(trimmed, max_detail_len);
-            matched = true;
         }
     }
 
@@ -507,7 +494,7 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                     if let Some(github_review_summary) = github_review_summary.as_deref() {
                         activity_line.push_str(&format!("  |  github: {github_review_summary}"));
                     }
-                        activity_line
+                    activity_line
                 }),
             ];
             lines.extend(queue_framing_lines);
@@ -590,30 +577,8 @@ fn compact_queue_task_summary(
     summary
 }
 
-fn compact_legacy_next_task_detail(summary: &str, max_detail_len: usize) -> String {
-    let trimmed = summary.trim();
-    let segments = trimmed.split(" / ").map(str::trim).collect::<Vec<_>>();
-    if segments.len() >= 4
-        && segments.first().is_some_and(|segment| segment.starts_with("rank "))
-        && segments
-            .last()
-            .is_some_and(|segment| segment.starts_with("priority "))
-    {
-        let title = segments[2..segments.len() - 1].join(" / ");
-        if !title.trim().is_empty() {
-            return compact_whitespace_detail(title.as_str(), max_detail_len);
-        }
-    }
-
-    compact_whitespace_detail(trimmed, max_detail_len)
-}
-
 fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> String {
-    let detail = summary
-        .split_once(": ")
-        .map(|(_, detail)| detail)
-        .unwrap_or(summary);
-    compact_whitespace_detail(detail, max_detail_len)
+    compact_whitespace_detail(summary, max_detail_len)
 }
 
 fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'static>> {
