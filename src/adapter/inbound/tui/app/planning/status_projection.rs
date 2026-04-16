@@ -97,9 +97,9 @@ pub(crate) fn build_resumed_session_status_text(snapshot: &PlanningRuntimeSnapsh
     {
         status_text.push_str(" / queue summary: ");
         status_text.push_str(&queue_summary);
-    } else if let Some(detail) = snapshot.preview_detail_with_limit(RESUMED_SESSION_DETAIL_LIMIT) {
+    } else if let Some(detail) = snapshot.preview_detail() {
         status_text.push_str(" / planning detail: ");
-        status_text.push_str(&detail);
+        status_text.push_str(&compact_whitespace_detail(detail, RESUMED_SESSION_DETAIL_LIMIT));
     }
 
     status_text
@@ -403,7 +403,7 @@ mod tests {
 
         let status_text = build_resumed_session_status_text(&snapshot);
 
-        assert!(status_text.contains("thread loaded / planning status: waiting"));
+        assert!(status_text.contains("thread loaded / planning status: ready"));
         assert!(status_text.contains("queue summary: now: Ship resume status"));
         assert!(status_text.contains("next: Review overlays"));
     }

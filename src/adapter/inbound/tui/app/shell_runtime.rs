@@ -482,7 +482,7 @@ mod tests {
         assert!(
             conversation
                 .status_text
-                .contains("thread loaded / planning status: waiting")
+                .contains("thread loaded / planning status: ready")
         );
         assert!(
             conversation

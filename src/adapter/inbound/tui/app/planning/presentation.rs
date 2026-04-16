@@ -1,11 +1,9 @@
 use super::super::planner_debug_preview::build_debug_preview_lines;
-use super::super::{ConversationState, ConversationViewModel, NativeTuiApp};
+use super::super::{ConversationState, NativeTuiApp};
 use super::status_projection::{
     build_planning_followup_surface_projection, compact_queue_framing_summary,
 };
-use crate::application::service::planning::{
-    PlanningRuntimePreviewRequest, PlanningRuntimeRepairAttempt, PlanningRuntimeSummaryLineRequest,
-};
+use crate::application::service::planning::PlanningRuntimePreviewRequest;
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -17,45 +15,6 @@ const AUTOMATION_PLANNING_DETAIL_LIMIT: usize = 48;
 const AUTOMATION_PLANNER_PANEL_DETAIL_LIMIT: usize = 48;
 const AUTOMATION_PLANNER_DEBUG_MAX_LINES: usize = 256;
 const PREVIEW_THREAD_ID_PLACEHOLDER: &str = "draft-thread";
-
-pub(crate) fn build_planning_summary_line(
-    app: &NativeTuiApp,
-    conversation: &ConversationViewModel,
-    max_detail_len: usize,
-    always_show: bool,
-) -> Option<String> {
-    app.planning
-        .runtime
-        .build_summary_line(PlanningRuntimeSummaryLineRequest {
-            snapshot: &conversation.planning_runtime_snapshot,
-            has_running_turn: conversation.has_running_turn(),
-            is_repairing: conversation.planning_repair_state.is_some(),
-            repair_failure_summary: conversation
-                .planning_repair_state
-                .as_ref()
-                .map(|state| state.latest_request.failure_summary.as_str()),
-            repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
-                PlanningRuntimeRepairAttempt {
-                    attempts_used: state.attempts_used,
-                    max_attempts: state.max_attempts,
-                }
-            }),
-            has_notice: conversation
-                .planning_notice_summary(max_detail_len)
-                .is_some(),
-            max_detail_len,
-            always_show,
-        })
-}
-
-pub(crate) fn build_planning_notice_line(
-    conversation: &ConversationViewModel,
-    max_detail_len: usize,
-) -> Option<String> {
-    conversation
-        .planning_notice_summary(max_detail_len)
-        .map(|summary| format!("planning notice: {summary}"))
-}
 
 pub(crate) fn build_planner_panel_lines(app: &NativeTuiApp, max_detail_len: usize) -> Vec<String> {
     if !app.planner_shows_debug_details() {

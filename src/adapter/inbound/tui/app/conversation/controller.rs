@@ -1,4 +1,4 @@
-use super::super::planning::build_resumed_session_status_text;
+use super::super::planning::status_projection::build_resumed_session_status_text;
 use super::super::{ConversationState, FollowupControlEvent, NativeTuiApp, StartupState};
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 

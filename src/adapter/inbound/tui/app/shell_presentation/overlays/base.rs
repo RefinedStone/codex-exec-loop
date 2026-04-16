@@ -1,7 +1,7 @@
 #[cfg(test)]
-use super::super::super::planning::{
-    build_planner_panel_lines, build_planning_status_surface_projection,
-};
+use super::super::super::planning::status_projection::build_planning_status_surface_projection;
+#[cfg(test)]
+use super::super::super::planning::build_planner_panel_lines;
 #[cfg(test)]
 use super::super::{
     Block, Borders, Constraint, ConversationShellFrameView, ConversationShellView, Direction,

@@ -1,9 +1,8 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use super::super::planning::{
-    build_planner_panel_lines, build_planning_notice_line, build_planning_summary_line,
-};
+use super::super::planning::build_planner_panel_lines;
+use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::{
     ConversationInputState, ConversationState, ConversationViewModel,
     INLINE_LIVE_AGENT_DETAIL_LIMIT, INLINE_LIVE_AGENT_MAX_CONTENT_LINES,
@@ -179,11 +178,14 @@ fn build_inline_tail_lines_with_context(
     github_review_recent_changes_summary: Option<String>,
 ) -> Vec<Line<'static>> {
     let plan_mode_indicator = current_plan_mode_indicator(app);
-    let planning_summary_line = context.ready_conversation().and_then(|conversation| {
-        build_planning_summary_line(app, conversation, INLINE_TAIL_PLANNING_DETAIL_LIMIT, false)
-    });
-    let planning_notice_line = context.ready_conversation().and_then(|conversation| {
-        build_planning_notice_line(conversation, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+    let planning_status_projection = context.ready_conversation().map(|conversation| {
+        build_planning_status_surface_projection(
+            app,
+            conversation,
+            INLINE_TAIL_PLANNING_DETAIL_LIMIT,
+            INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+            false,
+        )
     });
     let planner_panel_lines = build_planner_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
 
@@ -278,11 +280,14 @@ fn build_inline_tail_lines_with_context(
             {
                 lines.push(working_line);
             }
-            if let Some(planning_line) = planning_summary_line {
-                lines.push(Line::from(planning_line));
-            }
-            if let Some(planning_notice_line) = planning_notice_line {
-                lines.push(Line::from(planning_notice_line));
+            if let Some(planning_projection) = planning_status_projection.as_ref() {
+                if let Some(planning_line) = planning_projection.summary_line.as_deref() {
+                    lines.push(Line::from(planning_line.to_string()));
+                }
+                lines.extend(planning_projection.queue_framing_lines.iter().cloned());
+                if let Some(planning_notice_line) = planning_projection.notice_line.as_deref() {
+                    lines.push(Line::from(planning_notice_line.to_string()));
+                }
             }
             lines.extend(planner_panel_lines.into_iter().map(Line::from));
 
