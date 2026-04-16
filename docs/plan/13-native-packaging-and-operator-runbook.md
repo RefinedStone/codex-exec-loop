@@ -132,6 +132,18 @@ After a platform-facing change, record the validation result instead of rewritin
 ```bash
 ./scripts/capture_native_validation.sh \
   --frontend inline \
+  --check-profile terminal-baseline \
+  --terminal "iTerm2 3.5" \
+  --result pass \
+  --output-dir docs/validation
+```
+
+If the change touches Phase 1 operator-surface behavior such as status language, resume context, queue or automation explanation, or `akra` / `:` lifecycle commands, use:
+
+```bash
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile phase1-operator-surface \
   --terminal "iTerm2 3.5" \
   --result pass \
   --output-dir docs/validation

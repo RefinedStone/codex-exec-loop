@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Frontend,
 
+    [string]$CheckProfile = "terminal-baseline",
     [string]$Terminal,
     [string]$Shell,
     [string]$Term = $env:TERM,
@@ -74,12 +75,48 @@ function Get-SlugValue {
     return $slug
 }
 
-$repoRoot = git rev-parse --show-toplevel
+function Get-ValidationChecks {
+    param([string]$SelectedProfile)
+
+    switch ($SelectedProfile) {
+        "terminal-baseline" {
+            return @(
+                "- launch and exit"
+                "- frontend selection"
+                "- input editing"
+                "- overlay flow"
+                "- streaming visibility"
+                "- resize and scrollback"
+                "- failure and recovery"
+            )
+        }
+        "phase1-operator-surface" {
+            return @(
+                "- launch and exit"
+                "- frontend selection"
+                "- input editing"
+                "- overlay flow"
+                "- streaming visibility"
+                "- resize and scrollback"
+                "- failure and recovery"
+                "- status language and next action"
+                "- resumed session context"
+                "- queue and automation explanation"
+                "- lifecycle command parity"
+            )
+        }
+        default {
+            throw "Unsupported -CheckProfile '$SelectedProfile'."
+        }
+    }
+}
+
 if ($OutputPath -and $OutputDir) {
     throw "-OutputPath and -OutputDir cannot be used together."
 }
 
 if (-not $Commit) {
+    $repoRoot = git rev-parse --show-toplevel
     $Commit = git -C $repoRoot rev-parse HEAD
 }
 
@@ -102,6 +139,8 @@ if ($OutputDir) {
     $OutputPath = Join-Path $OutputDir "$fileName.txt"
 }
 
+$checks = Get-ValidationChecks -SelectedProfile $CheckProfile
+
 $report = @(
     "date: $Date"
     "commit: $Commit"
@@ -110,14 +149,9 @@ $report = @(
     "shell: $detectedShell"
     "frontend: $Frontend"
     "term: $Term"
+    "check_profile: $CheckProfile"
     "checks:"
-    "- launch and exit"
-    "- frontend selection"
-    "- input editing"
-    "- overlay flow"
-    "- streaming visibility"
-    "- resize and scrollback"
-    "- failure and recovery"
+    $checks
     "result: $Result"
     "notes: $Notes"
 ) -join [Environment]::NewLine

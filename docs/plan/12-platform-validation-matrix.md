@@ -36,6 +36,7 @@ Record a validation row:
 ```bash
 ./scripts/capture_native_validation.sh \
   --frontend inline \
+  --check-profile terminal-baseline \
   --terminal "iTerm2 3.5" \
   --result pass \
   --output-dir docs/validation
@@ -58,7 +59,11 @@ Summarize recorded coverage:
 | Windows | Git Bash or equivalent | bash | inline | optional |
 | Windows | JetBrains IDE terminal | WSL bash | inline | optional |
 
-## Checklist
+## Check Profiles
+
+### `terminal-baseline`
+
+Use this profile for terminal-behavior changes such as raw mode, cursor restore, resize handling, prompt editing, or streaming behavior.
 
 Run these checks once per required row:
 
@@ -87,6 +92,45 @@ Run these checks once per required row:
    - terminate the app during a live session if the change touched restore behavior
    - confirm the terminal returns to a usable state
 
+### `phase1-operator-surface`
+
+Use this profile when a change touches:
+
+- compact status wording or next-action copy
+- queue, automation, planning, or directions operator surfaces
+- session resume context
+- external `akra doctor`, `akra init`, `akra reset`
+- in-shell `:doctor`, `:init`, `:reset`
+
+Record these rows with:
+
+```bash
+./scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile phase1-operator-surface \
+  --terminal "iTerm2 3.5" \
+  --result pass \
+  --output-dir docs/validation
+```
+
+Run the full `terminal-baseline` checklist plus these additional checks:
+
+8. Status language and next action
+   - confirm the compact shell status stays in operator vocabulary such as `ready`, `waiting`, `paused`, `blocked`, `repairing`, or `review needed`
+   - confirm the visible status text names the next action when the shell is paused or blocked
+   - confirm routine copy avoids raw internal ids or implementation-only terms
+9. Resumed session context
+   - load an existing session in a workspace with accepted planning
+   - confirm the shell immediately surfaces planning status and queue summary after the thread loads
+10. Queue and automation explanation
+   - open the queue and automation surfaces
+   - confirm they explain current state, cause, and next action in operator language
+   - confirm executable work, proposals, and blocked work read like work framing rather than file dumps
+11. Lifecycle command parity
+   - exercise the relevant external command path with `akra doctor`, `akra init`, and the applicable `akra reset <target>`
+   - exercise the matching in-shell path with `:doctor`, `:init`, and the matching `:reset <target>`
+   - confirm both command surfaces report the same lifecycle state and safety expectation
+
 ## Record Format
 
 Each completed row should capture:
@@ -98,6 +142,7 @@ Each completed row should capture:
 - shell
 - frontend
 - `TERM` when available
+- check profile
 - result and notes
 
 Committed validation rows live under [`../validation/`](../validation/).
