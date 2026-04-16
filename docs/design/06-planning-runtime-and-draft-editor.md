@@ -30,6 +30,7 @@ This file records the active planning contract.
 - `queue.snapshot.json` is derived state only.
 - Proposed tasks do not enter the executable queue until promoted.
 - Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
+- `task-ledger.json` may use `progress_note` to record meaningful progress when the same task continues across multiple turns.
 
 ## Reconciliation And Worker Rules
 
@@ -37,6 +38,7 @@ This file records the active planning contract.
 - Invalid `task-ledger.json` writes are rolled back, archived, and may trigger a bounded repair retry.
 - Queue refresh and repair work run through the planning worker boundary.
 - Builtin `next-task` uses the accepted queue head only.
+- Builtin `next-task` warns once when the queue head repeats without any meaningful task update, then pauses on the next unchanged repeat.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.
 
 ## Code Entry

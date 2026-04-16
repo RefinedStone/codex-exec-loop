@@ -88,6 +88,7 @@ fn ready_conversation() -> ConversationViewModel {
         approval_review: None,
         last_auto_followup_activity: None,
         last_planning_task_handoff: None,
+        repeated_planning_queue_head_count: 0,
         status_text: "thread loaded".to_string(),
     }
 }

@@ -49,6 +49,7 @@ pub(super) struct ConversationPostTurnEvaluation {
     pub planning_runtime_snapshot: PlanningRuntimeSnapshot,
     pub planning_repair_state: Option<PlanningRepairState>,
     pub runtime_notices: Vec<String>,
+    pub repeated_planning_queue_head_count: usize,
     pub action: ConversationPostTurnAction,
 }
 
@@ -216,6 +217,9 @@ pub(super) fn reduce_conversation_runtime(
             state.replace_planning_runtime_snapshot(evaluation.planning_runtime_snapshot);
             state.planning_repair_state = evaluation.planning_repair_state;
             state.extend_runtime_notices(evaluation.runtime_notices);
+            state.set_repeated_planning_queue_head_count(
+                evaluation.repeated_planning_queue_head_count,
+            );
             match evaluation.action {
                 ConversationPostTurnAction::QueueAutoPrompt(queued_prompt) => {
                     let QueuedAutoPrompt {
@@ -1044,6 +1048,7 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
+                    repeated_planning_queue_head_count: 0,
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "continue".to_string(),
@@ -1102,6 +1107,7 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
+                    repeated_planning_queue_head_count: 0,
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "continue".to_string(),
@@ -1154,6 +1160,7 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["planning reconciliation completed".to_string()],
+                    repeated_planning_queue_head_count: 0,
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "continue".to_string(),
@@ -1249,6 +1256,7 @@ mod tests {
             approval_review: None,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
+            repeated_planning_queue_head_count: 0,
             status_text: "thread loaded".to_string(),
         }
     }

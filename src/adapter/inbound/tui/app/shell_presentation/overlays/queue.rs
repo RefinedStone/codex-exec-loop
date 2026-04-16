@@ -220,6 +220,12 @@ fn build_queue_task_lines(
             task.combined_priority,
             compact_whitespace_detail(task.task_title.trim(), QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
         )));
+        if let Some(progress_note) = task.progress_note() {
+            lines.push(Line::from(format!(
+                "   progress: {}",
+                compact_whitespace_detail(progress_note, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+            )));
+        }
     }
 
     let hidden_count = tasks.len().saturating_sub(max_visible_tasks);

@@ -30,6 +30,7 @@ use super::super::{
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
     "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
+const REPEATED_QUEUE_HEAD_PAUSE_THRESHOLD: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
@@ -47,6 +48,8 @@ struct HiddenPlanningRepairOutcome {
 #[derive(Debug, Clone)]
 struct BuiltinNextTaskRefreshOutcome {
     runtime_snapshot: PlanningRuntimeSnapshot,
+    runtime_notices: Vec<String>,
+    repeated_queue_head_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -84,13 +87,14 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
     ) -> PostTurnEvaluationExecution {
         let reconciliation_result = self.reconcile_planning_after_turn(request);
-        let runtime_notices = reconciliation_result.notices.clone();
+        let mut runtime_notices = reconciliation_result.notices.clone();
         let mut planning_runtime_snapshot = self.planning_runtime_snapshot_after_reconciliation(
             conversation,
             request,
             &reconciliation_result,
         );
         let automation_enabled = conversation.auto_follow_state.enabled;
+        let mut repeated_queue_head_count = 0;
 
         if automation_enabled
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
@@ -115,6 +119,8 @@ impl PostTurnEvaluationExecutor {
                 planning_runtime_snapshot.clone(),
             );
             planning_runtime_snapshot = refresh_outcome.runtime_snapshot;
+            runtime_notices.extend(refresh_outcome.runtime_notices);
+            repeated_queue_head_count = refresh_outcome.repeated_queue_head_count;
         }
 
         let action = self.auto_followup_action_from_snapshot(
@@ -130,6 +136,7 @@ impl PostTurnEvaluationExecutor {
                 planning_runtime_snapshot,
                 planning_repair_state: None,
                 runtime_notices,
+                repeated_planning_queue_head_count: repeated_queue_head_count,
                 action,
             },
             planner_worker_panel_state: self.planner_worker_panel_state,
@@ -307,6 +314,8 @@ impl PostTurnEvaluationExecutor {
         if current_snapshot.workspace_present() && !current_snapshot.plan_enabled() {
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
+                runtime_notices: Vec::new(),
+                repeated_queue_head_count: 0,
             };
         }
 
@@ -317,6 +326,8 @@ impl PostTurnEvaluationExecutor {
         ) {
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
+                runtime_notices: Vec::new(),
+                repeated_queue_head_count: 0,
             };
         }
 
@@ -327,6 +338,8 @@ impl PostTurnEvaluationExecutor {
         else {
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
+                runtime_notices: Vec::new(),
+                repeated_queue_head_count: 0,
             };
         };
 
@@ -342,6 +355,8 @@ impl PostTurnEvaluationExecutor {
                     Err(_) => {
                         return BuiltinNextTaskRefreshOutcome {
                             runtime_snapshot: current_snapshot,
+                            runtime_notices: Vec::new(),
+                            repeated_queue_head_count: 0,
                         };
                     }
                 };
@@ -349,12 +364,16 @@ impl PostTurnEvaluationExecutor {
                     QueueIdlePolicy::Stop => {
                         return BuiltinNextTaskRefreshOutcome {
                             runtime_snapshot: current_snapshot,
+                            runtime_notices: Vec::new(),
+                            repeated_queue_head_count: 0,
                         };
                     }
                     QueueIdlePolicy::ReviewAndEnqueue => {
                         let Some(prompt_markdown) = review_context.prompt_markdown else {
                             return BuiltinNextTaskRefreshOutcome {
                                 runtime_snapshot: current_snapshot,
+                                runtime_notices: Vec::new(),
+                                repeated_queue_head_count: 0,
                             };
                         };
                         Some(prompt_markdown)
@@ -365,6 +384,8 @@ impl PostTurnEvaluationExecutor {
             | PlanningRuntimeWorkspaceStatus::Invalid => {
                 return BuiltinNextTaskRefreshOutcome {
                     runtime_snapshot: current_snapshot,
+                    runtime_notices: Vec::new(),
+                    repeated_queue_head_count: 0,
                 };
             }
         };
@@ -431,6 +452,8 @@ impl PostTurnEvaluationExecutor {
                 );
                 return BuiltinNextTaskRefreshOutcome {
                     runtime_snapshot: invalid_snapshot,
+                    runtime_notices: Vec::new(),
+                    repeated_queue_head_count: 0,
                 };
             }
         };
@@ -485,6 +508,8 @@ impl PostTurnEvaluationExecutor {
                     );
                     return BuiltinNextTaskRefreshOutcome {
                         runtime_snapshot: invalid_snapshot,
+                        runtime_notices: Vec::new(),
+                        repeated_queue_head_count: 0,
                     };
                 }
             }
@@ -503,15 +528,32 @@ impl PostTurnEvaluationExecutor {
             );
         }
 
+        let mut runtime_notices = Vec::new();
+        let mut repeated_queue_head_count = 0;
         if let Some(detail) =
             repeated_queue_head_detail(conversation.last_planning_task_handoff(), &runtime_snapshot)
         {
-            self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
-            self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
-            runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail.clone());
+            repeated_queue_head_count = conversation.repeated_planning_queue_head_count + 1;
+            if repeated_queue_head_count >= REPEATED_QUEUE_HEAD_PAUSE_THRESHOLD {
+                self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
+                self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
+                runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail.clone());
+            } else {
+                let notice = format!(
+                    "planning: planner kept the previously handed-off task unchanged as the queue head; allowing one more auto turn before pausing ({}/{})",
+                    repeated_queue_head_count, REPEATED_QUEUE_HEAD_PAUSE_THRESHOLD
+                );
+                self.planner_worker_panel_state.last_notice_detail = Some(notice.clone());
+                self.planner_worker_panel_state.last_host_detail = Some(detail);
+                runtime_notices.push(notice);
+            }
         }
 
-        BuiltinNextTaskRefreshOutcome { runtime_snapshot }
+        BuiltinNextTaskRefreshOutcome {
+            runtime_snapshot,
+            runtime_notices,
+            repeated_queue_head_count,
+        }
     }
 
     fn auto_followup_action_from_snapshot(
@@ -731,6 +773,7 @@ fn repeated_queue_head_detail(
 
     let unchanged = queue_head.task_title.trim() == previous_handoff.task_title.trim()
         && queue_head.direction_id.trim() == previous_handoff.direction_id.trim()
+        && queue_head.progress_note.trim() == previous_handoff.progress_note.trim()
         && queue_head.combined_priority == previous_handoff.combined_priority
         && queue_head.updated_at.trim() == previous_handoff.updated_at.trim()
         && queue_head.status.label() == previous_handoff.status_label;
@@ -739,7 +782,7 @@ fn repeated_queue_head_detail(
     }
 
     Some(format!(
-        "planner refresh kept the previously handed-off task unchanged as the queue head: {}",
+        "planner refresh kept the previously handed-off task unchanged as the queue head without updating status, priority, progress_note, or updated_at: {}",
         previous_handoff.task_title
     ))
 }

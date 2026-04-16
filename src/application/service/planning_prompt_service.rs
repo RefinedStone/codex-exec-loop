@@ -476,6 +476,9 @@ fn build_prompt_fragment(
                 task.status.label(),
                 task.combined_priority,
             ));
+            if let Some(progress_note) = task.progress_note() {
+                lines.push(format!("  progress_note: {progress_note}"));
+            }
             lines.push(format!("  rank_reasons: {}", task.rank_reasons.join(" | ")));
         }
         None => lines.push("- next_task: none".to_string()),
@@ -500,6 +503,9 @@ fn build_prompt_fragment(
                 task.status.label(),
                 task.combined_priority,
             ));
+            if let Some(progress_note) = task.progress_note() {
+                lines.push(format!("    progress_note: {progress_note}"));
+            }
             lines.push(format!(
                 "    rank_reasons: {}",
                 task.rank_reasons.join(" | ")
@@ -524,6 +530,9 @@ fn build_prompt_fragment(
                 proposed_task.status.label(),
                 proposed_task.combined_priority,
             ));
+            if let Some(progress_note) = proposed_task.progress_note() {
+                lines.push(format!("    progress_note: {progress_note}"));
+            }
             lines.push(format!(
                 "    rank_reasons: {}",
                 proposed_task.rank_reasons.join(" | ")
@@ -566,6 +575,10 @@ fn build_prompt_fragment(
     ));
     lines.push(
         "- New tasks must attach to an existing `direction_id` and include `direction_relation_note`."
+            .to_string(),
+    );
+    lines.push(
+        "- When an existing task continues after meaningful progress, update `progress_note` with what changed and what remains."
             .to_string(),
     );
     lines.push(

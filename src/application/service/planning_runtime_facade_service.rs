@@ -78,6 +78,7 @@ pub struct PlanningTaskHandoff {
     pub task_id: String,
     pub task_title: String,
     pub direction_id: String,
+    pub progress_note: String,
     pub combined_priority: i32,
     pub updated_at: String,
     pub status_label: String,
@@ -143,6 +144,7 @@ impl PlanningRuntimeFacadeService {
                 task_id: queue_head.task_id.trim().to_string(),
                 task_title: queue_head.task_title.trim().to_string(),
                 direction_id: queue_head.direction_id.trim().to_string(),
+                progress_note: queue_head.progress_note.trim().to_string(),
                 combined_priority: queue_head.combined_priority,
                 updated_at: queue_head.updated_at.trim().to_string(),
                 status_label: queue_head.status.label().to_string(),
@@ -361,8 +363,12 @@ fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> St
         .find(|reason| !reason.trim().is_empty())
         .map(String::as_str)
         .unwrap_or("this is the highest-priority actionable task");
+    let progress_note_line = queue_head
+        .progress_note()
+        .map(|note| format!("Current progress: {note}\n"))
+        .unwrap_or_default();
     format!(
-        "Continue the next highest-priority task.\n\nTask: {}\nDirection: {}\nPriority: rank {} / combined priority {}\nWhy now: {}\n\nWork from the current repository state and focus on this task only. Treat `.codex-exec-loop/planning` and other planning control files as internal runtime state. Do not inspect, mention, or update them unless the user explicitly asked for planning maintenance or this task strictly requires it. Do not describe planning queue refresh logic in commentary or in the final answer. When you finish, summarize what you completed and what remains.",
+        "Continue the next highest-priority task.\n\nTask: {}\nDirection: {}\nPriority: rank {} / combined priority {}\nWhy now: {}\n{progress_note_line}\nWork from the current repository state and focus on this task only. Treat `.codex-exec-loop/planning` and other planning control files as internal runtime state. Do not inspect, mention, or update them unless the user explicitly asked for planning maintenance or this task strictly requires it. Do not describe planning queue refresh logic in commentary or in the final answer. When you finish, summarize what you completed and what remains.",
         queue_head.task_title.trim(),
         queue_head.direction_title.trim(),
         queue_head.rank,
@@ -538,6 +544,8 @@ mod tests {
                 direction_id: "general-workstream".to_string(),
                 direction_title: "General workstream".to_string(),
                 task_title: "Implement planning runtime facade".to_string(),
+                progress_note: "shell projection 정리는 끝났고 runtime facade wiring 이 남아 있음"
+                    .to_string(),
                 status: crate::domain::planning::TaskStatus::Ready,
                 combined_priority: 10,
                 updated_at: "2026-04-10T00:00:00Z".to_string(),
@@ -583,6 +591,9 @@ mod tests {
         );
         assert!(prompt.prompt.contains("Implement planning runtime facade"));
         assert!(prompt.prompt.contains("General workstream"));
+        assert!(prompt.prompt.contains(
+            "Current progress: shell projection 정리는 끝났고 runtime facade wiring 이 남아 있음"
+        ));
         assert_eq!(
             prompt.transcript_text,
             "다음 queued task 1개를 이어서 진행합니다."
@@ -593,6 +604,13 @@ mod tests {
                 .as_ref()
                 .map(|task| task.task_id.as_str()),
             Some("task-1")
+        );
+        assert_eq!(
+            prompt
+                .handoff_task
+                .as_ref()
+                .map(|task| task.progress_note.as_str()),
+            Some("shell projection 정리는 끝났고 runtime facade wiring 이 남아 있음")
         );
     }
 

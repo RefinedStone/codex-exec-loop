@@ -164,7 +164,7 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
 }
 
 #[test]
-fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances() {
+fn repeated_builtin_next_task_refresh_warns_once_before_pausing() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repeated-next-task");
@@ -230,10 +230,166 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
         task_id: "task-repeat-1".to_string(),
         task_title: "Rust 입문 8주 커리큘럼 구체화".to_string(),
         direction_id: "general-workstream".to_string(),
+        progress_note: String::new(),
         combined_priority: 80,
         updated_at: "2026-04-13T00:00:00Z".to_string(),
         status_label: "ready".to_string(),
     });
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.replace_planning_runtime_snapshot(
+        app.planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(&workspace_dir),
+    );
+    app.conversation_state = ConversationState::ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-main".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ));
+
+    let mut turn_calls = Vec::new();
+    for _ in 0..20 {
+        turn_calls = codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .iter()
+            .map(|(_, prompt)| prompt.clone())
+            .collect::<Vec<_>>();
+        if !turn_calls.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert_eq!(turn_calls.len(), 1);
+    assert_eq!(
+        conversation.status_text,
+        "auto follow-up submitted / turn 1/3 / template: builtin next-task"
+    );
+    assert_eq!(conversation.repeated_planning_queue_head_count, 1);
+    assert!(
+        conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| { notice.contains("allowing one more auto turn before pausing") })
+    );
+    assert!(
+        conversation
+            .planning_runtime_snapshot
+            .auto_followup_pause_reason()
+            .is_none()
+    );
+    assert!(conversation.messages.iter().any(|message| {
+        message
+            .text
+            .contains("다음 queued task 1개를 이어서 진행합니다.")
+    }));
+    assert!(
+        app.planner_worker_panel_state
+            .last_notice_detail
+            .as_deref()
+            .is_some_and(|detail: &str| detail.contains("allowing one more auto turn"))
+    );
+    assert_eq!(
+        app.planner_worker_panel_state
+            .last_operation_label
+            .as_deref(),
+        Some("refresh")
+    );
+    assert_eq!(
+        app.planner_worker_panel_state.last_response.as_deref(),
+        Some("planner refreshed the queue")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn second_repeated_builtin_next_task_refresh_pauses_after_warning_budget_is_exhausted() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-repeated-next-task-pause");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::write(
+        planning_dir.join("task-ledger.json"),
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-repeat-1",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Current next task.",
+      "title": "Rust 입문 8주 커리큘럼 구체화",
+      "description": "Expand the roadmap into a week-by-week curriculum.",
+      "status": "ready",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": "turn-prev",
+      "updated_at": "2026-04-13T00:00:00Z"
+    }
+  ]
+}"#,
+    )
+    .expect("task ledger should write");
+
+    codex_port
+        .new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned")
+        .events = vec![
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id: "planner-thread-1".to_string(),
+            title: "Planner".to_string(),
+            cwd: workspace_dir.clone(),
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id: "planner-item-1".to_string(),
+            phase: None,
+            text: "planner refreshed the queue".to_string(),
+        },
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "planner-turn-1".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ];
+
+    let mut conversation = ready_conversation();
+    conversation.auto_follow_state.template_state.selected_index = 0;
+    conversation.cwd = workspace_dir.clone();
+    conversation.draft_workspace_directory = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-main".to_string());
+    conversation.last_planning_task_handoff = Some(PlanningTaskHandoff {
+        task_id: "task-repeat-1".to_string(),
+        task_title: "Rust 입문 8주 커리큘럼 구체화".to_string(),
+        direction_id: "general-workstream".to_string(),
+        progress_note: String::new(),
+        combined_priority: 80,
+        updated_at: "2026-04-13T00:00:00Z".to_string(),
+        status_label: "ready".to_string(),
+    });
+    conversation.repeated_planning_queue_head_count = 1;
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -267,6 +423,7 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
             .expect("turn call mutex poisoned")
             .is_empty()
     );
+    assert_eq!(conversation.repeated_planning_queue_head_count, 2);
     assert_eq!(
         conversation.status_text,
         "turn completed / auto follow-up paused: planning queue repeated the previous task"
@@ -281,30 +438,14 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
         app.planner_worker_panel_state
             .last_host_detail
             .as_deref()
-            .is_some_and(|detail: &str| detail.contains("previously handed-off task"))
-    );
-    assert!(
-        app.planner_worker_panel_state
-            .last_prompt
-            .as_deref()
-            .is_some_and(|prompt: &str| prompt.contains("planning worker refresh 입니다."))
-    );
-    assert_eq!(
-        app.planner_worker_panel_state
-            .last_operation_label
-            .as_deref(),
-        Some("refresh")
-    );
-    assert_eq!(
-        app.planner_worker_panel_state.last_response.as_deref(),
-        Some("planner refreshed the queue")
+            .is_some_and(|detail: &str| detail.contains("progress_note"))
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_followup() {
+fn refreshed_queue_head_with_same_task_id_but_new_progress_note_still_submits_auto_followup() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repeated-next-task-updated");
@@ -372,6 +513,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
       "id": "task-repeat-1",
       "direction_id": "general-workstream",
       "direction_relation_note": "Current next task was updated after the latest reply.",
+      "progress_note": "주차별 목표는 유지하고 실습 구성을 다음 단계로 이어감.",
       "title": "Rust 입문 8주 커리큘럼 구체화",
       "description": "Expand the roadmap into a week-by-week curriculum.",
       "status": "ready",
@@ -383,7 +525,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": "turn-main",
-      "updated_at": "2026-04-14T00:00:00Z"
+      "updated_at": "2026-04-13T00:00:00Z"
     }
   ]
 }"#
@@ -400,6 +542,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
         task_id: "task-repeat-1".to_string(),
         task_title: "Rust 입문 8주 커리큘럼 구체화".to_string(),
         direction_id: "general-workstream".to_string(),
+        progress_note: String::new(),
         combined_priority: 80,
         updated_at: "2026-04-13T00:00:00Z".to_string(),
         status_label: "ready".to_string(),
@@ -454,6 +597,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
             .auto_followup_pause_reason()
             .is_none()
     );
+    assert_eq!(conversation.repeated_planning_queue_head_count, 0);
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

@@ -475,6 +475,7 @@ mod tests {
             direction_id: "general-workstream".to_string(),
             direction_title: "General workstream".to_string(),
             task_title: "Implement queue-aware policy".to_string(),
+            progress_note: String::new(),
             status: TaskStatus::Ready,
             combined_priority: 10,
             updated_at: "2026-04-10T00:00:00Z".to_string(),

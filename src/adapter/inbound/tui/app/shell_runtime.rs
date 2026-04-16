@@ -508,6 +508,7 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["stale notice".to_string()],
+                    repeated_planning_queue_head_count: 0,
                     action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollowup {
                         reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::Disabled,
                     },

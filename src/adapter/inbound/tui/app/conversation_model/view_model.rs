@@ -99,6 +99,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
+    pub(crate) repeated_planning_queue_head_count: usize,
     pub(crate) status_text: String,
 }
 
@@ -138,6 +139,7 @@ impl ConversationViewModel {
             approval_review: None,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
+            repeated_planning_queue_head_count: 0,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -186,6 +188,7 @@ impl ConversationViewModel {
             approval_review: None,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
+            repeated_planning_queue_head_count: 0,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -721,6 +724,7 @@ impl ConversationViewModel {
 
     pub(crate) fn clear_last_planning_task_handoff(&mut self) {
         self.last_planning_task_handoff = None;
+        self.repeated_planning_queue_head_count = 0;
     }
 
     pub(crate) fn record_auto_followup_submission(
@@ -737,6 +741,9 @@ impl ConversationViewModel {
             self.auto_follow_state.max_auto_turns_label()
         );
         self.last_planning_task_handoff = handoff_task.cloned();
+        if handoff_task.is_none() {
+            self.repeated_planning_queue_head_count = 0;
+        }
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("submitted auto turn {progress}"),
             detail: format!(
@@ -778,6 +785,10 @@ impl ConversationViewModel {
 
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()
+    }
+
+    pub(crate) fn set_repeated_planning_queue_head_count(&mut self, count: usize) {
+        self.repeated_planning_queue_head_count = count;
     }
 
     pub(crate) fn accepts_post_turn_evaluation(
