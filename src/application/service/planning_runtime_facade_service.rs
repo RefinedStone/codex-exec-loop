@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn build_summary_line_compacts_queue_and_failure_segments() {
+    fn build_summary_line_uses_current_state_cause_and_next_action() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot = ready_snapshot();
 
@@ -655,14 +655,14 @@ mod tests {
         });
 
         let summary_line = summary_line.expect("summary line should be projected");
-        assert!(summary_line.contains("planning: repairing"));
-        assert!(summary_line.contains("repair: 1/2"));
-        assert!(summary_line.contains("failure: task-ledger.json is m..."));
-        assert!(summary_line.contains("queue: next task: rank 1 / t..."));
+        assert!(summary_line.contains("current state: repairing"));
+        assert!(summary_line.contains("cause: planning needs rep"));
+        assert!(summary_line.contains("next action: wait for repair"));
+        assert!(summary_line.contains("repair attempt: 1/2"));
     }
 
     #[test]
-    fn build_summary_line_includes_proposals_when_queue_is_idle() {
+    fn build_summary_line_projects_review_needed_when_queue_has_only_proposals() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
             crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
@@ -687,8 +687,9 @@ mod tests {
         });
 
         let summary_line = summary_line.expect("summary line should be projected");
-        assert!(summary_line.contains("queue: queue idle:"));
-        assert!(summary_line.contains("proposals: 2 promotable"));
+        assert!(summary_line.contains("current state: review needed"));
+        assert!(summary_line.contains("cause: planning has proposals but no"));
+        assert!(summary_line.contains("next action: review the queue and promote"));
     }
 
     #[test]

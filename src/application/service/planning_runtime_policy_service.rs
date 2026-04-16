@@ -255,12 +255,13 @@ impl PlanningRuntimePolicyService {
         &self,
         request: PlanningRuntimeSummaryLineRequest<'_>,
     ) -> Option<String> {
-        let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
+        let summary_request = PlanningRuntimeSummaryRequest {
             snapshot: request.snapshot,
             has_running_turn: request.has_running_turn,
             is_repairing: request.is_repairing,
             repair_failure_summary: request.repair_failure_summary,
-        });
+        };
+        let summary = self.build_summary_view(summary_request);
         if !request.always_show
             && summary.workspace_state == PlanningWorkspaceState::Uninitialized
             && !request.has_notice
@@ -268,66 +269,23 @@ impl PlanningRuntimePolicyService {
             return None;
         }
 
-        let mut segments = vec![format!("planning: {}", summary.status_label)];
+        let operator_guidance = build_operator_guidance(summary_request);
+        let mut segments = vec![
+            format!("current state: {}", operator_guidance.current_state),
+            format!(
+                "cause: {}",
+                compact_projection_detail(&operator_guidance.cause, request.max_detail_len)
+            ),
+            format!(
+                "next action: {}",
+                compact_projection_detail(&operator_guidance.next_action, request.max_detail_len)
+            ),
+        ];
         if let Some(repair_attempt) = request.repair_attempt {
             segments.push(format!(
-                "repair: {}/{}",
+                "repair attempt: {}/{}",
                 repair_attempt.attempts_used, repair_attempt.max_attempts
             ));
-        }
-
-        match summary.workspace_state {
-            PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
-                if let Some(queue_summary) = summary.queue_summary.as_deref() {
-                    segments.push(format!(
-                        "queue: {}",
-                        compact_queue_summary(
-                            request.snapshot,
-                            queue_summary,
-                            request.max_detail_len
-                        )
-                    ));
-                }
-                if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
-                    segments.push(format!(
-                        "proposals: {}",
-                        compact_projection_detail(proposal_summary, request.max_detail_len)
-                    ));
-                }
-            }
-            PlanningWorkspaceState::Repairing => {
-                if let Some(failure_summary) = summary.failure_summary.as_deref() {
-                    segments.push(format!(
-                        "failure: {}",
-                        compact_projection_detail(failure_summary, request.max_detail_len)
-                    ));
-                }
-                if let Some(queue_summary) = summary.queue_summary.as_deref() {
-                    segments.push(format!(
-                        "queue: {}",
-                        compact_queue_summary(
-                            request.snapshot,
-                            queue_summary,
-                            request.max_detail_len
-                        )
-                    ));
-                }
-                if let Some(proposal_summary) = summary.proposal_summary.as_deref() {
-                    segments.push(format!(
-                        "proposals: {}",
-                        compact_projection_detail(proposal_summary, request.max_detail_len)
-                    ));
-                }
-            }
-            PlanningWorkspaceState::BlockedInvalid => {
-                if let Some(failure_summary) = summary.failure_summary.as_deref() {
-                    segments.push(format!(
-                        "failure: {}",
-                        compact_projection_detail(failure_summary, request.max_detail_len)
-                    ));
-                }
-            }
-            PlanningWorkspaceState::Uninitialized | PlanningWorkspaceState::Authoring => {}
         }
 
         Some(segments.join("  |  "))
@@ -887,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_line_compacts_repair_queue_and_proposal_details() {
+    fn summary_line_uses_current_state_cause_and_next_action() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
@@ -916,11 +874,10 @@ mod tests {
         });
 
         let summary_line = summary_line.expect("summary line should be projected");
-        assert!(summary_line.contains("planning: repairing"));
-        assert!(summary_line.contains("repair: 1/2"));
-        assert!(summary_line.contains("failure: task-ledger.json is m..."));
-        assert!(summary_line.contains("queue: queue idle:"));
-        assert!(summary_line.contains("proposals: 2 promotable"));
+        assert!(summary_line.contains("current state: repairing"));
+        assert!(summary_line.contains("cause: planning needs rep"));
+        assert!(summary_line.contains("next action: wait for repair"));
+        assert!(summary_line.contains("repair attempt: 1/2"));
     }
 
     #[test]

@@ -12,9 +12,10 @@ use super::{
     ConversationState, KeyCode, KeyEvent, KeyModifiers, PlanningExecutionSnapshot,
     PlanningRuntimeSnapshot, ShellActionAvailability, ShellOverlay, StartupState,
     TASK_LEDGER_FILE_PATH, build_automation_overlay_view, build_automation_preview_lines,
-    build_automation_status_lines, build_queue_overlay_view, build_ready_input_lines,
-    create_temp_workspace, make_test_app, ready_conversation, ready_turn_planning_capture,
-    sample_planning_runtime_snapshot, sample_startup_diagnostics,
+    build_automation_status_lines, build_inline_tail_lines, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_ready_input_lines, create_temp_workspace, make_test_app,
+    ready_conversation, ready_turn_planning_capture, sample_planning_runtime_snapshot,
+    sample_startup_diagnostics,
 };
 
 #[test]
@@ -339,6 +340,57 @@ fn queue_overlay_uses_current_state_cause_and_next_action_summary() {
     assert!(
         rendered.contains("next action: review the queue and promote the next actionable task")
     );
+}
+
+#[test]
+fn inline_tail_uses_canonical_planning_summary_and_plan_badge() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.conversation_state = ConversationState::ready(ready_conversation());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
+        "Planning Context".to_string(),
+        "queue idle: no executable planning task".to_string(),
+        Some("1 promotable follow-up proposal available: Draft queue review".to_string()),
+        None,
+    ));
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Plan on / review needed"));
+    assert!(rendered.contains("current state: review needed"));
+    assert!(rendered.contains("cause: planning has proposals"));
+    assert!(rendered.contains("next action: review the queue"));
+}
+
+#[test]
+fn planning_controls_existing_workspace_uses_canonical_state_label() {
+    let (mut app, _) = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::ready_with_details(
+        "Planning Context".to_string(),
+        "queue idle: no executable planning task".to_string(),
+        Some("1 promotable follow-up proposal available: Draft queue review".to_string()),
+        None,
+    ));
+    app.planning_init_overlay_ui_state.open_existing_workspace();
+
+    let rendered = build_planning_init_overlay_view(&app)
+        .option_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("state: Plan on / review needed"));
 }
 
 #[test]

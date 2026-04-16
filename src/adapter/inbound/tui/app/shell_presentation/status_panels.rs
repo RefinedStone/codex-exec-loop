@@ -17,7 +17,7 @@ use super::{
 };
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningRuntimeSnapshot,
 };
 
 #[cfg(test)]
@@ -402,15 +402,7 @@ fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Plan
 }
 
 pub(super) fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
-    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
-        "invalid"
-    } else if snapshot.auto_followup_pause_reason().is_some() {
-        "paused"
-    } else if snapshot.has_actionable_queue_head() {
-        "ready"
-    } else {
-        "idle"
-    }
+    snapshot.preview_status_label()
 }
 
 fn plan_mode_prefixed_spans(
