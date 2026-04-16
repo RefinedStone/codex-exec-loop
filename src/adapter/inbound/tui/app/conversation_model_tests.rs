@@ -55,7 +55,6 @@ fn ready_conversation() -> ConversationViewModel {
         approval_review: None,
         last_auto_followup_activity: None,
         last_planning_task_handoff: None,
-        repeated_planning_queue_head_count: 0,
         status_text: "thread loaded".to_string(),
     }
 }
@@ -170,7 +169,11 @@ fn queue_handoff_prompt_renders_for_auto_follow() {
         panic!("auto follow-up prompt should render");
     };
 
-    assert!(prompt.prompt.contains("Continue the next highest-priority task."));
+    assert!(
+        prompt
+            .prompt
+            .contains("Continue the next highest-priority task.")
+    );
     assert!(prompt.prompt.contains("Implement shell planning status"));
     assert_eq!(
         prompt.transcript_text,
@@ -189,7 +192,10 @@ fn warning_summary_prefers_latest_warning_and_truncates() {
 
     let summary = conversation.warning_summary(36);
 
-    assert_eq!(summary, "warnings (2): shared runtime busy with an activ...");
+    assert_eq!(
+        summary,
+        "warnings (2): shared runtime busy with an activ..."
+    );
 }
 
 #[test]
@@ -358,7 +364,9 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         .auto_follow_state
         .stop_rules
         .stop_on_no_file_changes = true;
-    conversation.turn_activity.last_completed_turn_file_change_count = 2;
+    conversation
+        .turn_activity
+        .last_completed_turn_file_change_count = 2;
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -372,7 +380,11 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         panic!("auto follow-up should continue when file changes exist");
     };
 
-    assert!(prompt.prompt.contains("Continue the next highest-priority task."));
+    assert!(
+        prompt
+            .prompt
+            .contains("Continue the next highest-priority task.")
+    );
 }
 
 #[test]

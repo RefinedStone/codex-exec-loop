@@ -220,6 +220,10 @@ impl AutoFollowState {
         self.max_auto_turns
     }
 
+    pub(crate) fn max_auto_turns_label(&self) -> String {
+        format_max_auto_turns(self.max_auto_turns)
+    }
+
     pub(crate) fn stop_keyword_label(&self) -> String {
         self.stop_rules.stop_keyword.label()
     }

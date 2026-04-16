@@ -342,10 +342,7 @@ impl ConversationViewModel {
         }
     }
 
-    pub(crate) fn sync_draft_workspace(
-        &mut self,
-        workspace_directory: String,
-    ) -> bool {
+    pub(crate) fn sync_draft_workspace(&mut self, workspace_directory: String) -> bool {
         if self.has_active_thread() || self.draft_workspace_directory == workspace_directory {
             return false;
         }
@@ -658,9 +655,6 @@ impl ConversationViewModel {
             self.auto_follow_state.max_auto_turns_value()
         );
         self.last_planning_task_handoff = handoff_task.cloned();
-        if handoff_task.is_none() {
-            self.repeated_planning_queue_head_count = 0;
-        }
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: format!("submitted auto turn {progress}"),
             detail: "queued after the previous turn completed; submitted planning auto follow-up"
@@ -668,10 +662,7 @@ impl ConversationViewModel {
         });
     }
 
-    pub(crate) fn record_auto_followup_queue(
-        &mut self,
-        _queued_from_turn_id: &str,
-    ) {
+    pub(crate) fn record_auto_followup_queue(&mut self, _queued_from_turn_id: &str) {
         let turn_index = self.auto_follow_state.mark_auto_turn_queued();
         let next_progress = format!(
             "{turn_index}/{}",

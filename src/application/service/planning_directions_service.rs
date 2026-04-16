@@ -419,7 +419,9 @@ impl PlanningDirectionsService {
         direction_id: &str,
         configured_path: Option<&str>,
     ) -> Result<(String, String)> {
-        if let Some(path) = configured_path {
+        if let Some(path) = configured_path
+            .filter(|path| is_valid_planning_markdown_path(path, PLANNING_DIRECTION_DOCS_DIRECTORY))
+        {
             match self
                 .planning_workspace_port
                 .load_optional_planning_file(workspace_dir, path)
@@ -442,7 +444,9 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         configured_path: Option<&str>,
     ) -> Result<(String, String)> {
-        if let Some(path) = configured_path {
+        if let Some(path) = configured_path
+            .filter(|path| is_valid_planning_markdown_path(path, PLANNING_PROMPTS_DIRECTORY))
+        {
             match self
                 .planning_workspace_port
                 .load_optional_planning_file(workspace_dir, path)
@@ -848,6 +852,54 @@ mod tests {
     }
 
     #[test]
+    fn stage_detail_doc_editor_session_ignores_non_planning_detail_doc_path() {
+        let workspace_dir = create_temp_workspace("planning-directions-non-planning-detail-doc");
+        write_bootstrap_workspace(&workspace_dir);
+        fs::write(
+            format!("{workspace_dir}/README.md"),
+            "# not a direction doc",
+        )
+        .expect("readme should write");
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"detail_doc_path = """#,
+                r#"detail_doc_path = "README.md""#,
+            )
+        });
+
+        let session = sample_service()
+            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
+            .expect("detail doc editor should recover from non-planning path");
+        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .expect("directions.toml should be editable");
+        let detail_doc = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == detail_doc_path)
+            .expect("default detail doc should be editable");
+
+        assert!(
+            directions
+                .body
+                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
+        );
+        assert_eq!(detail_doc.body, "");
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .all(|file| file.active_path != "README.md")
+        );
+        assert!(session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
     fn stage_queue_idle_prompt_editor_session_recovers_from_invalid_prompt_path() {
         let workspace_dir = create_temp_workspace("planning-directions-invalid-queue-idle");
         write_bootstrap_workspace(&workspace_dir);
@@ -876,6 +928,51 @@ mod tests {
             r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
         )));
         assert_eq!(prompt.body, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
+        assert!(session.validation_report.is_valid());
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn stage_queue_idle_prompt_editor_session_ignores_non_planning_prompt_path() {
+        let workspace_dir = create_temp_workspace("planning-directions-non-planning-queue-idle");
+        write_bootstrap_workspace(&workspace_dir);
+        fs::write(
+            format!("{workspace_dir}/README.md"),
+            "# not a queue idle prompt",
+        )
+        .expect("readme should write");
+        rewrite_directions_toml(&workspace_dir, |directions| {
+            directions.replace(
+                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+                r#"prompt_path = "README.md""#,
+            )
+        });
+
+        let session = sample_service()
+            .stage_queue_idle_prompt_editor_session(&workspace_dir)
+            .expect("queue-idle prompt editor should recover from non-planning path");
+        let directions = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
+            .expect("directions.toml should be editable");
+        let prompt = session
+            .editable_files
+            .iter()
+            .find(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+            .expect("default queue-idle prompt should be editable");
+
+        assert!(directions.body.contains(&format!(
+            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
+        )));
+        assert_eq!(prompt.body, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
+        assert!(
+            session
+                .editable_files
+                .iter()
+                .all(|file| file.active_path != "README.md")
+        );
         assert!(session.validation_report.is_valid());
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");

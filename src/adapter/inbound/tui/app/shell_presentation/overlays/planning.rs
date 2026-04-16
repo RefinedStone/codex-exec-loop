@@ -254,7 +254,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         )),
                         Line::from(format!(
                             "max auto turns: {}",
-                            app.current_max_auto_turns_value()
+                            app.current_max_auto_turns_label()
                         )),
                     ];
                     if app.is_max_auto_turns_editing() {
