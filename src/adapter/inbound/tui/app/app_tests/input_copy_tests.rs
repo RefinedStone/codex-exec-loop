@@ -17,7 +17,7 @@ fn running_turn_still_shows_buffered_prompt() {
         .join("\n");
 
     assert!(rendered.contains("Continue from the last change."));
-    assert!(rendered.contains("Ctrl+j inserts a new line"));
+    assert!(rendered.contains("Ctrl+j for newline"));
 }
 #[test]
 fn empty_existing_session_prompts_for_next_message() {
@@ -32,13 +32,16 @@ fn empty_existing_session_prompts_for_next_message() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ready to continue this session."))
+            .any(|line| line.contains("current state: ready"))
     );
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ctrl+j for newline"))
+            .any(|line| line.contains("cause: this session is ready for the next prompt"))
     );
+    assert!(rendered.iter().any(|line| line.contains(
+        "next action: type the next prompt, use Ctrl+j for newline, then press Enter to send"
+    )));
     assert!(
         rendered
             .iter()
@@ -62,7 +65,7 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
     assert!(rendered.contains("Ctrl+j nl"));
     assert!(rendered.contains(":help"));
     assert!(!rendered.contains(":help commands"));
-    assert!(!rendered.contains("Ready to continue this session."));
+    assert!(!rendered.contains("this session is ready for the next prompt"));
     assert!(!rendered.contains("Shell commands: :diag"));
 }
 #[test]
@@ -171,11 +174,14 @@ fn empty_draft_prompts_for_first_message() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ready to start a new thread."))
+            .any(|line| line.contains("current state: ready"))
     );
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Ctrl+j for newline"))
+            .any(|line| line.contains("cause: a new thread draft is ready for the opening prompt"))
     );
+    assert!(rendered.iter().any(|line| line.contains(
+        "next action: type the first prompt, use Ctrl+j for newline, then press Enter to send"
+    )));
 }

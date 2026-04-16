@@ -381,40 +381,52 @@ pub(super) fn build_ready_input_lines(
         }
         match (conversation.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
-                lines.push(Line::from("Startup checks are still running."));
-                lines.push(Line::from(
-                    "Type now if you want, then send once startup checks finish.",
-                ));
+                push_operator_prompt_summary(
+                    &mut lines,
+                    "waiting",
+                    "startup checks are still running",
+                    "type now if you want, then send once startup checks finish",
+                );
             }
             (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
-                lines.push(Line::from("Startup checks need attention."));
-                lines.push(Line::from(
-                    "Open Ctrl+d, resolve the blocking check, then send the prompt.",
-                ));
+                push_operator_prompt_summary(
+                    &mut lines,
+                    "blocked",
+                    "startup checks need attention before the prompt can be sent",
+                    "open startup checks with Ctrl+d, resolve the blocking check, then send the prompt",
+                );
             }
             (ConversationInputState::DraftReady, _) => {
-                lines.push(Line::from("Ready to start a new thread."));
-                lines.push(Line::from(
-                    "Type the first prompt, Ctrl+j for newline, Enter to send.",
-                ));
+                push_operator_prompt_summary(
+                    &mut lines,
+                    "ready",
+                    "a new thread draft is ready for the opening prompt",
+                    "type the first prompt, use Ctrl+j for newline, then press Enter to send",
+                );
             }
             (ConversationInputState::ReadyToContinue, _) => {
-                lines.push(Line::from("Ready to continue this session."));
-                lines.push(Line::from(
-                    "Type the next prompt, Ctrl+j for newline, Enter to send.",
-                ));
+                push_operator_prompt_summary(
+                    &mut lines,
+                    "ready",
+                    "this session is ready for the next prompt",
+                    "type the next prompt, use Ctrl+j for newline, then press Enter to send",
+                );
             }
             (ConversationInputState::SubmittingTurn, _) => {
-                lines.push(Line::from("Sending prompt to Codex..."));
-                lines.push(Line::from(
-                    "Wait for the turn to open before sending again.",
-                ));
+                push_operator_prompt_summary(
+                    &mut lines,
+                    "waiting",
+                    "the prompt is being sent to codex",
+                    "wait for the turn to open before sending again",
+                );
             }
             (ConversationInputState::StreamingTurn, _) => {
-                lines.push(Line::from("Codex is still working on the current turn."));
-                lines.push(Line::from(
-                    "Type now; press Enter after the turn completes.",
-                ));
+                push_operator_prompt_summary(
+                    &mut lines,
+                    "waiting",
+                    "codex is still working on the current turn",
+                    "type now, then press Enter after the turn completes",
+                );
             }
         }
 
@@ -435,9 +447,12 @@ pub(super) fn build_ready_input_lines(
     if conversation.auto_follow_state.has_live_activity()
         && conversation.input_state.can_submit_now()
     {
-        lines.push(Line::from(
-            "Prompt buffered. Ctrl+j inserts a new line. Press Enter when automation finishes.",
-        ));
+        push_operator_prompt_summary(
+            &mut lines,
+            "waiting",
+            "automation is still working on the current follow-up",
+            "keep editing, use Ctrl+j for newline, then press Enter when automation finishes",
+        );
         return lines;
     }
 
@@ -446,35 +461,76 @@ pub(super) fn build_ready_input_lines(
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Pending,
         ) if conversation.startup_submit_armed => {
-            lines.push(Line::from("Prompt queued until startup checks finish."));
-            lines.push(Line::from(
-                "Ctrl+j inserts a new line. Editing cancels the queued send.",
-            ));
+            push_operator_prompt_summary(
+                &mut lines,
+                "waiting",
+                "the prompt is queued until startup checks finish",
+                "keep editing, or wait for startup checks to finish before sending",
+            );
+            lines.push(Line::from("note: editing cancels the queued send"));
         }
         (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
-            lines.push(Line::from(
-                "Press Enter to create thread and send. Ctrl+j inserts a new line.",
-            ));
+            push_operator_prompt_summary(
+                &mut lines,
+                "ready",
+                "the prompt is buffered for a new thread",
+                "press Enter to create the thread and send, or use Ctrl+j for newline",
+            );
         }
         (ConversationInputState::ReadyToContinue, ShellActionAvailability::Ready) => {
-            lines.push(Line::from(
-                "Press Enter to send this prompt. Ctrl+j inserts a new line.",
-            ));
+            push_operator_prompt_summary(
+                &mut lines,
+                "ready",
+                "the prompt is buffered for the current session",
+                "press Enter to send, or use Ctrl+j for newline",
+            );
         }
-        (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
-            lines.push(Line::from(
-                "Prompt buffered. Ctrl+j inserts a new line. Press Enter after startup checks finish.",
-            ));
+        (
+            ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
+            ShellActionAvailability::Pending,
+        ) => {
+            push_operator_prompt_summary(
+                &mut lines,
+                "waiting",
+                "startup checks are still running, so this prompt is buffered",
+                "keep editing, then press Enter after startup checks finish",
+            );
+        }
+        (
+            ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
+            ShellActionAvailability::Blocked,
+        ) => {
+            push_operator_prompt_summary(
+                &mut lines,
+                "blocked",
+                "startup checks need attention before this prompt can be sent",
+                "open startup checks with Ctrl+d, fix them, then press Enter to send",
+            );
         }
         (ConversationInputState::SubmittingTurn, _)
         | (ConversationInputState::StreamingTurn, _) => {
-            lines.push(Line::from(
-                "Prompt buffered. Ctrl+j inserts a new line. Press Enter when turn ends.",
-            ));
+            push_operator_prompt_summary(
+                &mut lines,
+                "waiting",
+                "a turn is already running, so this prompt is buffered",
+                "keep editing, use Ctrl+j for newline, then press Enter when the turn ends",
+            );
         }
     }
 
     lines
+}
+
+#[cfg(test)]
+fn push_operator_prompt_summary(
+    lines: &mut Vec<Line<'static>>,
+    current_state: &str,
+    cause: &str,
+    next_action: &str,
+) {
+    lines.push(Line::from(format!("current state: {current_state}")));
+    lines.push(Line::from(format!("cause: {cause}")));
+    lines.push(Line::from(format!("next action: {next_action}")));
 }
 
 fn build_shell_command_palette_lines(conversation: &ConversationViewModel) -> Vec<Line<'static>> {
@@ -675,9 +731,9 @@ fn build_shell_header_lines_with_context(
                 Span::raw(format!(
                     "thread: {}  |  input: ",
                     if conversation.has_active_thread() {
-                        conversation.thread_id.as_str()
+                        conversation.title.as_str()
                     } else {
-                        "not started yet"
+                        "new draft"
                     }
                 )),
                 Span::styled(
@@ -1447,18 +1503,13 @@ pub(super) fn build_startup_operator_lines_from_state(
 fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
     OverlayListEntryView {
         lines: vec![
+            Line::from(format!("thread: {}", session.title())),
             Line::from(format!(
-                "{}  {}  {}",
-                session.short_id(),
+                "current state: {}  |  last updated: {}",
+                session.status_type,
                 session.updated_at_label(),
-                session.workspace_label(),
             )),
-            Line::from(format!(
-                "{} [{} / {}]",
-                session.title(),
-                session.source,
-                session.model_provider,
-            )),
+            Line::from(format!("workspace: {}", session.workspace_label())),
         ],
     }
 }

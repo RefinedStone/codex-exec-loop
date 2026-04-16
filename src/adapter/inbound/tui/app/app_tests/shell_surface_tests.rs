@@ -676,6 +676,51 @@ fn selected_session_detail_uses_operator_facing_metadata_labels() {
 }
 
 #[test]
+fn recent_session_list_rows_use_operator_facing_labels() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    app.session_state = SessionState::Ready(crate::domain::recent_sessions::RecentSessions {
+        items: vec![crate::domain::session_summary::SessionSummary {
+            id: "thread-1".to_string(),
+            name: Some("Fix startup checks".to_string()),
+            preview: "Preview line".to_string(),
+            cwd: "/tmp/root".to_string(),
+            source: "native".to_string(),
+            model_provider: "openai".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: "/tmp/root/thread-1.json".to_string(),
+            git_branch: None,
+        }],
+        warnings: Vec::new(),
+        next_cursor: None,
+    });
+    app.selected_session_index = 0;
+    app.session_overlay_ui_state
+        .set_selected_session_id(Some("thread-1".to_string()));
+    app.session_overlay_ui_state.sync_selected_session(Some(0));
+
+    let list_item = build_session_overlay_view(&app)
+        .list_view
+        .items
+        .into_iter()
+        .next()
+        .expect("session row should exist")
+        .lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(list_item.contains("thread: Fix startup checks"));
+    assert!(list_item.contains("current state: ready"));
+    assert!(list_item.contains("last updated: 2023-11-15 07:13"));
+    assert!(list_item.contains("workspace: root"));
+    assert!(!list_item.contains("[native / openai]"));
+    assert!(!list_item.contains("thread-1  2023-11-15 07:13"));
+}
+
+#[test]
 fn loading_and_blocked_shell_views_use_canonical_operator_copy() {
     let (mut app, _) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
@@ -755,6 +800,39 @@ fn loading_and_blocked_shell_views_use_canonical_operator_copy() {
     assert!(blocked_input.contains("cause: thread history is unavailable because loading failed"));
     assert!(blocked_input.contains("next action: reload the session or open a new draft"));
     assert!(blocked_input.contains("conversation error: transport closed"));
+}
+
+#[test]
+fn ready_shell_header_uses_operator_facing_thread_labels() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+
+    let mut draft = ready_conversation();
+    draft.thread_id.clear();
+    draft.input_state = ConversationInputState::DraftReady;
+    app.conversation_state = ConversationState::ready(draft);
+
+    let draft_header = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(draft_header.contains("thread: new draft  |  input: draft ready"));
+    assert!(!draft_header.contains("not started yet"));
+
+    app.conversation_state = ConversationState::ready(ready_conversation());
+
+    let ready_header = build_conversation_shell_view(&app, ShellFrontendMode::InlineMainBuffer)
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(ready_header.contains("thread: Existing session  |  input: ready"));
+    assert!(!ready_header.contains("thread-1"));
 }
 
 #[test]
