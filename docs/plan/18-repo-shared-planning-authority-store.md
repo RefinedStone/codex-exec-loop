@@ -59,6 +59,10 @@ Required consequences:
 Structured change requests still exist, but they mutate draft state by default. They do not become
 direct active-authority writes.
 
+No filesystem mailbox is implied by this design. Structured change requests are authority-service
+input shapes used by explicit CLI, TUI, or import flows, not files that the runtime watches and
+auto-consumes from a directory.
+
 ### 3. Git-Tracked Files Become Exported Review Surfaces
 
 The authority store lives under the canonical repo root:
@@ -213,13 +217,13 @@ The physical schema may vary, but the logical model must include:
 
 | Logical bucket | Required contents |
 | --- | --- |
-| `authority_metadata` | active mode, schema version, active revision, last export revision |
+| `authority_metadata` | active mode, schema version, planning_revision, last export revision |
 | `planning_active_*` | active catalog, directions, detail content, task rows, dependency edges, queue projection |
 | `planning_drafts` | draft content, draft revision base, dirty state, validation state |
 | `planning_rejections` | rejected promote attempts, restore metadata, resume linkage |
 | `runtime_claims` | refresh claims, queue-head claims, recovery ownership, expiry metadata |
 | `runtime_projections` | slot, session, queue, and distributor delivery projections |
-| `runtime_events` | append-only orchestration events with `runtime_event_sequence` |
+| `runtime_events` | append-only orchestration events with `runtime_event_sequence` and `observed_planning_revision` |
 
 The authority schema must store:
 
@@ -237,7 +241,7 @@ The minimal active commit unit is:
 
 - validated active or promoted planning mutation
 - rebuilt queue projection
-- updated active revision
+- updated planning_revision
 - any claim or event writes that must be atomic with that mutation
 
 Examples that must be single-transaction:
@@ -246,7 +250,7 @@ Examples that must be single-transaction:
 - hidden planner refresh that changes tasks and queue head
 - official completion that marks a task done and emits follow-up tasks
 - repair rollback that restores accepted state and projection metadata
-- queue-head claim that depends on a specific active revision
+- queue-head claim that depends on a specific planning_revision
 
 ## Delivery Model
 
@@ -264,37 +268,37 @@ Examples that must be single-transaction:
 2. authority store records non-official runtime event
 3. one process claims official refresh responsibility
 4. hidden planning worker refreshes active planning state
-5. a new active revision commits if refresh succeeds
+5. a new planning_revision commits if refresh succeeds
 6. distributor claims one queue head against a committed revision
 7. delivery events and projections advance
 8. recovery may later re-check external truth and reconcile state
 
 ## Remaining Implementation Slices
 
-### Slice A: Locator And Shadow Store Bootstrap
+### Slice 9: Authority Locator And Shadow Store
 
 - add canonical repo authority resolution
 - add SQLite schema and read-only snapshot loading
 - mirror tracked planning files into the store without changing runtime authority
 
-### Slice B: Store-Backed Drafts
+### Slice 10: Store-Backed Drafts And Promote
 
 - move draft storage and validation into the authority store
 - keep draft, validate, and promote UX intact
 - prove that active authority stays unchanged until promote succeeds
 
-### Slice C: Active Mutation And Claim Migration
+### Slice 11: Active Planning Mutation And Queue Claims
 
 - route hidden planner refresh and official completion claims through the authority store
 - migrate queue-head claim semantics into the same authority domain
 
-### Slice D: Runtime Projection And Recovery
+### Slice 12: Runtime Projection Migration And Recovery
 
 - move slot, session, queue, and distributor projections into the store
 - append runtime-domain events
 - add recovery reconciliation against Git and GitHub truth
 
-### Slice E: Store-Primary Cutover
+### Slice 13: Store-Primary Cutover
 
 - make store-backed active planning the default runtime authority
 - keep tracked planning files as revision-stamped exports

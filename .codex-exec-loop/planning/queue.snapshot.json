@@ -31,23 +31,7 @@
       ]
     }
   ],
-  "proposed_tasks": [
-    {
-      "rank": 1,
-      "task_id": "task-supersession-architecture-agent-session-port",
-      "direction_id": "supersession-architecture-boundaries",
-      "direction_title": "Supersession architecture boundaries",
-      "task_title": "Extract AgentSessionPort from parallel turn launch and stream execution",
-      "status": "proposed",
-      "combined_priority": 82,
-      "updated_at": "2026-04-18T10:30:00Z",
-      "rank_reasons": [
-        "status=proposed",
-        "combined_priority=82 (base 82 + delta 0)",
-        "dependencies_ready=0"
-      ]
-    }
-  ],
+  "proposed_tasks": [],
   "skipped_tasks": [
     {
       "task_id": "task-supersession-architecture-agent-session-port",
