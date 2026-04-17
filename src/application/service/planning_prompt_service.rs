@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -49,7 +51,7 @@ pub struct PlanningRuntimeSnapshot {
     queue_idle_prompt_path: Option<String>,
     queue_head: Option<PriorityQueueTask>,
     queue_snapshot: Option<PriorityQueueSnapshot>,
-    task_ledger_signature: Option<String>,
+    task_ledger_signature: Option<u64>,
     failure_reason: Option<String>,
     auto_followup_pause_reason: Option<String>,
 }
@@ -214,8 +216,8 @@ impl PlanningRuntimeSnapshot {
         self.queue_snapshot.as_ref()
     }
 
-    pub fn task_ledger_signature(&self) -> Option<&str> {
-        self.task_ledger_signature.as_deref()
+    pub fn task_ledger_signature(&self) -> Option<u64> {
+        self.task_ledger_signature
     }
 
     pub fn failure_reason(&self) -> Option<&str> {
@@ -390,7 +392,7 @@ impl PlanningPromptService {
     }
 }
 
-fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> String {
+fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> u64 {
     let mut normalized_ledger = task_ledger.clone();
     normalized_ledger
         .tasks
@@ -400,8 +402,11 @@ fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> String 
         task.blocked_by.sort();
     }
 
-    serde_json::to_string(&normalized_ledger)
-        .expect("valid task ledger should serialize into a normalized signature")
+    let json = serde_json::to_string(&normalized_ledger)
+        .expect("valid task ledger should serialize into a normalized signature");
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn workspace_record_to_files(
