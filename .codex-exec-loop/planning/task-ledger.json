@@ -40,13 +40,13 @@
     {
       "id": "task-supersession-ledger-refresh-contract",
       "direction_id": "supersession-ledger-feedback-loop",
-      "direction_relation_note": "Derived from the supersession docs and latest answer that official task state must remain ledger-owned even after agent milestones, so the refresh contract needs to stay explicit as runtime orchestration grows.",
+      "direction_relation_note": "Promoted as the next executable slice after the latest main-session reply closed non-merged slot operator recovery by verification only, leaving the ledger-owned completion refresh boundary as the clearest remaining runtime contract needed before supersession can safely advance official assignments after agent completion.",
       "title": "Define serialized completion refresh contract for official ledger updates",
       "description": "Implement the planning-facing completion payload and supervisor-side reported-versus-official state boundary so agent completion stays non-official until one serialized hidden planning worker refresh succeeds, and new assignment remains blocked while refresh is running or failed.",
-      "status": "proposed",
+      "status": "ready",
       "base_priority": 80,
       "dynamic_priority_delta": 0,
-      "priority_reason": "This remains necessary for supersession authority boundaries, but the latest main-session reply shifted the immediate executable queue toward runtime pool, roster, and distributor bindings.",
+      "priority_reason": "With pool recovery, roster projection, and distributor automation now all confirmed done, this is the next clear executable slice: it is dependency-ready, directly advances the planning-authority direction, and avoids leaving builtin next-task stalled behind proposal-only work.",
       "depends_on": [
         "task-supersession-control-tower-empty-board"
       ],
@@ -54,7 +54,7 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-16T19:34:28Z"
+      "updated_at": "2026-04-17T15:05:00Z"
     },
     {
       "id": "task-supersession-worktree-pool-reconcile",
@@ -122,13 +122,13 @@
     {
       "id": "task-supersession-worktree-pool-runtime-lease-wiring",
       "direction_id": "supersession-git-worktree-pool",
-      "direction_relation_note": "Promoted as the next executable queue head because the latest main-session reply explicitly says the lease APIs are implemented but the actual agent/session runtime still does not call them, making runtime wiring the direct follow-up before roster and distributor panels can trust slot state.",
+      "direction_relation_note": "Completed per the latest main-session verification: handoff launch now acquires slot leases before stream start, transitions matching leases to running on `TurnStarted`, releases clean slots on failed start, and hands successful completion into the post-turn lifecycle APIs for cleanup-pending handling.",
       "title": "Wire agent session runtime into slot lease lifecycle APIs",
-      "description": "Connect the real agent and session runtime flow to `acquire_slot_lease`, `mark_slot_running`, and `mark_slot_cleanup_pending` so slot ownership, running-state entry, and merged-cleanup readiness are driven by actual execution events rather than service-only helpers.",
-      "status": "ready",
+      "description": "The real agent and session runtime now drives `acquire_slot_lease`, `mark_slot_running`, failed-start release, and success-path cleanup-pending transitions from the turn-submission runtime and post-turn execution flow instead of relying on service-only helpers.",
+      "status": "done",
       "base_priority": 96,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply names missing runtime calls into the new lease APIs as the first unfinished item, so this is the clearest executable next task for builtin next-task automation.",
+      "priority_reason": "Completed in the latest main-session reply with code-path verification across `turn_submission_runtime`, `stream_execution`, `post_turn_execution`, and `parallel_mode_service`, plus targeted tests covering leased launch, running transition, failed-start release, and success completion cleanup gating.",
       "depends_on": [
         "task-supersession-mode-readiness-skeleton",
         "task-supersession-control-tower-empty-board",
@@ -140,37 +140,35 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-17T13:40:00Z"
     },
     {
       "id": "task-supersession-worktree-pool-explicit-lease-release",
       "direction_id": "supersession-git-worktree-pool",
-      "direction_relation_note": "Created from the latest main-session reply, which explicitly leaves bootstrap-failure handling and clean-slot idle restoration as a separate follow-up beyond the newly added persisted lease transition APIs.",
+      "direction_relation_note": "Closed by the same runtime verification that completed lease wiring: startup failure now takes the explicit release path and resets a clean leased slot back to idle instead of leaving recovery to ad hoc cleanup.",
       "title": "Add explicit lease release for bootstrap failure recovery",
-      "description": "Introduce a dedicated release path that can return a clean leased slot back to idle when bootstrap or early runtime setup fails before the session reaches durable running state, instead of leaving recovery to ad hoc cleanup behavior.",
-      "status": "proposed",
+      "description": "A dedicated failed-start release path now returns a clean leased slot back to idle when bootstrap or early runtime setup fails before durable running state, covering the bootstrap recovery gap that was previously tracked separately.",
+      "status": "done",
       "base_priority": 87,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply directly calls out missing explicit release behavior for bootstrap failure, but wiring the runtime into the lease lifecycle APIs is the more immediate prerequisite.",
+      "priority_reason": "Completed in the latest main-session reply, which verified the bootstrap-failure release path with `release_workspace_slot_lease_after_failed_start_resets_clean_slot_to_idle` and confirmed the runtime now performs the explicit idle reset automatically.",
       "depends_on": [],
-      "blocked_by": [
-        "task-supersession-worktree-pool-runtime-lease-wiring"
-      ],
+      "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-17T13:40:00Z"
     },
     {
       "id": "task-supersession-agent-roster-lifecycle-runtime",
       "direction_id": "supersession-agent-control-tower",
-      "direction_relation_note": "Still follows the shipped placeholder board, but the latest main-session reply now makes runtime wiring the immediate prerequisite: roster state should wait until actual agent/session execution drives the persisted lease lifecycle so task ownership and durations reflect real runtime events instead of service-only transitions.",
+      "direction_relation_note": "Closed after the latest main-session reply verified the baseline already projects live supervisor roster data from pool context and lease or session detail state, so this control-tower slice no longer needs a separate implementation pass.",
       "title": "Wire supervisor roster to live agent lifecycle state",
       "description": "Replace static agent roster placeholders with runtime lifecycle projection that shows task ownership, slot identity, lease state, running duration, and latest summary for active and recently completed agents once actual agent/session execution is wired into the persisted lease lifecycle.",
-      "status": "proposed",
+      "status": "done",
       "base_priority": 84,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply still leaves roster runtime binding unfinished, but it now depends on the new runtime lease wiring before the board can project trustworthy ownership and duration data.",
+      "priority_reason": "Completed by verification in the latest main-session reply: `parallel_mode_service` already builds the supervisor roster from live pool context and projects `starting`, `running`, and `cleanup_pending` states, with targeted service tests re-run and passing.",
       "depends_on": [
         "task-supersession-control-tower-empty-board",
         "task-supersession-worktree-pool-reconcile",
@@ -180,38 +178,37 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-17T13:55:00Z"
     },
     {
       "id": "task-supersession-worktree-pool-operator-recovery",
       "direction_id": "supersession-git-worktree-pool",
-      "direction_relation_note": "Still tracks operator recovery for slots whose branches are not yet integrated into akra, but the latest main-session reply now makes runtime lease wiring and explicit release behavior the more immediate prerequisites for safe recovery decisions.",
+      "direction_relation_note": "Closed after the latest main-session reply verified the baseline already implements the operator-recovery path for non-merged slot branches, including blocked recovery notices, awaiting-cleanup separation, and supervisor notice rendering without requiring additional code changes in this turn.",
       "title": "Handle operator recovery for non-merged slot branches",
-      "description": "Add supervisor-visible recovery behavior for slots whose agent branches are not yet integrated into akra so they land in an explicit blocked or recoverable state with operator actions instead of only supporting merged-branch cleanup paths.",
-      "status": "proposed",
+      "description": "The baseline now stands verified as surfacing lease-less non-merged slot branches as explicit operator recovery or awaiting-cleanup states, with consistent reconcile-status and top-notice messaging rendered through the supersession overlay.",
+      "status": "done",
       "base_priority": 85,
       "dynamic_priority_delta": 0,
-      "priority_reason": "Non-merged branch recovery is still necessary, but runtime lease wiring and bootstrap-failure release are now the more immediate prerequisites for safe operator recovery decisions.",
+      "priority_reason": "Completed by verification in the latest main-session reply: `parallel_mode_service.rs` already defines the operator-recovery cause and next action, projects lease-less non-merged branches as `Blocked / operator recovery`, keeps cleanup-ready lease-less branches in `AwaitingCleanup`, and re-ran the three targeted recovery tests successfully.",
       "depends_on": [
-        "task-supersession-worktree-pool-runtime-lease-wiring",
-        "task-supersession-worktree-pool-explicit-lease-release"
+        "task-supersession-worktree-pool-runtime-lease-wiring"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-17T15:05:00Z"
     },
     {
       "id": "task-supersession-distributor-queue-runtime-bindings",
       "direction_id": "supersession-distributor-merge-queue",
-      "direction_relation_note": "Updated from the latest main-session reply, which now makes the missing runtime connection explicit: distributor and agent bindings should wait until actual agent/session execution drives the persisted lease lifecycle, then connect the board to real runtime ownership and queue execution rather than placeholders.",
+      "direction_relation_note": "Closed after the latest main-session reply verified the baseline already binds the distributor snapshot to live queue records and session history, including selected-detail preference for the active queue head session when present.",
       "title": "Bind distributor queue and selected detail to runtime data",
-      "description": "Replace placeholder distributor and selected-detail panels with runtime queue-head, queue membership, selected item data, and agent or distributor linkage once actual agent/session execution is wired into the persisted lease lifecycle and exposes real slot ownership and execution context.",
-      "status": "proposed",
+      "description": "The supervisor snapshot now reads live distributor queue records and session history so the distributor and selected-detail panels reflect runtime queue membership, queue-head context, and active-session linkage instead of placeholders.",
+      "status": "done",
       "base_priority": 82,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply still leaves agent and distributor runtime connection unfinished, but runtime lease wiring plus roster lifecycle are the higher-confidence prerequisites for meaningful queue-state projection.",
+      "priority_reason": "Completed by verification in the latest main-session reply: `parallel_mode_service` already projects live distributor queue data and prefers the active queue head when resolving selected runtime detail, and `cargo test build_supervisor_snapshot_prefers_active_distributor_queue_head_for_selected_detail -- --nocapture` passed without requiring further code changes.",
       "depends_on": [
         "task-supersession-control-tower-empty-board",
         "task-supersession-worktree-pool-runtime-lease-wiring",
@@ -221,7 +218,101 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-17T05:20:00Z"
+      "updated_at": "2026-04-17T14:15:00Z"
+    },
+    {
+      "id": "task-supersession-distributor-local-queue-head-processing",
+      "direction_id": "supersession-distributor-merge-queue",
+      "direction_relation_note": "Closed after the latest main-session reply verified the baseline already executes the single-consumer local distributor flow: `process_distributor_queue(...)` handles only the active head, blocks later items behind blocked or failed heads, integrates the head into local `akra`, and completes slot cleanup plus idle return.",
+      "title": "Implement serial distributor queue-head handling and local akra integration",
+      "description": "The baseline distributor flow now processes one commit-ready queue head at a time, preserves queue-head blocking semantics for later items, integrates successful heads into local `akra`, and returns the slot to idle only after cleanup succeeds.",
+      "status": "done",
+      "base_priority": 83,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed by verification in the latest main-session reply without new code changes: `parallel_mode_service.rs` already enforces single-head processing and local `akra` integration, and the targeted tests for commit-ready delivery and blocked-head queue retention both passed again.",
+      "depends_on": [
+        "task-supersession-distributor-queue-runtime-bindings",
+        "task-supersession-worktree-pool-runtime-lease-wiring"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T14:35:00Z"
+    },
+    {
+      "id": "task-supersession-distributor-github-automation-and-rebase-recovery",
+      "direction_id": "supersession-distributor-merge-queue",
+      "direction_relation_note": "Closed after the latest main-session reply verified that the baseline already handles distributor queue-head rebase, safe push, PR open-or-update, and integration-branch push sequencing, so this remote automation boundary no longer needs a separate implementation pass.",
+      "title": "Add distributor rebase, push, and PR automation for queue heads",
+      "description": "Extend the serial distributor from local-only `akra` integration into the remote automation path for one queue head at a time: detect stale source heads when `akra` advances, run explicit rebase and provenance refresh, push with safe lease semantics, open or update the PR, and surface capability degradation or rebase conflicts as blocked queue-head state instead of silently advancing.",
+      "status": "done",
+      "base_priority": 84,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed by verification in the latest main-session reply without new code changes: `parallel_mode_service.rs` already drives distributor heads through `pushing -> pr_pending -> merge_pending -> integrating`, performs `akra`-based rebase plus `--force-with-lease` push when the source SHA changes, and uses the GitHub automation port or adapter boundaries for push, PR ensure or inspect, integration push, and PR close; the targeted distributor tests were re-run and passed.",
+      "depends_on": [
+        "task-supersession-distributor-local-queue-head-processing"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T14:50:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-resync-local-prerelease-checkout-60151f0",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Tracked as an operational pool-baseline recovery slice so the local `/home/akra/codex-exec-loop` checkout matches merged PR #271 on `origin/prerelease` before further queue work resumes.",
+      "title": "Resync local prerelease checkout to merged PR #271 baseline",
+      "description": "Switch the local checkout back to `prerelease`, fast-forward it to merged PR #271 baseline commit `60151f0`, and preserve any preexisting local runtime-state edits safely outside the working tree so the main workspace returns to a clean queue-ready baseline.",
+      "status": "done",
+      "base_priority": 98,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in the latest main session reply after the local checkout was fast-forwarded to `60151f0`, `HEAD` and `origin/prerelease` were aligned, the worktree was confirmed clean, and the displaced runtime-state edits were preserved in `stash@{0}` (`resync-local-prerelease-baseline-2026-04-17`).",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T13:02:57Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-review-resync-runtime-state-stash",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Completed after the latest main-session reply verified `stash@{0}` contains only one-off internal runtime-state snapshots, confirmed no source changes need to be replayed onto refreshed `prerelease`, and left only an operator retention decision about whether to keep or drop the preserved stash record.",
+      "title": "Review preserved runtime-state stash after prerelease baseline resync",
+      "description": "Inspected `stash@{0}` (`resync-local-prerelease-baseline-2026-04-17`) and confirmed the preserved diff is limited to obsolete internal runtime-state snapshots, so there is no product or source change that should be replayed on top of local `prerelease` commit `60151f0`.",
+      "status": "done",
+      "base_priority": 99,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Completed in the latest main-session reply by reviewing `stash@{0}`, determining it should not be reapplied, and reducing the remaining follow-up to a separate operator decision about stash retention versus cleanup.",
+      "depends_on": [
+        "task-supersession-worktree-pool-resync-local-prerelease-checkout-60151f0"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T13:10:00Z"
+    },
+    {
+      "id": "task-supersession-worktree-pool-decide-resync-stash-retention",
+      "direction_id": "supersession-git-worktree-pool",
+      "direction_relation_note": "Split out from the completed stash review because the latest main-session reply leaves one non-implementation follow-up: decide whether the already-reviewed `stash@{0}` should remain as a preserved record or be dropped now that it is confirmed obsolete for code replay.",
+      "title": "Decide whether to retain or drop obsolete resync stash",
+      "description": "Make the operator-level retention decision for `stash@{0}` (`resync-local-prerelease-baseline-2026-04-17`): either keep the reviewed stash as a temporary audit record or explicitly drop it now that it has been confirmed unnecessary for restoring product code on top of `prerelease` commit `60151f0`.",
+      "status": "proposed",
+      "base_priority": 78,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply reduces the remaining follow-up to a judgment call about record retention rather than executable implementation work, so this should stay proposed until the operator chooses whether cleanup is desired.",
+      "depends_on": [
+        "task-supersession-worktree-pool-review-resync-runtime-state-stash"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-17T13:10:00Z"
     }
   ]
 }
