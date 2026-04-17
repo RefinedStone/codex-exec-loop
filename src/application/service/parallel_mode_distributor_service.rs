@@ -12,23 +12,23 @@ use crate::domain::parallel_mode::{
     ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
+use super::parallel_mode_supervisor_service::selected_runtime_session_detail;
 use super::{
     AKRA_BRANCH, DEFAULT_PUSH_REMOTE_NAME, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
-    branch_is_integrated_into_akra, build_live_session_detail, cleanup_slot, command_succeeds,
-    current_branch_name, current_timestamp, ensure_directory_exists, inspect_slot_git_status,
-    lease_session_key, load_agent_session_detail_records, load_pool_runtime_context,
-    read_agent_session_detail_record, record_cleaned_session_detail,
-    record_cleanup_pending_session_detail, record_distributor_failed_session_detail,
-    record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_pr_pending_session_detail,
-    record_pushing_session_detail, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    roster_recency_key, roster_state_priority, short_sha, write_slot_lease,
+    branch_is_integrated_into_akra, cleanup_slot, command_succeeds, current_branch_name,
+    current_timestamp, ensure_directory_exists, inspect_slot_git_status, lease_session_key,
+    load_agent_session_detail_records, load_pool_runtime_context, read_agent_session_detail_record,
+    record_cleaned_session_detail, record_cleanup_pending_session_detail,
+    record_distributor_failed_session_detail, record_integrating_session_detail,
+    record_merge_pending_session_detail, record_merge_queued_session_detail,
+    record_pr_pending_session_detail, record_pushing_session_detail, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, short_sha, write_slot_lease,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct ParallelModeDistributorQueueRecord {
     queue_item_id: String,
-    session_key: String,
+    pub(super) session_key: String,
     agent_id: String,
     task_id: String,
     task_title: String,
@@ -301,59 +301,6 @@ fn history_rebase_provenance(detail: &ParallelModeAgentSessionDetailSnapshot) ->
         .rev()
         .find(|entry| entry.summary.contains("rebased"))
         .map(|entry| entry.summary.clone())
-}
-
-pub(super) fn selected_runtime_session_detail(
-    context: &PoolRuntimeContext,
-    history: &[ParallelModeAgentSessionDetailSnapshot],
-    queue_records: &[ParallelModeDistributorQueueRecord],
-) -> Option<ParallelModeAgentSessionDetailSnapshot> {
-    if let Some(queue_head) = active_distributor_queue_head(queue_records)
-        && let Some(detail) =
-            session_detail_for_runtime_session(context, history, &queue_head.session_key)
-    {
-        return Some(detail);
-    }
-
-    let mut active_leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
-    active_leases.sort_by(|left, right| {
-        roster_state_priority(right.state)
-            .cmp(&roster_state_priority(left.state))
-            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
-            .then_with(|| left.slot_id.cmp(&right.slot_id))
-    });
-
-    if let Some(lease) = active_leases.first() {
-        return Some(build_live_session_detail(
-            lease,
-            history
-                .iter()
-                .find(|detail| detail.session_key == lease_session_key(lease))
-                .cloned(),
-        ));
-    }
-
-    history.first().cloned()
-}
-
-fn session_detail_for_runtime_session(
-    context: &PoolRuntimeContext,
-    history: &[ParallelModeAgentSessionDetailSnapshot],
-    session_key: &str,
-) -> Option<ParallelModeAgentSessionDetailSnapshot> {
-    let detail = history
-        .iter()
-        .find(|detail| detail.session_key == session_key)
-        .cloned();
-    if let Some(lease) = context
-        .slot_leases
-        .values()
-        .find(|lease| lease_session_key(lease) == session_key)
-    {
-        return Some(build_live_session_detail(lease, detail));
-    }
-
-    detail
 }
 
 fn detail_has_history_state(
