@@ -149,7 +149,7 @@ fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
             entry.task_title,
             entry.slot_id,
             entry.branch_name,
-            entry.state_label,
+            display_supersession_state_label(&entry.state_label),
             entry.duration_label,
             entry.latest_summary
         ))
@@ -175,7 +175,9 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
     let mut lines = vec![
         Line::from(format!(
             "selection: {} / {} / {}",
-            detail.agent_id, detail.slot_id, detail.state_label
+            detail.agent_id,
+            detail.slot_id,
+            display_supersession_state_label(&detail.state_label)
         )),
         Line::from(format!("task: {} / {}", detail.task_id, detail.task_title)),
         Line::from(format!(
@@ -185,7 +187,10 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
         Line::from(format!("worktree: {}", detail.worktree_path)),
         Line::from(format!("branch: {}", detail.branch_name)),
         Line::from(format!("lease start: {}", detail.lease_started_at)),
-        Line::from(format!("completion: {}", detail.completion_state_label)),
+        Line::from(format!(
+            "completion: {}",
+            display_supersession_state_label(&detail.completion_state_label)
+        )),
         Line::from(format!("latest: {}", detail.latest_summary)),
         Line::from(format!("validation: {}", detail.validation_summary)),
         Line::from(format!("ledger refresh: {}", detail.ledger_refresh_outcome)),
@@ -201,7 +206,9 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
     lines.extend(detail.history.iter().map(|entry| {
         Line::from(format!(
             "{} / {} / {}",
-            entry.timestamp, entry.state_label, entry.summary
+            entry.timestamp,
+            display_supersession_state_label(&entry.state_label),
+            entry.summary
         ))
     }));
     lines
@@ -246,12 +253,30 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
     lines
 }
 
+fn display_supersession_state_label(state_label: &str) -> String {
+    match state_label {
+        "reported_complete" => "reported".to_string(),
+        "ledger_refreshing" => "ledger refreshing".to_string(),
+        "commit_ready" => "official".to_string(),
+        "merge_queued" => "merge queued".to_string(),
+        "pr_pending" => "pr pending".to_string(),
+        "merge_pending" => "merge pending".to_string(),
+        "cleanup_pending" => "cleanup pending".to_string(),
+        "in_progress" => "in progress".to_string(),
+        other => other.replace('_', " "),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_distributor_lines;
+    use super::{build_detail_lines, build_distributor_lines, build_roster_lines};
     use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+        ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
         ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
-        ParallelModeDistributorSnapshot, ParallelModeQueueItemState,
+        ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeQueueItemState,
+        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+        ParallelModeSupervisorState,
     };
 
     #[test]
@@ -286,5 +311,84 @@ mod tests {
 
         assert!(rendered.contains("blocked head: rebased branch"));
         assert!(rendered.contains("provenance: rebased abc1234 -> def4567 onto `akra`"));
+    }
+
+    #[test]
+    fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
+        let snapshot = ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/workspace",
+            ParallelModePoolBoardSnapshot::new(0, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Task One",
+                    "slot-1",
+                    "akra-agent/slot-1/task-one",
+                    "reported_complete",
+                    "reported",
+                    "agent reported completion",
+                )],
+                "empty",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(
+                Some(ParallelModeAgentSessionDetailSnapshot::new(
+                    "slot-1:task-1",
+                    "agent-1",
+                    "task-1",
+                    "Task One",
+                    "slot-1",
+                    Some("thread-1".to_string()),
+                    "/tmp/worktree",
+                    "akra-agent/slot-1/task-one",
+                    "2026-04-17T00:00:00Z",
+                    "commit_ready",
+                    "commit_ready",
+                    "official ledger refresh accepted the completion report",
+                    "tests passed",
+                    "official ledger refresh succeeded",
+                    Some("commit-ready result accepted into distributor queue".to_string()),
+                    vec![
+                        ParallelModeAgentSessionHistoryEntry::new(
+                            "reported_complete",
+                            "2026-04-17T00:01:00Z",
+                            "agent reported completion",
+                        ),
+                        ParallelModeAgentSessionHistoryEntry::new(
+                            "commit_ready",
+                            "2026-04-17T00:02:00Z",
+                            "official ledger refresh accepted the completion report",
+                        ),
+                    ],
+                    "2026-04-17T00:02:00Z",
+                )),
+                "empty",
+            ),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "official", "queued"),
+            None,
+        );
+
+        let roster_rendered = build_roster_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail_rendered = build_detail_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(roster_rendered.contains("reported / reported / agent reported completion"));
+        assert!(!roster_rendered.contains("reported_complete"));
+        assert!(detail_rendered.contains("selection: agent-1 / slot-1 / official"));
+        assert!(detail_rendered.contains("completion: official"));
+        assert!(
+            detail_rendered.contains("2026-04-17T00:01:00Z / reported / agent reported completion")
+        );
+        assert!(detail_rendered.contains(
+            "2026-04-17T00:02:00Z / official / official ledger refresh accepted the completion report"
+        ));
+        assert!(!detail_rendered.contains("commit_ready"));
     }
 }
