@@ -458,6 +458,58 @@ impl ParallelModeService {
 
         Ok(Some(resolution.lease))
     }
+
+    pub fn mark_workspace_slot_cleanup_pending_if_ready(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state == ParallelModeSlotLeaseState::CleanupPending {
+            return Ok(Some(resolution.lease));
+        }
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+        if !branch_is_cleanup_ready(&resolution.context.repo_root, &resolution.lease.branch_name) {
+            return Ok(None);
+        }
+
+        self.mark_slot_cleanup_pending(
+            workspace_dir,
+            &resolution.lease.slot_id,
+            &resolution.lease.agent_id,
+        )
+        .map(Some)
+    }
+
+    pub fn cleanup_workspace_slot_if_pending(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::CleanupPending {
+            return Ok(None);
+        }
+
+        if !cleanup_slot(
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            &resolution.lease.slot_id,
+            &resolution.workspace_path,
+            &resolution.lease.branch_name,
+        ) {
+            return Err(format!(
+                "slot `{}` could not be reset to `{AKRA_BRANCH}` after successful completion",
+                resolution.lease.slot_id
+            ));
+        }
+
+        Ok(Some(resolution.lease))
+    }
 }
 
 fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
@@ -2072,11 +2124,11 @@ fn run_command_with_stdin<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pool_board, derive_default_pool_root, derive_readiness, inspect_planning,
-        parse_https_remote, reconcile_pool_board, slot_id, slot_lease_file_path,
-        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-        ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
-        ParallelModeSupervisorState, DEFAULT_POOL_SIZE,
+        DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+        ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+        ParallelModeService, ParallelModeSupervisorState, build_pool_board,
+        derive_default_pool_root, derive_readiness, inspect_planning, parse_https_remote,
+        reconcile_pool_board, slot_id, slot_lease_file_path,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::parallel_mode::{
@@ -2543,9 +2595,11 @@ mod tests {
         assert_eq!(persisted.state, ParallelModeSlotLeaseState::Leased);
         assert_eq!(persisted.agent_id, "agent-1");
         assert_eq!(persisted.task_id, "task-1");
-        assert!(persisted
-            .branch_name
-            .starts_with("akra-agent/slot-1/task-one"));
+        assert!(
+            persisted
+                .branch_name
+                .starts_with("akra-agent/slot-1/task-one")
+        );
         assert_eq!(pool.leased_slots, 1);
         assert_eq!(pool.running_slots, 0);
         assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Leased);
@@ -2605,6 +2659,98 @@ mod tests {
         assert_eq!(running_lease.state, ParallelModeSlotLeaseState::Running);
         assert_eq!(persisted.state, ParallelModeSlotLeaseState::Running);
         assert!(persisted.running_started_at.is_some());
+    }
+
+    #[test]
+    fn mark_workspace_slot_cleanup_pending_if_ready_waits_for_integrated_branch() {
+        let repo = TempGitRepo::new("workspace-cleanup-ready");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+
+        let pending_before_merge = service
+            .mark_workspace_slot_cleanup_pending_if_ready(&lease.worktree_path)
+            .expect("cleanup-ready check should succeed before merge");
+        assert!(pending_before_merge.is_none());
+        assert_eq!(
+            repo.read_slot_lease(1).state,
+            ParallelModeSlotLeaseState::Running
+        );
+
+        repo.merge_agent_slot_into_akra(&slot_path);
+
+        let pending_after_merge = service
+            .mark_workspace_slot_cleanup_pending_if_ready(&lease.worktree_path)
+            .expect("cleanup-ready check should succeed after merge")
+            .expect("workspace should transition once branch is integrated");
+
+        assert_eq!(
+            pending_after_merge.state,
+            ParallelModeSlotLeaseState::CleanupPending
+        );
+        assert_eq!(
+            repo.read_slot_lease(1).state,
+            ParallelModeSlotLeaseState::CleanupPending
+        );
+    }
+
+    #[test]
+    fn cleanup_workspace_slot_if_pending_resets_slot_to_idle() {
+        let repo = TempGitRepo::new("workspace-cleanup-slot");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+        repo.merge_agent_slot_into_akra(&slot_path);
+        service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to cleanup pending");
+        fs::write(slot_path.join("scratch.tmp"), "transient\n")
+            .expect("untracked file should be written");
+
+        let cleaned_lease = service
+            .cleanup_workspace_slot_if_pending(&lease.worktree_path)
+            .expect("cleanup-pending workspace should be cleaned")
+            .expect("workspace should have an active cleanup-pending lease");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+        let pool = build_pool_board(&repo.workspace_dir(), Some(&readiness));
+
+        assert_eq!(cleaned_lease.slot_id, "slot-1");
+        assert_eq!(
+            cleaned_lease.state,
+            ParallelModeSlotLeaseState::CleanupPending
+        );
+        assert!(!slot_path.join("scratch.tmp").exists());
+        assert!(!repo.branch_exists(&lease.branch_name));
+        assert!(!repo.slot_lease_path(1).exists());
+        assert_eq!(pool.leased_slots, 0);
+        assert_eq!(pool.running_slots, 0);
+        assert_eq!(pool.awaiting_cleanup_slots, 0);
+        assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Idle);
     }
 
     #[test]

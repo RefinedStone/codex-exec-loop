@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -65,6 +66,7 @@ struct FakeStreamBehavior {
     events: Vec<ConversationStreamEvent>,
     error: Option<String>,
     planning_file_writes: Vec<(String, String)>,
+    merge_active_branch_into_akra_repo: Option<String>,
 }
 
 impl CodexAppServerPort for FakeCodexAppServerPort {
@@ -170,6 +172,13 @@ fn run_fake_stream(
         let _ = event_sender.send(event);
     }
 
+    if let (Some(workspace_directory), Some(repo_root)) = (
+        workspace_directory,
+        behavior.merge_active_branch_into_akra_repo.as_deref(),
+    ) {
+        merge_active_branch_into_akra(repo_root, workspace_directory);
+    }
+
     if let Some(error) = behavior.error {
         Err(anyhow::anyhow!(error))
     } else {
@@ -221,6 +230,92 @@ fn create_temp_workspace(prefix: &str) -> String {
     let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
     std::fs::create_dir_all(&path).expect("temp workspace should be created");
     path.display().to_string()
+}
+
+struct TempGitWorkspace {
+    root: String,
+}
+
+impl TempGitWorkspace {
+    fn new(prefix: &str) -> Self {
+        let root = create_temp_workspace(prefix);
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.name", "Codex Tests"]);
+        run_git(&root, &["config", "user.email", "codex-tests@example.com"]);
+        fs::write(Path::new(&root).join("README.md"), "workspace\n")
+            .expect("git workspace readme should write");
+        run_git(&root, &["add", "README.md"]);
+        run_git(&root, &["commit", "-m", "initial"]);
+        run_git(&root, &["branch", "akra"]);
+
+        Self { root }
+    }
+
+    fn workspace_dir(&self) -> &str {
+        self.root.as_str()
+    }
+}
+
+impl Drop for TempGitWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn run_git(repo_root: &str, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git command should spawn");
+    assert!(
+        output.status.success(),
+        "git command should succeed: git {:?}\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn merge_active_branch_into_akra(repo_root: &str, slot_workspace_directory: &str) {
+    let branch_name = current_git_branch(slot_workspace_directory);
+    let original_branch = current_git_branch(repo_root);
+    run_git(repo_root, &["checkout", "akra"]);
+    run_git(repo_root, &["merge", "--ff-only", branch_name.as_str()]);
+    run_git(repo_root, &["checkout", original_branch.as_str()]);
+}
+
+fn git_branch_exists(repo_root: &str, branch_name: &str) -> bool {
+    Command::new("git")
+        .current_dir(repo_root)
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch_name}"),
+        ])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn current_git_branch(workspace_directory: &str) -> String {
+    let output = Command::new("git")
+        .current_dir(workspace_directory)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git rev-parse should spawn");
+    assert!(
+        output.status.success(),
+        "git rev-parse should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("branch name should be utf-8")
+        .trim()
+        .to_string()
 }
 
 fn bootstrap_active_planning_workspace(workspace_dir: &str) {
@@ -344,6 +439,9 @@ mod input_copy_tests;
 
 #[path = "app_tests/planning_runtime_tests.rs"]
 mod planning_runtime_tests;
+
+#[path = "app_tests/parallel_mode_runtime_tests.rs"]
+mod parallel_mode_runtime_tests;
 
 #[path = "app_tests/shell_surface_tests.rs"]
 mod shell_surface_tests;

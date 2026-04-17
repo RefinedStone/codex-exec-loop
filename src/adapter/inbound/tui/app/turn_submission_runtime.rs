@@ -3,7 +3,10 @@ mod post_turn_execution;
 #[path = "turn_submission_runtime/stream_execution.rs"]
 mod stream_execution;
 
-use crate::application::service::planning::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+use crate::application::service::planning::{
+    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
+};
+use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
 
@@ -51,11 +54,11 @@ impl NativeTuiApp {
                 workspace_directory,
                 thread_id,
                 prompt,
-            } => self.execute_start_stream(PreparedTurnStreamRequest {
+            } => self.execute_start_stream(self.build_turn_stream_request(
                 workspace_directory,
                 thread_id,
                 prompt,
-            }),
+            )),
             ConversationRuntimeEffect::EvaluateAutoFollowup {
                 workspace_directory,
                 queued_from_turn_id,
@@ -85,6 +88,33 @@ impl NativeTuiApp {
                 );
             }
         }
+    }
+
+    fn build_turn_stream_request(
+        &self,
+        workspace_directory: String,
+        thread_id: Option<String>,
+        prompt: String,
+    ) -> PreparedTurnStreamRequest {
+        PreparedTurnStreamRequest {
+            workspace_directory,
+            thread_id,
+            prompt,
+            slot_lease_request: self.build_parallel_mode_slot_lease_request(),
+        }
+    }
+
+    fn build_parallel_mode_slot_lease_request(&self) -> Option<ParallelModeSlotLeaseRequest> {
+        if !self.parallel_mode_enabled() {
+            return None;
+        }
+
+        let ConversationState::Ready(conversation) = &self.conversation_state else {
+            return None;
+        };
+        let handoff_task = conversation.last_planning_task_handoff()?;
+
+        Some(parallel_mode_slot_lease_request(handoff_task))
     }
 
     pub(super) fn resolve_startup_submit_queue(&mut self) {
@@ -290,5 +320,71 @@ fn append_debug_detail_preview_block(lines: &mut Vec<String>, label: &str, block
     lines.push(label.to_string());
     for line in build_debug_preview_lines(block, AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES) {
         lines.push(format!("  {line}"));
+    }
+}
+
+fn parallel_mode_slot_lease_request(
+    handoff_task: &PlanningTaskHandoff,
+) -> ParallelModeSlotLeaseRequest {
+    let task_id = handoff_task.task_id.trim();
+    let task_title = handoff_task.task_title.trim();
+    let task_slug = sanitize_parallel_mode_identifier(task_id)
+        .or_else(|| sanitize_parallel_mode_identifier(task_title))
+        .unwrap_or_else(|| "task".to_string());
+    let agent_slug = sanitize_parallel_mode_identifier(task_id)
+        .or_else(|| sanitize_parallel_mode_identifier(task_title))
+        .unwrap_or_else(|| "agent".to_string());
+
+    ParallelModeSlotLeaseRequest::new(
+        task_id,
+        task_title,
+        format!("agent-{agent_slug}"),
+        task_slug,
+    )
+}
+
+fn sanitize_parallel_mode_identifier(input: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_dash = false;
+
+    for character in input.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            previous_was_dash = false;
+            continue;
+        }
+
+        if !previous_was_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_was_dash = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    (!slug.is_empty()).then_some(slug)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parallel_mode_slot_lease_request_uses_handoff_task_identity() {
+        let request = parallel_mode_slot_lease_request(&PlanningTaskHandoff {
+            task_id: "task-supersession-runtime".to_string(),
+            task_title: "Wire runtime into slot lease lifecycle".to_string(),
+            direction_id: "supersession-git-worktree-pool".to_string(),
+            combined_priority: 96,
+            updated_at: "2026-04-17T05:20:00Z".to_string(),
+            status_label: "ready".to_string(),
+        });
+
+        assert_eq!(request.task_id, "task-supersession-runtime");
+        assert_eq!(request.task_title, "Wire runtime into slot lease lifecycle");
+        assert_eq!(request.agent_id, "agent-task-supersession-runtime");
+        assert_eq!(request.task_slug, "task-supersession-runtime");
     }
 }

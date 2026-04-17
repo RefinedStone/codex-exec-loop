@@ -563,6 +563,10 @@ impl ConversationViewModel {
         self.active_turn_started_at = Some(Instant::now());
     }
 
+    pub(crate) fn replace_active_turn_workspace_directory(&mut self, workspace_directory: String) {
+        self.active_turn_workspace_directory = Some(workspace_directory);
+    }
+
     pub(crate) fn mark_turn_started(&mut self, turn_id: String) {
         self.active_turn_id = Some(turn_id);
         self.input_state = ConversationInputState::StreamingTurn;
