@@ -19,7 +19,7 @@ scope_hints = [
     "Keep degraded-state copy explicit and recoverable from the first slice.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-mode-entry-and-readiness.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-agent-control-tower"
@@ -36,7 +36,7 @@ scope_hints = [
     "Keep the supervisor operational and non-conversational in every slice.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-agent-control-tower.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-ledger-feedback-loop"
@@ -53,7 +53,7 @@ scope_hints = [
     "Prefer explicit reported-versus-official state over inferred completion.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-ledger-feedback-loop.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-git-worktree-pool"
@@ -70,7 +70,7 @@ scope_hints = [
     "Keep slot identity and worktree-root naming deterministic from the first slice.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-git-worktree-pool.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-distributor-merge-queue"
@@ -87,7 +87,7 @@ scope_hints = [
     "Keep slot cleanup tied to distributor ownership and state transitions.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-distributor-merge-queue.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-architecture-boundaries"

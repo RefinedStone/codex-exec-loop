@@ -36,6 +36,15 @@
 - Recovery model:
   Invalid planning changes are restored, archived, and surfaced back to the operator instead of being silently accepted.
 
+## Supersession On `prerelease`
+
+- `:parallel on` runs readiness checks for git, worktree support, `akra`, push credentials, `gh`, and planning before the shell enters supersession mode.
+- The supersession control tower already projects capabilities, pool capacity, active agent roster, selected session detail, and distributor queue state from live snapshots.
+- Queue-driven auto follow-up can lease one of three `akra` worktree slots, launch a main-grade agent session in that slot, and keep slot lifecycle state synchronized through thread preparation, turn start, and completion.
+- Agent completion is intentionally split into `reported_complete` and official completion: hidden planning refresh must succeed before the result becomes `commit_ready` and enters distributor delivery.
+- Distributor delivery is already serial: it processes one queue head at a time, rebases stale branches onto `akra`, force-pushes rebased heads when needed, ensures and closes PRs through GitHub automation, and only returns the slot after cleanup succeeds.
+- The main supersession work that still remains is architectural cleanup around explicit runtime ports and seams, not the first-pass operator-facing loop.
+
 ## Active Constraints
 
 - Real-terminal validation is still required after prompt, streaming, overlay, or restore changes.
@@ -55,5 +64,7 @@
 ## Code Entry
 
 - Shell runtime entrypoint: `src/adapter/inbound/tui/app.rs`
+- Supersession shell entrypoint: `src/adapter/inbound/tui/app/parallel_mode.rs`
+- Supersession application services: `src/application/service/parallel_mode_service.rs`
 - Planning feature entrypoint: `src/adapter/inbound/tui/app/planning/`
 - Application planning services: `src/application/service/planning/`
