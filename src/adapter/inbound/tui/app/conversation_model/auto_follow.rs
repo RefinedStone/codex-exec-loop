@@ -28,6 +28,7 @@ pub(crate) enum AutoFollowupSkipReason {
     PlanningQueueIdlePolicyStop,
     PlanningQueueHeadRequired,
     PlanningRepeatedQueueHead,
+    ParallelSessionCompleted,
 }
 
 impl AutoFollowupSkipReason {
@@ -74,6 +75,10 @@ impl AutoFollowupSkipReason {
                 "the planning queue selected the same task again; auto follow-up stays paused until the queue advances"
                     .to_string()
             }
+            Self::ParallelSessionCompleted => {
+                "parallel agent session completed its assigned task; follow-up stays with the supervisor instead of reusing the same slot session"
+                    .to_string()
+            }
         }
     }
 
@@ -89,6 +94,7 @@ impl AutoFollowupSkipReason {
             Self::PlanningQueueIdlePolicyStop => "stopped: queue idle policy stop",
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
             Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
+            Self::ParallelSessionCompleted => "stopped: parallel session completed",
         }
     }
 
@@ -125,6 +131,10 @@ impl AutoFollowupSkipReason {
             }
             Self::PlanningRepeatedQueueHead => {
                 "turn completed / auto follow-up paused: planning queue repeated the previous task"
+                    .to_string()
+            }
+            Self::ParallelSessionCompleted => {
+                "turn completed / auto follow-up stopped: parallel session completion is handed back to the supervisor"
                     .to_string()
             }
         }

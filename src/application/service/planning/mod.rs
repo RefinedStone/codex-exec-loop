@@ -51,8 +51,9 @@ pub use super::planning_runtime_facade_service::{
 };
 pub use super::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 pub use super::planning_worker_orchestration_service::{
-    PlanningLedgerRepairRequest, PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
-    PlanningWorkerRunOutcome,
+    PlanningLedgerRepairRequest, PlanningOfficialCompletionPayload,
+    PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
+    PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
 };
 
 #[derive(Clone)]
@@ -387,11 +388,27 @@ impl PlanningWorkerUseCases {
             .render_refresh_queue_prompt(request)
     }
 
+    pub fn render_official_completion_refresh_prompt(
+        &self,
+        request: &PlanningOfficialCompletionRefreshRequest<'_>,
+    ) -> String {
+        self.worker_orchestration
+            .render_official_completion_refresh_prompt(request)
+    }
+
     pub fn refresh_queue_from_reply(
         &self,
         request: PlanningQueueRefreshRequest<'_>,
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
         self.worker_orchestration.refresh_queue_from_reply(request)
+    }
+
+    pub fn refresh_queue_from_official_completion(
+        &self,
+        request: PlanningOfficialCompletionRefreshRequest<'_>,
+    ) -> anyhow::Result<PlanningWorkerRunOutcome> {
+        self.worker_orchestration
+            .refresh_queue_from_official_completion(request)
     }
 
     pub fn render_repair_task_ledger_prompt(

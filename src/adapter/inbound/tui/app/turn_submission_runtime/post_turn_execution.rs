@@ -1,8 +1,15 @@
+use crate::application::service::parallel_mode_service::{
+    ParallelModeOfficialCompletionReport, ParallelModeService,
+};
+use std::thread;
+use std::time::Duration;
+
 use crate::application::service::planning::PlanningProposalPromotionRequest;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{
-    PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
+    PlanningExecutionSnapshot, PlanningOfficialCompletionPayload,
+    PlanningOfficialCompletionRefreshRequest, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
 };
 use crate::application::service::planning::{
@@ -30,6 +37,8 @@ use super::super::{
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
     "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
+const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
+    "official completion refresh failed; the leased slot stays reserved until planning is repaired";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
@@ -50,6 +59,12 @@ struct BuiltinNextTaskRefreshOutcome {
 }
 
 #[derive(Debug, Clone)]
+struct OfficialCompletionRefreshOutcome {
+    runtime_snapshot: PlanningRuntimeSnapshot,
+    runtime_notices: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 #[cfg_attr(test, allow(dead_code))]
 struct PostTurnEvaluationExecution {
     thread_id: String,
@@ -61,6 +76,7 @@ struct PostTurnEvaluationExecution {
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
     planning: PlanningServices,
+    parallel_mode_service: ParallelModeService,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
 }
@@ -68,11 +84,13 @@ struct PostTurnEvaluationExecutor {
 impl PostTurnEvaluationExecutor {
     fn new(
         planning: PlanningServices,
+        parallel_mode_service: ParallelModeService,
         active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
         planner_worker_panel_state: PlannerWorkerPanelState,
     ) -> Self {
         Self {
             planning,
+            parallel_mode_service,
             active_turn_planning_capture,
             planner_worker_panel_state,
         }
@@ -84,15 +102,17 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
     ) -> PostTurnEvaluationExecution {
         let reconciliation_result = self.reconcile_planning_after_turn(request);
-        let runtime_notices = reconciliation_result.notices.clone();
+        let mut runtime_notices = reconciliation_result.notices.clone();
         let mut planning_runtime_snapshot = self.planning_runtime_snapshot_after_reconciliation(
             conversation,
             request,
             &reconciliation_result,
         );
         let automation_enabled = conversation.auto_follow_state.enabled;
+        let official_completion_report =
+            self.begin_official_completion_if_needed(conversation, request);
 
-        if automation_enabled
+        if (automation_enabled || official_completion_report.is_some())
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
         {
             let repair_outcome = self.run_hidden_planning_repairs(
@@ -103,7 +123,22 @@ impl PostTurnEvaluationExecutor {
             planning_runtime_snapshot = repair_outcome.runtime_snapshot;
         }
 
-        if automation_enabled {
+        let handled_parallel_completion =
+            if let Some(completion_report) = official_completion_report {
+                let official_completion_outcome = self.run_official_completion_refresh(
+                    conversation,
+                    request,
+                    &planning_runtime_snapshot,
+                    &completion_report,
+                );
+                runtime_notices.extend(official_completion_outcome.runtime_notices.clone());
+                planning_runtime_snapshot = official_completion_outcome.runtime_snapshot;
+                true
+            } else {
+                false
+            };
+
+        if !handled_parallel_completion && automation_enabled {
             let refresh_outcome = self.run_builtin_next_task_refresh(
                 conversation,
                 request,
@@ -112,11 +147,17 @@ impl PostTurnEvaluationExecutor {
             planning_runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
 
-        let action = self.auto_followup_action_from_snapshot(
-            conversation,
-            request,
-            &planning_runtime_snapshot,
-        );
+        let action = if handled_parallel_completion {
+            ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::ParallelSessionCompleted,
+            }
+        } else {
+            self.auto_followup_action_from_snapshot(
+                conversation,
+                request,
+                &planning_runtime_snapshot,
+            )
+        };
 
         PostTurnEvaluationExecution {
             thread_id: conversation.thread_id.clone(),
@@ -198,6 +239,220 @@ impl PostTurnEvaluationExecutor {
                 ),
                 ..PlanningReconciliationResult::default()
             },
+        }
+    }
+
+    fn begin_official_completion_if_needed(
+        &mut self,
+        conversation: &ConversationViewModel,
+        request: &PostTurnEvaluationRequest,
+    ) -> Option<ParallelModeOfficialCompletionReport> {
+        let latest_main_reply = conversation
+            .latest_agent_message_text()
+            .map(str::trim)
+            .filter(|message| !message.is_empty());
+        let validation_summary = if request.changed_planning_file_paths.is_empty() {
+            "turn completed without planning file changes"
+        } else {
+            "turn completed with planning file changes; protected planning files were reconciled before official refresh"
+        };
+
+        match self
+            .parallel_mode_service
+            .begin_workspace_official_completion(
+                &request.workspace_directory,
+                latest_main_reply,
+                Some(validation_summary),
+                None,
+            ) {
+            Ok(report) => report,
+            Err(error) => {
+                self.record_planner_worker_failure(
+                    PlannerWorkerStatus::RefreshFailed,
+                    &format!("parallel completion capture failed: {error}"),
+                    &conversation.planning_runtime_snapshot,
+                );
+                None
+            }
+        }
+    }
+
+    fn run_official_completion_refresh(
+        &mut self,
+        conversation: &ConversationViewModel,
+        request: &PostTurnEvaluationRequest,
+        current_snapshot: &PlanningRuntimeSnapshot,
+        completion_report: &ParallelModeOfficialCompletionReport,
+    ) -> OfficialCompletionRefreshOutcome {
+        if current_snapshot.workspace_present() && !current_snapshot.plan_enabled() {
+            let failure_detail =
+                "official completion refresh is blocked because planning mode is off";
+            let _ = self
+                .parallel_mode_service
+                .mark_workspace_official_completion_failed(
+                    &request.workspace_directory,
+                    failure_detail,
+                );
+            let failure_snapshot =
+                self.official_completion_failure_snapshot(current_snapshot, failure_detail);
+            self.record_planner_worker_failure(
+                PlannerWorkerStatus::RefreshFailed,
+                failure_detail,
+                &failure_snapshot,
+            );
+            return OfficialCompletionRefreshOutcome {
+                runtime_snapshot: failure_snapshot,
+                runtime_notices: Vec::new(),
+            };
+        }
+
+        if matches!(
+            current_snapshot.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::Invalid | PlanningRuntimeWorkspaceStatus::Uninitialized
+        ) {
+            let failure_detail = current_snapshot.preview_detail().unwrap_or(
+                "official completion refresh is blocked because the planning workspace is unavailable",
+            );
+            let _ = self
+                .parallel_mode_service
+                .mark_workspace_official_completion_failed(
+                    &request.workspace_directory,
+                    failure_detail,
+                );
+            let failure_snapshot =
+                self.official_completion_failure_snapshot(current_snapshot, failure_detail);
+            self.record_planner_worker_failure(
+                PlannerWorkerStatus::RefreshFailed,
+                failure_detail,
+                &failure_snapshot,
+            );
+            return OfficialCompletionRefreshOutcome {
+                runtime_snapshot: failure_snapshot,
+                runtime_notices: Vec::new(),
+            };
+        }
+
+        let _ = self
+            .parallel_mode_service
+            .mark_workspace_official_completion_refreshing(&request.workspace_directory);
+        let latest_main_reply = conversation
+            .latest_agent_message_text()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .unwrap_or(completion_report.final_response_summary.as_str());
+        let worker_request = PlanningOfficialCompletionRefreshRequest {
+            workspace_directory: &request.workspace_directory,
+            root_turn_id: &request.queued_from_turn_id,
+            latest_user_message: conversation.latest_user_message_text(),
+            latest_main_reply,
+            previous_handoff_task: conversation.last_planning_task_handoff(),
+            completion: PlanningOfficialCompletionPayload {
+                agent_id: &completion_report.agent_id,
+                task_id: &completion_report.task_id,
+                task_title: &completion_report.task_title,
+                branch_name: &completion_report.branch_name,
+                worktree_path: &completion_report.worktree_path,
+                commit_sha: &completion_report.commit_sha,
+                validation_summary: &completion_report.validation_summary,
+                final_response_summary: &completion_report.final_response_summary,
+                final_response_text: completion_report.final_response_text.as_deref(),
+                failure_context: completion_report.failure_context.as_deref(),
+                completed_at: &completion_report.completed_at,
+            },
+        };
+        let worker_prompt = self
+            .planning
+            .worker
+            .render_official_completion_refresh_prompt(&worker_request);
+        self.record_planner_worker_running(
+            PlannerWorkerStatus::RefreshRunning,
+            "official-refresh",
+            worker_prompt,
+        );
+
+        let worker_outcome = self
+            .planning
+            .worker
+            .refresh_queue_from_official_completion(worker_request);
+        let outcome = match worker_outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let detail = format!("official completion refresh failed: {error}");
+                let _ = self
+                    .parallel_mode_service
+                    .mark_workspace_official_completion_failed(
+                        &request.workspace_directory,
+                        &detail,
+                    );
+                let failure_snapshot =
+                    self.official_completion_failure_snapshot(current_snapshot, &detail);
+                self.record_planner_worker_failure(
+                    PlannerWorkerStatus::RefreshFailed,
+                    &detail,
+                    &failure_snapshot,
+                );
+                return OfficialCompletionRefreshOutcome {
+                    runtime_snapshot: failure_snapshot,
+                    runtime_notices: Vec::new(),
+                };
+            }
+        };
+
+        self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
+        let mut runtime_snapshot = outcome.runtime_snapshot.clone();
+
+        if let Some(repair_request) = outcome.repair_request.as_ref() {
+            let repair_outcome = self.run_hidden_planning_repairs(
+                &request.workspace_directory,
+                &request.queued_from_turn_id,
+                repair_request,
+            );
+            runtime_snapshot = if repair_outcome.resolved {
+                repair_outcome.runtime_snapshot
+            } else {
+                self.official_completion_failure_snapshot(
+                    &repair_outcome.runtime_snapshot,
+                    OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
+                )
+            };
+        }
+
+        if runtime_snapshot.blocks_auto_followup() {
+            let failure_detail = runtime_snapshot
+                .preview_detail()
+                .unwrap_or(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON);
+            let _ = self
+                .parallel_mode_service
+                .mark_workspace_official_completion_failed(
+                    &request.workspace_directory,
+                    failure_detail,
+                );
+            let failure_snapshot =
+                self.official_completion_failure_snapshot(&runtime_snapshot, failure_detail);
+            self.record_planner_worker_failure(
+                PlannerWorkerStatus::RefreshFailed,
+                failure_detail,
+                &failure_snapshot,
+            );
+            return OfficialCompletionRefreshOutcome {
+                runtime_snapshot: failure_snapshot,
+                runtime_notices: Vec::new(),
+            };
+        }
+
+        let ledger_refresh_outcome = outcome
+            .worker_summary
+            .as_deref()
+            .map(|summary| format!("official ledger refresh succeeded: {summary}"))
+            .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
+        let _ = self
+            .parallel_mode_service
+            .mark_workspace_commit_ready(&request.workspace_directory, &ledger_refresh_outcome);
+        let runtime_notices = self.finalize_commit_ready_slot_cleanup(&request.workspace_directory);
+
+        OfficialCompletionRefreshOutcome {
+            runtime_snapshot,
+            runtime_notices,
         }
     }
 
@@ -291,6 +546,65 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot,
             resolved: false,
         }
+    }
+
+    fn official_completion_failure_snapshot(
+        &self,
+        current_snapshot: &PlanningRuntimeSnapshot,
+        failure_detail: &str,
+    ) -> PlanningRuntimeSnapshot {
+        let detail = if failure_detail.trim().is_empty() {
+            OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON
+        } else {
+            failure_detail
+        };
+        current_snapshot.with_auto_followup_pause_reason(detail.to_string())
+    }
+
+    fn finalize_commit_ready_slot_cleanup(&self, workspace_directory: &str) -> Vec<String> {
+        let mut notices = Vec::new();
+        let mut cleanup_pending_ready = false;
+        for attempt in 0..20 {
+            match self
+                .parallel_mode_service
+                .mark_workspace_slot_cleanup_pending_if_ready(workspace_directory)
+            {
+                Ok(Some(lease)) => {
+                    notices.push(format!(
+                        "slot lease became cleanup-pending after official refresh / slot: {} / agent: {}",
+                        lease.slot_id, lease.agent_id
+                    ));
+                    cleanup_pending_ready = true;
+                    break;
+                }
+                Ok(None) if attempt < 19 => thread::sleep(Duration::from_millis(10)),
+                Ok(None) => break,
+                Err(error) => {
+                    notices.push(format!(
+                        "slot cleanup-pending transition failed after official refresh: {error}"
+                    ));
+                    break;
+                }
+            }
+        }
+
+        if cleanup_pending_ready {
+            match self
+                .parallel_mode_service
+                .cleanup_workspace_slot_if_pending(workspace_directory)
+            {
+                Ok(Some(lease)) => notices.push(format!(
+                    "slot returned to idle after official refresh / slot: {} / agent: {}",
+                    lease.slot_id, lease.agent_id
+                )),
+                Ok(None) => {}
+                Err(error) => notices.push(format!(
+                    "slot cleanup failed after official refresh: {error}"
+                )),
+            }
+        }
+
+        notices
     }
 
     fn run_builtin_next_task_refresh(
@@ -620,6 +934,7 @@ impl NativeTuiApp {
         self.mark_post_turn_evaluation_running(&conversation, &request);
         let executor = PostTurnEvaluationExecutor::new(
             self.planning.clone(),
+            self.parallel_mode_service.clone(),
             self.active_turn_planning_capture.take(),
             self.planner_worker_panel_state.clone(),
         );
@@ -628,6 +943,7 @@ impl NativeTuiApp {
         {
             let execution = executor.run(&conversation, &request);
             self.planner_worker_panel_state = execution.planner_worker_panel_state;
+            self.invalidate_parallel_mode_supervisor_snapshot();
             self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
                 evaluation: Box::new(execution.evaluation),
             });

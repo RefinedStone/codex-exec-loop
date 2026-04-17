@@ -281,45 +281,7 @@ fn finalize_slot_lease_after_stream_completion(
         return (None, false);
     }
 
-    let cleanup_pending_lease = match parallel_mode_service
-        .mark_workspace_slot_cleanup_pending_if_ready(&request.workspace_directory)
-    {
-        Ok(lease) => lease,
-        Err(error) => {
-            return (
-                Some(format!(
-                    "slot lease cleanup-pending transition failed after successful completion: {error}"
-                )),
-                false,
-            );
-        }
-    };
-
-    let cleanup_pending_transitioned = cleanup_pending_lease.is_some();
-    match parallel_mode_service.cleanup_workspace_slot_if_pending(&request.workspace_directory) {
-        Ok(Some(lease)) => (
-            Some(format!(
-                "slot lease cleaned up and returned after successful completion / slot: {} / agent: {}",
-                lease.slot_id, lease.agent_id
-            )),
-            true,
-        ),
-        Ok(None) => (
-            cleanup_pending_lease.map(|lease| {
-                format!(
-                    "slot lease marked cleanup pending after successful completion / slot: {} / agent: {}",
-                    lease.slot_id, lease.agent_id
-                )
-            }),
-            cleanup_pending_transitioned,
-        ),
-        Err(error) => (
-            Some(format!(
-                "slot lease cleanup failed after successful completion: {error}"
-            )),
-            false,
-        ),
-    }
+    (None, false)
 }
 
 fn should_release_unstarted_slot_lease(

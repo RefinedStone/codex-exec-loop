@@ -17,12 +17,12 @@ use super::{
     NativeTuiApp, PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus,
     PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
     SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
-    TurnActivityState, build_conversation_shell_frame_view, build_conversation_shell_view,
-    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
-    build_inline_tail_lines, build_planning_init_overlay_view, build_queue_overlay_view,
-    build_ready_input_lines, build_session_overlay_view, build_startup_overlay_view,
-    build_status_title, build_transcript_panel_view, format_conversation_lines, shell_layout,
-    startup_ascii_art_enabled_from_value,
+    TurnActivityState, build_automation_overlay_view, build_automation_preview_lines,
+    build_automation_status_lines, build_conversation_shell_frame_view,
+    build_conversation_shell_view, build_inline_tail_lines, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_ready_input_lines, build_session_overlay_view,
+    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
+    format_conversation_lines, shell_layout, startup_ascii_art_enabled_from_value,
 };
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
@@ -56,12 +56,14 @@ use crate::domain::startup_diagnostics::StartupDiagnostics;
 #[derive(Default)]
 struct FakeCodexAppServerPort {
     new_thread_calls: Mutex<Vec<(String, String)>>,
+    hidden_planning_calls: Mutex<Vec<(String, String)>>,
     turn_calls: Mutex<Vec<(String, String)>>,
     new_thread_stream_behavior: Mutex<FakeStreamBehavior>,
+    hidden_planning_stream_behavior: Mutex<FakeStreamBehavior>,
     turn_stream_behavior: Mutex<FakeStreamBehavior>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FakeStreamBehavior {
     events: Vec<ConversationStreamEvent>,
     error: Option<String>,
@@ -146,7 +148,28 @@ impl PlanningThreadLauncher for FakeCodexAppServerPort {
         prompt: &str,
         event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.run_new_thread_stream(workspace_directory, prompt, event_sender)
+        self.hidden_planning_calls
+            .lock()
+            .expect("hidden planning call mutex poisoned")
+            .push((workspace_directory.to_string(), prompt.to_string()));
+        self.new_thread_calls
+            .lock()
+            .expect("new-thread call mutex poisoned")
+            .push((workspace_directory.to_string(), prompt.to_string()));
+        let hidden_behavior = self
+            .hidden_planning_stream_behavior
+            .lock()
+            .expect("hidden planning stream behavior mutex poisoned")
+            .clone();
+        let behavior = if hidden_behavior == FakeStreamBehavior::default() {
+            self.new_thread_stream_behavior
+                .lock()
+                .expect("new-thread stream behavior mutex poisoned")
+                .clone()
+        } else {
+            hidden_behavior
+        };
+        run_fake_stream(Some(workspace_directory), event_sender, behavior)
     }
 }
 
@@ -333,6 +356,16 @@ fn bootstrap_active_planning_workspace(workspace_dir: &str) {
         promote_result.promoted_file_count > 0,
         "bootstrap planning workspace should become ready"
     );
+}
+
+fn commit_active_planning_workspace_into_akra(workspace_dir: &str) {
+    bootstrap_active_planning_workspace(workspace_dir);
+    run_git(workspace_dir, &["add", ".codex-exec-loop"]);
+    run_git(
+        workspace_dir,
+        &["commit", "-m", "Bootstrap planning workspace"],
+    );
+    merge_active_branch_into_akra(workspace_dir, workspace_dir);
 }
 
 fn rewrite_active_directions_toml(workspace_dir: &str, f: impl FnOnce(String) -> String) {

@@ -25,6 +25,31 @@ pub struct PlanningQueueRefreshRequest<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningOfficialCompletionRefreshRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub root_turn_id: &'a str,
+    pub latest_user_message: Option<&'a str>,
+    pub latest_main_reply: &'a str,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub completion: PlanningOfficialCompletionPayload<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningOfficialCompletionPayload<'a> {
+    pub agent_id: &'a str,
+    pub task_id: &'a str,
+    pub task_title: &'a str,
+    pub branch_name: &'a str,
+    pub worktree_path: &'a str,
+    pub commit_sha: &'a str,
+    pub validation_summary: &'a str,
+    pub final_response_summary: &'a str,
+    pub final_response_text: Option<&'a str>,
+    pub failure_context: Option<&'a str>,
+    pub completed_at: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningQueueRefreshMode<'a> {
     FromLatestReply,
     DeriveNextTaskWhenQueueIdle { queue_idle_prompt_markdown: &'a str },
@@ -81,6 +106,19 @@ impl PlanningWorkerOrchestrationService {
         )
     }
 
+    pub fn refresh_queue_from_official_completion(
+        &self,
+        request: PlanningOfficialCompletionRefreshRequest<'_>,
+    ) -> Result<PlanningWorkerRunOutcome> {
+        let prompt = self.render_official_completion_refresh_prompt(&request);
+        self.run_worker_and_reconcile(
+            request.workspace_directory,
+            &format!("planner-refresh-{}", request.root_turn_id),
+            PlanningWorkerOperation::RefreshQueue,
+            prompt,
+        )
+    }
+
     pub fn repair_task_ledger(
         &self,
         request: PlanningLedgerRepairRequest<'_>,
@@ -113,6 +151,18 @@ impl PlanningWorkerOrchestrationService {
                 queue_idle_prompt_markdown,
             ),
         }
+    }
+
+    pub fn render_official_completion_refresh_prompt(
+        &self,
+        request: &PlanningOfficialCompletionRefreshRequest<'_>,
+    ) -> String {
+        build_planning_official_completion_prompt(
+            request.latest_user_message,
+            request.latest_main_reply,
+            request.previous_handoff_task,
+            &request.completion,
+        )
     }
 
     pub fn render_repair_task_ledger_prompt(
@@ -256,6 +306,71 @@ main session latest reply:
     )
 }
 
+fn build_planning_official_completion_prompt(
+    latest_user_message: Option<&str>,
+    latest_main_reply: &str,
+    previous_handoff_task: Option<&PlanningTaskHandoff>,
+    completion: &PlanningOfficialCompletionPayload<'_>,
+) -> String {
+    let latest_user_request_section = latest_user_request_section(latest_user_message);
+    let previous_handoff_section = previous_handoff_section(previous_handoff_task);
+    let final_response_text = completion
+        .final_response_text
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("(no long-form completion text captured)");
+    let failure_context = completion
+        .failure_context
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("(none)");
+
+    format!(
+        r#"planning worker official completion refresh 입니다.
+
+이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 기준으로 agent completion을 공식 상태로 반영하세요.
+- planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
+- `directions.toml`, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
+- 아래 completion payload는 비공식 agent report입니다. ledger refresh가 성공하기 전까지 이 결과를 공식 완료로 간주하지 마세요.
+- payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
+- follow-up work가 있으면 새 executable task를 queue에 반영하고, 없으면 queue를 비워 둘 수 있습니다.
+- 같은 task를 다시 queue head로 유지해야 한다면 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
+- `commit_sha`, `branch_name`, `worktree_path`는 provenance 용도입니다. ledger에는 작업 의미 중심으로 반영하되 repeat prevention 판단에 활용하세요.
+- `validation_summary`가 실패 또는 미실행이면 후속 task를 `blocked` 또는 보완 task로 표현할지 신중히 결정하세요.
+- 마지막에는 이번 official refresh에서 ledger에 반영한 핵심 판단을 짧게 요약하세요.
+{latest_user_request_section}
+{previous_handoff_section}
+
+official completion payload:
+- agent_id: {agent_id}
+- task_id: {task_id}
+- task_title: {task_title}
+- branch_name: {branch_name}
+- worktree_path: {worktree_path}
+- commit_sha: {commit_sha}
+- validation_summary: {validation_summary}
+- final_response_summary: {final_response_summary}
+- final_response_text:
+{final_response_text}
+- failure_context: {failure_context}
+- completed_at: {completed_at}
+
+main session latest reply:
+{latest_main_reply}"#,
+        agent_id = completion.agent_id,
+        task_id = completion.task_id,
+        task_title = completion.task_title,
+        branch_name = completion.branch_name,
+        worktree_path = completion.worktree_path,
+        commit_sha = completion.commit_sha,
+        validation_summary = completion.validation_summary,
+        final_response_summary = completion.final_response_summary,
+        final_response_text = final_response_text,
+        failure_context = failure_context,
+        completed_at = completion.completed_at,
+    )
+}
+
 fn latest_user_request_section(latest_user_message: Option<&str>) -> String {
     latest_user_message
         .map(str::trim)
@@ -298,6 +413,7 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::{
+        PlanningOfficialCompletionPayload, PlanningOfficialCompletionRefreshRequest,
         PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
@@ -535,6 +651,55 @@ mod tests {
         assert!(prompt.contains("- task_id: task-7"));
         assert!(prompt.contains("- updated_at: 2026-04-14T00:00:00Z"));
         assert!(prompt.contains("그대로 `ready` queue head로 다시 선택하지 마세요."));
+    }
+
+    #[test]
+    fn render_official_completion_prompt_includes_completion_payload() {
+        let workspace_dir = create_temp_workspace("planning-worker-render-completion");
+        write_bootstrap_workspace(&workspace_dir);
+        let workspace_port: Arc<dyn PlanningWorkspacePort> =
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
+        let service = service_with_worker(worker);
+
+        let prompt = service.render_official_completion_refresh_prompt(
+            &PlanningOfficialCompletionRefreshRequest {
+                workspace_directory: &workspace_dir,
+                root_turn_id: "turn-9",
+                latest_user_message: Some("이후 작업도 이어서 진행해."),
+                latest_main_reply: "구현을 마쳤고 follow-up 하나가 남았습니다.",
+                previous_handoff_task: Some(&PlanningTaskHandoff {
+                    task_id: "task-9".to_string(),
+                    task_title: "Official completion pipeline 구현".to_string(),
+                    direction_id: "supersession-ledger-feedback-loop".to_string(),
+                    combined_priority: 88,
+                    updated_at: "2026-04-17T09:00:00Z".to_string(),
+                    status_label: "ready".to_string(),
+                }),
+                completion: PlanningOfficialCompletionPayload {
+                    agent_id: "agent-2",
+                    task_id: "task-9",
+                    task_title: "Official completion pipeline 구현",
+                    branch_name: "akra-agent/slot-1/official-completion",
+                    worktree_path: "/tmp/slot-1",
+                    commit_sha: "abc123def456",
+                    validation_summary: "cargo test passed",
+                    final_response_summary: "official completion lifecycle wired",
+                    final_response_text: Some("Implemented official completion reporting."),
+                    failure_context: None,
+                    completed_at: "2026-04-17T09:10:00Z",
+                },
+            },
+        );
+
+        assert!(prompt.contains("official completion payload:"));
+        assert!(prompt.contains("agent_id: agent-2"));
+        assert!(prompt.contains("task_id: task-9"));
+        assert!(prompt.contains("commit_sha: abc123def456"));
+        assert!(prompt.contains("validation_summary: cargo test passed"));
+        assert!(prompt.contains("final_response_summary: official completion lifecycle wired"));
+        assert!(prompt.contains("Implemented official completion reporting."));
+        assert!(prompt.contains("latest operator request:"));
     }
 
     #[test]

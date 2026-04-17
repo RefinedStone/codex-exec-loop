@@ -105,6 +105,21 @@ struct WorkspaceSlotLeaseResolution {
     workspace_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeOfficialCompletionReport {
+    pub agent_id: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub branch_name: String,
+    pub worktree_path: String,
+    pub commit_sha: String,
+    pub validation_summary: String,
+    pub final_response_summary: String,
+    pub final_response_text: Option<String>,
+    pub failure_context: Option<String>,
+    pub completed_at: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParallelModeService;
 
@@ -200,7 +215,7 @@ impl ParallelModeService {
             build_pool_board(workspace_dir, readiness_snapshot),
             build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
             build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
-            build_placeholder_distributor(mode_enabled, readiness_snapshot),
+            build_distributor_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
             top_notice,
         )
     }
@@ -231,7 +246,7 @@ impl ParallelModeService {
             pool,
             build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
             build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
-            build_placeholder_distributor(mode_enabled, readiness_snapshot),
+            build_distributor_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
             top_notice,
         )
     }
@@ -484,6 +499,117 @@ impl ParallelModeService {
             record_failed_start_session_detail(&resolution.context.pool_root, &resolution.lease);
 
         Ok(Some(resolution.lease))
+    }
+
+    pub fn begin_workspace_official_completion(
+        &self,
+        workspace_dir: &str,
+        final_response_text: Option<&str>,
+        validation_summary: Option<&str>,
+        failure_context: Option<&str>,
+    ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+
+        let commit_sha =
+            resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
+                format!(
+                    "slot `{}` workspace head could not be resolved for official completion",
+                    resolution.lease.slot_id
+                )
+            })?;
+        let completed_at = current_timestamp();
+        let final_response_text = normalized_optional_text(final_response_text).map(str::to_string);
+        let validation_summary = normalized_optional_text(validation_summary)
+            .unwrap_or("validation status was not reported by runtime")
+            .to_string();
+        let failure_context = normalized_optional_text(failure_context).map(str::to_string);
+        let final_response_summary = completion_summary_from_text(
+            final_response_text.as_deref(),
+            failure_context.as_deref(),
+        );
+
+        record_reported_complete_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            &completed_at,
+            &final_response_summary,
+            &validation_summary,
+            failure_context.as_deref(),
+        )?;
+
+        Ok(Some(ParallelModeOfficialCompletionReport {
+            agent_id: resolution.lease.agent_id,
+            task_id: resolution.lease.task_id,
+            task_title: resolution.lease.task_title,
+            branch_name: resolution.lease.branch_name,
+            worktree_path: resolution.lease.worktree_path,
+            commit_sha,
+            validation_summary,
+            final_response_summary,
+            final_response_text,
+            failure_context,
+            completed_at,
+        }))
+    }
+
+    pub fn mark_workspace_official_completion_refreshing(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+
+        record_ledger_refreshing_session_detail(&resolution.context.pool_root, &resolution.lease)
+            .map(Some)
+    }
+
+    pub fn mark_workspace_commit_ready(
+        &self,
+        workspace_dir: &str,
+        ledger_refresh_outcome: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+
+        record_commit_ready_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            ledger_refresh_outcome,
+        )
+        .map(Some)
+    }
+
+    pub fn mark_workspace_official_completion_failed(
+        &self,
+        workspace_dir: &str,
+        failure_detail: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+
+        record_official_completion_failed_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            failure_detail,
+        )
+        .map(Some)
     }
 
     pub fn mark_workspace_slot_cleanup_pending_if_ready(
@@ -1919,8 +2045,38 @@ fn remove_slot_lease(pool_root: &Path, slot_id: &str) -> bool {
     !lease_path.exists() || fs::remove_file(lease_path).is_ok()
 }
 
+fn resolve_workspace_head_sha(workspace_path: &Path) -> Option<String> {
+    let workspace = workspace_path.display().to_string();
+    run_command("git", ["-C", workspace.as_str(), "rev-parse", "HEAD"], None)
+}
+
 fn current_timestamp() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn normalized_optional_text(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn completion_summary_from_text(
+    final_response_text: Option<&str>,
+    failure_context: Option<&str>,
+) -> String {
+    if let Some(summary) = final_response_text
+        .and_then(first_non_empty_line)
+        .filter(|summary| !summary.is_empty())
+    {
+        return summary.to_string();
+    }
+    if let Some(context) = failure_context {
+        return format!("agent session finished with follow-up context: {context}");
+    }
+
+    "agent session reported completion without a structured final summary".to_string()
+}
+
+fn first_non_empty_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 fn allocate_agent_branch_name(
@@ -2070,6 +2226,7 @@ fn build_agent_roster_from_context(
     context: &PoolRuntimeContext,
     mode_enabled: bool,
 ) -> ParallelModeAgentRosterSnapshot {
+    let history = load_agent_session_detail_records(&context.pool_root);
     let mut leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
     leases.sort_by(|left, right| {
         roster_state_priority(right.state)
@@ -2080,7 +2237,13 @@ fn build_agent_roster_from_context(
 
     let entries = leases
         .iter()
-        .map(build_agent_roster_entry)
+        .map(|lease| {
+            let detail = history
+                .iter()
+                .find(|detail| detail.session_key == lease_session_key(lease))
+                .cloned();
+            build_agent_roster_entry(lease, detail.as_ref())
+        })
         .collect::<Vec<_>>();
     let empty_state = if mode_enabled {
         "no agent sessions launched in this slice"
@@ -2091,15 +2254,18 @@ fn build_agent_roster_from_context(
     ParallelModeAgentRosterSnapshot::new(entries, empty_state)
 }
 
-fn build_agent_roster_entry(lease: &ParallelModeSlotLeaseSnapshot) -> ParallelModeAgentRosterEntry {
+fn build_agent_roster_entry(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> ParallelModeAgentRosterEntry {
     ParallelModeAgentRosterEntry::new(
         lease.agent_id.clone(),
         lease.task_title.clone(),
         lease.slot_id.clone(),
         lease.branch_name.clone(),
-        roster_state_label(lease.state),
-        roster_duration_label(lease),
-        roster_latest_summary(lease.state),
+        roster_state_label(lease, detail),
+        roster_duration_label(lease, detail),
+        roster_latest_summary(lease, detail),
     )
 }
 
@@ -2118,15 +2284,37 @@ fn roster_recency_key(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
         .unwrap_or(lease.leased_at.as_str())
 }
 
-fn roster_state_label(state: ParallelModeSlotLeaseState) -> &'static str {
-    match state {
-        ParallelModeSlotLeaseState::Leased => "starting",
-        ParallelModeSlotLeaseState::Running => "running",
-        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending",
+fn roster_state_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> String {
+    if let Some(detail) = detail
+        && let Some(label) = active_runtime_state_override(lease, detail)
+    {
+        return label.to_string();
+    }
+
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased => "starting".to_string(),
+        ParallelModeSlotLeaseState::Running => "running".to_string(),
+        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
     }
 }
 
-fn roster_duration_label(lease: &ParallelModeSlotLeaseSnapshot) -> String {
+fn roster_duration_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> String {
+    if let Some(detail) = detail {
+        match detail.state_label.as_str() {
+            "reported_complete" => return "reported".to_string(),
+            "ledger_refreshing" => return "refreshing".to_string(),
+            "commit_ready" => return "official".to_string(),
+            "failed" => return "blocked".to_string(),
+            _ => {}
+        }
+    }
+
     match lease.state {
         ParallelModeSlotLeaseState::Leased => "launch pending".to_string(),
         ParallelModeSlotLeaseState::Running => lease
@@ -2138,14 +2326,25 @@ fn roster_duration_label(lease: &ParallelModeSlotLeaseSnapshot) -> String {
     }
 }
 
-fn roster_latest_summary(state: ParallelModeSlotLeaseState) -> &'static str {
-    match state {
-        ParallelModeSlotLeaseState::Leased => "branch reserved and agent bootstrap in progress",
-        ParallelModeSlotLeaseState::Running => "agent session is active in the leased slot",
-        ParallelModeSlotLeaseState::CleanupPending => {
-            "execution finished and slot cleanup is pending"
-        }
-    }
+fn roster_latest_summary(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> String {
+    detail
+        .map(|detail| detail.latest_summary.trim())
+        .filter(|summary| !summary.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| match lease.state {
+            ParallelModeSlotLeaseState::Leased => {
+                "branch reserved and agent bootstrap in progress".to_string()
+            }
+            ParallelModeSlotLeaseState::Running => {
+                "agent session is active in the leased slot".to_string()
+            }
+            ParallelModeSlotLeaseState::CleanupPending => {
+                "execution finished and slot cleanup is pending".to_string()
+            }
+        })
 }
 
 fn build_supervisor_detail(
@@ -2232,10 +2431,10 @@ fn build_live_session_detail(
     detail.worktree_path = lease.worktree_path.clone();
     detail.branch_name = lease.branch_name.clone();
     detail.lease_started_at = lease.leased_at.clone();
-    detail.state_label = live_detail_state_label(lease, &detail).to_string();
-    detail.completion_state_label = live_completion_state_label(lease).to_string();
+    detail.state_label = live_detail_state_label(lease, &detail);
+    detail.completion_state_label = live_completion_state_label(lease, &detail);
     if detail.latest_summary.trim().is_empty() {
-        detail.latest_summary = roster_latest_summary(lease.state).to_string();
+        detail.latest_summary = roster_latest_summary(lease, Some(&detail));
     }
     if detail.validation_summary.trim().is_empty() {
         detail.validation_summary = default_validation_summary().to_string();
@@ -2255,24 +2454,52 @@ fn build_live_session_detail(
 fn live_detail_state_label(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: &ParallelModeAgentSessionDetailSnapshot,
-) -> &'static str {
+) -> String {
+    if let Some(label) = active_runtime_state_override(lease, detail) {
+        return label.to_string();
+    }
+
     match lease.state {
         ParallelModeSlotLeaseState::Leased => {
             if detail.thread_id.is_some() || detail.state_label == "starting" {
-                "starting"
+                "starting".to_string()
             } else {
-                "assigned"
+                "assigned".to_string()
             }
         }
-        ParallelModeSlotLeaseState::Running => "running",
-        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending",
+        ParallelModeSlotLeaseState::Running => "running".to_string(),
+        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
     }
 }
 
-fn live_completion_state_label(lease: &ParallelModeSlotLeaseSnapshot) -> &'static str {
+fn active_runtime_state_override<'a>(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: &'a ParallelModeAgentSessionDetailSnapshot,
+) -> Option<&'a str> {
     match lease.state {
-        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => "in_progress",
-        ParallelModeSlotLeaseState::CleanupPending => "merged",
+        ParallelModeSlotLeaseState::Running => match detail.state_label.as_str() {
+            "reported_complete" | "ledger_refreshing" | "commit_ready" | "failed" => {
+                Some(detail.state_label.as_str())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn live_completion_state_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+) -> String {
+    if active_runtime_state_override(lease, detail).is_some() {
+        return detail.completion_state_label.clone();
+    }
+
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => {
+            "in_progress".to_string()
+        }
+        ParallelModeSlotLeaseState::CleanupPending => "merged".to_string(),
     }
 }
 
@@ -2297,7 +2524,7 @@ fn default_validation_summary() -> &'static str {
 }
 
 fn default_ledger_refresh_outcome() -> &'static str {
-    "official ledger refresh tracking has not landed yet"
+    "no official completion has been reported yet"
 }
 
 fn lease_session_key(lease: &ParallelModeSlotLeaseSnapshot) -> String {
@@ -2379,6 +2606,115 @@ fn record_running_session_detail(
             "running",
             timestamp,
             "agent session entered the running state".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_reported_complete_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    completed_at: &str,
+    final_response_summary: &str,
+    validation_summary: &str,
+    failure_context: Option<&str>,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "reported_complete".to_string();
+        detail.completion_state_label = "reported_complete".to_string();
+        detail.latest_summary = final_response_summary.to_string();
+        detail.validation_summary = validation_summary.to_string();
+        detail.ledger_refresh_outcome =
+            "completion reported; official ledger refresh is pending".to_string();
+        detail.distributor_outcome = None;
+        detail.updated_at = completed_at.to_string();
+
+        let history_summary = failure_context.map_or_else(
+            || final_response_summary.to_string(),
+            |context| format!("{final_response_summary} / context: {context}"),
+        );
+        push_session_history(
+            &mut detail,
+            "reported_complete",
+            completed_at.to_string(),
+            history_summary,
+        );
+        detail
+    })
+}
+
+fn record_ledger_refreshing_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "ledger_refreshing".to_string();
+        detail.completion_state_label = "ledger_refreshing".to_string();
+        detail.latest_summary =
+            "completion reported and hidden planning worker is refreshing the ledger".to_string();
+        detail.ledger_refresh_outcome =
+            "hidden planning worker is refreshing the official task ledger".to_string();
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "ledger_refreshing",
+            timestamp,
+            "hidden planning worker is refreshing the official task ledger".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_commit_ready_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    ledger_refresh_outcome: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "commit_ready".to_string();
+        detail.completion_state_label = "commit_ready".to_string();
+        detail.latest_summary =
+            "official ledger refresh accepted the completion report".to_string();
+        detail.ledger_refresh_outcome = ledger_refresh_outcome.trim().to_string();
+        detail.distributor_outcome =
+            Some("commit-ready result is waiting for distributor integration".to_string());
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "commit_ready",
+            timestamp,
+            "official ledger refresh accepted the completion report".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_official_completion_failed_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    failure_detail: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "failed".to_string();
+        detail.completion_state_label = "failed".to_string();
+        detail.latest_summary = "official completion refresh failed".to_string();
+        detail.ledger_refresh_outcome = failure_detail.trim().to_string();
+        detail.distributor_outcome = Some(
+            "not queued for distributor integration because official refresh failed".to_string(),
+        );
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "failed",
+            timestamp,
+            failure_detail.trim().to_string(),
         );
         detail
     })
@@ -2616,30 +2952,146 @@ fn format_elapsed_seconds(elapsed_seconds: i64) -> String {
     format!("{days}d {hours}h")
 }
 
-fn build_placeholder_distributor(
+fn build_distributor_snapshot(
+    workspace_dir: &str,
     mode_enabled: bool,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
 ) -> ParallelModeDistributorSnapshot {
-    let (head_summary, note) = match (mode_enabled, readiness_snapshot) {
-        (true, Some(snapshot)) if snapshot.allows_parallel_mode() => (
-            ParallelModeQueueItemState::Idle.label(),
-            "queue is read-only until distributor runtime lands",
-        ),
-        (true, Some(_)) => (
+    match readiness_snapshot {
+        Some(snapshot) if mode_enabled && snapshot.allows_parallel_mode() => {
+            inspect_distributor_snapshot(workspace_dir)
+        }
+        Some(_) if mode_enabled => build_placeholder_distributor_snapshot(
             "paused",
             "distributor waits for readiness recovery before queue processing",
         ),
-        (true, None) => (
+        None if mode_enabled => build_placeholder_distributor_snapshot(
             "pending",
             "rerun readiness before distributor state can be trusted",
         ),
-        (false, Some(_)) => (
+        Some(_) => build_placeholder_distributor_snapshot(
             "inactive",
             "enable parallel mode to surface live distributor activity",
         ),
-        (false, None) => ("inactive", "parallel mode is off"),
+        None => build_placeholder_distributor_snapshot("inactive", "parallel mode is off"),
+    }
+}
+
+fn inspect_distributor_snapshot(workspace_dir: &str) -> ParallelModeDistributorSnapshot {
+    match load_pool_runtime_context(workspace_dir) {
+        Ok(context) => build_distributor_snapshot_from_context(&context),
+        Err((_, detail)) => build_placeholder_distributor_snapshot(
+            "unavailable",
+            format!("distributor snapshot unavailable / {detail}"),
+        ),
+    }
+}
+
+fn build_distributor_snapshot_from_context(
+    context: &PoolRuntimeContext,
+) -> ParallelModeDistributorSnapshot {
+    let history = load_agent_session_detail_records(&context.pool_root);
+    let Some(detail) = selected_distributor_detail(context, &history) else {
+        return build_placeholder_distributor_snapshot(
+            ParallelModeQueueItemState::Idle.label(),
+            "queue is read-only until distributor runtime lands",
+        );
     };
 
+    let reported_summary = latest_history_summary(&detail, &["reported_complete"])
+        .unwrap_or_else(|| "no agent results reported yet".to_string());
+    let ledger_refresh_summary = if detail.state_label == "ledger_refreshing" {
+        detail.ledger_refresh_outcome.clone()
+    } else if let Some(summary) = latest_history_summary(&detail, &["ledger_refreshing"]) {
+        summary
+    } else {
+        "no official refresh workers are active".to_string()
+    };
+    let official_summary = latest_history_summary(&detail, &["commit_ready"])
+        .unwrap_or_else(|| "nothing is queued for merge".to_string());
+
+    let (head_summary, note) = match detail.state_label.as_str() {
+        "reported_complete" => ("reported".to_string(), detail.latest_summary.clone()),
+        "ledger_refreshing" => (
+            "ledger refreshing".to_string(),
+            detail.ledger_refresh_outcome.clone(),
+        ),
+        "commit_ready" | "cleanup_pending" | "cleaned" => (
+            "official".to_string(),
+            detail.distributor_outcome.clone().unwrap_or_else(|| {
+                "commit-ready result is waiting for distributor integration".to_string()
+            }),
+        ),
+        "failed" if detail_has_history_state(&detail, "reported_complete") => {
+            ("blocked".to_string(), detail.ledger_refresh_outcome.clone())
+        }
+        _ => (
+            ParallelModeQueueItemState::Idle.label().to_string(),
+            "queue is read-only until distributor runtime lands".to_string(),
+        ),
+    };
+
+    ParallelModeDistributorSnapshot::new(
+        Vec::new(),
+        vec![
+            ParallelModeCompletionFeedEntry::new("reported", reported_summary),
+            ParallelModeCompletionFeedEntry::new("ledger refreshing", ledger_refresh_summary),
+            ParallelModeCompletionFeedEntry::new("official", official_summary),
+        ],
+        head_summary,
+        note,
+    )
+}
+
+fn selected_distributor_detail(
+    context: &PoolRuntimeContext,
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+) -> Option<ParallelModeAgentSessionDetailSnapshot> {
+    let mut active_leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    active_leases.sort_by(|left, right| {
+        roster_state_priority(right.state)
+            .cmp(&roster_state_priority(left.state))
+            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
+            .then_with(|| left.slot_id.cmp(&right.slot_id))
+    });
+
+    if let Some(lease) = active_leases.first() {
+        let detail = history
+            .iter()
+            .find(|detail| detail.session_key == lease_session_key(lease))
+            .cloned();
+        return Some(build_live_session_detail(lease, detail));
+    }
+
+    history.first().cloned()
+}
+
+fn latest_history_summary(
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+    state_labels: &[&str],
+) -> Option<String> {
+    detail
+        .history
+        .iter()
+        .rev()
+        .find(|entry| state_labels.contains(&entry.state_label.as_str()))
+        .map(|entry| entry.summary.clone())
+}
+
+fn detail_has_history_state(
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+    state_label: &str,
+) -> bool {
+    detail
+        .history
+        .iter()
+        .any(|entry| entry.state_label == state_label)
+}
+
+fn build_placeholder_distributor_snapshot(
+    head_summary: impl Into<String>,
+    note: impl Into<String>,
+) -> ParallelModeDistributorSnapshot {
     ParallelModeDistributorSnapshot::new(
         Vec::new(),
         vec![
@@ -2728,11 +3180,11 @@ fn run_command_with_stdin<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pool_board, derive_default_pool_root, derive_readiness, inspect_planning,
-        parse_https_remote, reconcile_pool_board, slot_id, slot_lease_file_path,
-        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-        ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
-        ParallelModeSupervisorState, DEFAULT_POOL_SIZE,
+        DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+        ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+        ParallelModeService, ParallelModeSupervisorState, build_pool_board,
+        derive_default_pool_root, derive_readiness, inspect_planning, parse_https_remote,
+        reconcile_pool_board, slot_id, slot_lease_file_path,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::parallel_mode::{
@@ -3235,6 +3687,89 @@ mod tests {
     }
 
     #[test]
+    fn build_supervisor_snapshot_projects_official_completion_and_commit_ready_states() {
+        let repo = TempGitRepo::new("supervisor-official-completion");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-88")
+            .expect("thread prepared should be recorded");
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                Some("Implemented official completion lifecycle."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be recorded");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing state should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official ledger refresh succeeded: follow-up queued",
+            )
+            .expect("commit-ready state should be recorded");
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let roster_entry = snapshot
+            .roster
+            .entries
+            .first()
+            .expect("roster entry should exist");
+        let detail = snapshot
+            .detail
+            .session
+            .as_ref()
+            .expect("detail should exist");
+
+        assert_eq!(roster_entry.state_label, "commit_ready");
+        assert_eq!(detail.state_label, "commit_ready");
+        assert_eq!(detail.completion_state_label, "commit_ready");
+        assert_eq!(snapshot.distributor.head_summary, "official");
+        assert_eq!(
+            snapshot.distributor.completion_feed[0].summary,
+            "Implemented official completion lifecycle."
+        );
+        assert_eq!(
+            snapshot.distributor.completion_feed[2].summary,
+            "official ledger refresh accepted the completion report"
+        );
+        assert_eq!(
+            detail
+                .history
+                .iter()
+                .map(|entry| entry.state_label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assigned",
+                "starting",
+                "running",
+                "reported_complete",
+                "ledger_refreshing",
+                "commit_ready"
+            ]
+        );
+    }
+
+    #[test]
     fn unavailable_pool_board_does_not_report_exhausted() {
         let pool = build_pool_board("/tmp/root", None);
 
@@ -3408,9 +3943,11 @@ mod tests {
         assert_eq!(persisted.state, ParallelModeSlotLeaseState::Leased);
         assert_eq!(persisted.agent_id, "agent-1");
         assert_eq!(persisted.task_id, "task-1");
-        assert!(persisted
-            .branch_name
-            .starts_with("akra-agent/slot-1/task-one"));
+        assert!(
+            persisted
+                .branch_name
+                .starts_with("akra-agent/slot-1/task-one")
+        );
         assert_eq!(pool.leased_slots, 1);
         assert_eq!(pool.running_slots, 0);
         assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Leased);

@@ -119,6 +119,7 @@ impl ShellRuntime {
                         continue;
                     }
                     self.app.planner_worker_panel_state = planner_worker_panel_state;
+                    self.app.invalidate_parallel_mode_supervisor_snapshot();
                     self.app.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::PostTurnEvaluated { evaluation },
                     );
