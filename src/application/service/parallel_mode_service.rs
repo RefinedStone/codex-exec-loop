@@ -4715,7 +4715,7 @@ mod tests {
         assert_eq!(entry.duration_label, "launch pending");
         assert_eq!(
             entry.latest_summary,
-            "branch reserved and agent bootstrap in progress"
+            "slot lease acquired and branch reserved for launch"
         );
     }
 
@@ -4752,7 +4752,7 @@ mod tests {
         assert_ne!(running_entry.duration_label, "launch pending");
         assert_eq!(
             running_entry.latest_summary,
-            "agent session is active in the leased slot"
+            "agent session entered the running state"
         );
 
         repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
@@ -4771,7 +4771,7 @@ mod tests {
         assert_eq!(cleanup_entry.duration_label, "complete");
         assert_eq!(
             cleanup_entry.latest_summary,
-            "execution finished and slot cleanup is pending"
+            "agent branch is merged into akra and awaiting slot cleanup"
         );
     }
 
