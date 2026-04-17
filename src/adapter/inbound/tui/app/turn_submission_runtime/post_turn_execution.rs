@@ -402,6 +402,14 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
+        if let Some(detail) = repeated_queue_head_detail(
+            conversation.last_planning_task_handoff(),
+            current_snapshot,
+            &runtime_snapshot,
+        ) {
+            runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail);
+        }
+
         if runtime_snapshot.blocks_auto_followup() {
             let failure_detail = runtime_snapshot
                 .preview_detail()
