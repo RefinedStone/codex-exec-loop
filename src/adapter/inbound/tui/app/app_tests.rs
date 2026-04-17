@@ -34,8 +34,12 @@ use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemP
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
+use crate::application::port::outbound::github_automation_port::{
+    GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::parallel_mode_service::ParallelModeService;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
@@ -49,6 +53,9 @@ use crate::application::service::planning_contract::{
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::parallel_mode::{
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+};
 use crate::domain::recent_sessions::RecentSessions;
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -224,6 +231,113 @@ fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
 
     (app, codex_port)
 }
+
+#[derive(Debug, Clone, Default)]
+struct ReadyGithubAutomationPort {
+    head_branch: Arc<Mutex<Option<String>>>,
+    base_branch: Arc<Mutex<Option<String>>>,
+}
+
+impl GithubAutomationPort for ReadyGithubAutomationPort {
+    fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+        GithubAutomationCapabilities::new(
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Ready,
+                "test push remote is ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhBinary,
+                ParallelModeCapabilityState::Ready,
+                "test gh binary is ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhAuth,
+                ParallelModeCapabilityState::Ready,
+                "test gh auth is ready",
+                None,
+            ),
+        )
+    }
+
+    fn push_branch(
+        &self,
+        _repo_root: &str,
+        _branch_name: &str,
+        _force_with_lease: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn ensure_pull_request(
+        &self,
+        _repo_root: &str,
+        base_branch: &str,
+        head_branch: &str,
+        _title: &str,
+        _body: &str,
+    ) -> Result<GithubAutomationPullRequest> {
+        *self
+            .head_branch
+            .lock()
+            .expect("fake github head branch mutex poisoned") = Some(head_branch.to_string());
+        *self
+            .base_branch
+            .lock()
+            .expect("fake github base branch mutex poisoned") = Some(base_branch.to_string());
+        Ok(GithubAutomationPullRequest::new(
+            42,
+            "https://github.com/RefinedStone/codex-exec-loop/pull/42",
+            "OPEN",
+            base_branch,
+            head_branch,
+            false,
+        ))
+    }
+
+    fn inspect_pull_request(
+        &self,
+        _repo_root: &str,
+        pr_number: u64,
+    ) -> Result<GithubAutomationPullRequest> {
+        let base_branch = self
+            .base_branch
+            .lock()
+            .expect("fake github base branch mutex poisoned")
+            .clone()
+            .unwrap_or_else(|| "akra".to_string());
+        let head_branch = self
+            .head_branch
+            .lock()
+            .expect("fake github head branch mutex poisoned")
+            .clone()
+            .unwrap_or_else(|| "akra-agent/slot-1/task".to_string());
+        Ok(GithubAutomationPullRequest::new(
+            pr_number,
+            format!("https://github.com/RefinedStone/codex-exec-loop/pull/{pr_number}"),
+            "OPEN",
+            base_branch,
+            head_branch,
+            false,
+        ))
+    }
+
+    fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn close_pull_request(&self, _repo_root: &str, _pr_number: u64) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn install_ready_github_automation(app: &mut NativeTuiApp) {
+    app.parallel_mode_service =
+        ParallelModeService::with_github_automation(Arc::new(ReadyGithubAutomationPort::default()));
+}
+
 fn sample_startup_diagnostics(workspace_path: &str, can_continue: bool) -> StartupDiagnostics {
     StartupDiagnostics {
         cwd: workspace_path.to_string(),

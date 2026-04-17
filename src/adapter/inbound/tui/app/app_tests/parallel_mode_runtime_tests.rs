@@ -7,7 +7,8 @@ use super::super::shell_runtime;
 use super::{
     AutoFollowupSubmitContext, ConversationRuntimeEvent, ConversationState, PromptOrigin,
     StartupState, TempGitWorkspace, commit_active_planning_workspace_into_akra, current_git_branch,
-    git_branch_exists, make_test_app, ready_conversation, sample_startup_diagnostics,
+    git_branch_exists, install_ready_github_automation, make_test_app, ready_conversation,
+    sample_startup_diagnostics,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{
@@ -192,6 +193,7 @@ fn leased_slot_success_completion_waits_for_official_refresh_before_cleanup() {
         )];
     }
     app.parallel_mode_enabled = true;
+    install_ready_github_automation(&mut app);
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(repo.workspace_dir(), true));
     let mut conversation = ready_conversation();
     conversation.cwd = repo.workspace_dir().to_string();
@@ -272,6 +274,7 @@ fn parallel_mode_runtime_invalidates_cached_supervisor_roster_when_slot_starts_r
         }];
     }
     app.parallel_mode_enabled = true;
+    install_ready_github_automation(&mut app);
     app.parallel_mode_readiness_snapshot = Some(ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
         ParallelModeReadinessState::Ready,
@@ -403,6 +406,7 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
         )];
     }
     app.parallel_mode_enabled = true;
+    install_ready_github_automation(&mut app);
     app.parallel_mode_readiness_snapshot = Some(ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
         ParallelModeReadinessState::Ready,
@@ -475,6 +479,9 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
                     "ledger_refreshing",
                     "commit_ready",
                     "merge_queued",
+                    "pushing",
+                    "pr_pending",
+                    "merge_pending",
                     "integrating",
                     "merged",
                     "cleanup_pending",

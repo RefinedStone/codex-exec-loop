@@ -23,7 +23,8 @@ impl ParallelModeReadinessState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ParallelModeCapabilityKey {
     GitRepository,
     GitWorktree,
@@ -48,7 +49,8 @@ impl ParallelModeCapabilityKey {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ParallelModeCapabilityState {
     Ready,
     Degraded,
@@ -67,7 +69,7 @@ impl ParallelModeCapabilityState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParallelModeCapabilitySnapshot {
     pub key: ParallelModeCapabilityKey,
     pub state: ParallelModeCapabilityState,
