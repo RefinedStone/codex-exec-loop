@@ -27,6 +27,8 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md)
 - [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md)
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md)
+- [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md): repo-shared planning authority redesign
+- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md): current supersession and planning runtime failure modes
 
 ## Roadmap References
 
