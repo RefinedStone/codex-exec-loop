@@ -34,7 +34,9 @@ pub(super) struct ParallelModeDistributorQueueRecord {
     task_title: String,
     branch_name: String,
     worktree_path: String,
-    commit_sha: String,
+    pub(super) commit_sha: String,
+    #[serde(default)]
+    pub(super) original_commit_sha: Option<String>,
     validation_summary: String,
     ledger_refresh_outcome: String,
     #[serde(default)]
@@ -154,6 +156,7 @@ impl ParallelModeDistributorService {
             task_title: resolution.lease.task_title.clone(),
             branch_name: resolution.lease.branch_name.clone(),
             worktree_path: resolution.lease.worktree_path.clone(),
+            original_commit_sha: Some(commit_sha.clone()),
             commit_sha,
             validation_summary: detail.validation_summary.clone(),
             ledger_refresh_outcome: detail.ledger_refresh_outcome.clone(),
@@ -226,7 +229,9 @@ fn build_distributor_snapshot_from_context(
             completion_feed,
             queue_head.queue_state.label(),
             queue_head.integration_note.clone(),
-        );
+        )
+        .with_head_blocked_detail(blocked_head_detail(queue_head))
+        .with_head_rebase_provenance(rebase_provenance_label(queue_head));
     }
 
     let Some(detail) = selected_runtime_session_detail(context, &history, &queue_records) else {
@@ -258,6 +263,7 @@ fn build_distributor_snapshot_from_context(
     };
 
     ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
+        .with_head_rebase_provenance(history_rebase_provenance(&detail))
 }
 
 fn active_distributor_queue_head(
@@ -266,6 +272,35 @@ fn active_distributor_queue_head(
     queue_records
         .iter()
         .find(|record| record.queue_state.is_active())
+}
+
+fn blocked_head_detail(record: &ParallelModeDistributorQueueRecord) -> Option<String> {
+    (record.queue_state == ParallelModeQueueItemState::Blocked)
+        .then(|| record.integration_note.clone())
+}
+
+fn rebase_provenance_label(record: &ParallelModeDistributorQueueRecord) -> Option<String> {
+    let original_commit_sha = record
+        .original_commit_sha
+        .as_deref()
+        .filter(|commit| !commit.trim().is_empty())
+        .unwrap_or(record.commit_sha.as_str());
+    (original_commit_sha != record.commit_sha).then(|| {
+        format!(
+            "rebased {} -> {} onto `{AKRA_BRANCH}`",
+            short_sha(original_commit_sha),
+            short_sha(&record.commit_sha)
+        )
+    })
+}
+
+fn history_rebase_provenance(detail: &ParallelModeAgentSessionDetailSnapshot) -> Option<String> {
+    detail
+        .history
+        .iter()
+        .rev()
+        .find(|entry| entry.summary.contains("rebased"))
+        .map(|entry| entry.summary.clone())
 }
 
 pub(super) fn selected_runtime_session_detail(
@@ -907,6 +942,14 @@ fn distributor_integrate_branch(
         }
 
         let previous_commit_sha = record.commit_sha.clone();
+        if record
+            .original_commit_sha
+            .as_deref()
+            .map(|commit| commit.trim().is_empty())
+            .unwrap_or(true)
+        {
+            record.original_commit_sha = Some(previous_commit_sha.clone());
+        }
         record.commit_sha =
             resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
                 format!(
@@ -918,10 +961,13 @@ fn distributor_integrate_branch(
             format!("branch rebased onto `{AKRA_BRANCH}` and is ready for local integration");
         record.updated_at = current_timestamp();
         write_distributor_queue_record(&resolution.context.pool_root, record)?;
+        let rebase_summary = rebase_provenance_label(record).unwrap_or_else(|| {
+            "branch rebased onto akra and is ready for local integration".to_string()
+        });
         let _ = record_integrating_session_detail(
             &resolution.context.pool_root,
             &resolution.lease,
-            "branch rebased onto akra and is ready for local integration",
+            &rebase_summary,
         );
         if record.commit_sha != previous_commit_sha {
             let repo_root = resolution.context.repo_root.clone();
@@ -941,10 +987,14 @@ fn distributor_integrate_branch(
                 "rebased branch force-pushed and ready for local integration".to_string();
             record.updated_at = current_timestamp();
             write_distributor_queue_record(&resolution.context.pool_root, record)?;
+            let force_push_summary = rebase_provenance_label(record).map_or_else(
+                || "rebased branch force-pushed and ready for local integration".to_string(),
+                |provenance| format!("{provenance} / force-pushed and ready for local integration"),
+            );
             let _ = record_integrating_session_detail(
                 &resolution.context.pool_root,
                 &resolution.lease,
-                "rebased branch force-pushed and ready for local integration",
+                &force_push_summary,
             );
         }
 

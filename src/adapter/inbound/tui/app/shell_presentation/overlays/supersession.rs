@@ -213,6 +213,12 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
         Line::from(format!("queue depth: {}", distributor.queue_depth())),
         Line::from(format!("note: {}", distributor.note)),
     ];
+    if let Some(detail) = distributor.head_blocked_detail.as_deref() {
+        lines.push(Line::from(format!("blocked head: {detail}")));
+    }
+    if let Some(provenance) = distributor.head_rebase_provenance.as_deref() {
+        lines.push(Line::from(format!("provenance: {provenance}")));
+    }
     if distributor.queue_items.is_empty() {
         lines.push(Line::from(
             "queue: no items are waiting for distributor work",
@@ -238,4 +244,47 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
             .map(|entry| Line::from(format!("{}: {}", entry.stage_label, entry.summary))),
     );
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_distributor_lines;
+    use crate::domain::parallel_mode::{
+        ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
+        ParallelModeDistributorSnapshot, ParallelModeQueueItemState,
+    };
+
+    #[test]
+    fn distributor_lines_render_blocked_head_and_rebase_provenance() {
+        let snapshot = ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-1",
+                "Task One",
+                ParallelModeQueueItemState::Blocked,
+                "akra-agent/slot-1/task-one",
+                "def4567",
+                "rebased branch `akra-agent/slot-1/task-one` could not be force-pushed: rejected",
+            )],
+            vec![ParallelModeCompletionFeedEntry::new(
+                "merge queued",
+                "distributor queue head is blocked",
+            )],
+            "blocked",
+            "rebased branch `akra-agent/slot-1/task-one` could not be force-pushed: rejected",
+        )
+        .with_head_blocked_detail(Some(
+            "rebased branch `akra-agent/slot-1/task-one` could not be force-pushed: rejected"
+                .to_string(),
+        ))
+        .with_head_rebase_provenance(Some("rebased abc1234 -> def4567 onto `akra`".to_string()));
+
+        let rendered = build_distributor_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("blocked head: rebased branch"));
+        assert!(rendered.contains("provenance: rebased abc1234 -> def4567 onto `akra`"));
+    }
 }

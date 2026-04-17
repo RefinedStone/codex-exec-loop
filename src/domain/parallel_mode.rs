@@ -649,6 +649,8 @@ pub struct ParallelModeDistributorSnapshot {
     pub completion_feed: Vec<ParallelModeCompletionFeedEntry>,
     pub head_summary: String,
     pub note: String,
+    pub head_blocked_detail: Option<String>,
+    pub head_rebase_provenance: Option<String>,
 }
 
 impl ParallelModeDistributorSnapshot {
@@ -663,7 +665,19 @@ impl ParallelModeDistributorSnapshot {
             completion_feed,
             head_summary: head_summary.into(),
             note: note.into(),
+            head_blocked_detail: None,
+            head_rebase_provenance: None,
         }
+    }
+
+    pub fn with_head_blocked_detail(mut self, detail: Option<String>) -> Self {
+        self.head_blocked_detail = detail.filter(|detail| !detail.trim().is_empty());
+        self
+    }
+
+    pub fn with_head_rebase_provenance(mut self, provenance: Option<String>) -> Self {
+        self.head_rebase_provenance = provenance.filter(|provenance| !provenance.trim().is_empty());
+        self
     }
 
     pub fn queue_depth(&self) -> usize {

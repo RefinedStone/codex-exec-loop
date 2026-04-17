@@ -3328,7 +3328,7 @@ mod tests {
         ParallelModeService, ParallelModeSupervisorState, build_pool_board,
         derive_default_pool_root, derive_readiness, inspect_planning, lease_session_key,
         load_distributor_queue_records, parse_https_remote, read_agent_session_detail_record,
-        reconcile_pool_board, run_command, slot_id, slot_lease_file_path,
+        reconcile_pool_board, run_command, short_sha, slot_id, slot_lease_file_path,
     };
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
@@ -3537,6 +3537,7 @@ mod tests {
         base_branch: Arc<Mutex<Option<String>>>,
         head_branch: Arc<Mutex<Option<String>>>,
         operations: Arc<Mutex<Vec<String>>>,
+        force_push_error: Arc<Mutex<Option<String>>>,
     }
 
     impl FakeGithubAutomationPort {
@@ -3573,6 +3574,7 @@ mod tests {
                 base_branch: Arc::new(Mutex::new(None)),
                 head_branch: Arc::new(Mutex::new(None)),
                 operations: Arc::new(Mutex::new(Vec::new())),
+                force_push_error: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -3581,6 +3583,15 @@ mod tests {
                 capabilities,
                 ..Self::ready()
             }
+        }
+
+        fn with_force_push_error(error: &str) -> Self {
+            let github = Self::ready();
+            *github
+                .force_push_error
+                .lock()
+                .expect("fake github force-push error mutex poisoned") = Some(error.to_string());
+            github
         }
     }
 
@@ -3599,6 +3610,15 @@ mod tests {
                 .lock()
                 .expect("fake github operations mutex poisoned")
                 .push(format!("push:{branch_name}:{force_with_lease}"));
+            if force_with_lease
+                && let Some(error) = self
+                    .force_push_error
+                    .lock()
+                    .expect("fake github force-push error mutex poisoned")
+                    .clone()
+            {
+                anyhow::bail!(error);
+            }
             Ok(())
         }
 
@@ -4571,6 +4591,122 @@ mod tests {
             "queue note should explain the blocked head: {}",
             snapshot.distributor.note
         );
+        assert!(
+            snapshot
+                .distributor
+                .head_blocked_detail
+                .as_deref()
+                .expect("blocked head detail should be surfaced")
+                .contains("source worktree is missing")
+        );
+    }
+
+    #[test]
+    fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
+        let repo = TempGitRepo::new("distributor-rebase-provenance");
+        let service = ParallelModeService::with_github_automation(Arc::new(
+            FakeGithubAutomationPort::with_force_push_error("force-with-lease rejected"),
+        ));
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                "turn-rebase-provenance",
+                None,
+                Some("Distributor rebase provenance slice completed."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official ledger refresh succeeded: queued for delivery",
+            )
+            .expect("commit-ready should be recorded");
+        service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should enqueue")
+            .expect("queue item should be created");
+
+        let original_queue_record = load_distributor_queue_records(&repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
+        let original_commit_sha = original_queue_record.commit_sha;
+
+        let original_branch = current_branch(&repo.repo_root);
+        run_git(&repo.repo_root, &["checkout", "akra"]);
+        fs::write(repo.repo_root.join("baseline.txt"), "baseline advanced\n")
+            .expect("baseline file should be written");
+        run_git(&repo.repo_root, &["add", "baseline.txt"]);
+        run_git(&repo.repo_root, &["commit", "-qm", "advance akra baseline"]);
+        run_git(&repo.repo_root, &["checkout", original_branch.as_str()]);
+
+        let notices = service
+            .process_distributor_queue(&repo.workspace_dir())
+            .expect("processing the queue head should succeed");
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("force-pushed") || notice.contains("blocked")),
+            "processing should surface the blocked force-push outcome: {notices:?}"
+        );
+
+        let queue_record = load_distributor_queue_records(&repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("blocked queue record should persist");
+        assert_eq!(
+            queue_record.queue_state,
+            ParallelModeQueueItemState::Blocked
+        );
+        assert_ne!(queue_record.commit_sha, original_commit_sha);
+        assert!(
+            queue_record
+                .integration_note
+                .contains("could not be force-pushed")
+        );
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        assert_eq!(snapshot.distributor.head_summary, "blocked");
+        assert!(
+            snapshot
+                .distributor
+                .head_blocked_detail
+                .as_deref()
+                .expect("blocked head detail should be surfaced")
+                .contains("could not be force-pushed")
+        );
+        let provenance = snapshot
+            .distributor
+            .head_rebase_provenance
+            .as_deref()
+            .expect("rebase provenance should be surfaced");
+        assert!(provenance.contains(short_sha(&original_commit_sha).as_str()));
+        assert!(provenance.contains(short_sha(&queue_record.commit_sha).as_str()));
+        assert!(provenance.contains("onto `akra`"));
     }
 
     #[test]
