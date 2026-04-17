@@ -51,6 +51,9 @@ impl NativeTuiApp {
         self.sync_active_turn_workspace_directory(&request.workspace_directory);
         self.active_turn_planning_capture =
             Some(self.capture_active_turn_planning(&request.workspace_directory));
+        if launch_notice.is_some() {
+            self.invalidate_parallel_mode_supervisor_snapshot();
+        }
         if let Some(notice) = launch_notice {
             let _ = self
                 .tx
@@ -131,12 +134,16 @@ fn spawn_conversation_stream_worker(
         let mut saw_failed_before_turn_started = false;
         let mut saw_failed_event = false;
         while let Ok(event) = event_rx.recv() {
-            if let Some(notice) = sync_slot_lease_for_stream_event(
+            let (notice, invalidate_supervisor_snapshot) = sync_slot_lease_for_stream_event(
                 &parallel_mode_service,
                 &request,
                 &event,
                 &mut saw_turn_started,
-            ) {
+            );
+            if invalidate_supervisor_snapshot {
+                let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
+            }
+            if let Some(notice) = notice {
                 let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
             }
             let should_stop = matches!(
@@ -163,14 +170,18 @@ fn spawn_conversation_stream_worker(
             Ok(result) => observe_stream_completion(&request, saw_terminal_event, result),
             Err(payload) => observe_stream_panic(&request, saw_terminal_event, payload),
         };
-        if let Some(notice) = finalize_slot_lease_after_stream_completion(
+        let (notice, invalidate_supervisor_snapshot) = finalize_slot_lease_after_stream_completion(
             &parallel_mode_service,
             &request,
             saw_turn_started,
             saw_failed_before_turn_started,
             saw_failed_event,
             &observation,
-        ) {
+        );
+        if invalidate_supervisor_snapshot {
+            let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
+        }
+        if let Some(notice) = notice {
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }
 
@@ -205,15 +216,18 @@ fn sync_slot_lease_for_stream_event(
     request: &PreparedTurnStreamRequest,
     event: &ConversationStreamEvent,
     saw_turn_started: &mut bool,
-) -> Option<String> {
+) -> (Option<String>, bool) {
     if !matches!(event, ConversationStreamEvent::TurnStarted { .. }) {
-        return None;
+        return (None, false);
     }
 
     *saw_turn_started = true;
     match parallel_mode_service.mark_workspace_slot_running(&request.workspace_directory) {
-        Ok(Some(_)) | Ok(None) => None,
-        Err(error) => Some(format!("slot lease running transition failed: {error}")),
+        Ok(Some(_)) | Ok(None) => (None, true),
+        Err(error) => (
+            Some(format!("slot lease running transition failed: {error}")),
+            false,
+        ),
     }
 }
 
@@ -224,7 +238,7 @@ fn finalize_slot_lease_after_stream_completion(
     saw_failed_before_turn_started: bool,
     saw_failed_event: bool,
     observation: &StreamExecutionObservation,
-) -> Option<String> {
+) -> (Option<String>, bool) {
     if should_release_unstarted_slot_lease(
         saw_turn_started,
         saw_failed_before_turn_started,
@@ -233,19 +247,25 @@ fn finalize_slot_lease_after_stream_completion(
         return match parallel_mode_service
             .release_workspace_slot_lease_after_failed_start(&request.workspace_directory)
         {
-            Ok(Some(lease)) => Some(format!(
-                "slot lease released after startup failure / slot: {} / agent: {}",
-                lease.slot_id, lease.agent_id
-            )),
-            Ok(None) => None,
-            Err(error) => Some(format!(
-                "slot lease release failed after startup failure: {error}"
-            )),
+            Ok(Some(lease)) => (
+                Some(format!(
+                    "slot lease released after startup failure / slot: {} / agent: {}",
+                    lease.slot_id, lease.agent_id
+                )),
+                true,
+            ),
+            Ok(None) => (None, false),
+            Err(error) => (
+                Some(format!(
+                    "slot lease release failed after startup failure: {error}"
+                )),
+                false,
+            ),
         };
     }
 
     if !should_mark_cleanup_pending_after_success(saw_turn_started, saw_failed_event, observation) {
-        return None;
+        return (None, false);
     }
 
     let cleanup_pending_lease = match parallel_mode_service
@@ -253,26 +273,39 @@ fn finalize_slot_lease_after_stream_completion(
     {
         Ok(lease) => lease,
         Err(error) => {
-            return Some(format!(
-                "slot lease cleanup-pending transition failed after successful completion: {error}"
-            ));
+            return (
+                Some(format!(
+                    "slot lease cleanup-pending transition failed after successful completion: {error}"
+                )),
+                false,
+            );
         }
     };
 
+    let cleanup_pending_transitioned = cleanup_pending_lease.is_some();
     match parallel_mode_service.cleanup_workspace_slot_if_pending(&request.workspace_directory) {
-        Ok(Some(lease)) => Some(format!(
-            "slot lease cleaned up and returned after successful completion / slot: {} / agent: {}",
-            lease.slot_id, lease.agent_id
-        )),
-        Ok(None) => cleanup_pending_lease.map(|lease| {
-            format!(
-                "slot lease marked cleanup pending after successful completion / slot: {} / agent: {}",
+        Ok(Some(lease)) => (
+            Some(format!(
+                "slot lease cleaned up and returned after successful completion / slot: {} / agent: {}",
                 lease.slot_id, lease.agent_id
-            )
-        }),
-        Err(error) => Some(format!(
-            "slot lease cleanup failed after successful completion: {error}"
-        )),
+            )),
+            true,
+        ),
+        Ok(None) => (
+            cleanup_pending_lease.map(|lease| {
+                format!(
+                    "slot lease marked cleanup pending after successful completion / slot: {} / agent: {}",
+                    lease.slot_id, lease.agent_id
+                )
+            }),
+            cleanup_pending_transitioned,
+        ),
+        Err(error) => (
+            Some(format!(
+                "slot lease cleanup failed after successful completion: {error}"
+            )),
+            false,
+        ),
     }
 }
 

@@ -34,6 +34,7 @@ pub(super) enum BackgroundMessage {
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
+    InvalidateParallelModeSupervisorSnapshot,
     PostTurnEvaluated {
         thread_id: String,
         queued_from_turn_id: String,

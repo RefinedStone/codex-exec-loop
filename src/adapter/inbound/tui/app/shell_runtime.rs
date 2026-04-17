@@ -103,6 +103,9 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::StreamExecutionObserved { notice },
                     );
                 }
+                BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
+                    self.app.invalidate_parallel_mode_supervisor_snapshot();
+                }
                 BackgroundMessage::PostTurnEvaluated {
                     thread_id,
                     queued_from_turn_id,

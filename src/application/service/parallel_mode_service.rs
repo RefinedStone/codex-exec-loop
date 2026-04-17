@@ -10,12 +10,12 @@ use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-    ParallelModeCapabilityState, ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
-    ParallelModeQueueItemState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey,
+    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeCompletionFeedEntry,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
+    ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
 const AKRA_BRANCH: &str = "akra";
@@ -195,7 +195,7 @@ impl ParallelModeService {
             state,
             workspace_path,
             build_pool_board(workspace_dir, readiness_snapshot),
-            build_placeholder_roster(mode_enabled, readiness_snapshot),
+            build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
             build_placeholder_distributor(mode_enabled, readiness_snapshot),
             top_notice,
         )
@@ -225,7 +225,7 @@ impl ParallelModeService {
             state,
             workspace_path,
             pool,
-            build_placeholder_roster(mode_enabled, readiness_snapshot),
+            build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
             build_placeholder_distributor(mode_enabled, readiness_snapshot),
             top_notice,
         )
@@ -2012,6 +2012,144 @@ fn build_placeholder_roster(
     ParallelModeAgentRosterSnapshot::new(Vec::new(), empty_state)
 }
 
+fn build_agent_roster(
+    workspace_dir: &str,
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModeAgentRosterSnapshot {
+    match readiness_snapshot {
+        Some(snapshot) if snapshot.allows_parallel_mode() => {
+            inspect_agent_roster(workspace_dir, mode_enabled)
+        }
+        _ => build_placeholder_roster(mode_enabled, readiness_snapshot),
+    }
+}
+
+fn inspect_agent_roster(
+    workspace_dir: &str,
+    mode_enabled: bool,
+) -> ParallelModeAgentRosterSnapshot {
+    match load_pool_runtime_context(workspace_dir) {
+        Ok(context) => build_agent_roster_from_context(&context, mode_enabled),
+        Err((_, detail)) => ParallelModeAgentRosterSnapshot::new(
+            Vec::new(),
+            format!("agent roster unavailable / {detail}"),
+        ),
+    }
+}
+
+fn build_agent_roster_from_context(
+    context: &PoolRuntimeContext,
+    mode_enabled: bool,
+) -> ParallelModeAgentRosterSnapshot {
+    let mut leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    leases.sort_by(|left, right| {
+        roster_state_priority(right.state)
+            .cmp(&roster_state_priority(left.state))
+            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
+            .then_with(|| left.slot_id.cmp(&right.slot_id))
+    });
+
+    let entries = leases
+        .iter()
+        .map(build_agent_roster_entry)
+        .collect::<Vec<_>>();
+    let empty_state = if mode_enabled {
+        "no agent sessions launched in this slice"
+    } else {
+        "parallel mode is off / agent roster is read-only"
+    };
+
+    ParallelModeAgentRosterSnapshot::new(entries, empty_state)
+}
+
+fn build_agent_roster_entry(lease: &ParallelModeSlotLeaseSnapshot) -> ParallelModeAgentRosterEntry {
+    ParallelModeAgentRosterEntry::new(
+        lease.agent_id.clone(),
+        lease.task_title.clone(),
+        lease.slot_id.clone(),
+        lease.branch_name.clone(),
+        roster_state_label(lease.state),
+        roster_duration_label(lease),
+        roster_latest_summary(lease.state),
+    )
+}
+
+fn roster_state_priority(state: ParallelModeSlotLeaseState) -> u8 {
+    match state {
+        ParallelModeSlotLeaseState::Running => 3,
+        ParallelModeSlotLeaseState::Leased => 2,
+        ParallelModeSlotLeaseState::CleanupPending => 1,
+    }
+}
+
+fn roster_recency_key(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
+    lease
+        .running_started_at
+        .as_deref()
+        .unwrap_or(lease.leased_at.as_str())
+}
+
+fn roster_state_label(state: ParallelModeSlotLeaseState) -> &'static str {
+    match state {
+        ParallelModeSlotLeaseState::Leased => "starting",
+        ParallelModeSlotLeaseState::Running => "running",
+        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending",
+    }
+}
+
+fn roster_duration_label(lease: &ParallelModeSlotLeaseSnapshot) -> String {
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased => "launch pending".to_string(),
+        ParallelModeSlotLeaseState::Running => lease
+            .running_started_at
+            .as_deref()
+            .and_then(format_elapsed_label_from_timestamp)
+            .unwrap_or_else(|| "active".to_string()),
+        ParallelModeSlotLeaseState::CleanupPending => "complete".to_string(),
+    }
+}
+
+fn roster_latest_summary(state: ParallelModeSlotLeaseState) -> &'static str {
+    match state {
+        ParallelModeSlotLeaseState::Leased => "branch reserved and agent bootstrap in progress",
+        ParallelModeSlotLeaseState::Running => "agent session is active in the leased slot",
+        ParallelModeSlotLeaseState::CleanupPending => {
+            "execution finished and slot cleanup is pending"
+        }
+    }
+}
+
+fn format_elapsed_label_from_timestamp(timestamp: &str) -> Option<String> {
+    let started_at = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .ok()?
+        .with_timezone(&Utc);
+    let elapsed_seconds = Utc::now()
+        .signed_duration_since(started_at)
+        .num_seconds()
+        .max(0);
+
+    Some(format_elapsed_seconds(elapsed_seconds))
+}
+
+fn format_elapsed_seconds(elapsed_seconds: i64) -> String {
+    if elapsed_seconds < 60 {
+        return format!("{elapsed_seconds}s");
+    }
+    if elapsed_seconds < 60 * 60 {
+        return format!("{}m", elapsed_seconds / 60);
+    }
+    if elapsed_seconds < 60 * 60 * 24 {
+        let hours = elapsed_seconds / (60 * 60);
+        let minutes = (elapsed_seconds % (60 * 60)) / 60;
+        return format!("{hours}h {minutes}m");
+    }
+
+    let days = elapsed_seconds / (60 * 60 * 24);
+    let hours = (elapsed_seconds % (60 * 60 * 24)) / (60 * 60);
+    format!("{days}d {hours}h")
+}
+
 fn build_placeholder_distributor(
     mode_enabled: bool,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
@@ -2419,6 +2557,100 @@ mod tests {
         assert_eq!(snapshot.state, ParallelModeSupervisorState::Recover);
         assert_eq!(snapshot.pool.unavailable_slots, DEFAULT_POOL_SIZE);
         assert_eq!(snapshot.distributor.head_summary, "paused");
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_populates_roster_from_live_slot_leases() {
+        let repo = TempGitRepo::new("supervisor-roster-starting");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let entry = snapshot
+            .roster
+            .entries
+            .first()
+            .expect("roster should contain the leased agent");
+
+        assert_eq!(snapshot.roster.active_count(), 1);
+        assert_eq!(entry.agent_id, "agent-1");
+        assert_eq!(entry.task_title, "Task One");
+        assert_eq!(entry.slot_id, "slot-1");
+        assert_eq!(entry.branch_name, lease.branch_name);
+        assert_eq!(entry.state_label, "starting");
+        assert_eq!(entry.duration_label, "launch pending");
+        assert_eq!(
+            entry.latest_summary,
+            "branch reserved and agent bootstrap in progress"
+        );
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_projects_running_and_cleanup_pending_roster_states() {
+        let repo = TempGitRepo::new("supervisor-roster-lifecycle");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+        let running_snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let running_entry = running_snapshot
+            .roster
+            .entries
+            .first()
+            .expect("running roster entry should exist");
+        assert_eq!(running_entry.state_label, "running");
+        assert_ne!(running_entry.duration_label, "launch pending");
+        assert_eq!(
+            running_entry.latest_summary,
+            "agent session is active in the leased slot"
+        );
+
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        repo.merge_agent_slot_into_akra(&slot_path);
+        service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to cleanup pending");
+        let cleanup_snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let cleanup_entry = cleanup_snapshot
+            .roster
+            .entries
+            .first()
+            .expect("cleanup-pending roster entry should exist");
+        assert_eq!(cleanup_entry.state_label, "cleanup_pending");
+        assert_eq!(cleanup_entry.duration_label, "complete");
+        assert_eq!(
+            cleanup_entry.latest_summary,
+            "execution finished and slot cleanup is pending"
+        );
     }
 
     #[test]

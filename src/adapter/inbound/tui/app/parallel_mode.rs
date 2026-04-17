@@ -36,6 +36,10 @@ impl NativeTuiApp {
         )
     }
 
+    pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
+        self.parallel_mode_supervisor_snapshot = None;
+    }
+
     pub(crate) fn refresh_parallel_mode_readiness_snapshot(
         &mut self,
     ) -> ParallelModeReadinessSnapshot {
