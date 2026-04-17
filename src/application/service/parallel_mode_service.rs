@@ -30,6 +30,10 @@ const AKRA_BRANCH: &str = "akra";
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
+const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL: &str =
+    "agent branch is not integrated into `akra` and has no lease metadata";
+const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
+    "inspect the slot branch, merge or discard it manually, then rerun reconcile";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GitWorktreeRecord {
@@ -267,14 +271,16 @@ impl ParallelModeService {
         let workspace_path = readiness_snapshot
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
+        let pool = build_pool_board(workspace_dir, readiness_snapshot);
         let top_notice = readiness_snapshot
             .and_then(|snapshot| snapshot.top_alert.clone())
+            .or_else(|| pool_operator_recovery_notice(&pool))
             .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot));
 
         ParallelModeSupervisorSnapshot::new(
             state,
             workspace_path,
-            build_pool_board(workspace_dir, readiness_snapshot),
+            pool,
             build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
             build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
             build_distributor_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
@@ -292,15 +298,16 @@ impl ParallelModeService {
         let workspace_path = readiness_snapshot
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
-        let top_notice = readiness_snapshot
-            .and_then(|snapshot| snapshot.top_alert.clone())
-            .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot));
         let pool = match readiness_snapshot {
             Some(snapshot) if mode_enabled && snapshot.allows_parallel_mode() => {
                 reconcile_pool_board(workspace_dir)
             }
             _ => build_pool_board(workspace_dir, readiness_snapshot),
         };
+        let top_notice = readiness_snapshot
+            .and_then(|snapshot| snapshot.top_alert.clone())
+            .or_else(|| pool_operator_recovery_notice(&pool))
+            .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot));
 
         ParallelModeSupervisorSnapshot::new(
             state,
@@ -1767,7 +1774,11 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
                     branch_name,
                     annotate_worktree_label(
                         base_worktree_label,
-                        "agent branch exists without lease",
+                        &orphan_agent_branch_without_lease_detail(
+                            &context.repo_root,
+                            branch_name,
+                            slot_status,
+                        ),
                     ),
                     "operator recovery",
                 );
@@ -1881,6 +1892,16 @@ fn summarize_pool_reconcile_status(
     }
 
     if blocked_slots > 0 {
+        if let Some(slot) = find_non_merged_orphan_slot_branch(slots) {
+            return format!(
+                "{}reconcile blocked / cause: {} branch `{}` is not integrated into `{AKRA_BRANCH}` and has no lease metadata / next action: {} / blocked: {blocked_slots} / missing: {missing_slots} / cleanup: {awaiting_cleanup_slots} / root {}",
+                prefix,
+                slot.slot_id,
+                slot.branch_name,
+                NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
+                pool_root.display()
+            );
+        }
         return format!(
             "{}reconcile blocked / blocked: {blocked_slots} / missing: {missing_slots} / cleanup: {awaiting_cleanup_slots} / root {}",
             prefix,
@@ -1923,6 +1944,44 @@ fn summarize_pool_reconcile_status(
         prefix,
         pool_root.display()
     )
+}
+
+fn orphan_agent_branch_without_lease_detail(
+    repo_root: &str,
+    branch_name: &str,
+    slot_status: SlotGitStatus,
+) -> String {
+    let mut parts = Vec::new();
+    if branch_is_cleanup_ready(repo_root, branch_name) {
+        parts.push("cleanup-ready agent branch has no lease metadata".to_string());
+    } else {
+        parts.push(NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL.to_string());
+    }
+    if !slot_status.is_clean_baseline() {
+        parts.push(slot_status.detail_label());
+    }
+
+    parts.join(" / ")
+}
+
+fn find_non_merged_orphan_slot_branch<'a>(
+    slots: &'a [ParallelModePoolSlotSnapshot],
+) -> Option<&'a ParallelModePoolSlotSnapshot> {
+    slots.iter().find(|slot| {
+        slot.state == ParallelModePoolSlotState::Blocked
+            && slot.owner_label == "operator recovery"
+            && slot
+                .worktree_label
+                .contains(NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL)
+    })
+}
+
+fn pool_operator_recovery_notice(pool: &ParallelModePoolBoardSnapshot) -> Option<String> {
+    let slot = find_non_merged_orphan_slot_branch(&pool.slots)?;
+    Some(format!(
+        "pool: blocked / cause: {} branch `{}` is not integrated into `{AKRA_BRANCH}` and has no lease metadata / next action: {}",
+        slot.slot_id, slot.branch_name, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION
+    ))
 }
 
 fn detect_canonical_repo_root(workspace_dir: &str) -> Option<PathBuf> {
@@ -5482,6 +5541,46 @@ mod tests {
         assert!(slot.branch_name.starts_with("akra-agent/slot-1/"));
         assert_eq!(slot.owner_label, "cleanup pending");
         assert_eq!(pool.awaiting_cleanup_slots, 1);
+    }
+
+    #[test]
+    fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
+        let repo = TempGitRepo::new("non-merged-slot");
+        let service = ParallelModeService::new();
+        let slot_path = repo.create_agent_slot(1, "task-one");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let slot = &snapshot.pool.slots[0];
+
+        assert_eq!(slot.state, ParallelModePoolSlotState::Blocked);
+        assert_eq!(slot.owner_label, "operator recovery");
+        assert!(slot.branch_name.starts_with("akra-agent/slot-1/"));
+        assert!(
+            slot.worktree_label
+                .contains(super::NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL)
+        );
+        assert!(
+            snapshot
+                .pool
+                .reconcile_status
+                .contains("next action: inspect the slot branch")
+        );
+        let notice = snapshot
+            .top_notice
+            .as_deref()
+            .expect("operator recovery notice should be surfaced");
+        assert!(notice.contains("pool: blocked"));
+        assert!(notice.contains("slot-1"));
+        assert!(notice.contains("not integrated into `akra`"));
+        assert!(notice.contains("next action: inspect the slot branch"));
     }
 
     #[test]
