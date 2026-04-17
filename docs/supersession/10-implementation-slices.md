@@ -7,6 +7,19 @@ This document defines the target supersession model, not shipped behavior.
 Supersession should land as several reviewable slices. Each slice must leave the product in a
 buildable and understandable state even if the full feature is not yet operator-complete.
 
+## Current `prerelease` Status
+
+The first operator-visible supersession loop is already shipped on current `prerelease`.
+
+- Slice 1 shipped: readiness gating and `:parallel` mode entry are live.
+- Slice 2 shipped: the control-tower board and domain snapshots are live.
+- Slice 3 shipped: the `akra` worktree pool reconciles, leases, blocks, and cleans slots.
+- Slice 4 shipped in native form: queue-driven handoff launches main-grade agent sessions into leased slots and tracks lifecycle state.
+- Slice 5 shipped: completion becomes official only after serialized hidden planning refresh succeeds.
+- Slice 6 and Slice 7 shipped together in native form: distributor queue delivery, rebase provenance, GitHub automation, and slot return are live.
+
+The remaining supersession work is mostly architecture follow-through and cleanup around explicit runtime ports, not first-pass product behavior.
+
 ## Slice Sequence
 
 ### Slice 1: Capability Detection And Mode Skeleton
@@ -95,6 +108,12 @@ Verification:
 - document shipped behavior back into `docs/design` when stable
 - add real-terminal validation captures
 
+Current status:
+
+- partially complete
+- shipped behavior has been summarized back into `docs/design/`
+- remaining work is validation depth and residual surface polish rather than core supersession enablement
+
 Verification:
 
 - `cargo build`
@@ -126,6 +145,10 @@ Potential hotspots:
 - distributor can integrate one queue item into `akra`
 - cleaned slots return to idle
 - degraded capability states are visible and actionable
+
+Current status:
+
+- achieved on current `prerelease`
 
 ## Related Docs
 

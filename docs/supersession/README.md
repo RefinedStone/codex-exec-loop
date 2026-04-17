@@ -8,6 +8,24 @@ This document set defines the target supersession model, not shipped behavior.
 It treats the feature as a product and runtime redesign, not as a small extension of the
 current hidden planning worker or session browser.
 
+Current shipped supersession behavior should be read from `docs/design/` first.
+This directory now exists to track the remaining target model and architecture follow-through.
+
+## Current Shipped Status
+
+Current `prerelease` already ships:
+
+- parallel-mode readiness gating and supersession control-tower entry
+- a live supervisor board with pool, roster, selected detail, and distributor projections
+- a three-slot `akra` worktree pool with lease lifecycle and cleanup
+- `reported_complete` versus official completion through hidden planning refresh
+- a serial distributor queue with GitHub automation and slot return
+
+Use these docs for current behavior:
+
+- [../design/01-current-product-state.md](../design/01-current-product-state.md)
+- [../releases/v1.2.9-to-prerelease.md](../releases/v1.2.9-to-prerelease.md)
+
 ## Fixed V1 Decisions
 
 - parallel mode runs only in a git repository
