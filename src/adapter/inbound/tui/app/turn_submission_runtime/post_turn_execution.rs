@@ -42,6 +42,7 @@ pub(super) struct PostTurnEvaluationRequest {
     pub workspace_directory: String,
     pub queued_from_turn_id: String,
     pub changed_planning_file_paths: Vec<String>,
+    pub official_completion_refresh_order: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +99,7 @@ impl PostTurnEvaluationExecutor {
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
     ) -> PostTurnEvaluationExecution {
+        let planning_workspace_directory = planning_workspace_directory(conversation, request);
         let reconciliation_result = self.reconcile_planning_after_turn(request);
         let mut runtime_notices = reconciliation_result.notices.clone();
         let mut planning_runtime_snapshot = self.planning_runtime_snapshot_after_reconciliation(
@@ -125,6 +127,7 @@ impl PostTurnEvaluationExecutor {
                 let official_completion_outcome = self.run_official_completion_refresh(
                     conversation,
                     request,
+                    planning_workspace_directory,
                     &planning_runtime_snapshot,
                     &completion_report,
                 );
@@ -259,6 +262,7 @@ impl PostTurnEvaluationExecutor {
             .begin_workspace_official_completion(
                 &request.workspace_directory,
                 &request.queued_from_turn_id,
+                request.official_completion_refresh_order,
                 latest_main_reply,
                 Some(validation_summary),
                 None,
@@ -279,10 +283,22 @@ impl PostTurnEvaluationExecutor {
         &mut self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
+        planning_workspace_directory: &str,
         current_snapshot: &PlanningRuntimeSnapshot,
         completion_report: &ParallelModeOfficialCompletionReport,
     ) -> OfficialCompletionRefreshOutcome {
-        if current_snapshot.workspace_present() && !current_snapshot.plan_enabled() {
+        let planning_workspace_snapshot =
+            if planning_workspace_directory == request.workspace_directory {
+                current_snapshot.clone()
+            } else {
+                self.planning
+                    .runtime
+                    .load_runtime_snapshot_or_invalid(planning_workspace_directory)
+            };
+
+        if planning_workspace_snapshot.workspace_present()
+            && !planning_workspace_snapshot.plan_enabled()
+        {
             let failure_detail =
                 "official completion refresh is blocked because planning mode is off";
             let _ = self
@@ -291,8 +307,8 @@ impl PostTurnEvaluationExecutor {
                     &request.workspace_directory,
                     failure_detail,
                 );
-            let failure_snapshot =
-                self.official_completion_failure_snapshot(current_snapshot, failure_detail);
+            let failure_snapshot = self
+                .official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
             self.record_planner_worker_failure(
                 PlannerWorkerStatus::RefreshFailed,
                 failure_detail,
@@ -305,10 +321,10 @@ impl PostTurnEvaluationExecutor {
         }
 
         if matches!(
-            current_snapshot.workspace_status(),
+            planning_workspace_snapshot.workspace_status(),
             PlanningRuntimeWorkspaceStatus::Invalid | PlanningRuntimeWorkspaceStatus::Uninitialized
         ) {
-            let failure_detail = current_snapshot.preview_detail().unwrap_or(
+            let failure_detail = planning_workspace_snapshot.preview_detail().unwrap_or(
                 "official completion refresh is blocked because the planning workspace is unavailable",
             );
             let _ = self
@@ -317,8 +333,8 @@ impl PostTurnEvaluationExecutor {
                     &request.workspace_directory,
                     failure_detail,
                 );
-            let failure_snapshot =
-                self.official_completion_failure_snapshot(current_snapshot, failure_detail);
+            let failure_snapshot = self
+                .official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
             self.record_planner_worker_failure(
                 PlannerWorkerStatus::RefreshFailed,
                 failure_detail,
@@ -339,7 +355,7 @@ impl PostTurnEvaluationExecutor {
             .filter(|message| !message.is_empty())
             .unwrap_or(completion_report.completion.final_response_summary.as_str());
         let worker_request = PlanningOfficialCompletionRefreshRequest {
-            workspace_directory: &request.workspace_directory,
+            workspace_directory: planning_workspace_directory,
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
@@ -369,8 +385,8 @@ impl PostTurnEvaluationExecutor {
                         &request.workspace_directory,
                         &detail,
                     );
-                let failure_snapshot =
-                    self.official_completion_failure_snapshot(current_snapshot, &detail);
+                let failure_snapshot = self
+                    .official_completion_failure_snapshot(&planning_workspace_snapshot, &detail);
                 self.record_planner_worker_failure(
                     PlannerWorkerStatus::RefreshFailed,
                     &detail,
@@ -388,7 +404,7 @@ impl PostTurnEvaluationExecutor {
 
         if let Some(repair_request) = outcome.repair_request.as_ref() {
             let repair_outcome = self.run_hidden_planning_repairs(
-                &request.workspace_directory,
+                planning_workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
             );
@@ -404,7 +420,7 @@ impl PostTurnEvaluationExecutor {
 
         if let Some(detail) = repeated_queue_head_detail(
             conversation.last_planning_task_handoff(),
-            current_snapshot,
+            &planning_workspace_snapshot,
             &runtime_snapshot,
         ) {
             runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail);
@@ -907,10 +923,14 @@ impl PostTurnEvaluationExecutor {
 }
 
 impl NativeTuiApp {
-    pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
+    pub(super) fn execute_post_turn_evaluation(&mut self, mut request: PostTurnEvaluationRequest) {
         let Some(conversation) = self.ready_conversation_snapshot() else {
             return;
         };
+        request.official_completion_refresh_order = self
+            .parallel_mode_service
+            .reserve_workspace_official_completion_refresh_order(&request.workspace_directory)
+            .unwrap_or(None);
 
         self.mark_post_turn_evaluation_running(&conversation, &request);
         let executor = PostTurnEvaluationExecutor::new(
@@ -974,6 +994,18 @@ impl NativeTuiApp {
         } else {
             self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshRunning;
         }
+    }
+}
+
+fn planning_workspace_directory<'a>(
+    conversation: &'a ConversationViewModel,
+    request: &'a PostTurnEvaluationRequest,
+) -> &'a str {
+    let draft_workspace_directory = conversation.draft_workspace_directory.trim();
+    if draft_workspace_directory.is_empty() {
+        request.workspace_directory.as_str()
+    } else {
+        draft_workspace_directory
     }
 }
 

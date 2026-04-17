@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const PLANNING_FORMAT_VERSION: u32 = 1;
-pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 1;
+pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningWorkspaceState {
@@ -293,18 +293,21 @@ pub struct PlanningOfficialCompletionRefreshContract {
     pub version: u32,
     pub refresh_kind: PlanningRefreshContractKind,
     pub root_turn_id: String,
+    pub refresh_order: u64,
     pub completion: PlanningOfficialCompletionRefreshPayload,
 }
 
 impl PlanningOfficialCompletionRefreshContract {
     pub fn new(
         root_turn_id: impl Into<String>,
+        refresh_order: u64,
         completion: PlanningOfficialCompletionRefreshPayload,
     ) -> Self {
         Self {
             version: PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
             refresh_kind: PlanningRefreshContractKind::OfficialCompletion,
             root_turn_id: root_turn_id.into(),
+            refresh_order,
             completion,
         }
     }
@@ -369,6 +372,7 @@ mod tests {
     fn official_completion_refresh_contract_round_trips_as_versioned_json() {
         let contract = PlanningOfficialCompletionRefreshContract::new(
             "turn-42",
+            7,
             PlanningOfficialCompletionRefreshPayload::new(
                 "agent-2",
                 "task-9",
@@ -398,6 +402,7 @@ mod tests {
             PlanningRefreshContractKind::OfficialCompletion
         );
         assert_eq!(restored.root_turn_id, "turn-42");
+        assert_eq!(restored.refresh_order, 7);
         assert_eq!(restored.completion.task_id, "task-9");
         assert_eq!(
             restored.completion.final_response_text.as_deref(),

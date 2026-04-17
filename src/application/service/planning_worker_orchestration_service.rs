@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use anyhow::Result;
@@ -65,6 +66,81 @@ pub struct PlanningWorkerRunOutcome {
 pub struct PlanningWorkerOrchestrationService {
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     runtime_facade: PlanningRuntimeFacadeService,
+    official_completion_refresh_gate: Arc<OfficialCompletionRefreshGate>,
+}
+
+#[derive(Debug, Default)]
+struct OfficialCompletionRefreshGate {
+    workspace_state: Mutex<BTreeMap<String, OfficialCompletionRefreshWorkspaceState>>,
+    wake_all: Condvar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OfficialCompletionRefreshWorkspaceState {
+    next_refresh_order: u64,
+    in_flight_refresh_order: Option<u64>,
+}
+
+impl Default for OfficialCompletionRefreshWorkspaceState {
+    fn default() -> Self {
+        Self {
+            next_refresh_order: 1,
+            in_flight_refresh_order: None,
+        }
+    }
+}
+
+impl OfficialCompletionRefreshGate {
+    fn run_in_order<T, F>(
+        &self,
+        workspace_directory: &str,
+        refresh_order: u64,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        let mut workspace_state = self
+            .workspace_state
+            .lock()
+            .expect("official completion refresh gate mutex should not be poisoned");
+        loop {
+            let state = workspace_state
+                .entry(workspace_directory.to_string())
+                .or_default();
+            if refresh_order < state.next_refresh_order {
+                return Err(anyhow::anyhow!(
+                    "official completion refresh order {refresh_order} already completed for `{workspace_directory}`"
+                ));
+            }
+            if refresh_order == state.next_refresh_order && state.in_flight_refresh_order.is_none()
+            {
+                state.in_flight_refresh_order = Some(refresh_order);
+                break;
+            }
+            workspace_state = self
+                .wake_all
+                .wait(workspace_state)
+                .expect("official completion refresh gate wait should succeed");
+        }
+        drop(workspace_state);
+
+        let result = operation();
+
+        let mut workspace_state = self
+            .workspace_state
+            .lock()
+            .expect("official completion refresh gate mutex should not be poisoned");
+        if let Some(state) = workspace_state.get_mut(workspace_directory)
+            && state.in_flight_refresh_order == Some(refresh_order)
+        {
+            state.in_flight_refresh_order = None;
+            state.next_refresh_order = refresh_order + 1;
+        }
+        self.wake_all.notify_all();
+
+        result
+    }
 }
 
 impl PlanningWorkerOrchestrationService {
@@ -75,6 +151,7 @@ impl PlanningWorkerOrchestrationService {
         Self {
             planning_worker_port,
             runtime_facade,
+            official_completion_refresh_gate: Arc::new(OfficialCompletionRefreshGate::default()),
         }
     }
 
@@ -96,11 +173,17 @@ impl PlanningWorkerOrchestrationService {
         request: PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
         let prompt = self.render_official_completion_refresh_prompt(&request);
-        self.run_worker_and_reconcile(
+        self.official_completion_refresh_gate.run_in_order(
             request.workspace_directory,
-            &format!("planner-refresh-{}", request.contract.root_turn_id),
-            PlanningWorkerOperation::RefreshQueue,
-            prompt,
+            request.contract.refresh_order,
+            || {
+                self.run_worker_and_reconcile(
+                    request.workspace_directory,
+                    &format!("planner-refresh-{}", request.contract.root_turn_id),
+                    PlanningWorkerOperation::RefreshQueue,
+                    prompt,
+                )
+            },
         )
     }
 
@@ -311,7 +394,7 @@ fn build_planning_official_completion_prompt(
 - payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
 - follow-up work가 있으면 새 executable task를 queue에 반영하고, 없으면 queue를 비워 둘 수 있습니다.
 - 같은 task를 다시 queue head로 유지해야 한다면 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
-- 아래 JSON contract는 official ledger update용 serialized input입니다. `root_turn_id`와 `completed_at` 순서를 보존한다고 가정하고 한 번에 하나씩 반영하세요.
+- 아래 JSON contract는 official ledger update용 serialized input입니다. `refresh_order` 순서를 보존하면서 한 번에 하나씩 반영하세요.
 - `commit_sha`, `branch_name`, `worktree_path`는 provenance 용도입니다. ledger에는 작업 의미 중심으로 반영하되 repeat prevention 판단에 활용하세요.
 - `validation_summary`가 실패 또는 미실행이면 후속 task를 `blocked` 또는 보완 task로 표현할지 신중히 결정하세요.
 - 마지막에는 이번 official refresh에서 ledger에 반영한 핵심 판단을 짧게 요약하세요.
@@ -373,6 +456,8 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use anyhow::{Result, anyhow};
@@ -445,6 +530,57 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct RecordingPlanningWorkerPort {
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        replies: Arc<Mutex<VecDeque<String>>>,
+        refresh_orders: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl RecordingPlanningWorkerPort {
+        fn new(
+            workspace_port: Arc<dyn PlanningWorkspacePort>,
+            replies: Vec<String>,
+            refresh_orders: Arc<Mutex<Vec<u64>>>,
+        ) -> Self {
+            Self {
+                workspace_port,
+                replies: Arc::new(Mutex::new(replies.into())),
+                refresh_orders,
+            }
+        }
+    }
+
+    impl PlanningWorkerPort for RecordingPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> Result<PlanningWorkerResponse> {
+            self.refresh_orders
+                .lock()
+                .expect("refresh orders mutex poisoned")
+                .push(prompt_refresh_order(&request.prompt));
+
+            let next_body = self
+                .replies
+                .lock()
+                .expect("reply mutex poisoned")
+                .pop_front()
+                .ok_or_else(|| anyhow!("missing scripted task-ledger body"))?;
+            self.workspace_port.replace_planning_workspace_file(
+                &request.workspace_directory,
+                TASK_LEDGER_FILE_PATH,
+                Some(next_body.as_str()),
+            )?;
+
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                final_agent_message: Some("updated planning queue".to_string()),
+                changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+            })
+        }
+    }
+
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -482,6 +618,45 @@ mod tests {
         .expect("result output should write");
     }
 
+    fn ready_task_ledger(task_id: &str, source_turn_id: &str) -> String {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "tasks": [{
+                "id": task_id,
+                "direction_id": "example-direction",
+                "direction_relation_note": "latest answer completed the previous slice and exposed one more step",
+                "title": format!("Continue {task_id}"),
+                "description": "Continue the next actionable item from the latest answer.",
+                "status": "ready",
+                "base_priority": 80,
+                "dynamic_priority_delta": 0,
+                "priority_reason": "latest answer exposed the next implementation slice",
+                "depends_on": [],
+                "blocked_by": [],
+                "created_by": "llm",
+                "last_updated_by": "llm",
+                "source_turn_id": source_turn_id,
+                "updated_at": "2026-04-13T00:00:00Z"
+            }]
+        }))
+        .expect("valid task ledger should serialize")
+    }
+
+    fn prompt_refresh_order(prompt: &str) -> u64 {
+        let marker = "\"refresh_order\": ";
+        let suffix = prompt
+            .split(marker)
+            .nth(1)
+            .expect("official completion prompt should contain refresh_order");
+        let digits = suffix
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        digits
+            .parse::<u64>()
+            .expect("refresh_order should parse as u64")
+    }
+
     fn service_with_worker(
         worker: Arc<dyn PlanningWorkerPort>,
     ) -> PlanningWorkerOrchestrationService {
@@ -517,27 +692,7 @@ mod tests {
         write_bootstrap_workspace(&workspace_dir);
         let workspace_port: Arc<dyn PlanningWorkspacePort> =
             Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let valid_task_ledger = serde_json::to_string_pretty(&serde_json::json!({
-                "version": 1,
-                "tasks": [{
-                    "id": "task-1",
-                    "direction_id": "example-direction",
-                "direction_relation_note": "latest answer completed the scaffold and left implementation work",
-                "title": "Implement the highest-priority follow-up",
-                "description": "Continue the next actionable item from the latest answer.",
-                "status": "ready",
-                "base_priority": 80,
-                "dynamic_priority_delta": 0,
-                "priority_reason": "latest answer exposed the next implementation slice",
-                "depends_on": [],
-                "blocked_by": [],
-                "created_by": "llm",
-                "last_updated_by": "llm",
-                "source_turn_id": "turn-1",
-                "updated_at": "2026-04-13T00:00:00Z"
-            }]
-        }))
-        .expect("valid task ledger should serialize");
+        let valid_task_ledger = ready_task_ledger("task-1", "turn-1");
         let worker = Arc::new(ScriptedPlanningWorkerPort::new(
             workspace_port,
             vec![valid_task_ledger],
@@ -645,6 +800,7 @@ mod tests {
                 }),
                 contract: PlanningOfficialCompletionRefreshContract::new(
                     "turn-9",
+                    3,
                     PlanningOfficialCompletionRefreshPayload::new(
                         "agent-2",
                         "task-9",
@@ -663,9 +819,10 @@ mod tests {
         );
 
         assert!(prompt.contains("serialized completion refresh contract:"));
-        assert!(prompt.contains("\"version\": 1"));
+        assert!(prompt.contains("\"version\": 2"));
         assert!(prompt.contains("\"refresh_kind\": \"official_completion\""));
         assert!(prompt.contains("\"root_turn_id\": \"turn-9\""));
+        assert!(prompt.contains("\"refresh_order\": 3"));
         assert!(prompt.contains("\"agent_id\": \"agent-2\""));
         assert!(prompt.contains("\"task_id\": \"task-9\""));
         assert!(prompt.contains("\"commit_sha\": \"abc123def456\""));
@@ -675,6 +832,103 @@ mod tests {
         );
         assert!(prompt.contains("Implemented official completion reporting."));
         assert!(prompt.contains("latest operator request:"));
+    }
+
+    #[test]
+    fn official_completion_refreshes_run_in_reserved_order() {
+        let workspace_dir = create_temp_workspace("planning-worker-official-order");
+        write_bootstrap_workspace(&workspace_dir);
+        let workspace_port: Arc<dyn PlanningWorkspacePort> =
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let observed_orders = Arc::new(Mutex::new(Vec::new()));
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(
+            workspace_port,
+            vec![
+                ready_task_ledger("task-1", "turn-1"),
+                ready_task_ledger("task-2", "turn-2"),
+            ],
+            observed_orders.clone(),
+        ));
+        let service = service_with_worker(worker);
+
+        let later_service = service.clone();
+        let later_workspace_dir = workspace_dir.clone();
+        let later_refresh = thread::spawn(move || {
+            later_service.refresh_queue_from_official_completion(
+                PlanningOfficialCompletionRefreshRequest {
+                    workspace_directory: &later_workspace_dir,
+                    latest_user_message: Some("다음 작업도 이어서 진행해."),
+                    latest_main_reply: "두 번째 agent completion 입니다.",
+                    previous_handoff_task: None,
+                    contract: PlanningOfficialCompletionRefreshContract::new(
+                        "turn-2",
+                        2,
+                        PlanningOfficialCompletionRefreshPayload::new(
+                            "agent-2",
+                            "task-2",
+                            "Task Two",
+                            "akra-agent/slot-2/task-two",
+                            "/tmp/slot-2",
+                            "sha-2",
+                            "cargo test passed",
+                            "second completion finished",
+                            None,
+                            None,
+                            "2026-04-17T10:01:00Z",
+                        ),
+                    ),
+                },
+            )
+        });
+
+        thread::sleep(Duration::from_millis(50));
+
+        let earlier_service = service.clone();
+        let earlier_workspace_dir = workspace_dir.clone();
+        let earlier_refresh = thread::spawn(move || {
+            earlier_service.refresh_queue_from_official_completion(
+                PlanningOfficialCompletionRefreshRequest {
+                    workspace_directory: &earlier_workspace_dir,
+                    latest_user_message: Some("첫 번째 completion 을 공식 반영해."),
+                    latest_main_reply: "첫 번째 agent completion 입니다.",
+                    previous_handoff_task: None,
+                    contract: PlanningOfficialCompletionRefreshContract::new(
+                        "turn-1",
+                        1,
+                        PlanningOfficialCompletionRefreshPayload::new(
+                            "agent-1",
+                            "task-1",
+                            "Task One",
+                            "akra-agent/slot-1/task-one",
+                            "/tmp/slot-1",
+                            "sha-1",
+                            "cargo test passed",
+                            "first completion finished",
+                            None,
+                            None,
+                            "2026-04-17T10:00:00Z",
+                        ),
+                    ),
+                },
+            )
+        });
+
+        earlier_refresh
+            .join()
+            .expect("earlier refresh thread should not panic")
+            .expect("earlier refresh should succeed");
+        later_refresh
+            .join()
+            .expect("later refresh thread should not panic")
+            .expect("later refresh should succeed");
+
+        assert_eq!(
+            observed_orders
+                .lock()
+                .expect("refresh order mutex poisoned")
+                .as_slice(),
+            &[1, 2]
+        );
     }
 
     #[test]

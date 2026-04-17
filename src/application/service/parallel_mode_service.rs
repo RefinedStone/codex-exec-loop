@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 
@@ -117,6 +117,11 @@ struct WorkspaceSlotLeaseResolution {
     workspace_path: PathBuf,
 }
 
+#[derive(Debug, Default)]
+struct OfficialCompletionRefreshOrderState {
+    next_refresh_order_by_repo: BTreeMap<String, u64>,
+}
+
 pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefreshContract;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -159,6 +164,7 @@ impl ParallelModeDistributorQueueRecord {
 #[derive(Clone)]
 pub struct ParallelModeService {
     github_automation: Arc<dyn GithubAutomationPort>,
+    official_completion_refresh_orders: Arc<Mutex<OfficialCompletionRefreshOrderState>>,
 }
 
 impl std::fmt::Debug for ParallelModeService {
@@ -181,7 +187,27 @@ impl ParallelModeService {
     }
 
     pub fn with_github_automation(github_automation: Arc<dyn GithubAutomationPort>) -> Self {
-        Self { github_automation }
+        Self {
+            github_automation,
+            official_completion_refresh_orders: Arc::new(Mutex::new(
+                OfficialCompletionRefreshOrderState::default(),
+            )),
+        }
+    }
+
+    pub fn reserve_workspace_official_completion_refresh_order(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<u64>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+
+        self.allocate_official_completion_refresh_order(&resolution)
+            .map(Some)
     }
 
     pub fn inspect_readiness(
@@ -564,6 +590,7 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
         root_turn_id: &str,
+        official_completion_refresh_order: Option<u64>,
         final_response_text: Option<&str>,
         validation_summary: Option<&str>,
         failure_context: Option<&str>,
@@ -583,6 +610,9 @@ impl ParallelModeService {
                 )
             })?;
         let completed_at = current_timestamp();
+        let refresh_order = official_completion_refresh_order
+            .map(Ok)
+            .unwrap_or_else(|| self.allocate_official_completion_refresh_order(&resolution))?;
         let final_response_text = normalized_optional_text(final_response_text).map(str::to_string);
         let validation_summary = normalized_optional_text(validation_summary)
             .unwrap_or("validation status was not reported by runtime")
@@ -604,6 +634,7 @@ impl ParallelModeService {
 
         Ok(Some(PlanningOfficialCompletionRefreshContract::new(
             root_turn_id,
+            refresh_order,
             PlanningOfficialCompletionRefreshPayload::new(
                 resolution.lease.agent_id,
                 resolution.lease.task_id,
@@ -618,6 +649,28 @@ impl ParallelModeService {
                 completed_at,
             ),
         )))
+    }
+
+    fn allocate_official_completion_refresh_order(
+        &self,
+        resolution: &WorkspaceSlotLeaseResolution,
+    ) -> Result<u64, String> {
+        let mut state = self
+            .official_completion_refresh_orders
+            .lock()
+            .map_err(|_| "official completion refresh order mutex was poisoned".to_string())?;
+        let refresh_scope_key = resolution
+            .context
+            .canonical_repo_root
+            .to_string_lossy()
+            .to_string();
+        let next_refresh_order = state
+            .next_refresh_order_by_repo
+            .entry(refresh_scope_key)
+            .or_insert(1);
+        let refresh_order = *next_refresh_order;
+        *next_refresh_order += 1;
+        Ok(refresh_order)
     }
 
     pub fn mark_workspace_official_completion_refreshing(
@@ -4986,6 +5039,7 @@ mod tests {
             .begin_workspace_official_completion(
                 &lease.worktree_path,
                 "turn-1",
+                None,
                 Some("Implemented official completion lifecycle."),
                 Some("cargo test passed"),
                 None,
@@ -5019,6 +5073,7 @@ mod tests {
         assert_eq!(detail.state_label, "commit_ready");
         assert_eq!(detail.completion_state_label, "commit_ready");
         assert_eq!(completion_report.root_turn_id, "turn-1");
+        assert_eq!(completion_report.refresh_order, 1);
         assert_eq!(completion_report.completion.task_id, "task-1");
         assert_eq!(completion_report.completion.agent_id, "agent-1");
         assert_eq!(snapshot.distributor.head_summary, "official");
@@ -5078,6 +5133,7 @@ mod tests {
             .begin_workspace_official_completion(
                 &lease.worktree_path,
                 "turn-queue-success",
+                None,
                 Some("Distributor queue wiring completed."),
                 Some("cargo test passed"),
                 None,
@@ -5219,6 +5275,7 @@ mod tests {
             .begin_workspace_official_completion(
                 &queued.worktree_path,
                 "turn-queue-head",
+                None,
                 Some("Queued result is waiting for distributor delivery."),
                 Some("cargo test passed"),
                 None,
@@ -5316,6 +5373,7 @@ mod tests {
             .begin_workspace_official_completion(
                 &lease.worktree_path,
                 "turn-gh-blocked",
+                None,
                 Some("Distributor queue wiring completed."),
                 Some("cargo test passed"),
                 None,
@@ -5388,6 +5446,65 @@ mod tests {
     }
 
     #[test]
+    fn reserved_official_completion_orders_survive_out_of_order_worker_start() {
+        let repo = TempGitRepo::new("official-completion-refresh-order");
+        let service = ParallelModeService::new();
+
+        let first = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("first slot lease should be acquired");
+        let second = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-2", "Task Two", "agent-2", "task-two"),
+            )
+            .expect("second slot lease should be acquired");
+        for lease in [&first, &second] {
+            service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("slot should transition to running");
+        }
+
+        let first_order = service
+            .reserve_workspace_official_completion_refresh_order(&first.worktree_path)
+            .expect("first order reservation should succeed")
+            .expect("first running slot should reserve an order");
+        let second_order = service
+            .reserve_workspace_official_completion_refresh_order(&second.worktree_path)
+            .expect("second order reservation should succeed")
+            .expect("second running slot should reserve an order");
+
+        let second_report = service
+            .begin_workspace_official_completion(
+                &second.worktree_path,
+                "turn-2",
+                Some(second_order),
+                Some("second completion finished"),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("second official completion should be captured")
+            .expect("second report should be returned");
+        let first_report = service
+            .begin_workspace_official_completion(
+                &first.worktree_path,
+                "turn-1",
+                Some(first_order),
+                Some("first completion finished"),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("first official completion should be captured")
+            .expect("first report should be returned");
+
+        assert_eq!(first_report.refresh_order, 1);
+        assert_eq!(second_report.refresh_order, 2);
+    }
+
+    #[test]
     fn distributor_queue_keeps_later_item_queued_behind_blocked_head() {
         let repo = TempGitRepo::new("distributor-queue-blocked-head");
         let service = ParallelModeService::new();
@@ -5425,6 +5542,7 @@ mod tests {
                 .begin_workspace_official_completion(
                     &lease.worktree_path,
                     &format!("turn-{}", lease.task_id),
+                    None,
                     Some("Distributor queue slice completed."),
                     Some("cargo test passed"),
                     None,
