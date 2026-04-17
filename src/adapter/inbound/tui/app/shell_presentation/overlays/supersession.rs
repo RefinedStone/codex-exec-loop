@@ -231,17 +231,24 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
             "queue: no items are waiting for distributor work",
         ));
     } else {
-        lines.extend(distributor.queue_items.iter().map(|item| {
-            Line::from(format!(
-                "{}: {} / {} / {} / {} / {}",
-                item.source_agent,
-                item.task_title,
-                item.queue_state.label(),
-                item.branch_name,
-                item.commit_short_sha,
-                item.integration_note
-            ))
-        }));
+        lines.extend(
+            distributor
+                .queue_items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let row_label = if index == 0 { "head" } else { "next" };
+                    Line::from(format!(
+                        "{row_label}: {} / {} / {} / {} / {} / {}",
+                        item.source_agent,
+                        item.task_title,
+                        item.queue_state.label(),
+                        item.branch_name,
+                        item.commit_short_sha,
+                        item.integration_note
+                    ))
+                }),
+        );
     }
     lines.push(Line::from("completion feed:"));
     lines.extend(
@@ -311,6 +318,48 @@ mod tests {
 
         assert!(rendered.contains("blocked head: rebased branch"));
         assert!(rendered.contains("provenance: rebased abc1234 -> def4567 onto `akra`"));
+    }
+
+    #[test]
+    fn distributor_lines_render_head_marker_and_humanized_queue_state_labels() {
+        let snapshot = ParallelModeDistributorSnapshot::new(
+            vec![
+                ParallelModeDistributorQueueItem::new(
+                    "agent-1",
+                    "Task One",
+                    ParallelModeQueueItemState::PrPending,
+                    "akra-agent/slot-1/task-one",
+                    "abc1234",
+                    "pull request #42 is open and waiting for merge",
+                ),
+                ParallelModeDistributorQueueItem::new(
+                    "agent-2",
+                    "Task Two",
+                    ParallelModeQueueItemState::Queued,
+                    "akra-agent/slot-2/task-two",
+                    "def5678",
+                    "commit-ready result accepted into distributor queue",
+                ),
+            ],
+            vec![],
+            ParallelModeQueueItemState::PrPending.label(),
+            "pull request #42 is open and waiting for merge",
+        );
+
+        let rendered = build_distributor_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("head: pr pending"));
+        assert!(rendered.contains(
+            "head: agent-1 / Task One / pr pending / akra-agent/slot-1/task-one / abc1234 / pull request #42 is open and waiting for merge"
+        ));
+        assert!(rendered.contains(
+            "next: agent-2 / Task Two / queued / akra-agent/slot-2/task-two / def5678 / commit-ready result accepted into distributor queue"
+        ));
+        assert!(!rendered.contains("pr_pending"));
     }
 
     #[test]
