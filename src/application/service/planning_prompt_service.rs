@@ -11,7 +11,7 @@ use crate::application::service::planning_contract::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueSnapshot,
-    PriorityQueueTask, QueueIdlePolicy,
+    PriorityQueueTask, QueueIdlePolicy, TaskLedgerDocument,
 };
 
 use super::planning_validation_service::PlanningValidationService;
@@ -49,6 +49,7 @@ pub struct PlanningRuntimeSnapshot {
     queue_idle_prompt_path: Option<String>,
     queue_head: Option<PriorityQueueTask>,
     queue_snapshot: Option<PriorityQueueSnapshot>,
+    task_ledger_signature: Option<String>,
     failure_reason: Option<String>,
     auto_followup_pause_reason: Option<String>,
 }
@@ -66,6 +67,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head: None,
             queue_snapshot: None,
+            task_ledger_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -83,6 +85,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head: None,
             queue_snapshot: None,
+            task_ledger_signature: None,
             failure_reason: Some(reason.into()),
             auto_followup_pause_reason: None,
         }
@@ -117,6 +120,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head,
             queue_snapshot: None,
+            task_ledger_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -144,6 +148,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head,
             queue_snapshot: Some(queue_snapshot),
+            task_ledger_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -207,6 +212,10 @@ impl PlanningRuntimeSnapshot {
 
     pub fn queue_snapshot(&self) -> Option<&PriorityQueueSnapshot> {
         self.queue_snapshot.as_ref()
+    }
+
+    pub fn task_ledger_signature(&self) -> Option<&str> {
+        self.task_ledger_signature.as_deref()
     }
 
     pub fn failure_reason(&self) -> Option<&str> {
@@ -357,6 +366,7 @@ impl PlanningPromptService {
             build_prompt_fragment(&directions, &queue_snapshot, result_output_markdown);
         let queue_idle_prompt_path =
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
+        let task_ledger_signature = normalized_task_ledger_signature(&task_ledger);
 
         Ok(PlanningRuntimeSnapshot {
             workspace_present,
@@ -373,10 +383,25 @@ impl PlanningPromptService {
             queue_idle_prompt_path,
             queue_head: queue_snapshot.next_task.clone(),
             queue_snapshot: Some(queue_snapshot),
+            task_ledger_signature: Some(task_ledger_signature),
             failure_reason: None,
             auto_followup_pause_reason: None,
         })
     }
+}
+
+fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> String {
+    let mut normalized_ledger = task_ledger.clone();
+    normalized_ledger
+        .tasks
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    for task in &mut normalized_ledger.tasks {
+        task.depends_on.sort();
+        task.blocked_by.sort();
+    }
+
+    serde_json::to_string(&normalized_ledger)
+        .expect("valid task ledger should serialize into a normalized signature")
 }
 
 fn workspace_record_to_files(

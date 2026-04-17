@@ -211,6 +211,8 @@ fn build_planning_queue_refresh_prompt(
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
 - builtin next-task 자동 진행을 위해, `proposed`만 있고 바로 이어서 진행해야 할 후속 작업이 분명하면 최상위 proposal 1개를 `ready`로 승격하고 나머지 선택지는 `proposed`로 유지하세요.
 - queue head를 유지하더라도 title, status, priority, updated_at 중 하나도 바뀌지 않은 채 그대로 반복하지 마세요.
+- 같은 queue head를 유지해야 한다면 그 task의 scope, description, priority_reason, updated_at 중 최소 하나는 최신 답변 기준으로 다시 써서 진전이 드러나게 하세요.
+- 이미 일부가 끝났다면 기존 task를 더 좁은 남은 작업으로 갱신하거나, 완료된 slice와 새 follow-up task를 분리하세요.
 - 마지막에는 이번 refresh에서 queue에 반영한 핵심 변경을 짧게 요약하세요.
 {latest_user_request_section}
 {previous_handoff_section}

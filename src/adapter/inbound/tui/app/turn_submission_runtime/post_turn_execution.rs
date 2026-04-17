@@ -498,9 +498,11 @@ impl PostTurnEvaluationExecutor {
             );
         }
 
-        if let Some(detail) =
-            repeated_queue_head_detail(conversation.last_planning_task_handoff(), &runtime_snapshot)
-        {
+        if let Some(detail) = repeated_queue_head_detail(
+            conversation.last_planning_task_handoff(),
+            &conversation.planning_runtime_snapshot,
+            &runtime_snapshot,
+        ) {
             self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
             self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
             runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail.clone());
@@ -523,7 +525,8 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        if planning_runtime_snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        if planning_runtime_snapshot.workspace_status()
+            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
         {
             return ConversationPostTurnAction::SkipAutoFollowup {
@@ -700,6 +703,7 @@ fn planner_notice_detail(notices: &[String]) -> Option<String> {
 
 fn repeated_queue_head_detail(
     previous_handoff: Option<&PlanningTaskHandoff>,
+    previous_snapshot: &PlanningRuntimeSnapshot,
     snapshot: &PlanningRuntimeSnapshot,
 ) -> Option<String> {
     let previous_handoff = previous_handoff?;
@@ -717,8 +721,19 @@ fn repeated_queue_head_detail(
         return None;
     }
 
+    let ledger_unchanged = match (
+        previous_snapshot.task_ledger_signature(),
+        snapshot.task_ledger_signature(),
+    ) {
+        (Some(previous), Some(current)) => previous == current,
+        _ => previous_snapshot.queue_snapshot() == snapshot.queue_snapshot(),
+    };
+    if !ledger_unchanged {
+        return None;
+    }
+
     Some(format!(
-        "planner refresh kept the previously handed-off task unchanged as the queue head: {}",
+        "planner refresh kept the previously handed-off task unchanged as the queue head and did not materially change task-ledger.json: {}",
         previous_handoff.task_title
     ))
 }
