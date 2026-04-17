@@ -18,7 +18,7 @@ names the missing capability and the next operator action.
 | push capability available | distributor cannot publish results otherwise | merge queue blocked |
 | `gh` binary installed | end-to-end GitHub automation depends on it | GitHub flow degraded |
 | `gh auth status` succeeds | PR automation needs valid auth | GitHub flow degraded |
-| planning workspace valid | ledger authority must be trustworthy | assignment blocked |
+| planning authority valid | official task authority must be trustworthy | assignment blocked |
 
 ## Readiness States
 
@@ -75,7 +75,7 @@ Example pattern:
 
 ## Planning Readiness Boundary
 
-Because the ledger is the official task source of truth:
+Because active planning authority is the official task source of truth:
 
 - invalid planning blocks new assignment
 - invalid planning does not erase already-visible supersession history

@@ -10,7 +10,8 @@ Automation should feel trustworthy because it is understandable, not because it 
 
 ## Chosen Defaults
 
-- Planning continues to be file-backed and operator-owned.
+- Planning continues to be operator-owned through staged drafts and explicit promotion, even if the
+  long-term authority moves into a repo-shared store.
 - Simple mode becomes the main onboarding path and should be treated as the default narrative.
 - Detail mode remains for power users and deliberate authoring.
 - `llm-assisted` planning stays out of the active roadmap until manual and simple mode are clearly successful.
@@ -172,6 +173,6 @@ The operator should not need to rediscover:
 ## Explicit Non-Goals
 
 - making planning invisible
-- replacing file-backed planning with hidden runtime-only state
+- replacing planning with opaque runtime-only state that removes drafts, review, or explicit promotion
 - turning proposals into automatically executing tasks by default
 - shipping `llm-assisted` planning because it is visible in the UI

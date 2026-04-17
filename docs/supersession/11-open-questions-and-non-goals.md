@@ -5,7 +5,7 @@ This document defines the target supersession model, not shipped behavior.
 ## V1 Non-Goals
 
 - supervisor acting as a general implementation chat surface
-- agents directly updating `task-ledger.json`
+- agents directly updating active planning authority
 - more than one integration branch
 - non-git workspaces
 - distributed execution across multiple machines
@@ -16,7 +16,9 @@ This document defines the target supersession model, not shipped behavior.
 
 The following are intentionally not open in v1:
 
-- official task authority stays in `task-ledger.json`
+- official task authority lives in one repo-scoped planning authority domain
+- tracked planning files are review or portability artifacts, not runtime authority
+- `draft -> validate -> promote` remains the operator authoring contract
 - hidden planning worker remains planning-only
 - execution unit is an agent session
 - integration branch is `akra`

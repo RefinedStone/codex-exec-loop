@@ -4,11 +4,15 @@ This document defines the target supersession model, not shipped behavior.
 
 ## Authority Rule
 
-`.codex-exec-loop/planning/task-ledger.json` remains the official source of executable task state.
+Active task ledger state inside the repo-scoped planning authority domain remains the official
+source of executable task state.
+
+Tracked `task-ledger.json` exports may still exist for review or portability, but they are not the
+runtime authority.
 
 That means:
 
-- agent sessions never mutate the ledger directly
+- agent sessions never mutate active task authority directly
 - supervisor never treats an agent report as official task completion on its own
 - new assignment decisions happen only after ledger refresh
 
@@ -17,8 +21,8 @@ That means:
 1. agent reaches `reported_complete`
 2. supervisor captures the completion report and stores it as non-official event data
 3. supervisor invokes hidden planning worker with the completion payload
-4. hidden planning worker refreshes `task-ledger.json`
-5. supervisor reloads planning runtime snapshot
+4. hidden planning worker refreshes active task state and queue projection in the planning authority domain
+5. supervisor reloads committed planning runtime snapshot
 6. if refresh succeeds, agent transitions to `commit_ready`
 7. if refresh fails, agent transitions to `failed`
 
@@ -55,13 +59,13 @@ Supervisor does not invent new task state outside this refresh.
 ## Serialization Rules
 
 Multiple agent completions may arrive close together. Hidden planning refresh must therefore be
-serialized.
+serialized through the same authority domain that owns planning revision and refresh claims.
 
 Closed v1 rules:
 
-- only one ledger refresh may run at a time
+- only one official refresh claim may run at a time for one repo-scoped authority domain
 - refresh order follows completion event order
-- later refreshes always read the ledger produced by earlier refreshes
+- later refreshes always read the active task state produced by earlier refreshes
 - assignment cannot consume newly ready work until the current refresh finishes
 
 ## Repeat Prevention
@@ -82,16 +86,16 @@ refresh payload must include enough provenance for hidden planning worker to:
 - preserve the agent completion report for operator inspection
 - keep the slot reserved until the operator resolves the planning issue
 
-### Planning Workspace Invalid
+### Planning Authority Invalid
 
 - parallel mode may remain open, but no new assignments occur
-- supersession surface must explain that ledger authority is unavailable
+- supersession surface must explain that planning authority is unavailable
 
 ## Assignment Rule After Refresh
 
 After a successful refresh:
 
-- re-read official queue state from the ledger
+- re-read official queue state from committed active planning revision
 - assign only ledger-ready tasks
 - never assign directly from raw agent text
 

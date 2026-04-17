@@ -14,8 +14,8 @@ from one shell without losing planning authority, git hygiene, or integration co
 | parallel mode | operating mode where the shell runs a supervisor instead of a normal single main session |
 | super session | the control-tower shell surface for assignment, status, merge queue, and recovery |
 | agent session | a main-grade codex/app-server session that owns one task and one leased worktree slot |
-| hidden planning worker | the planning-only helper that refreshes `task-ledger.json` after agent milestones |
-| task ledger | `.codex-exec-loop/planning/task-ledger.json`, the official task source of truth |
+| hidden planning worker | the planning-only helper that refreshes active task state in the planning authority domain after agent milestones |
+| task ledger | the active executable task state inside the repo-scoped planning authority domain, optionally exported for review |
 | akra pool | the managed set of git worktree slots available to agent sessions |
 | slot | one reusable worktree lease that can be assigned to exactly one live agent at a time |
 | distributor | the serial integration subsystem that pushes, opens PRs, merges into `akra`, and cleans slots |
@@ -27,11 +27,11 @@ from one shell without losing planning authority, git hygiene, or integration co
 The target control flow is:
 
 1. supervisor loads capability state and pool state
-2. supervisor reads official queue state from `task-ledger.json`
+2. supervisor reads official queue state from the planning authority domain
 3. supervisor assigns a ready task to an idle slot and launches an agent session
 4. agent works in its leased worktree and reports commit-ready completion
 5. supervisor records the report and passes the result to hidden planning worker
-6. hidden planning worker updates `task-ledger.json`
+6. hidden planning worker updates active task state and queue projection in the planning authority domain
 7. distributor pulls commit-ready reports from merge queue and integrates them into `akra`
 8. cleaned slots return to the pool for future assignment
 
@@ -58,14 +58,14 @@ The planning worker remains in the loop, but it is downstream of agents rather t
 | primary shell identity | one main conversation | one control-tower supervisor |
 | execution unit | current main session | multiple agent sessions |
 | planning feedback | main reply can trigger planning refresh | agent completion report triggers planning refresh |
-| queue authority | `task-ledger.json` with hidden planning worker support | same authority, but fed by multiple agents |
+| queue authority | active planning authority with hidden planning worker support | same authority, but fed by multiple agents |
 | git model | current workspace only | `akra` plus leased worktree pool |
 | integration | operator-driven | distributor-driven merge queue |
 | sessions overlay | resume existing conversations | supersession board replaces session browser entrypoint |
 
 ## Closed V1 Invariants
 
-- Official task state changes only after hidden planning worker updates the ledger.
+- Official task state changes only after hidden planning worker updates the active planning authority.
 - Supervisor never bypasses the ledger when choosing new executable work.
 - Agent sessions never write the ledger directly.
 - Supervisor is operational, not conversational.

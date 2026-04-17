@@ -33,7 +33,7 @@ Use these docs for current behavior:
 - the worktree pool default size is `3`
 - the execution unit is a main-grade agent session, not a planning worker
 - the supervisor is a control tower and does not act as an implementation chat surface
-- `task-ledger.json` remains the official task source of truth
+- active task authority lives in a repo-scoped planning authority domain; tracked planning files are review and portability artifacts
 - hidden planning worker refresh remains in the loop after agent completion
 - distributor processes merge queue items one at a time
 - GitHub automation uses `gh` capability when available and reports degraded readiness otherwise
@@ -59,7 +59,7 @@ Use these docs for current behavior:
 | `01-product-model.md` | product and concept model | defines supersession, agents, pool, distributor, and ledger roles |
 | `02-operator-mode-and-shell-model.md` | operator-visible IA | defines mode switching, overlay ownership, and shell expectations |
 | `03-agent-session-lifecycle.md` | runtime lifecycle | defines agent state transitions and completion contract |
-| `04-task-ledger-feedback-loop.md` | planning authority | defines how agent results become official ledger state |
+| `04-task-ledger-feedback-loop.md` | planning authority | defines how agent results become official active task state |
 | `05-git-worktree-pool.md` | git orchestration | defines slot, worktree, branch, cleanup, and exhaustion rules |
 | `06-distributor-and-merge-queue.md` | integration flow | defines push, PR, merge, cleanup, and serial distributor behavior |
 | `07-supervisor-ui-and-surfaces.md` | UI contract | defines supersession surface, panels, summaries, and alerts |
@@ -75,6 +75,7 @@ Use these docs for current behavior:
 - Keep normal mode intact and route `:sessions` to supersession only when parallel mode is on.
 - Treat git/worktree orchestration as a first-class outbound boundary, not as shell-script glue.
 - Treat merge queue and distributor as a separate subsystem from agent execution.
+- Preserve `draft -> validate -> promote` while moving planning authority into a repo-scoped store.
 
 ## Related Docs
 

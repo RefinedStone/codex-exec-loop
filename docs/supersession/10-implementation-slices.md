@@ -18,9 +18,10 @@ The first operator-visible supersession loop is already shipped on current `prer
 - Slice 5 shipped: completion becomes official only after serialized hidden planning refresh succeeds.
 - Slice 6 and Slice 7 shipped together in native form: distributor queue delivery, rebase provenance, GitHub automation, and slot return are live.
 
-The remaining supersession work is mostly architecture follow-through and cleanup around explicit runtime ports, not first-pass product behavior.
+The remaining supersession work is mostly architecture follow-through around repo-shared planning
+authority, store-backed drafts, cross-process claims, and restart recovery.
 
-## Slice Sequence
+## Shipped Slices
 
 ### Slice 1: Capability Detection And Mode Skeleton
 
@@ -121,6 +122,66 @@ Verification:
 - `cargo clippy --all-targets --all-features -D warnings`
 - terminal validation runs covering mode switch, agent activity, ledger refresh, and distributor cleanup
 
+## Remaining Architecture Follow-Through
+
+### Slice 9: Authority Locator And Shadow Store
+
+- add canonical repo authority location rules
+- bootstrap SQLite schema and read-only snapshot loading
+- mirror tracked planning files into the store without changing runtime authority yet
+
+Verification:
+
+- parity checks between tracked planning files and mirrored store snapshot
+- worktree-level read tests that resolve one canonical authority root
+
+### Slice 10: Store-Backed Drafts And Promote
+
+- move draft storage, validation, and rejection resume data into the authority store
+- preserve `draft -> validate -> promote` semantics
+- prove that active planning does not change until promote succeeds
+
+Verification:
+
+- draft validation tests
+- promote success and rejection-resume tests
+- manual authoring flow check in detail mode
+
+### Slice 11: Active Planning Mutation And Queue Claims
+
+- route hidden planning refresh through store-backed active commits
+- move official refresh reservation and distributor queue-head claims into the same authority domain
+- separate planning revision from runtime event sequence
+
+Verification:
+
+- cross-process claim uniqueness tests
+- queue projection commit tests
+- repeated queue-head regression tests
+
+### Slice 12: Runtime Projection Migration And Recovery
+
+- move slot, session, and distributor delivery projections into the authority store
+- append runtime-domain events
+- add restart recovery that reconciles Git and GitHub truth before reclassifying in-flight work
+
+Verification:
+
+- recovery tests for in-flight refresh, push, PR ensure, integration, and cleanup
+- manual restart checks during blocked and in-flight distributor work
+
+### Slice 13: Store-Primary Cutover
+
+- make store-backed active and draft planning the default runtime authority
+- keep tracked planning files as revision-stamped exports
+- allow tracked-file import only through explicit operator flow
+
+Verification:
+
+- store-primary end-to-end tests across two worktrees
+- export revision labeling checks
+- manual review flow for exported planning artifacts
+
 ## Parallel Work Guidance
 
 Potential disjoint lanes:
@@ -148,7 +209,8 @@ Potential hotspots:
 
 Current status:
 
-- achieved on current `prerelease`
+- achieved on current `prerelease` for the first operator-visible loop
+- not yet achieved for the repo-shared authority and recovery hardening slices
 
 ## Related Docs
 

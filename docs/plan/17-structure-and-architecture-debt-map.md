@@ -119,5 +119,6 @@ Reorganize runtime tests around operator journeys and architectural contracts ra
 ## Explicit Assumptions
 
 - The inline shell remains the only frontend in the near term.
-- File-backed planning remains the trusted source of work continuity.
+- Planning remains operator-owned, but the long-term trusted source of continuity may move to a
+  repo-shared authority store as long as staged drafts and exported review surfaces remain intact.
 - Architectural work is only worth taking when it improves UX clarity, planning trust, or runtime safety.

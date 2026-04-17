@@ -94,10 +94,14 @@ This file records the active planning contract on `prerelease`.
 
 - The planned direction is to move planning authority into a repo-shared planning store under the
   canonical repo root.
-- `directions`, task state, queue projection, and planning runtime metadata move into that store as
-  the official source of truth.
-- File artifacts become import, export, review, and compatibility surfaces rather than the runtime
-  authority.
+- `directions`, active task state, queue projection, draft state, runtime planning metadata, and
+  supersession claims or projections move into one repo-scoped authority domain.
+- `draft -> validate -> promote` stays as the authoring contract, but draft state becomes
+  store-backed instead of worktree-local authority.
+- File artifacts become revision-stamped import, export, review, and compatibility surfaces rather
+  than the runtime authority.
+- The intended rollout is `legacy-file -> shadow-store -> store-primary`, with one-way mirroring
+  only and no long-lived dual authority.
 - Detailed redesign: [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md)
 
 ## Code Entry

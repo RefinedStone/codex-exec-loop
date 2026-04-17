@@ -1,60 +1,145 @@
-# Repo-Shared Planning Authority Store
+# Repo-Shared Planning Authority And Runtime Domain
 
-This document defines the planned replacement for worktree-local planning authority on `prerelease`.
+This document resets the planned replacement for worktree-local planning authority on `prerelease`.
 It is a forward design and development document, not shipped behavior.
 
-## Problem Statement
+## Summary
 
-The current supersession runtime already treats slot leases, agent session detail, and distributor
-queue state as repo-shared concerns, but planning authority still lives under the active workspace
-path.
+The core redesign is no longer just "put planning into SQLite".
 
-That mismatch creates three structural failures:
+The closed architectural decision is:
 
-- planning authority can split across the root checkout and leased worktrees
-- `task-ledger.json` and `queue.snapshot.json` are updated through separate file operations
-- process-local ordering and file-backed queue writes do not become cross-process safety just
-  because they run in one repository family
+- one repo-scoped authority domain owns planning state and supersession coordination state
+- operator authoring still uses `draft -> validate -> promote`
+- tracked planning files remain review and portability artifacts, not authority
+- runtime recovery uses committed store state plus external truth recheck
 
-Improving the priority queue alone does not solve this. The queue is a derived projection. The
-missing piece is a single repo-scoped authority store with transactional mutation rules.
+Any implementation that keeps separate authorities for planning, queue claims, or runtime delivery
+state is out of scope for this design.
 
-## Goals
+## Closed Architectural Decisions
 
-- make planning authority repo-shared across every worktree that belongs to one canonical git root
-- move all planning authority into one store: directions, detail content, queue policy, tasks, and
-  queue projection
-- make ledger and queue projection updates transactional
-- keep a backend boundary so SQLite can be replaced later by a Rust-native store
-- keep operator-visible editing and review flows through structured import/export surfaces
-- add runtime-domain events for supersession orchestration without turning all planning authoring
-  into full event sourcing
+### 1. One Repo-Scoped Authority Domain
 
-## Non-Goals
+The canonical repo root owns one authority domain for:
 
-- full event sourcing for directions authoring and task editing
-- using git refs or git objects as the primary authority model in v1
-- supporting long-term dual authority where files and the store are both official
-- preserving worktree-local planning authority semantics under supersession
+- directions and direction detail content
+- task ledger rows and queue projection
+- plan-enabled and queue-idle metadata
+- store-backed drafts, promotion results, and rejection archives
+- official refresh claims
+- distributor queue claims
+- supersession slot, session, and delivery projections
+- runtime-domain events
 
-## Repo-Shared Runtime Area
+This is one consistency domain even if the physical schema uses multiple tables.
 
-Authority state should live under the canonical repo root, not under an individual worktree.
+The design explicitly rejects:
 
-Recommended layout:
+- planning authority in one store and queue claims in another
+- a separate runtime-state authority that must coordinate with planning through best-effort updates
+
+### 2. Store-Backed Draft And Promote Model
+
+The current operator mental model stays intact:
+
+- draft
+- validate
+- promote
+
+The redesign does not permit direct mutation of active authority as the main authoring path.
+
+Required consequences:
+
+- drafts become store-backed state, not worktree-local authority files
+- active planning remains immutable while a draft is being edited
+- promote is the single transaction that can replace or merge active planning
+- rejected promote attempts preserve resume-able draft context and rejection metadata
+
+Structured change requests still exist, but they mutate draft state by default. They do not become
+direct active-authority writes.
+
+### 3. Git-Tracked Files Become Exported Review Surfaces
+
+The authority store lives under the canonical repo root:
 
 | Path | Role |
 | --- | --- |
 | `.codex-exec-loop/runtime/planning-authority.db` | SQLite authority store |
-| `.codex-exec-loop/runtime/planning-authority.lock` | repo-scoped advisory lock for migration, recovery, and cutover operations |
-| `.codex-exec-loop/runtime/exports/planning-snapshot.json` | full exported review snapshot, not authority |
-| `.codex-exec-loop/runtime/exports/task-ledger.json` | exported ledger view, not authority |
-| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | exported queue view, not authority |
-| `.codex-exec-loop/runtime/imports/planning-change-request.json` | optional structured import request for operator-facing editing flows |
+| `.codex-exec-loop/runtime/planning-authority.lock` | repo-scoped advisory lock for migration, import, and recovery sweep |
+| `.codex-exec-loop/runtime/exports/planning-snapshot.json` | full exported review snapshot |
+| `.codex-exec-loop/runtime/exports/task-ledger.json` | exported ledger view |
+| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | exported queue view |
 
-The legacy tracked files under `.codex-exec-loop/planning/` become compatibility artifacts only.
-They are imported from or exported to the authority store depending on the selected compatibility
-mode, but they are no longer the runtime source of truth.
+Tracked planning files under `.codex-exec-loop/planning/` remain valuable, but only as:
+
+- exported review artifacts
+- explicit import sources
+- branch-visible diffs when the operator chooses to mirror authority outward
+
+They are not runtime authority anymore.
+
+This intentionally changes the continuity rule:
+
+- Git is no longer the primary carrier of authoritative planning state
+- Git remains a review and portability surface through explicit export or import
+
+### 4. Rollout Uses One-Way Mirror Stages Only
+
+The compatibility path is:
+
+| Mode | Meaning |
+| --- | --- |
+| `legacy-file` | tracked files remain authority; the store is not runtime authority |
+| `shadow-store` | tracked files remain authority; the store mirrors and validates parity only |
+| `store-primary` | the store is authority; tracked files are export and explicit import artifacts only |
+
+`hybrid-read` is intentionally dropped because it reads like two-way sync.
+
+The design explicitly rejects:
+
+- long-lived dual authority
+- automatic two-way synchronization between tracked files and the store
+
+### 5. Planning Revision And Runtime Event Sequence Are Separate
+
+Two independent monotonic counters are required.
+
+`planning_revision` covers:
+
+- planning catalog changes
+- draft promotion into active state
+- task ledger changes
+- queue projection changes
+
+`runtime_event_sequence` covers:
+
+- refresh reservation and completion events
+- queue claims
+- push, PR, integration, and cleanup events
+- redistribution or recovery markers
+
+Each runtime event records the `observed_planning_revision` seen when the event was appended.
+
+Planning mutation does not happen on every runtime event, and runtime churn must not inflate the
+meaning of planning revision.
+
+### 6. Recovery Requires External Truth Reconciliation
+
+Recovery is not plain event replay.
+
+The recovery contract is:
+
+- use committed store projections and claims as the starting point
+- re-check Git truth through `GitWorkspacePort`
+- re-check GitHub truth through `GithubAutomationPort`
+- re-check filesystem and worktree truth through the canonical repo root
+- then reclassify in-flight work as recovered, blocked, failed, or already complete
+
+The design explicitly rejects:
+
+- declaring push, PR, or integration success from local projection state alone
+- restart logic that relies only on event replay without external revalidation
 
 ## Boundary Model
 
@@ -66,352 +151,172 @@ Maps any active workspace path to:
 - repo-shared runtime directory
 - authority store path
 
-This is the first place that must stop treating a leased worktree as a separate planning authority.
+This is the first place that stops treating a leased worktree as an independent planning root.
 
-### PlanningAuthorityService
+### PlanningAuthorityPort
 
-The only application-facing authority API.
+This is the application-facing authority contract.
 
 It owns:
 
-- loading committed planning snapshots
-- applying validated planning mutations
-- refreshing queue projections
+- loading active planning snapshot
+- loading and editing draft snapshot
+- validating draft state
+- promoting draft to active state
 - recording hidden planner refresh results
-- recording official completion outcomes
-- importing legacy planning files
-- exporting review/debug views
+- claiming official refresh work
+- claiming distributor queue head ownership
+- appending runtime-domain events
+- reading and updating runtime projections
+- exporting tracked planning artifacts
+- importing tracked planning artifacts under explicit policy
+- running recovery reconciliation
 
-It does not expose raw file-write operations as the main contract.
+This port owns repo-scoped consistency, not raw file I/O.
 
 ### PlanningAuthorityBackend
 
-Backend boundary below `PlanningAuthorityService`.
+Backend boundary below `PlanningAuthorityPort`.
 
 v1 backend:
 
 - SQLite
+
+Required backend capabilities:
+
+- schema migration
+- read and write transactions
+- compare-and-set style claim operations
+- durable draft storage
+- separate planning revision and runtime event sequence
+- durable runtime projection and recovery markers
 
 Possible future replacements:
 
 - Rust-native append-log and snapshot store
 - embedded custom storage engine
 
-Required backend capabilities:
+### Compatibility And Export Bridge
 
-- schema migration
-- read/write transaction support
-- compare-and-set style claim/update operations
-- revision tracking
-- durable runtime event append
-
-### PlanningCompatibilityBridge
-
-Translates between legacy planning files and the authority store.
+Compatibility logic remains an adapter concern.
 
 It owns:
 
-- one-time import of legacy directions and task ledger files
-- compatibility export views
-- mode-based routing between legacy and store-backed operation
-- mismatch diagnostics during rollout
+- one-time import from tracked planning files
+- revision-stamped export views
+- parity diagnostics in `shadow-store`
+- explicit import validation in `store-primary`
 
-### SupersessionRuntimeState Store
+## Authority Data Model
 
-The same repo-shared authority area should also hold supersession runtime state that must survive
-restart and coordinate across worktrees.
+The physical schema may vary, but the logical model must include:
 
-This state is not the same thing as planning authoring state, but it belongs beside it because both
-need repo-scoped consistency.
-
-## Why This Still Fits Hexagonal Architecture
-
-This redesign still fits the existing architectural direction, but the boundary must move up from
-"file read/write" to "authority transaction and projection management".
-
-- application services should depend on authority operations such as snapshot load, mutation apply,
-  queue claim, and export
-- SQLite remains an outbound adapter behind the backend boundary, not a new application center
-- compatibility import and export stay in adapters
-- the priority queue remains a domain projection, not the persistence model itself
-
-The key change is not abandoning ports and adapters. The key change is introducing a port with the
-right level of responsibility for repo-shared authority and concurrency.
-
-## Authority Model
-
-The authority store becomes the official source of truth for:
-
-- directions catalog
-- direction detail content
-- queue-idle policy and review prompt content
-- task ledger rows and dependency edges
-- queue projection
-- plan-enabled and revision metadata
-- repair and rejection metadata
-- supersession runtime events
-- supersession slot/session/distributor projections
-
-Files become:
-
-- import source
-- export view
-- operator review surface
-- debug artifact
-
-This means `task-ledger.json` and `queue.snapshot.json` may still exist, but only as generated or
-imported views. They must not be treated as concurrent writable authority files anymore.
-
-## Data Model
-
-### Planning Tables
-
-| Table | Purpose |
+| Logical bucket | Required contents |
 | --- | --- |
-| `authority_metadata` | backend mode, current revision, migration metadata, last export revision |
-| `planning_catalog_state` | repo-scoped planning settings such as queue-idle policy, queue-idle prompt markdown, result-output markdown, and plan-enabled state |
-| `planning_directions` | direction rows including title, summary, state, success criteria, scope hints, and detail markdown |
-| `planning_tasks` | task rows with normalized queue fields and full payload metadata |
-| `planning_task_edges` | dependency and blocker relations |
-| `planning_queue_projection` | committed projection rows for next task, active tasks, proposed tasks, and skipped tasks |
-| `planning_rejections` | archived invalid candidate metadata and repair linkage |
+| `authority_metadata` | active mode, schema version, active revision, last export revision |
+| `planning_active_*` | active catalog, directions, detail content, task rows, dependency edges, queue projection |
+| `planning_drafts` | draft content, draft revision base, dirty state, validation state |
+| `planning_rejections` | rejected promote attempts, restore metadata, resume linkage |
+| `runtime_claims` | refresh claims, queue-head claims, recovery ownership, expiry metadata |
+| `runtime_projections` | slot, session, queue, and distributor delivery projections |
+| `runtime_events` | append-only orchestration events with `runtime_event_sequence` |
 
-### Supersession Runtime Tables
+The authority schema must store:
 
-| Table | Purpose |
-| --- | --- |
-| `supersession_runtime_events` | append-only runtime-domain event log |
-| `supersession_runtime_state` | latest slot, session, queue-head, and delivery projection |
-| `supersession_claims` | queue-head claims, refresh claims, and recovery ownership markers |
+- queue-idle prompt content
+- result-output guidance
+- direction detail markdown
+- active snapshot metadata
+- export metadata
 
-### Revision Rule
+Tracked file paths are export-shape concerns, not the primary authority schema.
 
-Every committed planning mutation bumps a single repo-scoped revision number.
+## Transaction Rules
 
-That revision covers:
+The minimal active commit unit is:
 
-- planning catalog changes
-- directions changes
-- task ledger changes
-- queue projection changes
-
-Readers only consume committed revisions. Export views must record which revision they represent.
-
-## Editing Contract
-
-Operator-facing editing should move from “edit active authority files directly” to “submit a
-structured change request”.
-
-Recommended JSON request envelope:
-
-```json
-{
-  "base_revision": 42,
-  "changes": [
-    {
-      "op": "upsert_direction",
-      "direction": {
-        "id": "supersession-architecture-boundaries",
-        "title": "Supersession architecture boundaries",
-        "summary": "Split supersession into explicit repo-shared boundaries.",
-        "state": "active",
-        "success_criteria": [
-          "Parallel mode uses a repo-shared planning authority store."
-        ],
-        "scope_hints": [
-          "Prefer transactional authority updates over direct file mutation."
-        ],
-        "detail_markdown": "# Detail\n..."
-      }
-    },
-    {
-      "op": "upsert_task",
-      "task": {
-        "id": "task-planning-authority-store-bootstrap",
-        "direction_id": "supersession-architecture-boundaries",
-        "title": "Bootstrap repo-shared planning authority store",
-        "status": "ready",
-        "base_priority": 96,
-        "updated_at": "2026-04-18T12:00:00Z"
-      }
-    },
-    {
-      "op": "set_queue_idle",
-      "policy": "review_and_enqueue",
-      "prompt_markdown": "# queue-idle review\n..."
-    }
-  ]
-}
-```
-
-Design rules:
-
-- the request is optimistic and revision-based
-- the request is the mutable user-facing shape, not the internal canonical schema
-- the authority service validates and normalizes the request before commit
-- legacy file imports are translated into the same internal mutation model
-
-## Runtime Event Model
-
-Runtime-domain events are introduced only for supersession orchestration.
-
-Recommended v1 event types:
-
-- `agent_completion_reported`
-- `official_refresh_reserved`
-- `official_refresh_started`
-- `official_refresh_succeeded`
-- `official_refresh_failed`
-- `commit_ready_enqueued`
-- `distributor_queue_head_claimed`
-- `source_branch_push_started`
-- `source_branch_push_failed`
-- `pull_request_ensure_started`
-- `pull_request_ensure_failed`
-- `integration_started`
-- `integration_succeeded`
-- `integration_failed`
-- `slot_cleanup_started`
-- `slot_cleanup_succeeded`
-- `slot_cleanup_failed`
-- `redistribution_requested`
-
-Each event row should contain:
-
-- monotonically increasing event sequence
-- repo-scoped authority revision
-- event type
-- aggregate key such as task id, slot id, session key, or queue item id
-- JSON payload
-- timestamp
-
-The runtime state tables are projections of these events plus claim tables, not ad hoc files under
-the pool root.
-
-## Transaction Model
-
-The minimal committed transaction unit is:
-
-- accepted planning mutation
-- validated task state
+- validated active or promoted planning mutation
 - rebuilt queue projection
-- new committed revision
+- updated active revision
+- any claim or event writes that must be atomic with that mutation
 
 Examples that must be single-transaction:
 
-- hidden planner refresh that changes tasks and next queue head
-- proposal promotion into executable queue
+- draft promotion into active state
+- hidden planner refresh that changes tasks and queue head
 - official completion that marks a task done and emits follow-up tasks
 - repair rollback that restores accepted state and projection metadata
+- queue-head claim that depends on a specific active revision
 
-`queue.snapshot.json` should be produced from committed store state after the transaction, not
-written as a second authority step.
+## Delivery Model
 
-## Concurrency Model
+### Draft Mutation Flow
 
-### Short Transactions
+1. operator edits draft state
+2. draft validation runs against store-backed draft content
+3. promote attempts one transactional active update
+4. success replaces or merges active snapshot and rebuilds queue projection
+5. failure writes rejection metadata without corrupting active state
 
-Use SQLite write transactions for normal planning mutations.
+### Runtime Coordination Flow
 
-The expected pattern is:
+1. agent reports completion
+2. authority store records non-official runtime event
+3. one process claims official refresh responsibility
+4. hidden planning worker refreshes active planning state
+5. a new active revision commits if refresh succeeds
+6. distributor claims one queue head against a committed revision
+7. delivery events and projections advance
+8. recovery may later re-check external truth and reconcile state
 
-- `BEGIN IMMEDIATE`
-- validate base revision
-- apply mutation
-- rebuild projection
-- append any related runtime event
-- bump revision
-- `COMMIT`
+## Remaining Implementation Slices
 
-### Claims
+### Slice A: Locator And Shadow Store Bootstrap
 
-Use row-level claim semantics through guarded updates in the store for:
+- add canonical repo authority resolution
+- add SQLite schema and read-only snapshot loading
+- mirror tracked planning files into the store without changing runtime authority
 
-- official completion refresh reservation
-- distributor queue-head claim
-- recovery worker ownership
+### Slice B: Store-Backed Drafts
 
-The claim model must be compare-and-set style, not “scan files and hope nobody else writes first”.
+- move draft storage and validation into the authority store
+- keep draft, validate, and promote UX intact
+- prove that active authority stays unchanged until promote succeeds
 
-### Advisory Lock
+### Slice C: Active Mutation And Claim Migration
 
-Use the repo-scoped lock file only for long-lived global operations such as:
+- route hidden planner refresh and official completion claims through the authority store
+- migrate queue-head claim semantics into the same authority domain
 
-- first-time migration
-- legacy import/cutover
-- recovery sweep
+### Slice D: Runtime Projection And Recovery
 
-Do not hold an OS lock across the full lifetime of distributor delivery.
+- move slot, session, queue, and distributor projections into the store
+- append runtime-domain events
+- add recovery reconciliation against Git and GitHub truth
 
-## Compatibility Modes
+### Slice E: Store-Primary Cutover
 
-The new authority layer should support three explicit modes.
-
-| Mode | Meaning |
-| --- | --- |
-| `legacy-file` | current file-backed planning remains the runtime authority |
-| `hybrid-read` | legacy files can still be imported, but runtime reads and writes go through the authority store |
-| `store-primary` | authority store is official and files are import/export views only |
-
-Rollout order:
-
-1. `legacy-file`
-2. `hybrid-read`
-3. `store-primary`
-
-Long-term dual authority is explicitly out of scope.
-
-## Implementation Slices
-
-### Slice 1: Authority Locator And Read Path
-
-- add canonical repo authority location rules
-- bootstrap SQLite schema and read-only snapshot loading
-- keep runtime behavior in `legacy-file` mode
-
-### Slice 2: Planning Snapshot Shadow Mode
-
-- build queue projection from the store
-- export read-only snapshots for comparison against legacy files
-- report divergence without cutting over writes yet
-
-### Slice 3: Hidden Planner Write Path
-
-- route hidden queue refresh and repair through the authority store
-- make task and queue projection commit transactional
-- keep compatibility export enabled
-
-### Slice 4: Official Completion And Queue Claims
-
-- move official completion refresh reservation and queue-head claims into the store
-- replace process-local ordering guarantees with repo-shared claim semantics
-
-### Slice 5: Supersession Runtime State Migration
-
-- move slot/session/distributor state from pool-root files into store-backed projections
-- append runtime-domain events for delivery lifecycle
-- add recovery sweep on restart
-
-### Slice 6: Store-Primary Cutover
-
-- make store-backed planning the default runtime authority
-- reduce legacy files to import/export and review artifacts
-- remove assumptions that the active worktree owns planning authority
+- make store-backed active planning the default runtime authority
+- keep tracked planning files as revision-stamped exports
+- allow explicit import only under controlled operator flow
 
 ## Acceptance Criteria
 
-- every worktree under one canonical repo root sees the same committed planning authority
-- hidden planner refresh from a leased worktree mutates the repo-shared authority, not that
-  worktree's local planning files
-- `task ledger` and queue projection become visible only at the same committed revision
-- two processes cannot both claim the same official completion refresh order
-- two processes cannot both claim the same distributor queue head
-- restart recovery can reconstruct in-flight supersession delivery state from committed store data
-- operator-facing planning exports remain readable without becoming authority again
+- every worktree under one canonical repo root sees the same active planning revision
+- drafts are shared by repo scope and do not mutate active state until promote succeeds
+- hidden planner refresh from a leased worktree mutates repo-scoped active authority, not local
+  planning files
+- official refresh claims and distributor queue-head claims live in the same authority domain as
+  planning revision
+- planning revision and runtime event sequence remain distinct
+- recovery can reclassify in-flight push, PR, integration, and cleanup work by rechecking external
+  truth
+- tracked planning files remain readable and reviewable without becoming runtime authority again
 
 ## Related Docs
 
 - [19-supersession-runtime-risk-audit.md](19-supersession-runtime-risk-audit.md)
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)
+- [16-planning-and-automation-evolution.md](16-planning-and-automation-evolution.md)
 - [../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md)
 - [../supersession/09-architecture-boundaries.md](../supersession/09-architecture-boundaries.md)

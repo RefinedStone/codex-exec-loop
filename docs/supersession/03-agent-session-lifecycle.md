@@ -66,7 +66,7 @@ V1 completion is `commit ready`. The agent must:
 
 The agent does not:
 
-- update `task-ledger.json` directly
+- update active planning authority directly
 - merge into `akra`
 - decide official next tasks
 - declare global completion without ledger refresh
@@ -77,7 +77,8 @@ The agent does not:
 `commit_ready` means hidden planning worker has refreshed the ledger and supervisor now accepts the
 result as an official milestone.
 
-This distinction is mandatory because the ledger remains the official source of task state.
+This distinction is mandatory because active planning authority remains the official source of task
+state.
 
 ## Interruption And Failure Rules
 

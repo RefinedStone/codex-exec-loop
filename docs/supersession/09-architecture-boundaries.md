@@ -33,14 +33,16 @@ These types should stay UI-neutral and transport-neutral.
 | `GitWorkspacePort` | inspect repo state, manage branches, and manage worktrees |
 | `GithubAutomationPort` | inspect `gh` capability and run PR-oriented GitHub actions |
 | `DistributorPort` | process merge queue items and clean slots |
-| `PlanningAuthorityBackend` | own repo-shared planning authority, transactional queue projection, and compatibility import/export flows |
-| `SupersessionRuntimeStatePort` | persist queue claims, slot and session projections, distributor delivery state, and runtime-domain events |
+| `PlanningAuthorityPort` | own repo-shared planning authority, store-backed drafts, queue claims, runtime projections, export or import policy, and recovery reconciliation |
 
 Planning should not remain a workspace-local file authority in supersession. Instead, a dedicated
 planning authority boundary should own repo-scoped planning state and expose explicit mutation,
 refresh, and export operations. The planning facade may still be the caller-facing orchestration
 surface, but it must no longer assume that the active worktree owns the authoritative planning
 files.
+
+Queue claims, refresh claims, and runtime delivery projections belong in the same authority domain
+as planning revision. They are not a second authority store.
 
 ## New Application Services
 
@@ -82,9 +84,12 @@ Normal mode and parallel mode should have separate runtime state reducers.
 | --- | --- |
 | app-server agent adapter | launches and streams agent sessions |
 | git subprocess adapter | shells out to `git` for repo, branch, and worktree operations |
-| planning authority adapter | resolves canonical repo scope, executes transactional planning reads and writes, and manages compatibility import/export |
+| planning authority adapter | resolves canonical repo scope, executes transactional planning reads and writes, stores drafts and runtime projections, and manages compatibility import/export |
 | `gh` subprocess adapter | shells out to `gh` for auth, PR, and merge operations |
 | TUI supervisor adapter | maps supervisor snapshots to overlay and compact shell presentation |
+
+The SQLite-specific backend remains an implementation detail behind the planning authority adapter.
+It is not a second orchestration surface.
 
 ## Runtime Event Boundary
 
@@ -94,7 +99,9 @@ and projection model.
 - append runtime-domain events for completion, refresh, queue claim, push, PR ensure, integrate,
   cleanup, and redistribution
 - project those events into slot, session, and distributor state tables
-- make restart recovery consume the same projections instead of rebuilding from scattered files
+- keep planning revision separate from runtime event sequencing
+- make restart recovery consume the same projections plus Git and GitHub truth rechecks instead of
+  rebuilding from scattered files
 
 This event model is for runtime orchestration only. It is not a requirement to turn all planning
 authoring into full event sourcing.
