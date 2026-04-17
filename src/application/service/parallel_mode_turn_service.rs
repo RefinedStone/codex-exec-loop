@@ -119,9 +119,14 @@ impl ParallelModeTurnService {
             .parallel_mode_service
             .mark_workspace_slot_running(workspace_directory)
         {
-            Ok(Some(_)) | Ok(None) => ParallelTurnStreamEventOutcome {
+            Ok(Some(_)) => ParallelTurnStreamEventOutcome {
                 runtime_notice: None,
                 invalidate_supervisor_snapshot: true,
+                turn_started_observed: true,
+            },
+            Ok(None) => ParallelTurnStreamEventOutcome {
+                runtime_notice: None,
+                invalidate_supervisor_snapshot: false,
                 turn_started_observed: true,
             },
             Err(error) => ParallelTurnStreamEventOutcome {
@@ -222,10 +227,16 @@ impl ParallelModeTurnService {
             .mark_workspace_official_completion_failed(workspace_directory, failure_detail);
     }
 
-    pub fn mark_official_completion_refreshing(&self, workspace_directory: &str) {
-        let _ = self
+    pub fn mark_official_completion_refreshing(&self, workspace_directory: &str) -> Option<String> {
+        match self
             .parallel_mode_service
-            .mark_workspace_official_completion_refreshing(workspace_directory);
+            .mark_workspace_official_completion_refreshing(workspace_directory)
+        {
+            Ok(_) => None,
+            Err(error) => Some(format!(
+                "official completion refreshing state could not be recorded: {error}"
+            )),
+        }
     }
 
     pub fn finalize_official_completion_success(
@@ -233,11 +244,15 @@ impl ParallelModeTurnService {
         workspace_directory: &str,
         ledger_refresh_outcome: &str,
     ) -> Vec<String> {
-        let _ = self
-            .parallel_mode_service
-            .mark_workspace_commit_ready(workspace_directory, ledger_refresh_outcome);
-
         let mut notices = Vec::new();
+        if let Err(error) = self
+            .parallel_mode_service
+            .mark_workspace_commit_ready(workspace_directory, ledger_refresh_outcome)
+        {
+            notices.push(format!(
+                "commit-ready state could not be recorded after official refresh: {error}"
+            ));
+        }
         match self
             .parallel_mode_service
             .enqueue_workspace_commit_ready_result(workspace_directory)
@@ -289,7 +304,72 @@ fn should_mark_cleanup_pending_after_success(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_mark_cleanup_pending_after_success, should_release_unstarted_slot_lease};
+    use std::fs;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::parallel_mode_service::ParallelModeService;
+
+    use super::{
+        ParallelModeTurnService, should_mark_cleanup_pending_after_success,
+        should_release_unstarted_slot_lease,
+    };
+
+    struct TempGitWorkspace {
+        root: String,
+    }
+
+    impl TempGitWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&root).expect("temp git workspace should be created");
+            run_git(&root, &["init"]);
+            run_git(&root, &["config", "user.name", "RefinedStone"]);
+            run_git(&root, &["config", "user.email", "chem.en.9273@gmail.com"]);
+            fs::write(root.join("README.md"), "temp repo\n")
+                .expect("temp git workspace seed file should write");
+            run_git(&root, &["add", "README.md"]);
+            run_git(&root, &["commit", "-m", "Initial commit"]);
+
+            Self {
+                root: root.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempGitWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn create_temp_directory(prefix: &str) -> String {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+        fs::create_dir_all(&root).expect("temp directory should be created");
+        root.display().to_string()
+    }
+
+    fn run_git(repo_root: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo_root)
+            .args(args)
+            .status()
+            .expect("git command should launch");
+        assert!(
+            status.success(),
+            "git command failed: git {}",
+            args.join(" ")
+        );
+    }
 
     #[test]
     fn startup_failure_requests_unstarted_slot_release() {
@@ -306,5 +386,52 @@ mod tests {
         assert!(should_mark_cleanup_pending_after_success(
             true, false, false
         ));
+    }
+
+    #[test]
+    fn turn_started_without_slot_lease_keeps_snapshot_steady() {
+        let workspace = TempGitWorkspace::new("parallel-turn-no-lease");
+        let service = ParallelModeTurnService::new(ParallelModeService::new());
+
+        let outcome = service.sync_stream_event(
+            &workspace.root,
+            &ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+            },
+        );
+
+        assert!(!outcome.invalidate_supervisor_snapshot);
+        assert!(outcome.turn_started_observed);
+        assert!(outcome.runtime_notice.is_none());
+    }
+
+    #[test]
+    fn official_completion_refreshing_failure_becomes_runtime_notice() {
+        let workspace = create_temp_directory("parallel-turn-refresh-failure");
+        let service = ParallelModeTurnService::new(ParallelModeService::new());
+
+        let notice = service.mark_official_completion_refreshing(&workspace);
+
+        assert!(notice.as_deref().is_some_and(|value| {
+            value.contains("official completion refreshing state could not be recorded")
+        }));
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn official_completion_finalize_surfaces_commit_ready_transition_failure() {
+        let workspace = create_temp_directory("parallel-turn-commit-ready-failure");
+        let service = ParallelModeTurnService::new(ParallelModeService::new());
+
+        let notices = service
+            .finalize_official_completion_success(&workspace, "official ledger refresh succeeded");
+
+        assert!(notices.iter().any(|notice| {
+            notice.contains("commit-ready state could not be recorded after official refresh")
+        }));
+        assert!(notices.iter().any(|notice| {
+            notice.contains("distributor enqueue failed after official refresh")
+        }));
+        let _ = fs::remove_dir_all(workspace);
     }
 }

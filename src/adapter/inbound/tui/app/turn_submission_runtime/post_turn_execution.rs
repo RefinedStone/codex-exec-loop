@@ -334,8 +334,13 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        self.parallel_mode_turn_service
-            .mark_official_completion_refreshing(&request.workspace_directory);
+        let mut runtime_notices = Vec::new();
+        if let Some(notice) = self
+            .parallel_mode_turn_service
+            .mark_official_completion_refreshing(&request.workspace_directory)
+        {
+            runtime_notices.push(notice);
+        }
         let latest_main_reply = conversation
             .latest_agent_message_text()
             .map(str::trim)
@@ -346,7 +351,7 @@ impl PostTurnEvaluationExecutor {
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
-            contract: completion_report.clone(),
+            contract: completion_report,
         };
         let worker_prompt = self
             .planning
@@ -377,7 +382,7 @@ impl PostTurnEvaluationExecutor {
                 );
                 return OfficialCompletionRefreshOutcome {
                     runtime_snapshot: failure_snapshot,
-                    runtime_notices: Vec::new(),
+                    runtime_notices,
                 };
             }
         };
@@ -424,7 +429,7 @@ impl PostTurnEvaluationExecutor {
             );
             return OfficialCompletionRefreshOutcome {
                 runtime_snapshot: failure_snapshot,
-                runtime_notices: Vec::new(),
+                runtime_notices,
             };
         }
 
@@ -433,12 +438,13 @@ impl PostTurnEvaluationExecutor {
             .as_deref()
             .map(|summary| format!("official ledger refresh succeeded: {summary}"))
             .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
-        let runtime_notices = self
-            .parallel_mode_turn_service
-            .finalize_official_completion_success(
-                &request.workspace_directory,
-                &ledger_refresh_outcome,
-            );
+        runtime_notices.extend(
+            self.parallel_mode_turn_service
+                .finalize_official_completion_success(
+                    &request.workspace_directory,
+                    &ledger_refresh_outcome,
+                ),
+        );
 
         OfficialCompletionRefreshOutcome {
             runtime_snapshot,

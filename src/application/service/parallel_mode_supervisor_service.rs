@@ -1,7 +1,7 @@
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeReadinessSnapshot,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
+    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
 };
 
@@ -37,10 +37,7 @@ impl ParallelModeSupervisorService {
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
         let pool = build_pool_board(workspace_dir, readiness_snapshot);
-        let top_notice = readiness_snapshot
-            .and_then(|snapshot| snapshot.top_alert.clone())
-            .or_else(|| pool_operator_recovery_notice(&pool))
-            .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot));
+        let top_notice = supervisor_top_notice(&pool, mode_enabled, readiness_snapshot);
 
         ParallelModeSupervisorSnapshot::new(
             state,
@@ -70,10 +67,7 @@ impl ParallelModeSupervisorService {
             }
             _ => build_pool_board(workspace_dir, readiness_snapshot),
         };
-        let top_notice = readiness_snapshot
-            .and_then(|snapshot| snapshot.top_alert.clone())
-            .or_else(|| pool_operator_recovery_notice(&pool))
-            .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot));
+        let top_notice = supervisor_top_notice(&pool, mode_enabled, readiness_snapshot);
 
         ParallelModeSupervisorSnapshot::new(
             state,
@@ -85,6 +79,17 @@ impl ParallelModeSupervisorService {
             top_notice,
         )
     }
+}
+
+fn supervisor_top_notice(
+    pool: &ParallelModePoolBoardSnapshot,
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> Option<String> {
+    readiness_snapshot
+        .and_then(|snapshot| snapshot.top_alert.clone())
+        .or_else(|| pool_operator_recovery_notice(pool))
+        .or_else(|| default_supervisor_notice(mode_enabled, readiness_snapshot))
 }
 
 fn build_placeholder_roster(
@@ -135,21 +140,12 @@ fn build_agent_roster_from_context(
     mode_enabled: bool,
 ) -> ParallelModeAgentRosterSnapshot {
     let history = load_agent_session_detail_records(&context.pool_root);
-    let mut leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
-    leases.sort_by(|left, right| {
-        roster_state_priority(right.state)
-            .cmp(&roster_state_priority(left.state))
-            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
-            .then_with(|| left.slot_id.cmp(&right.slot_id))
-    });
+    let leases = sorted_active_leases(context);
 
     let entries = leases
         .iter()
         .map(|lease| {
-            let detail = history
-                .iter()
-                .find(|detail| detail.session_key == lease_session_key(lease))
-                .cloned();
+            let detail = session_detail_for_lease(history.as_slice(), lease);
             build_agent_roster_entry(lease, detail.as_ref())
         })
         .collect::<Vec<_>>();
@@ -196,10 +192,10 @@ fn roster_state_label(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
 ) -> String {
-    if let Some(detail) = detail
-        && let Some(label) = active_runtime_state_override(lease, detail)
-    {
-        return label.to_string();
+    if let Some(detail) = detail {
+        if let Some(label) = active_runtime_state_override(lease, detail) {
+            return label.to_string();
+        }
     }
 
     match lease.state {
@@ -255,7 +251,7 @@ fn roster_latest_summary(
                 "agent session is active in the leased slot".to_string()
             }
             ParallelModeSlotLeaseState::CleanupPending => {
-                "execution finished and slot cleanup is pending".to_string()
+                "agent session reported completion and slot cleanup is pending".to_string()
             }
         })
 }
@@ -425,31 +421,45 @@ pub(super) fn selected_runtime_session_detail(
     if let Some(queue_head) = queue_records
         .iter()
         .find(|record| record.queue_state.is_active())
-        && let Some(detail) =
-            session_detail_for_runtime_session(context, history, &queue_head.session_key)
     {
-        return Some(detail);
+        if let Some(detail) =
+            session_detail_for_runtime_session(context, history, &queue_head.session_key)
+        {
+            return Some(detail);
+        }
     }
 
-    let mut active_leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
-    active_leases.sort_by(|left, right| {
+    let active_leases = sorted_active_leases(context);
+
+    if let Some(lease) = active_leases.first() {
+        return Some(build_live_session_detail(
+            lease,
+            session_detail_for_lease(history, lease),
+        ));
+    }
+
+    history.first().cloned()
+}
+
+fn sorted_active_leases(context: &PoolRuntimeContext) -> Vec<ParallelModeSlotLeaseSnapshot> {
+    let mut leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    leases.sort_by(|left, right| {
         roster_state_priority(right.state)
             .cmp(&roster_state_priority(left.state))
             .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
             .then_with(|| left.slot_id.cmp(&right.slot_id))
     });
+    leases
+}
 
-    if let Some(lease) = active_leases.first() {
-        return Some(build_live_session_detail(
-            lease,
-            history
-                .iter()
-                .find(|detail| detail.session_key == lease_session_key(lease))
-                .cloned(),
-        ));
-    }
-
-    history.first().cloned()
+fn session_detail_for_lease(
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Option<ParallelModeAgentSessionDetailSnapshot> {
+    history
+        .iter()
+        .find(|detail| detail.session_key == lease_session_key(lease))
+        .cloned()
 }
 
 fn session_detail_for_runtime_session(

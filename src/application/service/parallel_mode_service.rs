@@ -1804,11 +1804,9 @@ fn summarize_pool_reconcile_status(
     if blocked_slots > 0 {
         if let Some(slot) = find_non_merged_orphan_slot_branch(slots) {
             return format!(
-                "{}reconcile blocked / cause: {} branch `{}` is not integrated into `{AKRA_BRANCH}` and has no lease metadata / next action: {} / blocked: {blocked_slots} / missing: {missing_slots} / cleanup: {awaiting_cleanup_slots} / root {}",
+                "{}reconcile blocked / cause: {} / blocked: {blocked_slots} / missing: {missing_slots} / cleanup: {awaiting_cleanup_slots} / root {}",
                 prefix,
-                slot.slot_id,
-                slot.branch_name,
-                NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
+                non_merged_orphan_slot_branch_notice(&slot.slot_id, &slot.branch_name),
                 pool_root.display()
             );
         }
@@ -1889,9 +1887,15 @@ fn find_non_merged_orphan_slot_branch<'a>(
 fn pool_operator_recovery_notice(pool: &ParallelModePoolBoardSnapshot) -> Option<String> {
     let slot = find_non_merged_orphan_slot_branch(&pool.slots)?;
     Some(format!(
-        "pool: blocked / cause: {} branch `{}` is not integrated into `{AKRA_BRANCH}` and has no lease metadata / next action: {}",
-        slot.slot_id, slot.branch_name, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION
+        "pool: blocked / cause: {}",
+        non_merged_orphan_slot_branch_notice(&slot.slot_id, &slot.branch_name)
     ))
+}
+
+fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> String {
+    format!(
+        "{slot_id} branch `{branch_name}` is not integrated into `{AKRA_BRANCH}` and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}"
+    )
 }
 
 fn detect_canonical_repo_root(workspace_dir: &str) -> Option<PathBuf> {
@@ -3282,14 +3286,15 @@ mod tests {
                 .lock()
                 .expect("fake github operations mutex poisoned")
                 .push(format!("push:{branch_name}:{force_with_lease}"));
-            if force_with_lease
-                && let Some(error) = self
+            if force_with_lease {
+                if let Some(error) = self
                     .force_push_error
                     .lock()
                     .expect("fake github force-push error mutex poisoned")
                     .clone()
-            {
-                anyhow::bail!(error);
+                {
+                    anyhow::bail!(error);
+                }
             }
             Ok(())
         }

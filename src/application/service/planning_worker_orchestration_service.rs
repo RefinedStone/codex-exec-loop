@@ -32,7 +32,7 @@ pub struct PlanningOfficialCompletionRefreshRequest<'a> {
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
-    pub contract: PlanningOfficialCompletionRefreshContract,
+    pub contract: &'a PlanningOfficialCompletionRefreshContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,11 +131,11 @@ impl OfficialCompletionRefreshGate {
             .workspace_state
             .lock()
             .expect("official completion refresh gate mutex should not be poisoned");
-        if let Some(state) = workspace_state.get_mut(workspace_directory)
-            && state.in_flight_refresh_order == Some(refresh_order)
-        {
-            state.in_flight_refresh_order = None;
-            state.next_refresh_order = refresh_order + 1;
+        if let Some(state) = workspace_state.get_mut(workspace_directory) {
+            if state.in_flight_refresh_order == Some(refresh_order) {
+                state.in_flight_refresh_order = None;
+                state.next_refresh_order = refresh_order + 1;
+            }
         }
         self.wake_all.notify_all();
 
@@ -394,7 +394,7 @@ fn build_planning_official_completion_prompt(
 - payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
 - follow-up work가 있으면 새 executable task를 queue에 반영하고, 없으면 queue를 비워 둘 수 있습니다.
 - 같은 task를 다시 queue head로 유지해야 한다면 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
-- 아래 JSON contract는 official ledger update용 serialized input입니다. `refresh_order` 순서를 보존하면서 한 번에 하나씩 반영하세요.
+- 아래 JSON contract는 이번 refresh에서 처리할 단일 official ledger update input입니다. 여러 completion이 누적돼도 `refresh_order`가 더 작은 contract가 끝난 뒤 다음 contract를 반영하세요.
 - `commit_sha`, `branch_name`, `worktree_path`는 provenance 용도입니다. ledger에는 작업 의미 중심으로 반영하되 repeat prevention 판단에 활용하세요.
 - `validation_summary`가 실패 또는 미실행이면 후속 task를 `blocked` 또는 보완 task로 표현할지 신중히 결정하세요.
 - 마지막에는 이번 official refresh에서 ledger에 반영한 핵심 판단을 짧게 요약하세요.
@@ -785,6 +785,23 @@ mod tests {
         let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
         let service = service_with_worker(worker);
 
+        let contract = PlanningOfficialCompletionRefreshContract::new(
+            "turn-9",
+            3,
+            PlanningOfficialCompletionRefreshPayload::new(
+                "agent-2",
+                "task-9",
+                "Official completion pipeline 구현",
+                "akra-agent/slot-1/official-completion",
+                "/tmp/slot-1",
+                "abc123def456",
+                "cargo test passed",
+                "official completion lifecycle wired",
+                Some("Implemented official completion reporting.".to_string()),
+                None,
+                "2026-04-17T09:10:00Z",
+            ),
+        );
         let prompt = service.render_official_completion_refresh_prompt(
             &PlanningOfficialCompletionRefreshRequest {
                 workspace_directory: &workspace_dir,
@@ -798,23 +815,7 @@ mod tests {
                     updated_at: "2026-04-17T09:00:00Z".to_string(),
                     status_label: "ready".to_string(),
                 }),
-                contract: PlanningOfficialCompletionRefreshContract::new(
-                    "turn-9",
-                    3,
-                    PlanningOfficialCompletionRefreshPayload::new(
-                        "agent-2",
-                        "task-9",
-                        "Official completion pipeline 구현",
-                        "akra-agent/slot-1/official-completion",
-                        "/tmp/slot-1",
-                        "abc123def456",
-                        "cargo test passed",
-                        "official completion lifecycle wired",
-                        Some("Implemented official completion reporting.".to_string()),
-                        None,
-                        "2026-04-17T09:10:00Z",
-                    ),
-                ),
+                contract: &contract,
             },
         );
 
@@ -831,6 +832,7 @@ mod tests {
             prompt.contains("\"final_response_summary\": \"official completion lifecycle wired\"")
         );
         assert!(prompt.contains("Implemented official completion reporting."));
+        assert!(prompt.contains("이번 refresh에서 처리할 단일 official ledger update input입니다."));
         assert!(prompt.contains("latest operator request:"));
     }
 
@@ -854,29 +856,30 @@ mod tests {
         let later_service = service.clone();
         let later_workspace_dir = workspace_dir.clone();
         let later_refresh = thread::spawn(move || {
+            let contract = PlanningOfficialCompletionRefreshContract::new(
+                "turn-2",
+                2,
+                PlanningOfficialCompletionRefreshPayload::new(
+                    "agent-2",
+                    "task-2",
+                    "Task Two",
+                    "akra-agent/slot-2/task-two",
+                    "/tmp/slot-2",
+                    "sha-2",
+                    "cargo test passed",
+                    "second completion finished",
+                    None,
+                    None,
+                    "2026-04-17T10:01:00Z",
+                ),
+            );
             later_service.refresh_queue_from_official_completion(
                 PlanningOfficialCompletionRefreshRequest {
                     workspace_directory: &later_workspace_dir,
                     latest_user_message: Some("다음 작업도 이어서 진행해."),
                     latest_main_reply: "두 번째 agent completion 입니다.",
                     previous_handoff_task: None,
-                    contract: PlanningOfficialCompletionRefreshContract::new(
-                        "turn-2",
-                        2,
-                        PlanningOfficialCompletionRefreshPayload::new(
-                            "agent-2",
-                            "task-2",
-                            "Task Two",
-                            "akra-agent/slot-2/task-two",
-                            "/tmp/slot-2",
-                            "sha-2",
-                            "cargo test passed",
-                            "second completion finished",
-                            None,
-                            None,
-                            "2026-04-17T10:01:00Z",
-                        ),
-                    ),
+                    contract: &contract,
                 },
             )
         });
@@ -886,29 +889,30 @@ mod tests {
         let earlier_service = service.clone();
         let earlier_workspace_dir = workspace_dir.clone();
         let earlier_refresh = thread::spawn(move || {
+            let contract = PlanningOfficialCompletionRefreshContract::new(
+                "turn-1",
+                1,
+                PlanningOfficialCompletionRefreshPayload::new(
+                    "agent-1",
+                    "task-1",
+                    "Task One",
+                    "akra-agent/slot-1/task-one",
+                    "/tmp/slot-1",
+                    "sha-1",
+                    "cargo test passed",
+                    "first completion finished",
+                    None,
+                    None,
+                    "2026-04-17T10:00:00Z",
+                ),
+            );
             earlier_service.refresh_queue_from_official_completion(
                 PlanningOfficialCompletionRefreshRequest {
                     workspace_directory: &earlier_workspace_dir,
                     latest_user_message: Some("첫 번째 completion 을 공식 반영해."),
                     latest_main_reply: "첫 번째 agent completion 입니다.",
                     previous_handoff_task: None,
-                    contract: PlanningOfficialCompletionRefreshContract::new(
-                        "turn-1",
-                        1,
-                        PlanningOfficialCompletionRefreshPayload::new(
-                            "agent-1",
-                            "task-1",
-                            "Task One",
-                            "akra-agent/slot-1/task-one",
-                            "/tmp/slot-1",
-                            "sha-1",
-                            "cargo test passed",
-                            "first completion finished",
-                            None,
-                            None,
-                            "2026-04-17T10:00:00Z",
-                        ),
-                    ),
+                    contract: &contract,
                 },
             )
         });
