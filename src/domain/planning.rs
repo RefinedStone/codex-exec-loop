@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const PLANNING_FORMAT_VERSION: u32 = 1;
+pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningWorkspaceState {
@@ -231,6 +232,84 @@ pub struct PriorityQueueSkippedTask {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningRefreshContractKind {
+    OfficialCompletion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningOfficialCompletionRefreshPayload {
+    pub agent_id: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub branch_name: String,
+    pub worktree_path: String,
+    pub commit_sha: String,
+    pub validation_summary: String,
+    pub final_response_summary: String,
+    #[serde(default)]
+    pub final_response_text: Option<String>,
+    #[serde(default)]
+    pub failure_context: Option<String>,
+    pub completed_at: String,
+}
+
+impl PlanningOfficialCompletionRefreshPayload {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        agent_id: impl Into<String>,
+        task_id: impl Into<String>,
+        task_title: impl Into<String>,
+        branch_name: impl Into<String>,
+        worktree_path: impl Into<String>,
+        commit_sha: impl Into<String>,
+        validation_summary: impl Into<String>,
+        final_response_summary: impl Into<String>,
+        final_response_text: Option<String>,
+        failure_context: Option<String>,
+        completed_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+            branch_name: branch_name.into(),
+            worktree_path: worktree_path.into(),
+            commit_sha: commit_sha.into(),
+            validation_summary: validation_summary.into(),
+            final_response_summary: final_response_summary.into(),
+            final_response_text,
+            failure_context,
+            completed_at: completed_at.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningOfficialCompletionRefreshContract {
+    pub version: u32,
+    pub refresh_kind: PlanningRefreshContractKind,
+    pub root_turn_id: String,
+    pub completion: PlanningOfficialCompletionRefreshPayload,
+}
+
+impl PlanningOfficialCompletionRefreshContract {
+    pub fn new(
+        root_turn_id: impl Into<String>,
+        completion: PlanningOfficialCompletionRefreshPayload,
+    ) -> Self {
+        Self {
+            version: PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
+            refresh_kind: PlanningRefreshContractKind::OfficialCompletion,
+            root_turn_id: root_turn_id.into(),
+            completion,
+        }
+    }
+}
+
 impl DirectionState {
     pub fn allows_queue_execution(self) -> bool {
         self == Self::Active
@@ -275,6 +354,55 @@ impl TaskStatus {
 
     pub fn clears_blocker(self) -> bool {
         matches!(self, Self::Done | Self::Cancelled | Self::AwaitingUser)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
+        PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+        PlanningRefreshContractKind,
+    };
+
+    #[test]
+    fn official_completion_refresh_contract_round_trips_as_versioned_json() {
+        let contract = PlanningOfficialCompletionRefreshContract::new(
+            "turn-42",
+            PlanningOfficialCompletionRefreshPayload::new(
+                "agent-2",
+                "task-9",
+                "Official completion pipeline 구현",
+                "akra-agent/slot-1/official-completion",
+                "/tmp/slot-1",
+                "abc123def456",
+                "cargo test passed",
+                "official completion lifecycle wired",
+                Some("Implemented official completion reporting.".to_string()),
+                None,
+                "2026-04-17T09:10:00Z",
+            ),
+        );
+
+        let serialized =
+            serde_json::to_string_pretty(&contract).expect("contract should serialize");
+        let restored: PlanningOfficialCompletionRefreshContract =
+            serde_json::from_str(&serialized).expect("contract should deserialize");
+
+        assert_eq!(
+            restored.version,
+            PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION
+        );
+        assert_eq!(
+            restored.refresh_kind,
+            PlanningRefreshContractKind::OfficialCompletion
+        );
+        assert_eq!(restored.root_turn_id, "turn-42");
+        assert_eq!(restored.completion.task_id, "task-9");
+        assert_eq!(
+            restored.completion.final_response_text.as_deref(),
+            Some("Implemented official completion reporting.")
+        );
     }
 }
 

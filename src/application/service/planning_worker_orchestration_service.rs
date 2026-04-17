@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use crate::domain::planning::{
+    PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+};
 
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
@@ -158,6 +161,7 @@ impl PlanningWorkerOrchestrationService {
         request: &PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> String {
         build_planning_official_completion_prompt(
+            request.root_turn_id,
             request.latest_user_message,
             request.latest_main_reply,
             request.previous_handoff_task,
@@ -307,6 +311,7 @@ main session latest reply:
 }
 
 fn build_planning_official_completion_prompt(
+    root_turn_id: &str,
     latest_user_message: Option<&str>,
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
@@ -314,16 +319,8 @@ fn build_planning_official_completion_prompt(
 ) -> String {
     let latest_user_request_section = latest_user_request_section(latest_user_message);
     let previous_handoff_section = previous_handoff_section(previous_handoff_task);
-    let final_response_text = completion
-        .final_response_text
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or("(no long-form completion text captured)");
-    let failure_context = completion
-        .failure_context
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or("(none)");
+    let serialized_contract =
+        serialize_official_completion_refresh_contract(root_turn_id, completion);
 
     format!(
         r#"planning worker official completion refresh 입니다.
@@ -335,40 +332,46 @@ fn build_planning_official_completion_prompt(
 - payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
 - follow-up work가 있으면 새 executable task를 queue에 반영하고, 없으면 queue를 비워 둘 수 있습니다.
 - 같은 task를 다시 queue head로 유지해야 한다면 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
+- 아래 JSON contract는 official ledger update용 serialized input입니다. `root_turn_id`와 `completed_at` 순서를 보존한다고 가정하고 한 번에 하나씩 반영하세요.
 - `commit_sha`, `branch_name`, `worktree_path`는 provenance 용도입니다. ledger에는 작업 의미 중심으로 반영하되 repeat prevention 판단에 활용하세요.
 - `validation_summary`가 실패 또는 미실행이면 후속 task를 `blocked` 또는 보완 task로 표현할지 신중히 결정하세요.
 - 마지막에는 이번 official refresh에서 ledger에 반영한 핵심 판단을 짧게 요약하세요.
 {latest_user_request_section}
 {previous_handoff_section}
 
-official completion payload:
-- agent_id: {agent_id}
-- task_id: {task_id}
-- task_title: {task_title}
-- branch_name: {branch_name}
-- worktree_path: {worktree_path}
-- commit_sha: {commit_sha}
-- validation_summary: {validation_summary}
-- final_response_summary: {final_response_summary}
-- final_response_text:
-{final_response_text}
-- failure_context: {failure_context}
-- completed_at: {completed_at}
+serialized completion refresh contract:
+```json
+{serialized_contract}
+```
 
 main session latest reply:
 {latest_main_reply}"#,
-        agent_id = completion.agent_id,
-        task_id = completion.task_id,
-        task_title = completion.task_title,
-        branch_name = completion.branch_name,
-        worktree_path = completion.worktree_path,
-        commit_sha = completion.commit_sha,
-        validation_summary = completion.validation_summary,
-        final_response_summary = completion.final_response_summary,
-        final_response_text = final_response_text,
-        failure_context = failure_context,
-        completed_at = completion.completed_at,
+        serialized_contract = serialized_contract,
     )
+}
+
+fn serialize_official_completion_refresh_contract(
+    root_turn_id: &str,
+    completion: &PlanningOfficialCompletionPayload<'_>,
+) -> String {
+    let contract = PlanningOfficialCompletionRefreshContract::new(
+        root_turn_id,
+        PlanningOfficialCompletionRefreshPayload::new(
+            completion.agent_id,
+            completion.task_id,
+            completion.task_title,
+            completion.branch_name,
+            completion.worktree_path,
+            completion.commit_sha,
+            completion.validation_summary,
+            completion.final_response_summary,
+            completion.final_response_text.map(str::to_string),
+            completion.failure_context.map(str::to_string),
+            completion.completed_at,
+        ),
+    );
+    serde_json::to_string_pretty(&contract)
+        .expect("official completion refresh contract should serialize")
 }
 
 fn latest_user_request_section(latest_user_message: Option<&str>) -> String {
@@ -654,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn render_official_completion_prompt_includes_completion_payload() {
+    fn render_official_completion_prompt_includes_serialized_contract() {
         let workspace_dir = create_temp_workspace("planning-worker-render-completion");
         write_bootstrap_workspace(&workspace_dir);
         let workspace_port: Arc<dyn PlanningWorkspacePort> =
@@ -692,12 +695,15 @@ mod tests {
             },
         );
 
-        assert!(prompt.contains("official completion payload:"));
-        assert!(prompt.contains("agent_id: agent-2"));
-        assert!(prompt.contains("task_id: task-9"));
-        assert!(prompt.contains("commit_sha: abc123def456"));
-        assert!(prompt.contains("validation_summary: cargo test passed"));
-        assert!(prompt.contains("final_response_summary: official completion lifecycle wired"));
+        assert!(prompt.contains("serialized completion refresh contract:"));
+        assert!(prompt.contains("\"version\": 1"));
+        assert!(prompt.contains("\"refresh_kind\": \"official_completion\""));
+        assert!(prompt.contains("\"root_turn_id\": \"turn-9\""));
+        assert!(prompt.contains("\"agent_id\": \"agent-2\""));
+        assert!(prompt.contains("\"task_id\": \"task-9\""));
+        assert!(prompt.contains("\"commit_sha\": \"abc123def456\""));
+        assert!(prompt.contains("\"validation_summary\": \"cargo test passed\""));
+        assert!(prompt.contains("\"final_response_summary\": \"official completion lifecycle wired\""));
         assert!(prompt.contains("Implemented official completion reporting."));
         assert!(prompt.contains("latest operator request:"));
     }

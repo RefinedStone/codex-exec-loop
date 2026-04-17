@@ -55,6 +55,9 @@ pub use super::planning_worker_orchestration_service::{
     PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
     PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
 };
+pub use crate::domain::planning::{
+    PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+};
 
 #[derive(Clone)]
 pub struct PlanningFeature {
