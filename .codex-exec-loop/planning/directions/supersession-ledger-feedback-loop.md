@@ -2,14 +2,14 @@
 
 ## Outcome
 
-Keep `task-ledger.json` as the official task source of truth even when several agent sessions are
-working in parallel by funneling completion results through hidden planning worker refresh.
+Keep active planning authority serialized even when several agent sessions are working in parallel
+by funneling completion results through hidden planning worker refresh.
 
 ## Why this direction exists
 
-Supersession only stays coherent if agent reports do not bypass planning authority. The docs lock in
-that agent completion is first reported, then reconciled by hidden planning worker, and only then
-becomes official queue state for the next assignment.
+Supersession only stays coherent if agent reports do not bypass planning authority. The docs lock
+in that agent completion is first reported, then reconciled by hidden planning worker, and only
+then becomes official queue state for the next assignment.
 
 ## Long-horizon plan
 

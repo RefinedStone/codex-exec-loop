@@ -2,40 +2,97 @@
   "version": 1,
   "tasks": [
     {
-      "id": "task-supersession-architecture-git-workspace-port",
-      "direction_id": "supersession-architecture-boundaries",
-      "direction_relation_note": "Most supersession operator behavior is already shipped, but the pool and distributor still own raw git and worktree command execution inside application services instead of depending on an explicit workspace boundary.",
-      "title": "Extract GitWorkspacePort from supersession pool and distributor flows",
-      "description": "Move raw git worktree inspection, slot provisioning, branch validation, rebase, and cleanup execution out of `parallel_mode_service` and `parallel_mode_distributor_service` into an explicit outbound boundary so the shipped pool and distributor contracts stop depending on inline process helpers.",
+      "id": "task-supersession-authority-locator-shadow-store",
+      "direction_id": "supersession-authority-locator-and-shadow-store",
+      "direction_relation_note": "The supersession docs now define the next work as replacing worktree-local planning roots with one repo-shared authority location and proving parity through a read-only shadow store before runtime authority moves.",
+      "title": "Introduce canonical authority locator and shadow-store parity path",
+      "description": "Resolve every active workspace to one canonical repo authority root, bootstrap the repo-shared planning store, and mirror tracked planning files into it with parity diagnostics while tracked files remain the active authority.",
       "status": "ready",
-      "base_priority": 88,
+      "base_priority": 90,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The supersession runtime loop is already shipped, so the clearest remaining gap is replacing raw git orchestration with an explicit workspace seam that matches the architecture direction.",
+      "priority_reason": "Every remaining supersession hardening slice depends on one repo-scoped authority location, so proving shadow-store parity is the first concrete step after the shipped operator loop.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T10:30:00Z"
+      "updated_at": "2026-04-18T13:30:00Z"
     },
     {
-      "id": "task-supersession-architecture-agent-session-port",
-      "direction_id": "supersession-architecture-boundaries",
-      "direction_relation_note": "Parallel turn launch and stream handling still route through the shared conversation runtime directly, so supersession has not fully reached the explicit agent-session boundary promised by the architecture direction.",
-      "title": "Extract AgentSessionPort from parallel turn launch and stream execution",
-      "description": "Introduce an explicit agent-session outbound boundary for new-thread launch, turn streaming, thread-prepared capture, and terminal observation so supersession runtime orchestration stops depending directly on `ConversationService` and TUI stream plumbing.",
+      "id": "task-supersession-store-backed-drafts-promote",
+      "direction_id": "supersession-store-backed-drafts-and-promote",
+      "direction_relation_note": "Once the repo-shared shadow store exists, the next architectural step is to preserve the current `draft -> validate -> promote` UX while moving draft storage and rejection resume semantics into the authority domain.",
+      "title": "Move draft, validation, and promote flow into the authority store",
+      "description": "Store draft planning state, validation results, rejection archives, and resume metadata in the repo-shared authority domain so active planning remains unchanged until store-backed promote succeeds.",
       "status": "proposed",
-      "base_priority": 82,
+      "base_priority": 86,
       "dynamic_priority_delta": 0,
-      "priority_reason": "After the workspace boundary is explicit, the remaining high-value architecture work is to stop driving supersession through the shared single-session runtime interface.",
+      "priority_reason": "Store-backed draft semantics are the next gate after shadow-store parity because they keep the current authoring model intact while removing worktree-local draft authority.",
       "depends_on": [
-        "task-supersession-architecture-git-workspace-port"
+        "task-supersession-authority-locator-shadow-store"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T10:30:00Z"
+      "updated_at": "2026-04-18T13:30:00Z"
+    },
+    {
+      "id": "task-supersession-active-planning-queue-claims",
+      "direction_id": "supersession-active-planning-mutation-and-queue-claims",
+      "direction_relation_note": "After draft and active planning state are store-backed, hidden planner refresh and supersession claim ownership must move into the same authority domain to close split-brain and cross-process duplication risks.",
+      "title": "Commit active planning refresh and queue claims in one authority domain",
+      "description": "Route hidden planning refresh, queue projection rebuild, official refresh reservation, and distributor queue-head claim through one repo-scoped authority transaction model with distinct planning revision and runtime event sequencing.",
+      "status": "proposed",
+      "base_priority": 84,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The store does not become real supersession authority until active planning mutation and queue claims share one transactional boundary.",
+      "depends_on": [
+        "task-supersession-store-backed-drafts-promote"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-18T13:30:00Z"
+    },
+    {
+      "id": "task-supersession-runtime-projections-recovery",
+      "direction_id": "supersession-runtime-projections-and-recovery",
+      "direction_relation_note": "Once claims and active planning mutation are store-backed, the remaining hardening work is durable runtime projection plus restart recovery that reconciles external Git and GitHub truth.",
+      "title": "Move runtime projections and recovery into the authority domain",
+      "description": "Persist slot, session, queue, and distributor delivery projections in the repo-shared authority store, append runtime-domain events, and add restart recovery that rechecks Git, GitHub, and worktree truth before reclassifying in-flight work.",
+      "status": "proposed",
+      "base_priority": 82,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Cross-process claims are not sufficient without durable runtime projections and recovery that can survive restart and external side effects.",
+      "depends_on": [
+        "task-supersession-active-planning-queue-claims"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-18T13:30:00Z"
+    },
+    {
+      "id": "task-supersession-store-primary-cutover",
+      "direction_id": "supersession-store-primary-cutover",
+      "direction_relation_note": "The final remaining supersession architecture step is to make the repo-shared authority store the runtime source of truth and demote tracked planning files to revision-stamped export and explicit import artifacts.",
+      "title": "Cut supersession planning over to store-primary authority",
+      "description": "Switch active and draft planning reads and writes to the repo-shared authority store, keep tracked planning files as revision-stamped exports, and require explicit operator import with base revision checks instead of implicit dual authority.",
+      "status": "proposed",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Store-primary is the final cutover after shadow-store parity, draft semantics, claims, and recovery have all been proven.",
+      "depends_on": [
+        "task-supersession-runtime-projections-recovery"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-18T13:30:00Z"
     }
   ]
 }

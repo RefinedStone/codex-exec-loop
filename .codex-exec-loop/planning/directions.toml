@@ -41,11 +41,11 @@ state = "done"
 [[directions]]
 id = "supersession-ledger-feedback-loop"
 title = "Supersession ledger feedback loop"
-summary = "Keep `task-ledger.json` authoritative by routing agent completion through hidden planning worker refresh before any new official assignment or follow-up is derived."
+summary = "Keep active planning authority serialized by routing agent completion through hidden planning worker refresh before any new official assignment or follow-up is derived."
 success_criteria = [
-    "Agent sessions never update the ledger directly; hidden planning worker refresh remains the only path to official task-state change.",
+    "Agent sessions never update active planning authority directly; hidden planning worker refresh remains the only path to official task-state change.",
     "Completion payloads carry enough provenance for hidden planning worker to refresh official queue state without repeating the same unchanged queue head.",
-    "Supervisor state blocks new official assignment until ledger refresh finishes or fails explicitly.",
+    "Supervisor state blocks new official assignment until active planning refresh finishes or fails explicitly.",
 ]
 scope_hints = [
     "Start with serialized completion refresh and provenance shape before broader follow-up derivation.",
@@ -90,18 +90,86 @@ detail_doc_path = ".codex-exec-loop/planning/directions/supersession-distributor
 state = "done"
 
 [[directions]]
-id = "supersession-architecture-boundaries"
-title = "Supersession architecture boundaries"
-summary = "Split supersession into explicit ports, services, and runtime seams so parallel mode can ship without bloating the current single-session shell and planning hotspots."
+id = "supersession-authority-locator-and-shadow-store"
+title = "Supersession authority locator and shadow store"
+summary = "Replace worktree-local planning roots with a canonical repo-scoped authority locator and a store mirror that can prove parity before runtime authority moves."
 success_criteria = [
-    "Parallel mode can evolve through supervisor, agent, pool, and distributor boundaries without widening the current single-session runtime model.",
-    "New outbound boundaries exist for agent session, git workspace, distributor, and GitHub automation while planning authority stays behind the planning facade.",
-    "Hotspot files shrink or split along supersession-visible seams instead of taking on more orchestration responsibility directly.",
+    "Any worktree in the same repo family resolves to one canonical authority root and runtime directory.",
+    "A repo-shared store can mirror directions, detail docs, tasks, and queue projection from tracked planning files without changing runtime authority yet.",
+    "Parity diagnostics make store-versus-file divergence operator-visible before store-backed runtime mutations are enabled.",
 ]
 scope_hints = [
-    "Prefer extractions that directly unblock the first five supersession directions.",
-    "Reuse hidden planning worker and planning runtime services through explicit facade seams rather than implicit cross-layer access.",
-    "Keep refactors reviewable and tied to one supersession behavior unlock at a time.",
+    "Start with canonical authority location and read-only mirroring before active planning mutations move.",
+    "Keep tracked planning files authoritative in this slice while proving repo-shared parity across worktrees.",
+    "Prefer worktree-family consistency checks over early mutation features.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-architecture-boundaries.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-authority-locator-and-shadow-store.md"
+state = "active"
+
+[[directions]]
+id = "supersession-store-backed-drafts-and-promote"
+title = "Supersession store-backed drafts and promote"
+summary = "Move draft storage, validation, rejection resume data, and promote semantics into the repo-shared authority domain while keeping active planning immutable until promote succeeds."
+success_criteria = [
+    "Draft planning state lives in the repo-shared authority domain instead of worktree-local authority files.",
+    "The existing `draft -> validate -> promote` operator model stays intact, including rejection archive and resume behavior.",
+    "Active planning state and queue projection remain unchanged until promote commits successfully.",
+]
+scope_hints = [
+    "Start with draft data model parity and validation behavior before broad authoring ergonomics.",
+    "Keep structured change requests targeting draft state by default instead of mutating active authority directly.",
+    "Treat rejected promote attempts as resume-able draft state, not discarded temporary edits.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-store-backed-drafts-and-promote.md"
+state = "active"
+
+[[directions]]
+id = "supersession-active-planning-mutation-and-queue-claims"
+title = "Supersession active planning mutation and queue claims"
+summary = "Commit hidden planner refresh, queue projection rebuild, and supersession claim ownership through one repo-scoped authority domain instead of separate file and runtime updates."
+success_criteria = [
+    "Hidden planning refresh writes active planning state and queue projection in one transaction.",
+    "Official refresh claims and distributor queue-head claims are unique across processes and tied to explicit planning revisions.",
+    "Planning revision remains distinct from runtime event sequencing so runtime churn does not redefine planning history.",
+]
+scope_hints = [
+    "Start with hidden refresh commits and queue-head claim semantics before widening runtime event coverage.",
+    "Prefer cross-process claim uniqueness and repeated queue-head regression coverage over feature breadth.",
+    "Keep runtime events linked to observed planning revision without inflating planning revision on every event.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-active-planning-mutation-and-queue-claims.md"
+state = "active"
+
+[[directions]]
+id = "supersession-runtime-projections-and-recovery"
+title = "Supersession runtime projections and recovery"
+summary = "Move slot, session, distributor, and recovery projections into the repo-shared authority domain and recover in-flight work by reconciling committed state with Git and GitHub truth."
+success_criteria = [
+    "Slot, session, queue, and distributor delivery projections are durable inside the repo-shared authority domain.",
+    "Restart recovery rechecks Git, GitHub, and worktree truth before reclassifying in-flight refresh, push, PR, integration, or cleanup work.",
+    "Timed-out or orphaned claims surface explicit recovered, blocked, failed, or already-complete states instead of silent divergence.",
+]
+scope_hints = [
+    "Start with projection persistence and recovery classification before throughput or UX optimization.",
+    "Treat external truth rechecks as mandatory for push, PR, integration, and cleanup recovery decisions.",
+    "Keep recovery states explicit and operator-readable from the first slice.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-runtime-projections-and-recovery.md"
+state = "active"
+
+[[directions]]
+id = "supersession-store-primary-cutover"
+title = "Supersession store-primary cutover"
+summary = "Make the repo-shared authority store the default active and draft planning authority, while tracked planning files become revision-stamped exports and explicit imports only."
+success_criteria = [
+    "Store-primary runtime reads and writes use the repo-shared authority domain for both active and draft planning state.",
+    "Tracked planning files are revision-stamped export artifacts instead of implicit runtime authority.",
+    "Tracked-file import is allowed only through explicit operator flow with base revision checks and no automatic two-way sync.",
+]
+scope_hints = [
+    "Start with mode gating and export labeling before wider review-surface polish.",
+    "Prefer one-way mirror rules over convenience sync that would reintroduce dual authority.",
+    "Keep operator review and portability ergonomics explicit even after file authority ends.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/supersession-store-primary-cutover.md"
 state = "active"
