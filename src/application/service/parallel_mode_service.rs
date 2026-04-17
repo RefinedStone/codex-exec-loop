@@ -10,12 +10,15 @@ use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey,
-    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeCompletionFeedEntry,
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
-    ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeQueueItemState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 
 const AKRA_BRANCH: &str = "akra";
@@ -196,6 +199,7 @@ impl ParallelModeService {
             workspace_path,
             build_pool_board(workspace_dir, readiness_snapshot),
             build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
+            build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
             build_placeholder_distributor(mode_enabled, readiness_snapshot),
             top_notice,
         )
@@ -226,6 +230,7 @@ impl ParallelModeService {
             workspace_path,
             pool,
             build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
+            build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
             build_placeholder_distributor(mode_enabled, readiness_snapshot),
             top_notice,
         )
@@ -310,6 +315,7 @@ impl ParallelModeService {
                 discard_unstarted_slot_branch(&context.repo_root, &slot_path, branch_name.as_str());
             return Err(error);
         }
+        let _ = record_assigned_session_detail(&context.pool_root, &lease);
 
         Ok(lease)
     }
@@ -351,7 +357,25 @@ impl ParallelModeService {
             lease.running_started_at = Some(current_timestamp());
         }
         write_slot_lease(&context.pool_root, &lease)?;
+        let _ = record_running_session_detail(&context.pool_root, &lease);
         Ok(lease)
+    }
+
+    pub fn record_workspace_slot_thread_prepared(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+
+        record_thread_prepared_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            thread_id,
+        )
+        .map(Some)
     }
 
     pub fn mark_slot_cleanup_pending(
@@ -399,6 +423,7 @@ impl ParallelModeService {
 
         lease.state = ParallelModeSlotLeaseState::CleanupPending;
         write_slot_lease(&context.pool_root, &lease)?;
+        let _ = record_cleanup_pending_session_detail(&context.pool_root, &lease);
         Ok(lease)
     }
 
@@ -455,6 +480,8 @@ impl ParallelModeService {
                 resolution.lease.slot_id
             ));
         }
+        let _ =
+            record_failed_start_session_detail(&resolution.context.pool_root, &resolution.lease);
 
         Ok(Some(resolution.lease))
     }
@@ -507,6 +534,7 @@ impl ParallelModeService {
                 resolution.lease.slot_id
             ));
         }
+        let _ = record_cleaned_session_detail(&resolution.context.pool_root, &resolution.lease);
 
         Ok(Some(resolution.lease))
     }
@@ -2120,6 +2148,444 @@ fn roster_latest_summary(state: ParallelModeSlotLeaseState) -> &'static str {
     }
 }
 
+fn build_supervisor_detail(
+    workspace_dir: &str,
+    mode_enabled: bool,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModeSupervisorDetailSnapshot {
+    match readiness_snapshot {
+        Some(snapshot) if snapshot.allows_parallel_mode() => {
+            inspect_supervisor_detail(workspace_dir, mode_enabled)
+        }
+        Some(_) => ParallelModeSupervisorDetailSnapshot::new(
+            None,
+            "readiness must recover before supervisor detail is available",
+        ),
+        None => ParallelModeSupervisorDetailSnapshot::new(
+            None,
+            "rerun readiness before supervisor detail is available",
+        ),
+    }
+}
+
+fn inspect_supervisor_detail(
+    workspace_dir: &str,
+    mode_enabled: bool,
+) -> ParallelModeSupervisorDetailSnapshot {
+    match load_pool_runtime_context(workspace_dir) {
+        Ok(context) => build_supervisor_detail_from_context(&context, mode_enabled),
+        Err((_, detail)) => ParallelModeSupervisorDetailSnapshot::new(
+            None,
+            format!("supervisor detail unavailable / {detail}"),
+        ),
+    }
+}
+
+fn build_supervisor_detail_from_context(
+    context: &PoolRuntimeContext,
+    mode_enabled: bool,
+) -> ParallelModeSupervisorDetailSnapshot {
+    let history = load_agent_session_detail_records(&context.pool_root);
+    let empty_state = if mode_enabled {
+        "no agent session history captured yet"
+    } else {
+        "parallel mode is off / supervisor detail is read-only"
+    };
+
+    let mut active_leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    active_leases.sort_by(|left, right| {
+        roster_state_priority(right.state)
+            .cmp(&roster_state_priority(left.state))
+            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
+            .then_with(|| left.slot_id.cmp(&right.slot_id))
+    });
+
+    if let Some(lease) = active_leases.first() {
+        let detail = history
+            .iter()
+            .find(|detail| detail.session_key == lease_session_key(lease))
+            .cloned();
+        return ParallelModeSupervisorDetailSnapshot::new(
+            Some(build_live_session_detail(lease, detail)),
+            empty_state,
+        );
+    }
+
+    let latest_history = history.into_iter().max_by(|left, right| {
+        left.updated_at
+            .cmp(&right.updated_at)
+            .then_with(|| left.session_key.cmp(&right.session_key))
+    });
+    ParallelModeSupervisorDetailSnapshot::new(latest_history, empty_state)
+}
+
+fn build_live_session_detail(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<ParallelModeAgentSessionDetailSnapshot>,
+) -> ParallelModeAgentSessionDetailSnapshot {
+    let mut detail = detail.unwrap_or_else(|| build_assigned_session_detail(lease));
+    detail.session_key = lease_session_key(lease);
+    detail.agent_id = lease.agent_id.clone();
+    detail.task_id = lease.task_id.clone();
+    detail.task_title = lease.task_title.clone();
+    detail.slot_id = lease.slot_id.clone();
+    detail.worktree_path = lease.worktree_path.clone();
+    detail.branch_name = lease.branch_name.clone();
+    detail.lease_started_at = lease.leased_at.clone();
+    detail.state_label = live_detail_state_label(lease, &detail).to_string();
+    detail.completion_state_label = live_completion_state_label(lease).to_string();
+    if detail.latest_summary.trim().is_empty() {
+        detail.latest_summary = roster_latest_summary(lease.state).to_string();
+    }
+    if detail.validation_summary.trim().is_empty() {
+        detail.validation_summary = default_validation_summary().to_string();
+    }
+    if detail.ledger_refresh_outcome.trim().is_empty() {
+        detail.ledger_refresh_outcome = default_ledger_refresh_outcome().to_string();
+    }
+    if detail.distributor_outcome.is_none() {
+        detail.distributor_outcome = live_distributor_outcome(lease);
+    }
+    if detail.updated_at.trim().is_empty() {
+        detail.updated_at = live_detail_updated_at(lease).to_string();
+    }
+    detail
+}
+
+fn live_detail_state_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+) -> &'static str {
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased => {
+            if detail.thread_id.is_some() || detail.state_label == "starting" {
+                "starting"
+            } else {
+                "assigned"
+            }
+        }
+        ParallelModeSlotLeaseState::Running => "running",
+        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending",
+    }
+}
+
+fn live_completion_state_label(lease: &ParallelModeSlotLeaseSnapshot) -> &'static str {
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => "in_progress",
+        ParallelModeSlotLeaseState::CleanupPending => "merged",
+    }
+}
+
+fn live_distributor_outcome(lease: &ParallelModeSlotLeaseSnapshot) -> Option<String> {
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => None,
+        ParallelModeSlotLeaseState::CleanupPending => {
+            Some("branch is merged into akra and the slot is awaiting cleanup".to_string())
+        }
+    }
+}
+
+fn live_detail_updated_at(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
+    lease
+        .running_started_at
+        .as_deref()
+        .unwrap_or(lease.leased_at.as_str())
+}
+
+fn default_validation_summary() -> &'static str {
+    "validation summary is not recorded in runtime yet"
+}
+
+fn default_ledger_refresh_outcome() -> &'static str {
+    "official ledger refresh tracking has not landed yet"
+}
+
+fn lease_session_key(lease: &ParallelModeSlotLeaseSnapshot) -> String {
+    format!("{}@{}", lease.slot_id, lease.leased_at)
+}
+
+fn build_assigned_session_detail(
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> ParallelModeAgentSessionDetailSnapshot {
+    ParallelModeAgentSessionDetailSnapshot::new(
+        lease_session_key(lease),
+        lease.agent_id.clone(),
+        lease.task_id.clone(),
+        lease.task_title.clone(),
+        lease.slot_id.clone(),
+        None,
+        lease.worktree_path.clone(),
+        lease.branch_name.clone(),
+        lease.leased_at.clone(),
+        "assigned",
+        "in_progress",
+        "slot lease acquired and branch reserved for launch",
+        default_validation_summary(),
+        default_ledger_refresh_outcome(),
+        None,
+        vec![ParallelModeAgentSessionHistoryEntry::new(
+            "assigned",
+            lease.leased_at.clone(),
+            "slot lease acquired and branch reserved for launch",
+        )],
+        lease.leased_at.clone(),
+    )
+}
+
+fn record_assigned_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    let detail = build_assigned_session_detail(lease);
+    write_agent_session_detail_record(pool_root, &detail)?;
+    Ok(detail)
+}
+
+fn record_thread_prepared_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    thread_id: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.thread_id = Some(thread_id.to_string());
+        detail.state_label = "starting".to_string();
+        detail.completion_state_label = "in_progress".to_string();
+        let summary = format!("thread prepared for the leased session / thread: {thread_id}");
+        detail.latest_summary = summary.clone();
+        detail.updated_at = timestamp.clone();
+        push_session_history(&mut detail, "starting", timestamp, summary);
+        detail
+    })
+}
+
+fn record_running_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = lease
+            .running_started_at
+            .clone()
+            .unwrap_or_else(current_timestamp);
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "running".to_string();
+        detail.completion_state_label = "in_progress".to_string();
+        detail.latest_summary = "agent session entered the running state".to_string();
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "running",
+            timestamp,
+            "agent session entered the running state".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_cleanup_pending_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "cleanup_pending".to_string();
+        detail.completion_state_label = "merged".to_string();
+        detail.latest_summary =
+            "agent branch is merged into akra and awaiting slot cleanup".to_string();
+        detail.distributor_outcome =
+            Some("branch is merged into akra and the slot is awaiting cleanup".to_string());
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "merged",
+            timestamp.clone(),
+            "branch is integrated into akra".to_string(),
+        );
+        push_session_history(
+            &mut detail,
+            "cleanup_pending",
+            timestamp,
+            "slot is waiting for cleanup before it can be reused".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_cleaned_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "cleaned".to_string();
+        detail.completion_state_label = "cleaned".to_string();
+        detail.latest_summary =
+            "merged session cleaned up and the slot returned to the idle pool".to_string();
+        detail.distributor_outcome =
+            Some("branch merged into akra and the slot returned to idle".to_string());
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "cleaned",
+            timestamp,
+            "slot cleaned and returned to the idle pool".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_failed_start_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "failed".to_string();
+        detail.completion_state_label = "aborted".to_string();
+        detail.latest_summary =
+            "launch failed before the session reached the running state".to_string();
+        detail.distributor_outcome =
+            Some("not queued for distributor work; slot returned to idle".to_string());
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "failed",
+            timestamp.clone(),
+            "launch failed before the session reached the running state".to_string(),
+        );
+        push_session_history(
+            &mut detail,
+            "cleaned",
+            timestamp,
+            "slot cleaned and returned to the idle pool after launch failure".to_string(),
+        );
+        detail
+    })
+}
+
+fn push_session_history(
+    detail: &mut ParallelModeAgentSessionDetailSnapshot,
+    state_label: &str,
+    timestamp: String,
+    summary: String,
+) {
+    if detail
+        .history
+        .last()
+        .is_some_and(|entry| entry.state_label == state_label && entry.summary == summary)
+    {
+        return;
+    }
+
+    detail
+        .history
+        .push(ParallelModeAgentSessionHistoryEntry::new(
+            state_label,
+            timestamp,
+            summary,
+        ));
+}
+
+fn update_agent_session_detail_record<F>(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    mutate: F,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String>
+where
+    F: FnOnce(
+        Option<ParallelModeAgentSessionDetailSnapshot>,
+    ) -> ParallelModeAgentSessionDetailSnapshot,
+{
+    let session_key = lease_session_key(lease);
+    let current = read_agent_session_detail_record(pool_root, &session_key);
+    let detail = mutate(current);
+    write_agent_session_detail_record(pool_root, &detail)?;
+    Ok(detail)
+}
+
+fn load_agent_session_detail_records(
+    pool_root: &Path,
+) -> Vec<ParallelModeAgentSessionDetailSnapshot> {
+    let history_dir = agent_session_history_dir(pool_root);
+    let Ok(entries) = fs::read_dir(history_dir) else {
+        return Vec::new();
+    };
+
+    let mut records = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|content| {
+            serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content).ok()
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.session_key.cmp(&right.session_key))
+    });
+    records
+}
+
+fn read_agent_session_detail_record(
+    pool_root: &Path,
+    session_key: &str,
+) -> Option<ParallelModeAgentSessionDetailSnapshot> {
+    let path = agent_session_detail_record_path(pool_root, session_key);
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn write_agent_session_detail_record(
+    pool_root: &Path,
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+) -> Result<(), String> {
+    let history_dir = agent_session_history_dir(pool_root);
+    ensure_directory_exists(&history_dir)
+        .map_err(|error| format!("failed to create agent session history directory: {error}"))?;
+
+    let path = agent_session_detail_record_path(pool_root, &detail.session_key);
+    let temp_path = path.with_extension("json.tmp");
+    let body = serde_json::to_string_pretty(detail)
+        .map_err(|error| format!("failed to serialize agent session detail: {error}"))?;
+    fs::write(&temp_path, body).map_err(|error| {
+        format!(
+            "failed to write temporary agent session detail `{}`: {error}",
+            detail.session_key
+        )
+    })?;
+    fs::rename(&temp_path, &path).map_err(|error| {
+        format!(
+            "failed to persist agent session detail `{}`: {error}",
+            detail.session_key
+        )
+    })
+}
+
+fn agent_session_history_dir(pool_root: &Path) -> PathBuf {
+    pool_root.join(".agent-sessions")
+}
+
+fn agent_session_detail_record_path(pool_root: &Path, session_key: &str) -> PathBuf {
+    let mut filename = String::new();
+    for ch in session_key.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            filename.push(ch);
+        } else {
+            filename.push('_');
+        }
+    }
+
+    agent_session_history_dir(pool_root).join(format!("{filename}.json"))
+}
+
 fn format_elapsed_label_from_timestamp(timestamp: &str) -> Option<String> {
     let started_at = chrono::DateTime::parse_from_rfc3339(timestamp)
         .ok()?
@@ -2262,11 +2728,11 @@ fn run_command_with_stdin<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-        ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-        ParallelModeService, ParallelModeSupervisorState, build_pool_board,
-        derive_default_pool_root, derive_readiness, inspect_planning, parse_https_remote,
-        reconcile_pool_board, slot_id, slot_lease_file_path,
+        build_pool_board, derive_default_pool_root, derive_readiness, inspect_planning,
+        parse_https_remote, reconcile_pool_board, slot_id, slot_lease_file_path,
+        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+        ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
+        ParallelModeSupervisorState, DEFAULT_POOL_SIZE,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::parallel_mode::{
@@ -2654,6 +3120,121 @@ mod tests {
     }
 
     #[test]
+    fn build_supervisor_snapshot_populates_detail_with_live_session_history() {
+        let repo = TempGitRepo::new("supervisor-detail-live");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-42")
+            .expect("thread prepared should be recorded");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let detail = snapshot
+            .detail
+            .session
+            .as_ref()
+            .expect("detail should select the live agent session");
+
+        assert_eq!(detail.agent_id, "agent-1");
+        assert_eq!(detail.task_id, "task-1");
+        assert_eq!(detail.thread_id.as_deref(), Some("thread-42"));
+        assert_eq!(detail.state_label, "running");
+        assert_eq!(detail.completion_state_label, "in_progress");
+        assert_eq!(
+            detail
+                .history
+                .iter()
+                .map(|entry| entry.state_label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assigned", "starting", "running"]
+        );
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_keeps_cleaned_session_detail_after_slot_return() {
+        let repo = TempGitRepo::new("supervisor-detail-cleaned");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+
+        service
+            .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-77")
+            .expect("thread prepared should be recorded");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to running");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        repo.merge_agent_slot_into_akra(&slot_path);
+        service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot lease should transition to cleanup pending");
+        service
+            .cleanup_workspace_slot_if_pending(&lease.worktree_path)
+            .expect("cleanup should succeed")
+            .expect("cleanup should return the cleaned lease");
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let detail = snapshot
+            .detail
+            .session
+            .as_ref()
+            .expect("detail should keep the last cleaned session");
+
+        assert_eq!(snapshot.roster.active_count(), 0);
+        assert_eq!(detail.thread_id.as_deref(), Some("thread-77"));
+        assert_eq!(detail.state_label, "cleaned");
+        assert_eq!(detail.completion_state_label, "cleaned");
+        assert_eq!(
+            detail.distributor_outcome.as_deref(),
+            Some("branch merged into akra and the slot returned to idle")
+        );
+        assert_eq!(
+            detail
+                .history
+                .iter()
+                .map(|entry| entry.state_label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assigned",
+                "starting",
+                "running",
+                "merged",
+                "cleanup_pending",
+                "cleaned"
+            ]
+        );
+    }
+
+    #[test]
     fn unavailable_pool_board_does_not_report_exhausted() {
         let pool = build_pool_board("/tmp/root", None);
 
@@ -2827,11 +3408,9 @@ mod tests {
         assert_eq!(persisted.state, ParallelModeSlotLeaseState::Leased);
         assert_eq!(persisted.agent_id, "agent-1");
         assert_eq!(persisted.task_id, "task-1");
-        assert!(
-            persisted
-                .branch_name
-                .starts_with("akra-agent/slot-1/task-one")
-        );
+        assert!(persisted
+            .branch_name
+            .starts_with("akra-agent/slot-1/task-one"));
         assert_eq!(pool.leased_slots, 1);
         assert_eq!(pool.running_slots, 0);
         assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Leased);

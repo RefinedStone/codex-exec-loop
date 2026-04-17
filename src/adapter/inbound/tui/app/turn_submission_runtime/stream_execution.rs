@@ -217,6 +217,19 @@ fn sync_slot_lease_for_stream_event(
     event: &ConversationStreamEvent,
     saw_turn_started: &mut bool,
 ) -> (Option<String>, bool) {
+    if let ConversationStreamEvent::ThreadPrepared { thread_id, .. } = event {
+        return match parallel_mode_service
+            .record_workspace_slot_thread_prepared(&request.workspace_directory, thread_id)
+        {
+            Ok(Some(_)) | Ok(None) => (None, true),
+            Err(error) => (
+                Some(format!(
+                    "slot lease thread-prepared transition failed: {error}"
+                )),
+                false,
+            ),
+        };
+    }
     if !matches!(event, ConversationStreamEvent::TurnStarted { .. }) {
         return (None, false);
     }

@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use super::super::shell_runtime;
 use super::{
-    AutoFollowupSubmitContext, ConversationRuntimeEvent, ConversationState, PromptOrigin,
-    StartupState, TempGitWorkspace, current_git_branch, git_branch_exists, make_test_app,
-    ready_conversation, sample_startup_diagnostics,
+    current_git_branch, git_branch_exists, make_test_app, ready_conversation,
+    sample_startup_diagnostics, AutoFollowupSubmitContext, ConversationRuntimeEvent,
+    ConversationState, PromptOrigin, StartupState, TempGitWorkspace,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
+    PlanningTaskHandoff, BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
 
@@ -101,13 +101,11 @@ fn parallel_mode_handoff_launch_uses_leased_slot_workspace_and_new_thread_stream
             .is_empty()
     });
 
-    assert!(
-        codex_port
-            .turn_calls
-            .lock()
-            .expect("turn calls mutex poisoned")
-            .is_empty()
-    );
+    assert!(codex_port
+        .turn_calls
+        .lock()
+        .expect("turn calls mutex poisoned")
+        .is_empty());
     let new_thread_calls = codex_port
         .new_thread_calls
         .lock()
@@ -274,4 +272,109 @@ fn parallel_mode_runtime_invalidates_cached_supervisor_roster_when_slot_starts_r
     }
 
     panic!("timed out waiting for the supervisor roster to refresh");
+}
+
+#[test]
+fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
+    let repo = TempGitWorkspace::new("parallel-mode-runtime-detail-history");
+    let (mut app, codex_port) = make_test_app();
+    {
+        let mut behavior = codex_port
+            .new_thread_stream_behavior
+            .lock()
+            .expect("new-thread stream behavior mutex poisoned");
+        behavior.events = vec![
+            ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-9".to_string(),
+                title: "Queued task".to_string(),
+                cwd: repo.workspace_dir().to_string(),
+            },
+            ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-2".to_string(),
+            },
+            ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-2".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            },
+        ];
+        behavior.merge_active_branch_into_akra_repo = Some(repo.workspace_dir().to_string());
+    }
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_readiness_snapshot = Some(ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    ));
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(repo.workspace_dir(), true));
+    let mut conversation = ready_conversation();
+    conversation.cwd = repo.workspace_dir().to_string();
+    conversation.draft_workspace_directory = repo.workspace_dir().to_string();
+    app.conversation_state = ConversationState::ready(conversation);
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
+
+    runtime
+        .app_mut()
+        .dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
+            prompt: "continue queued task".to_string(),
+            transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
+            origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
+                queued_from_turn_id: "turn-1".to_string(),
+                mode_label: "planning queue".to_string(),
+                transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
+                debug_detail: None,
+                handoff_task: Some(PlanningTaskHandoff {
+                    task_id: "task-supersession-runtime".to_string(),
+                    task_title: "Wire runtime into slot lease lifecycle".to_string(),
+                    direction_id: "supersession-git-worktree-pool".to_string(),
+                    combined_priority: 96,
+                    updated_at: "2026-04-17T05:20:00Z".to_string(),
+                    status_label: "ready".to_string(),
+                }),
+            })),
+        });
+
+    wait_for_stream_call(|| {
+        !codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread calls mutex poisoned")
+            .is_empty()
+    });
+
+    for _ in 0..50 {
+        runtime.poll_background_messages();
+        let snapshot = runtime.app().parallel_mode_supervisor_snapshot();
+        if snapshot.roster.active_count() == 0
+            && snapshot.detail.session.as_ref().is_some_and(|detail| {
+                detail.state_label == "cleaned" && detail.thread_id.as_deref() == Some("thread-9")
+            })
+        {
+            let detail = snapshot
+                .detail
+                .session
+                .as_ref()
+                .expect("detail should exist once the session is cleaned");
+            assert_eq!(detail.completion_state_label, "cleaned");
+            assert_eq!(
+                detail
+                    .history
+                    .iter()
+                    .map(|entry| entry.state_label.as_str())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "assigned",
+                    "starting",
+                    "running",
+                    "merged",
+                    "cleanup_pending",
+                    "cleaned"
+                ]
+            );
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    panic!("timed out waiting for cleaned session detail to refresh");
 }

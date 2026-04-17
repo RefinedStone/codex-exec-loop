@@ -434,6 +434,109 @@ impl ParallelModeAgentRosterEntry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeAgentSessionHistoryEntry {
+    pub state_label: String,
+    pub timestamp: String,
+    pub summary: String,
+}
+
+impl ParallelModeAgentSessionHistoryEntry {
+    pub fn new(
+        state_label: impl Into<String>,
+        timestamp: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            state_label: state_label.into(),
+            timestamp: timestamp.into(),
+            summary: summary.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeAgentSessionDetailSnapshot {
+    pub session_key: String,
+    pub agent_id: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub slot_id: String,
+    pub thread_id: Option<String>,
+    pub worktree_path: String,
+    pub branch_name: String,
+    pub lease_started_at: String,
+    pub state_label: String,
+    pub completion_state_label: String,
+    pub latest_summary: String,
+    pub validation_summary: String,
+    pub ledger_refresh_outcome: String,
+    pub distributor_outcome: Option<String>,
+    pub history: Vec<ParallelModeAgentSessionHistoryEntry>,
+    pub updated_at: String,
+}
+
+impl ParallelModeAgentSessionDetailSnapshot {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        session_key: impl Into<String>,
+        agent_id: impl Into<String>,
+        task_id: impl Into<String>,
+        task_title: impl Into<String>,
+        slot_id: impl Into<String>,
+        thread_id: Option<String>,
+        worktree_path: impl Into<String>,
+        branch_name: impl Into<String>,
+        lease_started_at: impl Into<String>,
+        state_label: impl Into<String>,
+        completion_state_label: impl Into<String>,
+        latest_summary: impl Into<String>,
+        validation_summary: impl Into<String>,
+        ledger_refresh_outcome: impl Into<String>,
+        distributor_outcome: Option<String>,
+        history: Vec<ParallelModeAgentSessionHistoryEntry>,
+        updated_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_key: session_key.into(),
+            agent_id: agent_id.into(),
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+            slot_id: slot_id.into(),
+            thread_id,
+            worktree_path: worktree_path.into(),
+            branch_name: branch_name.into(),
+            lease_started_at: lease_started_at.into(),
+            state_label: state_label.into(),
+            completion_state_label: completion_state_label.into(),
+            latest_summary: latest_summary.into(),
+            validation_summary: validation_summary.into(),
+            ledger_refresh_outcome: ledger_refresh_outcome.into(),
+            distributor_outcome,
+            history,
+            updated_at: updated_at.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeSupervisorDetailSnapshot {
+    pub session: Option<ParallelModeAgentSessionDetailSnapshot>,
+    pub empty_state: String,
+}
+
+impl ParallelModeSupervisorDetailSnapshot {
+    pub fn new(
+        session: Option<ParallelModeAgentSessionDetailSnapshot>,
+        empty_state: impl Into<String>,
+    ) -> Self {
+        Self {
+            session,
+            empty_state: empty_state.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModeAgentRosterSnapshot {
     pub entries: Vec<ParallelModeAgentRosterEntry>,
@@ -565,6 +668,7 @@ pub struct ParallelModeSupervisorSnapshot {
     pub workspace_path: String,
     pub pool: ParallelModePoolBoardSnapshot,
     pub roster: ParallelModeAgentRosterSnapshot,
+    pub detail: ParallelModeSupervisorDetailSnapshot,
     pub distributor: ParallelModeDistributorSnapshot,
     pub top_notice: Option<String>,
 }
@@ -575,6 +679,7 @@ impl ParallelModeSupervisorSnapshot {
         workspace_path: impl Into<String>,
         pool: ParallelModePoolBoardSnapshot,
         roster: ParallelModeAgentRosterSnapshot,
+        detail: ParallelModeSupervisorDetailSnapshot,
         distributor: ParallelModeDistributorSnapshot,
         top_notice: Option<String>,
     ) -> Self {
@@ -583,6 +688,7 @@ impl ParallelModeSupervisorSnapshot {
             workspace_path: workspace_path.into(),
             pool,
             roster,
+            detail,
             distributor,
             top_notice,
         }

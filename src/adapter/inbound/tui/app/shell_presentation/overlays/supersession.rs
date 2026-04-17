@@ -158,28 +158,53 @@ fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
 }
 
 fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> Vec<Line<'static>> {
-    let first_slot = supervisor_snapshot.pool.slots.first();
-    let slot_template = first_slot
-        .map(|slot| {
-            format!(
-                "{} / {} / {}",
-                slot.slot_id,
-                slot.state.label(),
-                slot.branch_name
-            )
-        })
-        .unwrap_or_else(|| "no slot template available".to_string());
+    let Some(detail) = supervisor_snapshot.detail.session.as_ref() else {
+        return vec![
+            Line::from("selection: none"),
+            Line::from(format!(
+                "board state: {}",
+                supervisor_snapshot.state_label()
+            )),
+            Line::from(format!(
+                "detail state: {}",
+                supervisor_snapshot.detail.empty_state
+            )),
+        ];
+    };
 
-    vec![
-        Line::from("selection: none"),
+    let mut lines = vec![
         Line::from(format!(
-            "board state: {}",
-            supervisor_snapshot.state_label()
+            "selection: {} / {} / {}",
+            detail.agent_id, detail.slot_id, detail.state_label
         )),
-        Line::from(format!("slot template: {slot_template}")),
-        Line::from("detail fields: task, thread, worktree, validation, distributor outcome"),
-        Line::from("placeholder until agent lifecycle tracking lands"),
-    ]
+        Line::from(format!("task: {} / {}", detail.task_id, detail.task_title)),
+        Line::from(format!(
+            "thread: {}",
+            detail.thread_id.as_deref().unwrap_or("not captured yet")
+        )),
+        Line::from(format!("worktree: {}", detail.worktree_path)),
+        Line::from(format!("branch: {}", detail.branch_name)),
+        Line::from(format!("lease start: {}", detail.lease_started_at)),
+        Line::from(format!("completion: {}", detail.completion_state_label)),
+        Line::from(format!("latest: {}", detail.latest_summary)),
+        Line::from(format!("validation: {}", detail.validation_summary)),
+        Line::from(format!("ledger refresh: {}", detail.ledger_refresh_outcome)),
+        Line::from(format!(
+            "distributor: {}",
+            detail
+                .distributor_outcome
+                .as_deref()
+                .unwrap_or("no distributor outcome recorded")
+        )),
+    ];
+    lines.push(Line::from("history:"));
+    lines.extend(detail.history.iter().map(|entry| {
+        Line::from(format!(
+            "{} / {} / {}",
+            entry.timestamp, entry.state_label, entry.summary
+        ))
+    }));
+    lines
 }
 
 fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
