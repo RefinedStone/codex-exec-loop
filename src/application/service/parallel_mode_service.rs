@@ -120,6 +120,37 @@ pub struct ParallelModeOfficialCompletionReport {
     pub completed_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ParallelModeDistributorQueueRecord {
+    queue_item_id: String,
+    session_key: String,
+    agent_id: String,
+    task_id: String,
+    task_title: String,
+    branch_name: String,
+    worktree_path: String,
+    commit_sha: String,
+    validation_summary: String,
+    ledger_refresh_outcome: String,
+    queue_state: ParallelModeQueueItemState,
+    integration_note: String,
+    enqueued_at: String,
+    updated_at: String,
+}
+
+impl ParallelModeDistributorQueueRecord {
+    fn display_item(&self) -> crate::domain::parallel_mode::ParallelModeDistributorQueueItem {
+        crate::domain::parallel_mode::ParallelModeDistributorQueueItem::new(
+            self.agent_id.clone(),
+            self.task_title.clone(),
+            self.queue_state,
+            self.branch_name.clone(),
+            short_sha(&self.commit_sha),
+            self.integration_note.clone(),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParallelModeService;
 
@@ -590,6 +621,96 @@ impl ParallelModeService {
             ledger_refresh_outcome,
         )
         .map(Some)
+    }
+
+    pub fn enqueue_workspace_commit_ready_result(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<crate::domain::parallel_mode::ParallelModeDistributorQueueItem>, String>
+    {
+        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+            return Ok(None);
+        };
+        if resolution.lease.state != ParallelModeSlotLeaseState::Running {
+            return Ok(None);
+        }
+
+        let session_key = lease_session_key(&resolution.lease);
+        let detail = read_agent_session_detail_record(&resolution.context.pool_root, &session_key)
+            .ok_or_else(|| {
+                format!(
+                    "slot `{}` does not have a persisted session detail record",
+                    resolution.lease.slot_id
+                )
+            })?;
+        if !matches!(
+            detail.state_label.as_str(),
+            "commit_ready" | "merge_queued" | "integrating"
+        ) {
+            return Ok(None);
+        }
+
+        if let Some(existing) = find_distributor_queue_record_by_session_key(
+            &resolution.context.pool_root,
+            &session_key,
+        ) {
+            return Ok(Some(existing.display_item()));
+        }
+
+        let commit_sha =
+            resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
+                format!(
+                    "slot `{}` workspace head could not be resolved for distributor enqueue",
+                    resolution.lease.slot_id
+                )
+            })?;
+        let timestamp = current_timestamp();
+        let record = ParallelModeDistributorQueueRecord {
+            queue_item_id: distributor_queue_item_id(&resolution.lease, &timestamp),
+            session_key,
+            agent_id: resolution.lease.agent_id.clone(),
+            task_id: resolution.lease.task_id.clone(),
+            task_title: resolution.lease.task_title.clone(),
+            branch_name: resolution.lease.branch_name.clone(),
+            worktree_path: resolution.lease.worktree_path.clone(),
+            commit_sha,
+            validation_summary: detail.validation_summary.clone(),
+            ledger_refresh_outcome: detail.ledger_refresh_outcome.clone(),
+            queue_state: ParallelModeQueueItemState::Queued,
+            integration_note: "commit-ready result accepted into distributor queue".to_string(),
+            enqueued_at: timestamp.clone(),
+            updated_at: timestamp,
+        };
+        write_distributor_queue_record(&resolution.context.pool_root, &record)?;
+        let _ =
+            record_merge_queued_session_detail(&resolution.context.pool_root, &resolution.lease);
+
+        Ok(Some(record.display_item()))
+    }
+
+    pub fn process_distributor_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
+        let context =
+            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let mut records = load_distributor_queue_records(&context.pool_root);
+        let Some(head_index) = records
+            .iter()
+            .position(|record| record.queue_state != ParallelModeQueueItemState::Done)
+        else {
+            return Ok(Vec::new());
+        };
+
+        let head = &mut records[head_index];
+        if matches!(
+            head.queue_state,
+            ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed
+        ) {
+            return Ok(vec![format!(
+                "distributor queue head is blocked / agent: {} / task: {} / {}",
+                head.agent_id, head.task_id, head.integration_note
+            )]);
+        }
+
+        process_distributor_queue_record(&context.pool_root, head)
     }
 
     pub fn mark_workspace_official_completion_failed(
@@ -2310,6 +2431,8 @@ fn roster_duration_label(
             "reported_complete" => return "reported".to_string(),
             "ledger_refreshing" => return "refreshing".to_string(),
             "commit_ready" => return "official".to_string(),
+            "merge_queued" => return "queued".to_string(),
+            "integrating" => return "integrating".to_string(),
             "failed" => return "blocked".to_string(),
             _ => {}
         }
@@ -2478,12 +2601,15 @@ fn active_runtime_state_override<'a>(
 ) -> Option<&'a str> {
     match lease.state {
         ParallelModeSlotLeaseState::Running => match detail.state_label.as_str() {
-            "reported_complete" | "ledger_refreshing" | "commit_ready" | "failed" => {
-                Some(detail.state_label.as_str())
-            }
+            "reported_complete" | "ledger_refreshing" | "commit_ready" | "merge_queued"
+            | "integrating" | "failed" => Some(detail.state_label.as_str()),
             _ => None,
         },
-        _ => None,
+        ParallelModeSlotLeaseState::CleanupPending => match detail.state_label.as_str() {
+            "failed" => Some(detail.state_label.as_str()),
+            _ => None,
+        },
+        ParallelModeSlotLeaseState::Leased => None,
     }
 }
 
@@ -2689,6 +2815,83 @@ fn record_commit_ready_session_detail(
             "commit_ready",
             timestamp,
             "official ledger refresh accepted the completion report".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_merge_queued_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "merge_queued".to_string();
+        detail.completion_state_label = "merge_queued".to_string();
+        detail.latest_summary =
+            "commit-ready result accepted into the distributor queue".to_string();
+        detail.distributor_outcome =
+            Some("distributor accepted the result and queued it for local integration".to_string());
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "merge_queued",
+            timestamp,
+            "distributor accepted the result and queued it for local integration".to_string(),
+        );
+        detail
+    })
+}
+
+fn record_integrating_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    summary: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "integrating".to_string();
+        detail.completion_state_label = "merge_queued".to_string();
+        detail.latest_summary = summary.trim().to_string();
+        detail.distributor_outcome = Some(summary.trim().to_string());
+        detail.updated_at = timestamp.clone();
+        if let Some(last_entry) = detail.history.last_mut()
+            && last_entry.state_label == "integrating"
+        {
+            last_entry.timestamp = timestamp;
+            last_entry.summary = summary.trim().to_string();
+        } else {
+            push_session_history(
+                &mut detail,
+                "integrating",
+                timestamp,
+                summary.trim().to_string(),
+            );
+        }
+        detail
+    })
+}
+
+fn record_distributor_failed_session_detail(
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    failure_detail: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(pool_root, lease, |current| {
+        let timestamp = current_timestamp();
+        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+        detail.state_label = "failed".to_string();
+        detail.completion_state_label = "failed".to_string();
+        detail.latest_summary = "distributor delivery failed".to_string();
+        detail.distributor_outcome = Some(failure_detail.trim().to_string());
+        detail.updated_at = timestamp.clone();
+        push_session_history(
+            &mut detail,
+            "failed",
+            timestamp,
+            failure_detail.trim().to_string(),
         );
         detail
     })
@@ -2991,24 +3194,32 @@ fn build_distributor_snapshot_from_context(
     context: &PoolRuntimeContext,
 ) -> ParallelModeDistributorSnapshot {
     let history = load_agent_session_detail_records(&context.pool_root);
+    let queue_records = load_distributor_queue_records(&context.pool_root);
+    let queue_items = queue_records
+        .iter()
+        .filter(|record| record.queue_state.is_active())
+        .map(ParallelModeDistributorQueueRecord::display_item)
+        .collect::<Vec<_>>();
+    let completion_feed = build_distributor_completion_feed(&history);
+
+    if let Some(queue_head) = queue_records
+        .iter()
+        .find(|record| record.queue_state.is_active())
+    {
+        return ParallelModeDistributorSnapshot::new(
+            queue_items,
+            completion_feed,
+            queue_head.queue_state.label(),
+            queue_head.integration_note.clone(),
+        );
+    }
+
     let Some(detail) = selected_distributor_detail(context, &history) else {
         return build_placeholder_distributor_snapshot(
             ParallelModeQueueItemState::Idle.label(),
-            "queue is read-only until distributor runtime lands",
+            "no distributor queue items are waiting",
         );
     };
-
-    let reported_summary = latest_history_summary(&detail, &["reported_complete"])
-        .unwrap_or_else(|| "no agent results reported yet".to_string());
-    let ledger_refresh_summary = if detail.state_label == "ledger_refreshing" {
-        detail.ledger_refresh_outcome.clone()
-    } else if let Some(summary) = latest_history_summary(&detail, &["ledger_refreshing"]) {
-        summary
-    } else {
-        "no official refresh workers are active".to_string()
-    };
-    let official_summary = latest_history_summary(&detail, &["commit_ready"])
-        .unwrap_or_else(|| "nothing is queued for merge".to_string());
 
     let (head_summary, note) = match detail.state_label.as_str() {
         "reported_complete" => ("reported".to_string(), detail.latest_summary.clone()),
@@ -3016,10 +3227,10 @@ fn build_distributor_snapshot_from_context(
             "ledger refreshing".to_string(),
             detail.ledger_refresh_outcome.clone(),
         ),
-        "commit_ready" | "cleanup_pending" | "cleaned" => (
+        "commit_ready" => (
             "official".to_string(),
             detail.distributor_outcome.clone().unwrap_or_else(|| {
-                "commit-ready result is waiting for distributor integration".to_string()
+                "commit-ready result is waiting for distributor enqueue".to_string()
             }),
         ),
         "failed" if detail_has_history_state(&detail, "reported_complete") => {
@@ -3027,20 +3238,11 @@ fn build_distributor_snapshot_from_context(
         }
         _ => (
             ParallelModeQueueItemState::Idle.label().to_string(),
-            "queue is read-only until distributor runtime lands".to_string(),
+            "no distributor queue items are waiting".to_string(),
         ),
     };
 
-    ParallelModeDistributorSnapshot::new(
-        Vec::new(),
-        vec![
-            ParallelModeCompletionFeedEntry::new("reported", reported_summary),
-            ParallelModeCompletionFeedEntry::new("ledger refreshing", ledger_refresh_summary),
-            ParallelModeCompletionFeedEntry::new("official", official_summary),
-        ],
-        head_summary,
-        note,
-    )
+    ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
 }
 
 fn selected_distributor_detail(
@@ -3066,18 +3268,6 @@ fn selected_distributor_detail(
     history.first().cloned()
 }
 
-fn latest_history_summary(
-    detail: &ParallelModeAgentSessionDetailSnapshot,
-    state_labels: &[&str],
-) -> Option<String> {
-    detail
-        .history
-        .iter()
-        .rev()
-        .find(|entry| state_labels.contains(&entry.state_label.as_str()))
-        .map(|entry| entry.summary.clone())
-}
-
 fn detail_has_history_state(
     detail: &ParallelModeAgentSessionDetailSnapshot,
     state_label: &str,
@@ -3086,6 +3276,54 @@ fn detail_has_history_state(
         .history
         .iter()
         .any(|entry| entry.state_label == state_label)
+}
+
+fn build_distributor_completion_feed(
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+) -> Vec<ParallelModeCompletionFeedEntry> {
+    vec![
+        ParallelModeCompletionFeedEntry::new(
+            "reported",
+            latest_history_summary_across_records(history, &["reported_complete"])
+                .unwrap_or_else(|| "no agent results reported yet".to_string()),
+        ),
+        ParallelModeCompletionFeedEntry::new(
+            "ledger refreshing",
+            latest_history_summary_across_records(history, &["ledger_refreshing"])
+                .unwrap_or_else(|| "no official refresh workers are active".to_string()),
+        ),
+        ParallelModeCompletionFeedEntry::new(
+            "official",
+            latest_history_summary_across_records(history, &["commit_ready"])
+                .unwrap_or_else(|| "nothing is queued for merge".to_string()),
+        ),
+        ParallelModeCompletionFeedEntry::new(
+            "merge queued",
+            latest_history_summary_across_records(history, &["merge_queued", "integrating"])
+                .unwrap_or_else(|| "no distributor queue items are waiting".to_string()),
+        ),
+        ParallelModeCompletionFeedEntry::new(
+            "merged",
+            latest_history_summary_across_records(history, &["merged", "cleaned"])
+                .unwrap_or_else(|| "nothing has been integrated into akra yet".to_string()),
+        ),
+    ]
+}
+
+fn latest_history_summary_across_records(
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+    state_labels: &[&str],
+) -> Option<String> {
+    history
+        .iter()
+        .flat_map(|detail| detail.history.iter())
+        .filter(|entry| state_labels.contains(&entry.state_label.as_str()))
+        .max_by(|left, right| {
+            left.timestamp
+                .cmp(&right.timestamp)
+                .then_with(|| left.summary.cmp(&right.summary))
+        })
+        .map(|entry| entry.summary.clone())
 }
 
 fn build_placeholder_distributor_snapshot(
@@ -3101,10 +3339,392 @@ fn build_placeholder_distributor_snapshot(
                 "no official refresh workers are active",
             ),
             ParallelModeCompletionFeedEntry::new("official", "nothing is queued for merge"),
+            ParallelModeCompletionFeedEntry::new(
+                "merge queued",
+                "no distributor queue items are waiting",
+            ),
+            ParallelModeCompletionFeedEntry::new(
+                "merged",
+                "nothing has been integrated into akra yet",
+            ),
         ],
         head_summary,
         note,
     )
+}
+
+fn distributor_queue_root(pool_root: &Path) -> PathBuf {
+    pool_root.join(".distributor-queue")
+}
+
+fn distributor_queue_record_path(pool_root: &Path, queue_item_id: &str) -> PathBuf {
+    distributor_queue_root(pool_root).join(format!("{queue_item_id}.json"))
+}
+
+fn distributor_queue_item_id(lease: &ParallelModeSlotLeaseSnapshot, timestamp: &str) -> String {
+    sanitize_runtime_record_key(&format!(
+        "{}-{}-{}",
+        lease.slot_id, lease.agent_id, timestamp
+    ))
+}
+
+fn sanitize_runtime_record_key(value: &str) -> String {
+    let mut key = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            key.push(ch);
+        } else {
+            key.push('_');
+        }
+    }
+    key
+}
+
+fn load_distributor_queue_records(pool_root: &Path) -> Vec<ParallelModeDistributorQueueRecord> {
+    let queue_root = distributor_queue_root(pool_root);
+    let Ok(entries) = fs::read_dir(queue_root) else {
+        return Vec::new();
+    };
+
+    let mut records = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|content| {
+            serde_json::from_str::<ParallelModeDistributorQueueRecord>(&content).ok()
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.enqueued_at
+            .cmp(&right.enqueued_at)
+            .then_with(|| left.queue_item_id.cmp(&right.queue_item_id))
+    });
+    records
+}
+
+fn find_distributor_queue_record_by_session_key(
+    pool_root: &Path,
+    session_key: &str,
+) -> Option<ParallelModeDistributorQueueRecord> {
+    load_distributor_queue_records(pool_root)
+        .into_iter()
+        .find(|record| record.session_key == session_key)
+}
+
+fn write_distributor_queue_record(
+    pool_root: &Path,
+    record: &ParallelModeDistributorQueueRecord,
+) -> Result<(), String> {
+    let queue_root = distributor_queue_root(pool_root);
+    ensure_directory_exists(&queue_root)
+        .map_err(|error| format!("failed to create distributor queue directory: {error}"))?;
+
+    let path = distributor_queue_record_path(pool_root, &record.queue_item_id);
+    let temp_path = path.with_extension("json.tmp");
+    let body = serde_json::to_string_pretty(record)
+        .map_err(|error| format!("failed to serialize distributor queue record: {error}"))?;
+    fs::write(&temp_path, body).map_err(|error| {
+        format!(
+            "failed to write temporary distributor queue record `{}`: {error}",
+            record.queue_item_id
+        )
+    })?;
+    fs::rename(&temp_path, &path).map_err(|error| {
+        format!(
+            "failed to persist distributor queue record `{}`: {error}",
+            record.queue_item_id
+        )
+    })
+}
+
+fn process_distributor_queue_record(
+    pool_root: &Path,
+    record: &mut ParallelModeDistributorQueueRecord,
+) -> Result<Vec<String>, String> {
+    if !Path::new(&record.worktree_path).exists() {
+        record.queue_state = ParallelModeQueueItemState::Blocked;
+        record.integration_note =
+            "source worktree is missing; distributor cannot continue".to_string();
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(pool_root, record)?;
+        return Ok(vec![format!(
+            "distributor queue head blocked / agent: {} / source worktree is missing",
+            record.agent_id
+        )]);
+    }
+
+    let resolution = match resolve_workspace_slot_lease(&record.worktree_path) {
+        Ok(Some(resolution)) => resolution,
+        Ok(None) => {
+            record.queue_state = ParallelModeQueueItemState::Blocked;
+            record.integration_note =
+                "slot lease disappeared before distributor integration".to_string();
+            record.updated_at = current_timestamp();
+            write_distributor_queue_record(pool_root, record)?;
+            return Ok(vec![format!(
+                "distributor queue head blocked / agent: {} / slot lease disappeared",
+                record.agent_id
+            )]);
+        }
+        Err(error) => {
+            record.queue_state = ParallelModeQueueItemState::Blocked;
+            record.integration_note =
+                format!("slot lease could not be resolved for distributor delivery: {error}");
+            record.updated_at = current_timestamp();
+            write_distributor_queue_record(pool_root, record)?;
+            return Ok(vec![format!(
+                "distributor queue head blocked / agent: {} / {error}",
+                record.agent_id
+            )]);
+        }
+    };
+
+    let mut notices = Vec::new();
+    if matches!(
+        record.queue_state,
+        ParallelModeQueueItemState::Queued
+            | ParallelModeQueueItemState::Pushing
+            | ParallelModeQueueItemState::PrPending
+            | ParallelModeQueueItemState::MergePending
+            | ParallelModeQueueItemState::Integrating
+    ) {
+        let integration_notice = distributor_integrate_branch(&resolution, record)?;
+        notices.push(integration_notice);
+    }
+
+    let cleanup_notice = distributor_cleanup_integrated_slot(&resolution, record)?;
+    notices.push(cleanup_notice);
+    Ok(notices)
+}
+
+fn distributor_integrate_branch(
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+) -> Result<String, String> {
+    let slot_status = inspect_slot_git_status(&resolution.workspace_path).ok_or_else(|| {
+        format!(
+            "slot `{}` git status could not be inspected for distributor delivery",
+            resolution.lease.slot_id
+        )
+    })?;
+    if slot_status.has_pending_operation {
+        let failure_detail = format!(
+            "slot `{}` has pending merge or rebase metadata and cannot be integrated",
+            resolution.lease.slot_id
+        );
+        record.queue_state = ParallelModeQueueItemState::Blocked;
+        record.integration_note = failure_detail.clone();
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(&resolution.context.pool_root, record)?;
+        let _ = record_distributor_failed_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            &failure_detail,
+        );
+        return Ok(format!(
+            "distributor queue head blocked / agent: {} / {}",
+            record.agent_id, failure_detail
+        ));
+    }
+
+    if current_branch_name(&resolution.workspace_path).as_deref()
+        != Some(record.branch_name.as_str())
+    {
+        let failure_detail = format!(
+            "slot `{}` is no longer checked out to `{}`",
+            resolution.lease.slot_id, record.branch_name
+        );
+        record.queue_state = ParallelModeQueueItemState::Blocked;
+        record.integration_note = failure_detail.clone();
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(&resolution.context.pool_root, record)?;
+        let _ = record_distributor_failed_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            &failure_detail,
+        );
+        return Ok(format!(
+            "distributor queue head blocked / agent: {} / {}",
+            record.agent_id, failure_detail
+        ));
+    }
+
+    let current_head = resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
+        format!(
+            "slot `{}` workspace head could not be resolved for distributor delivery",
+            resolution.lease.slot_id
+        )
+    })?;
+    if current_head != record.commit_sha {
+        let failure_detail = format!(
+            "branch head drifted from expected commit `{}` to `{}`",
+            short_sha(&record.commit_sha),
+            short_sha(&current_head)
+        );
+        record.queue_state = ParallelModeQueueItemState::Blocked;
+        record.integration_note = failure_detail.clone();
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(&resolution.context.pool_root, record)?;
+        let _ = record_distributor_failed_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            &failure_detail,
+        );
+        return Ok(format!(
+            "distributor queue head blocked / agent: {} / {}",
+            record.agent_id, failure_detail
+        ));
+    }
+
+    record.queue_state = ParallelModeQueueItemState::Integrating;
+    record.integration_note = "distributor is integrating the queued branch into akra".to_string();
+    record.updated_at = current_timestamp();
+    write_distributor_queue_record(&resolution.context.pool_root, record)?;
+    let _ = record_integrating_session_detail(
+        &resolution.context.pool_root,
+        &resolution.lease,
+        "distributor is integrating the queued branch into akra",
+    );
+
+    if !branch_is_integrated_into_akra(&resolution.context.repo_root, &record.branch_name) {
+        let worktree = resolution.workspace_path.display().to_string();
+        if !command_succeeds(
+            "git",
+            [
+                "-C",
+                worktree.as_str(),
+                "-c",
+                "rebase.autoStash=true",
+                "rebase",
+                AKRA_BRANCH,
+            ],
+        ) {
+            let failure_detail = format!(
+                "branch `{}` could not rebase onto `{AKRA_BRANCH}` cleanly",
+                record.branch_name
+            );
+            record.queue_state = ParallelModeQueueItemState::Blocked;
+            record.integration_note = failure_detail.clone();
+            record.updated_at = current_timestamp();
+            write_distributor_queue_record(&resolution.context.pool_root, record)?;
+            let _ = record_distributor_failed_session_detail(
+                &resolution.context.pool_root,
+                &resolution.lease,
+                &failure_detail,
+            );
+            return Ok(format!(
+                "distributor queue head blocked / agent: {} / {}",
+                record.agent_id, failure_detail
+            ));
+        }
+
+        record.commit_sha =
+            resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
+                format!(
+                    "slot `{}` workspace head could not be resolved after distributor rebase",
+                    resolution.lease.slot_id
+                )
+            })?;
+        record.integration_note =
+            format!("branch rebased onto `{AKRA_BRANCH}` and is ready for local integration");
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(&resolution.context.pool_root, record)?;
+        let _ = record_integrating_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            "branch rebased onto akra and is ready for local integration",
+        );
+
+        if !command_succeeds(
+            "git",
+            ["-C", worktree.as_str(), "branch", "-f", AKRA_BRANCH, "HEAD"],
+        ) {
+            let failure_detail = format!(
+                "local `{AKRA_BRANCH}` could not advance to `{}`",
+                short_sha(&record.commit_sha)
+            );
+            record.queue_state = ParallelModeQueueItemState::Blocked;
+            record.integration_note = failure_detail.clone();
+            record.updated_at = current_timestamp();
+            write_distributor_queue_record(&resolution.context.pool_root, record)?;
+            let _ = record_distributor_failed_session_detail(
+                &resolution.context.pool_root,
+                &resolution.lease,
+                &failure_detail,
+            );
+            return Ok(format!(
+                "distributor queue head blocked / agent: {} / {}",
+                record.agent_id, failure_detail
+            ));
+        }
+    }
+
+    record.queue_state = ParallelModeQueueItemState::Cleaning;
+    record.integration_note =
+        "branch integrated into akra and the slot is entering cleanup".to_string();
+    record.updated_at = current_timestamp();
+    write_distributor_queue_record(&resolution.context.pool_root, record)?;
+
+    Ok(format!(
+        "distributor integrated queue head into akra / slot: {} / agent: {} / commit: {}",
+        resolution.lease.slot_id,
+        resolution.lease.agent_id,
+        short_sha(&record.commit_sha)
+    ))
+}
+
+fn distributor_cleanup_integrated_slot(
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+) -> Result<String, String> {
+    if resolution.lease.state == ParallelModeSlotLeaseState::Running {
+        let mut cleanup_pending_lease = resolution.lease.clone();
+        cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
+        write_slot_lease(&resolution.context.pool_root, &cleanup_pending_lease)?;
+        let _ = record_cleanup_pending_session_detail(
+            &resolution.context.pool_root,
+            &cleanup_pending_lease,
+        );
+    }
+
+    if !cleanup_slot(
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        &resolution.lease.slot_id,
+        &resolution.workspace_path,
+        &resolution.lease.branch_name,
+    ) {
+        let failure_detail = format!(
+            "slot `{}` cleanup failed after local integration",
+            resolution.lease.slot_id
+        );
+        record.queue_state = ParallelModeQueueItemState::Blocked;
+        record.integration_note = failure_detail.clone();
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(&resolution.context.pool_root, record)?;
+        let _ = record_distributor_failed_session_detail(
+            &resolution.context.pool_root,
+            &resolution.lease,
+            &failure_detail,
+        );
+        return Ok(format!(
+            "distributor queue head blocked during cleanup / agent: {} / {}",
+            record.agent_id, failure_detail
+        ));
+    }
+
+    let _ = record_cleaned_session_detail(&resolution.context.pool_root, &resolution.lease);
+    record.queue_state = ParallelModeQueueItemState::Done;
+    record.integration_note =
+        "branch integrated into akra and the slot returned to idle".to_string();
+    record.updated_at = current_timestamp();
+    write_distributor_queue_record(&resolution.context.pool_root, record)?;
+
+    Ok(format!(
+        "distributor returned slot to idle / slot: {} / agent: {}",
+        resolution.lease.slot_id, resolution.lease.agent_id
+    ))
 }
 
 fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
@@ -3184,12 +3804,12 @@ mod tests {
         ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
         ParallelModeService, ParallelModeSupervisorState, build_pool_board,
         derive_default_pool_root, derive_readiness, inspect_planning, parse_https_remote,
-        reconcile_pool_board, slot_id, slot_lease_file_path,
+        reconcile_pool_board, run_command, slot_id, slot_lease_file_path,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::parallel_mode::{
-        ParallelModePoolSlotState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-        ParallelModeSlotLeaseState,
+        ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
+        ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -3766,6 +4386,219 @@ mod tests {
                 "ledger_refreshing",
                 "commit_ready"
             ]
+        );
+    }
+
+    #[test]
+    fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_slot() {
+        let repo = TempGitRepo::new("distributor-queue-success");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        service
+            .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-42")
+            .expect("thread prepared should be recorded");
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                Some("Distributor queue wiring completed."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official ledger refresh succeeded: distributor delivery approved",
+            )
+            .expect("commit-ready should be recorded");
+
+        let queued_item = service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should be enqueued")
+            .expect("queue item should be created");
+        assert_eq!(queued_item.queue_state, ParallelModeQueueItemState::Queued);
+
+        let notices = service
+            .process_distributor_queue(&repo.workspace_dir())
+            .expect("distributor queue should process");
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor integrated queue head into akra"))
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor returned slot to idle"))
+        );
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let detail = snapshot
+            .detail
+            .session
+            .as_ref()
+            .expect("cleaned session detail should remain available");
+
+        assert_eq!(snapshot.roster.active_count(), 0);
+        assert_eq!(snapshot.distributor.head_summary, "idle");
+        assert!(
+            snapshot.distributor.completion_feed[3]
+                .summary
+                .contains("akra"),
+            "merge-queued feed should reflect distributor integration: {}",
+            snapshot.distributor.completion_feed[3].summary
+        );
+        assert_eq!(
+            snapshot.distributor.completion_feed[4].summary,
+            "slot cleaned and returned to the idle pool"
+        );
+        assert_eq!(detail.state_label, "cleaned");
+        assert_eq!(
+            detail
+                .history
+                .iter()
+                .map(|entry| entry.state_label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assigned",
+                "starting",
+                "running",
+                "reported_complete",
+                "ledger_refreshing",
+                "commit_ready",
+                "merge_queued",
+                "integrating",
+                "merged",
+                "cleanup_pending",
+                "cleaned"
+            ]
+        );
+        assert!(!repo.slot_lease_path(1).exists());
+        assert!(!repo.branch_exists(&lease.branch_name));
+        assert_eq!(
+            run_command(
+                "git",
+                [
+                    "-C",
+                    repo.workspace_dir().as_str(),
+                    "show",
+                    "akra:feature.txt",
+                ],
+                None,
+            )
+            .as_deref(),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn distributor_queue_keeps_later_item_queued_behind_blocked_head() {
+        let repo = TempGitRepo::new("distributor-queue-blocked-head");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let first = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("first slot lease should be acquired");
+        let second = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-2", "Task Two", "agent-2", "task-two"),
+            )
+            .expect("second slot lease should be acquired");
+        for lease in [&first, &second] {
+            let slot_path = PathBuf::from(lease.worktree_path.clone());
+            service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("slot should transition to running");
+            repo.commit_file_in_slot(
+                &slot_path,
+                &format!("{}.txt", lease.task_id),
+                "done\n",
+                "agent work",
+            );
+            service
+                .begin_workspace_official_completion(
+                    &lease.worktree_path,
+                    Some("Distributor queue slice completed."),
+                    Some("cargo test passed"),
+                    None,
+                )
+                .expect("official completion should be captured");
+            service
+                .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+                .expect("ledger refreshing should be recorded");
+            service
+                .mark_workspace_commit_ready(
+                    &lease.worktree_path,
+                    "official ledger refresh succeeded: queued for delivery",
+                )
+                .expect("commit-ready should be recorded");
+            service
+                .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+                .expect("commit-ready result should enqueue")
+                .expect("queue item should be present");
+        }
+
+        fs::remove_dir_all(&first.worktree_path).expect("first slot worktree should be removed");
+
+        let notices = service
+            .process_distributor_queue(&repo.workspace_dir())
+            .expect("processing the queue head should not crash");
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor queue head blocked"))
+        );
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        assert_eq!(snapshot.distributor.head_summary, "blocked");
+        assert_eq!(snapshot.distributor.queue_depth(), 2);
+        assert_eq!(
+            snapshot.distributor.queue_items[0].queue_state,
+            ParallelModeQueueItemState::Blocked
+        );
+        assert_eq!(
+            snapshot.distributor.queue_items[1].queue_state,
+            ParallelModeQueueItemState::Queued
+        );
+        assert!(
+            snapshot
+                .distributor
+                .note
+                .contains("source worktree is missing"),
+            "queue note should explain the blocked head: {}",
+            snapshot.distributor.note
         );
     }
 

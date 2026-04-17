@@ -1,8 +1,6 @@
 use crate::application::service::parallel_mode_service::{
     ParallelModeOfficialCompletionReport, ParallelModeService,
 };
-use std::thread;
-use std::time::Duration;
 
 use crate::application::service::planning::PlanningProposalPromotionRequest;
 use crate::application::service::planning::PlanningServices;
@@ -448,7 +446,8 @@ impl PostTurnEvaluationExecutor {
         let _ = self
             .parallel_mode_service
             .mark_workspace_commit_ready(&request.workspace_directory, &ledger_refresh_outcome);
-        let runtime_notices = self.finalize_commit_ready_slot_cleanup(&request.workspace_directory);
+        let runtime_notices =
+            self.finalize_commit_ready_distributor_delivery(&request.workspace_directory);
 
         OfficialCompletionRefreshOutcome {
             runtime_snapshot,
@@ -561,47 +560,34 @@ impl PostTurnEvaluationExecutor {
         current_snapshot.with_auto_followup_pause_reason(detail.to_string())
     }
 
-    fn finalize_commit_ready_slot_cleanup(&self, workspace_directory: &str) -> Vec<String> {
+    fn finalize_commit_ready_distributor_delivery(&self, workspace_directory: &str) -> Vec<String> {
         let mut notices = Vec::new();
-        let mut cleanup_pending_ready = false;
-        for attempt in 0..20 {
-            match self
-                .parallel_mode_service
-                .mark_workspace_slot_cleanup_pending_if_ready(workspace_directory)
-            {
-                Ok(Some(lease)) => {
-                    notices.push(format!(
-                        "slot lease became cleanup-pending after official refresh / slot: {} / agent: {}",
-                        lease.slot_id, lease.agent_id
-                    ));
-                    cleanup_pending_ready = true;
-                    break;
-                }
-                Ok(None) if attempt < 19 => thread::sleep(Duration::from_millis(10)),
-                Ok(None) => break,
-                Err(error) => {
-                    notices.push(format!(
-                        "slot cleanup-pending transition failed after official refresh: {error}"
-                    ));
-                    break;
-                }
+        match self
+            .parallel_mode_service
+            .enqueue_workspace_commit_ready_result(workspace_directory)
+        {
+            Ok(Some(item)) => notices.push(format!(
+                "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
+                item.source_agent,
+                item.task_title,
+                item.queue_state.label()
+            )),
+            Ok(None) => {}
+            Err(error) => {
+                notices.push(format!(
+                    "distributor enqueue failed after official refresh: {error}"
+                ));
+                return notices;
             }
         }
-
-        if cleanup_pending_ready {
-            match self
-                .parallel_mode_service
-                .cleanup_workspace_slot_if_pending(workspace_directory)
-            {
-                Ok(Some(lease)) => notices.push(format!(
-                    "slot returned to idle after official refresh / slot: {} / agent: {}",
-                    lease.slot_id, lease.agent_id
-                )),
-                Ok(None) => {}
-                Err(error) => notices.push(format!(
-                    "slot cleanup failed after official refresh: {error}"
-                )),
-            }
+        match self
+            .parallel_mode_service
+            .process_distributor_queue(workspace_directory)
+        {
+            Ok(mut delivery_notices) => notices.append(&mut delivery_notices),
+            Err(error) => notices.push(format!(
+                "distributor delivery failed after official refresh: {error}"
+            )),
         }
 
         notices

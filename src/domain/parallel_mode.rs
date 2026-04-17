@@ -560,13 +560,19 @@ impl ParallelModeAgentRosterSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ParallelModeQueueItemState {
     Idle,
     Queued,
+    Pushing,
+    PrPending,
+    MergePending,
     Integrating,
+    Cleaning,
+    Done,
     Blocked,
-    Merged,
+    Failed,
 }
 
 impl ParallelModeQueueItemState {
@@ -574,10 +580,19 @@ impl ParallelModeQueueItemState {
         match self {
             Self::Idle => "idle",
             Self::Queued => "queued",
+            Self::Pushing => "pushing",
+            Self::PrPending => "pr_pending",
+            Self::MergePending => "merge_pending",
             Self::Integrating => "integrating",
+            Self::Cleaning => "cleaning",
+            Self::Done => "done",
             Self::Blocked => "blocked",
-            Self::Merged => "merged",
+            Self::Failed => "failed",
         }
+    }
+
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Idle | Self::Done | Self::Failed)
     }
 }
 

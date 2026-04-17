@@ -460,6 +460,7 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
                 .as_ref()
                 .expect("detail should exist once the session is cleaned");
             assert_eq!(detail.completion_state_label, "cleaned");
+            assert_eq!(snapshot.distributor.head_summary, "idle");
             assert_eq!(
                 detail
                     .history
@@ -473,6 +474,8 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
                     "reported_complete",
                     "ledger_refreshing",
                     "commit_ready",
+                    "merge_queued",
+                    "integrating",
                     "merged",
                     "cleanup_pending",
                     "cleaned"
