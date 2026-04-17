@@ -101,27 +101,25 @@ impl NativeTuiApp {
             }
             Some(value) if value.eq_ignore_ascii_case("on") => {
                 let snapshot = self.refresh_parallel_mode_readiness_snapshot();
-                if snapshot.allows_parallel_mode() {
+                let status_text = if snapshot.allows_parallel_mode() {
                     self.parallel_mode_enabled = true;
                     self.sync_parallel_mode_supervisor_snapshot(true);
-                    self.show_supersession_overlay();
-                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text: format!(
-                            "parallel mode: on / readiness: {} / control tower opened",
-                            snapshot.readiness_label()
-                        ),
-                    });
+                    format!(
+                        "parallel mode: on / readiness: {} / control tower opened",
+                        snapshot.readiness_label()
+                    )
                 } else {
                     self.parallel_mode_enabled = false;
                     self.sync_parallel_mode_supervisor_snapshot(false);
-                    self.show_supersession_overlay();
-                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text: format!(
-                            "parallel mode: blocked / readiness: {} / inspect the prepare surface before retrying",
-                            snapshot.readiness_label()
-                        ),
-                    });
-                }
+                    format!(
+                        "parallel mode: blocked / readiness: {} / inspect the prepare surface before retrying",
+                        snapshot.readiness_label()
+                    )
+                };
+                self.show_supersession_overlay();
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
             }
             Some(value) => {
                 self.inspect_parallel_mode_shell();
