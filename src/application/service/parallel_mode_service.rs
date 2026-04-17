@@ -25,6 +25,9 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
+use crate::domain::planning::{
+    PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+};
 
 const AKRA_BRANCH: &str = "akra";
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
@@ -114,20 +117,7 @@ struct WorkspaceSlotLeaseResolution {
     workspace_path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParallelModeOfficialCompletionReport {
-    pub agent_id: String,
-    pub task_id: String,
-    pub task_title: String,
-    pub branch_name: String,
-    pub worktree_path: String,
-    pub commit_sha: String,
-    pub validation_summary: String,
-    pub final_response_summary: String,
-    pub final_response_text: Option<String>,
-    pub failure_context: Option<String>,
-    pub completed_at: String,
-}
+pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefreshContract;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ParallelModeDistributorQueueRecord {
@@ -573,6 +563,7 @@ impl ParallelModeService {
     pub fn begin_workspace_official_completion(
         &self,
         workspace_dir: &str,
+        root_turn_id: &str,
         final_response_text: Option<&str>,
         validation_summary: Option<&str>,
         failure_context: Option<&str>,
@@ -611,19 +602,22 @@ impl ParallelModeService {
             failure_context.as_deref(),
         )?;
 
-        Ok(Some(ParallelModeOfficialCompletionReport {
-            agent_id: resolution.lease.agent_id,
-            task_id: resolution.lease.task_id,
-            task_title: resolution.lease.task_title,
-            branch_name: resolution.lease.branch_name,
-            worktree_path: resolution.lease.worktree_path,
-            commit_sha,
-            validation_summary,
-            final_response_summary,
-            final_response_text,
-            failure_context,
-            completed_at,
-        }))
+        Ok(Some(PlanningOfficialCompletionRefreshContract::new(
+            root_turn_id,
+            PlanningOfficialCompletionRefreshPayload::new(
+                resolution.lease.agent_id,
+                resolution.lease.task_id,
+                resolution.lease.task_title,
+                resolution.lease.branch_name,
+                resolution.lease.worktree_path,
+                commit_sha,
+                validation_summary,
+                final_response_summary,
+                final_response_text,
+                failure_context,
+                completed_at,
+            ),
+        )))
     }
 
     pub fn mark_workspace_official_completion_refreshing(
@@ -4988,14 +4982,16 @@ mod tests {
         service
             .mark_workspace_slot_running(&lease.worktree_path)
             .expect("slot should transition to running");
-        service
+        let completion_report = service
             .begin_workspace_official_completion(
                 &lease.worktree_path,
+                "turn-1",
                 Some("Implemented official completion lifecycle."),
                 Some("cargo test passed"),
                 None,
             )
-            .expect("official completion should be recorded");
+            .expect("official completion should be recorded")
+            .expect("official completion contract should be returned");
         service
             .mark_workspace_official_completion_refreshing(&lease.worktree_path)
             .expect("ledger refreshing state should be recorded");
@@ -5022,6 +5018,9 @@ mod tests {
         assert_eq!(roster_entry.state_label, "commit_ready");
         assert_eq!(detail.state_label, "commit_ready");
         assert_eq!(detail.completion_state_label, "commit_ready");
+        assert_eq!(completion_report.root_turn_id, "turn-1");
+        assert_eq!(completion_report.completion.task_id, "task-1");
+        assert_eq!(completion_report.completion.agent_id, "agent-1");
         assert_eq!(snapshot.distributor.head_summary, "official");
         assert_eq!(
             snapshot.distributor.completion_feed[0].summary,
@@ -5078,6 +5077,7 @@ mod tests {
         service
             .begin_workspace_official_completion(
                 &lease.worktree_path,
+                "turn-queue-success",
                 Some("Distributor queue wiring completed."),
                 Some("cargo test passed"),
                 None,
@@ -5218,6 +5218,7 @@ mod tests {
         service
             .begin_workspace_official_completion(
                 &queued.worktree_path,
+                "turn-queue-head",
                 Some("Queued result is waiting for distributor delivery."),
                 Some("cargo test passed"),
                 None,
@@ -5314,6 +5315,7 @@ mod tests {
         service
             .begin_workspace_official_completion(
                 &lease.worktree_path,
+                "turn-gh-blocked",
                 Some("Distributor queue wiring completed."),
                 Some("cargo test passed"),
                 None,
@@ -5422,6 +5424,7 @@ mod tests {
             service
                 .begin_workspace_official_completion(
                     &lease.worktree_path,
+                    &format!("turn-{}", lease.task_id),
                     Some("Distributor queue slice completed."),
                     Some("cargo test passed"),
                     None,

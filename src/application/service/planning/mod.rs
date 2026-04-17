@@ -51,9 +51,8 @@ pub use super::planning_runtime_facade_service::{
 };
 pub use super::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
 pub use super::planning_worker_orchestration_service::{
-    PlanningLedgerRepairRequest, PlanningOfficialCompletionPayload,
-    PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
-    PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
+    PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
+    PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
 };
 pub use crate::domain::planning::{
     PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,

@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
+use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use anyhow::Result;
-use crate::domain::planning::{
-    PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
-};
 
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
@@ -30,26 +28,10 @@ pub struct PlanningQueueRefreshRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningOfficialCompletionRefreshRequest<'a> {
     pub workspace_directory: &'a str,
-    pub root_turn_id: &'a str,
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
-    pub completion: PlanningOfficialCompletionPayload<'a>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningOfficialCompletionPayload<'a> {
-    pub agent_id: &'a str,
-    pub task_id: &'a str,
-    pub task_title: &'a str,
-    pub branch_name: &'a str,
-    pub worktree_path: &'a str,
-    pub commit_sha: &'a str,
-    pub validation_summary: &'a str,
-    pub final_response_summary: &'a str,
-    pub final_response_text: Option<&'a str>,
-    pub failure_context: Option<&'a str>,
-    pub completed_at: &'a str,
+    pub contract: PlanningOfficialCompletionRefreshContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +98,7 @@ impl PlanningWorkerOrchestrationService {
         let prompt = self.render_official_completion_refresh_prompt(&request);
         self.run_worker_and_reconcile(
             request.workspace_directory,
-            &format!("planner-refresh-{}", request.root_turn_id),
+            &format!("planner-refresh-{}", request.contract.root_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
         )
@@ -161,11 +143,10 @@ impl PlanningWorkerOrchestrationService {
         request: &PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> String {
         build_planning_official_completion_prompt(
-            request.root_turn_id,
             request.latest_user_message,
             request.latest_main_reply,
             request.previous_handoff_task,
-            &request.completion,
+            &request.contract,
         )
     }
 
@@ -311,16 +292,14 @@ main session latest reply:
 }
 
 fn build_planning_official_completion_prompt(
-    root_turn_id: &str,
     latest_user_message: Option<&str>,
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
-    completion: &PlanningOfficialCompletionPayload<'_>,
+    contract: &PlanningOfficialCompletionRefreshContract,
 ) -> String {
     let latest_user_request_section = latest_user_request_section(latest_user_message);
     let previous_handoff_section = previous_handoff_section(previous_handoff_task);
-    let serialized_contract =
-        serialize_official_completion_refresh_contract(root_turn_id, completion);
+    let serialized_contract = serialize_official_completion_refresh_contract(contract);
 
     format!(
         r#"planning worker official completion refresh 입니다.
@@ -351,25 +330,8 @@ main session latest reply:
 }
 
 fn serialize_official_completion_refresh_contract(
-    root_turn_id: &str,
-    completion: &PlanningOfficialCompletionPayload<'_>,
+    contract: &PlanningOfficialCompletionRefreshContract,
 ) -> String {
-    let contract = PlanningOfficialCompletionRefreshContract::new(
-        root_turn_id,
-        PlanningOfficialCompletionRefreshPayload::new(
-            completion.agent_id,
-            completion.task_id,
-            completion.task_title,
-            completion.branch_name,
-            completion.worktree_path,
-            completion.commit_sha,
-            completion.validation_summary,
-            completion.final_response_summary,
-            completion.final_response_text.map(str::to_string),
-            completion.failure_context.map(str::to_string),
-            completion.completed_at,
-        ),
-    );
     serde_json::to_string_pretty(&contract)
         .expect("official completion refresh contract should serialize")
 }
@@ -416,8 +378,8 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::{
-        PlanningOfficialCompletionPayload, PlanningOfficialCompletionRefreshRequest,
-        PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
+        PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
+        PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_worker_port::{
@@ -439,6 +401,9 @@ mod tests {
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
+    use crate::domain::planning::{
+        PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+    };
 
     #[derive(Clone)]
     struct ScriptedPlanningWorkerPort {
@@ -668,7 +633,6 @@ mod tests {
         let prompt = service.render_official_completion_refresh_prompt(
             &PlanningOfficialCompletionRefreshRequest {
                 workspace_directory: &workspace_dir,
-                root_turn_id: "turn-9",
                 latest_user_message: Some("이후 작업도 이어서 진행해."),
                 latest_main_reply: "구현을 마쳤고 follow-up 하나가 남았습니다.",
                 previous_handoff_task: Some(&PlanningTaskHandoff {
@@ -679,19 +643,22 @@ mod tests {
                     updated_at: "2026-04-17T09:00:00Z".to_string(),
                     status_label: "ready".to_string(),
                 }),
-                completion: PlanningOfficialCompletionPayload {
-                    agent_id: "agent-2",
-                    task_id: "task-9",
-                    task_title: "Official completion pipeline 구현",
-                    branch_name: "akra-agent/slot-1/official-completion",
-                    worktree_path: "/tmp/slot-1",
-                    commit_sha: "abc123def456",
-                    validation_summary: "cargo test passed",
-                    final_response_summary: "official completion lifecycle wired",
-                    final_response_text: Some("Implemented official completion reporting."),
-                    failure_context: None,
-                    completed_at: "2026-04-17T09:10:00Z",
-                },
+                contract: PlanningOfficialCompletionRefreshContract::new(
+                    "turn-9",
+                    PlanningOfficialCompletionRefreshPayload::new(
+                        "agent-2",
+                        "task-9",
+                        "Official completion pipeline 구현",
+                        "akra-agent/slot-1/official-completion",
+                        "/tmp/slot-1",
+                        "abc123def456",
+                        "cargo test passed",
+                        "official completion lifecycle wired",
+                        Some("Implemented official completion reporting.".to_string()),
+                        None,
+                        "2026-04-17T09:10:00Z",
+                    ),
+                ),
             },
         );
 
@@ -703,7 +670,9 @@ mod tests {
         assert!(prompt.contains("\"task_id\": \"task-9\""));
         assert!(prompt.contains("\"commit_sha\": \"abc123def456\""));
         assert!(prompt.contains("\"validation_summary\": \"cargo test passed\""));
-        assert!(prompt.contains("\"final_response_summary\": \"official completion lifecycle wired\""));
+        assert!(
+            prompt.contains("\"final_response_summary\": \"official completion lifecycle wired\"")
+        );
         assert!(prompt.contains("Implemented official completion reporting."));
         assert!(prompt.contains("latest operator request:"));
     }

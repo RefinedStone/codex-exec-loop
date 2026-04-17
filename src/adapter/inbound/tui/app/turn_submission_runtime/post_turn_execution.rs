@@ -6,9 +6,8 @@ use crate::application::service::planning::PlanningProposalPromotionRequest;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{
-    PlanningExecutionSnapshot, PlanningOfficialCompletionPayload,
-    PlanningOfficialCompletionRefreshRequest, PlanningReconciliationResult, PlanningRepairRequest,
-    PlanningRepairRetryReason,
+    PlanningExecutionSnapshot, PlanningOfficialCompletionRefreshRequest,
+    PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
 use crate::application::service::planning::{
     PlanningLedgerRepairRequest, PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
@@ -259,6 +258,7 @@ impl PostTurnEvaluationExecutor {
             .parallel_mode_service
             .begin_workspace_official_completion(
                 &request.workspace_directory,
+                &request.queued_from_turn_id,
                 latest_main_reply,
                 Some(validation_summary),
                 None,
@@ -337,26 +337,13 @@ impl PostTurnEvaluationExecutor {
             .latest_agent_message_text()
             .map(str::trim)
             .filter(|message| !message.is_empty())
-            .unwrap_or(completion_report.final_response_summary.as_str());
+            .unwrap_or(completion_report.completion.final_response_summary.as_str());
         let worker_request = PlanningOfficialCompletionRefreshRequest {
             workspace_directory: &request.workspace_directory,
-            root_turn_id: &request.queued_from_turn_id,
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
-            completion: PlanningOfficialCompletionPayload {
-                agent_id: &completion_report.agent_id,
-                task_id: &completion_report.task_id,
-                task_title: &completion_report.task_title,
-                branch_name: &completion_report.branch_name,
-                worktree_path: &completion_report.worktree_path,
-                commit_sha: &completion_report.commit_sha,
-                validation_summary: &completion_report.validation_summary,
-                final_response_summary: &completion_report.final_response_summary,
-                final_response_text: completion_report.final_response_text.as_deref(),
-                failure_context: completion_report.failure_context.as_deref(),
-                completed_at: &completion_report.completed_at,
-            },
+            contract: completion_report.clone(),
         };
         let worker_prompt = self
             .planning
