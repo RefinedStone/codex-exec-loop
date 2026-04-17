@@ -41,7 +41,6 @@ pub(super) struct PostTurnEvaluationRequest {
     pub workspace_directory: String,
     pub queued_from_turn_id: String,
     pub changed_planning_file_paths: Vec<String>,
-    pub official_completion_refresh_order: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -259,7 +258,7 @@ impl PostTurnEvaluationExecutor {
         match self.parallel_mode_turn_service.begin_official_completion(
             &request.workspace_directory,
             &request.queued_from_turn_id,
-            request.official_completion_refresh_order,
+            None,
             latest_main_reply,
             Some(validation_summary),
         ) {
@@ -876,14 +875,10 @@ impl PostTurnEvaluationExecutor {
 }
 
 impl NativeTuiApp {
-    pub(super) fn execute_post_turn_evaluation(&mut self, mut request: PostTurnEvaluationRequest) {
+    pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
         let Some(conversation) = self.ready_conversation_snapshot() else {
             return;
         };
-        request.official_completion_refresh_order = self
-            .parallel_mode_turn_service()
-            .reserve_official_completion_refresh_order(&request.workspace_directory);
-
         self.mark_post_turn_evaluation_running(&conversation, &request);
         let executor = PostTurnEvaluationExecutor::new(
             self.planning.clone(),

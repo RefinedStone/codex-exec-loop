@@ -299,7 +299,9 @@ fn history_rebase_provenance(detail: &ParallelModeAgentSessionDetailSnapshot) ->
         .history
         .iter()
         .rev()
-        .find(|entry| entry.summary.contains("rebased"))
+        .find(|entry| {
+            entry.state_label == "integrating" && entry.summary.starts_with("rebased ")
+        })
         .map(|entry| entry.summary.clone())
 }
 
@@ -892,8 +894,8 @@ fn distributor_integrate_branch(
         if record
             .original_commit_sha
             .as_deref()
-            .map(|commit| commit.trim().is_empty())
-            .unwrap_or(true)
+            .filter(|commit| !commit.trim().is_empty())
+            .is_none()
         {
             record.original_commit_sha = Some(previous_commit_sha.clone());
         }

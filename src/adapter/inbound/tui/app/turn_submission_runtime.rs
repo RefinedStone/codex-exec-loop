@@ -72,7 +72,6 @@ impl NativeTuiApp {
                 workspace_directory,
                 queued_from_turn_id,
                 changed_planning_file_paths,
-                official_completion_refresh_order: None,
             }),
             ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt,

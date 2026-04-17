@@ -92,9 +92,14 @@ impl ParallelModeTurnService {
                 .parallel_mode_service
                 .record_workspace_slot_thread_prepared(workspace_directory, thread_id)
             {
-                Ok(Some(_)) | Ok(None) => ParallelTurnStreamEventOutcome {
+                Ok(Some(_)) => ParallelTurnStreamEventOutcome {
                     runtime_notice: None,
                     invalidate_supervisor_snapshot: true,
+                    turn_started_observed: false,
+                },
+                Ok(None) => ParallelTurnStreamEventOutcome {
+                    runtime_notice: None,
+                    invalidate_supervisor_snapshot: false,
                     turn_started_observed: false,
                 },
                 Err(error) => ParallelTurnStreamEventOutcome {
@@ -191,15 +196,6 @@ impl ParallelModeTurnService {
             runtime_notice: None,
             invalidate_supervisor_snapshot: false,
         }
-    }
-
-    pub fn reserve_official_completion_refresh_order(
-        &self,
-        workspace_directory: &str,
-    ) -> Option<u64> {
-        self.parallel_mode_service
-            .reserve_workspace_official_completion_refresh_order(workspace_directory)
-            .unwrap_or(None)
     }
 
     pub fn begin_official_completion(
@@ -402,6 +398,25 @@ mod tests {
 
         assert!(!outcome.invalidate_supervisor_snapshot);
         assert!(outcome.turn_started_observed);
+        assert!(outcome.runtime_notice.is_none());
+    }
+
+    #[test]
+    fn thread_prepared_without_slot_lease_keeps_snapshot_steady() {
+        let workspace = TempGitWorkspace::new("parallel-thread-prepared-no-lease");
+        let service = ParallelModeTurnService::new(ParallelModeService::new());
+
+        let outcome = service.sync_stream_event(
+            &workspace.root,
+            &ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Temp".to_string(),
+                cwd: workspace.root.clone(),
+            },
+        );
+
+        assert!(!outcome.invalidate_supervisor_snapshot);
+        assert!(!outcome.turn_started_observed);
         assert!(outcome.runtime_notice.is_none());
     }
 

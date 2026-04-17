@@ -215,12 +215,19 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
 }
 
 fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
+    let blocked_head_detail = distributor
+        .head_blocked_detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty());
     let mut lines = vec![
         Line::from(format!("head: {}", distributor.head_summary)),
         Line::from(format!("queue depth: {}", distributor.queue_depth())),
-        Line::from(format!("note: {}", distributor.note)),
     ];
-    if let Some(detail) = distributor.head_blocked_detail.as_deref() {
+    if blocked_head_detail != Some(distributor.note.trim()) {
+        lines.push(Line::from(format!("note: {}", distributor.note)));
+    }
+    if let Some(detail) = blocked_head_detail {
         lines.push(Line::from(format!("blocked head: {detail}")));
     }
     if let Some(provenance) = distributor.head_rebase_provenance.as_deref() {
@@ -237,7 +244,7 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
                 .iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    let row_label = if index == 0 { "head" } else { "next" };
+                    let row_label = if index == 0 { "current" } else { "next" };
                     Line::from(format!(
                         "{row_label}: {} / {} / {} / {} / {} / {}",
                         item.source_agent,
@@ -263,13 +270,7 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
 fn display_supersession_state_label(state_label: &str) -> String {
     match state_label {
         "reported_complete" => "reported".to_string(),
-        "ledger_refreshing" => "ledger refreshing".to_string(),
         "commit_ready" => "official".to_string(),
-        "merge_queued" => "merge queued".to_string(),
-        "pr_pending" => "pr pending".to_string(),
-        "merge_pending" => "merge pending".to_string(),
-        "cleanup_pending" => "cleanup pending".to_string(),
-        "in_progress" => "in progress".to_string(),
         other => other.replace('_', " "),
     }
 }
@@ -321,6 +322,35 @@ mod tests {
     }
 
     #[test]
+    fn distributor_lines_omit_duplicate_note_when_blocked_detail_matches() {
+        let detail =
+            "rebased branch `akra-agent/slot-1/task-one` could not be force-pushed: rejected";
+        let snapshot = ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-1",
+                "Task One",
+                ParallelModeQueueItemState::Blocked,
+                "akra-agent/slot-1/task-one",
+                "def4567",
+                detail,
+            )],
+            vec![],
+            "blocked",
+            detail,
+        )
+        .with_head_blocked_detail(Some(detail.to_string()));
+
+        let rendered = build_distributor_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains(&format!("note: {detail}")));
+        assert!(rendered.contains(&format!("blocked head: {detail}")));
+    }
+
+    #[test]
     fn distributor_lines_render_head_marker_and_humanized_queue_state_labels() {
         let snapshot = ParallelModeDistributorSnapshot::new(
             vec![
@@ -354,7 +384,7 @@ mod tests {
 
         assert!(rendered.contains("head: pr pending"));
         assert!(rendered.contains(
-            "head: agent-1 / Task One / pr pending / akra-agent/slot-1/task-one / abc1234 / pull request #42 is open and waiting for merge"
+            "current: agent-1 / Task One / pr pending / akra-agent/slot-1/task-one / abc1234 / pull request #42 is open and waiting for merge"
         ));
         assert!(rendered.contains(
             "next: agent-2 / Task Two / queued / akra-agent/slot-2/task-two / def5678 / commit-ready result accepted into distributor queue"
