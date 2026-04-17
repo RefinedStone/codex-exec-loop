@@ -44,6 +44,7 @@
 - Agent completion is intentionally split into `reported_complete` and official completion: hidden planning refresh must succeed before the result becomes `commit_ready` and enters distributor delivery.
 - Distributor delivery is already serial: it processes one queue head at a time, rebases stale branches onto `akra`, force-pushes rebased heads when needed, ensures and closes PRs through GitHub automation, and only returns the slot after cleanup succeeds.
 - The main supersession work that still remains is architectural cleanup around explicit runtime ports and seams, not the first-pass operator-facing loop.
+- Parallel supersession still relies on worktree-local planning authority and process-local runtime serialization in key places; see [06-planning-runtime-and-draft-editor.md](06-planning-runtime-and-draft-editor.md) and [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md).
 
 ## Active Constraints
 

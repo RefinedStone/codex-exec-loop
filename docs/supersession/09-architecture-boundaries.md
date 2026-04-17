@@ -33,10 +33,14 @@ These types should stay UI-neutral and transport-neutral.
 | `GitWorkspacePort` | inspect repo state, manage branches, and manage worktrees |
 | `GithubAutomationPort` | inspect `gh` capability and run PR-oriented GitHub actions |
 | `DistributorPort` | process merge queue items and clean slots |
-| `SupersessionStatePort` | persist or reload supervisor runtime snapshots if persistence is needed |
+| `PlanningAuthorityBackend` | own repo-shared planning authority, transactional queue projection, and compatibility import/export flows |
+| `SupersessionRuntimeStatePort` | persist queue claims, slot and session projections, distributor delivery state, and runtime-domain events |
 
-Planning should not become a generic supersession service. Instead, extend the planning facade with
-an explicit completion-refresh operation that accepts agent result input and returns a fresh runtime snapshot.
+Planning should not remain a workspace-local file authority in supersession. Instead, a dedicated
+planning authority boundary should own repo-scoped planning state and expose explicit mutation,
+refresh, and export operations. The planning facade may still be the caller-facing orchestration
+surface, but it must no longer assume that the active worktree owns the authoritative planning
+files.
 
 ## New Application Services
 
@@ -78,8 +82,22 @@ Normal mode and parallel mode should have separate runtime state reducers.
 | --- | --- |
 | app-server agent adapter | launches and streams agent sessions |
 | git subprocess adapter | shells out to `git` for repo, branch, and worktree operations |
+| planning authority adapter | resolves canonical repo scope, executes transactional planning reads and writes, and manages compatibility import/export |
 | `gh` subprocess adapter | shells out to `gh` for auth, PR, and merge operations |
 | TUI supervisor adapter | maps supervisor snapshots to overlay and compact shell presentation |
+
+## Runtime Event Boundary
+
+Supersession runtime coordination should move from ad hoc file updates toward a repo-shared event
+and projection model.
+
+- append runtime-domain events for completion, refresh, queue claim, push, PR ensure, integrate,
+  cleanup, and redistribution
+- project those events into slot, session, and distributor state tables
+- make restart recovery consume the same projections instead of rebuilding from scattered files
+
+This event model is for runtime orchestration only. It is not a requirement to turn all planning
+authoring into full event sourcing.
 
 ## Existing Hotspots To Avoid Growing Further
 
@@ -96,6 +114,8 @@ Supersession should reduce pressure on these hotspots by moving logic into new s
 - [01-product-model.md](01-product-model.md)
 - [04-task-ledger-feedback-loop.md](04-task-ledger-feedback-loop.md)
 - [10-implementation-slices.md](10-implementation-slices.md)
+- [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md)
+- [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md)
 - [../design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md)
 
 ## Code Impact

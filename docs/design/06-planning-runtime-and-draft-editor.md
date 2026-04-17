@@ -79,6 +79,27 @@ This file records the active planning contract on `prerelease`.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.
 - If automation sees the same accepted queue head again, queue-driven follow-up pauses until the queue advances.
 
+## Current Limits
+
+- Active planning files are still resolved from the current workspace path, not from a canonical
+  repo-shared planning authority root.
+- `task-ledger.json` and `queue.snapshot.json` are logically coupled but are still written and
+  restored as separate filesystem artifacts.
+- Official completion refresh ordering is coordinated only inside one app process.
+- Current supersession and planning behavior should be treated as effectively single-operator and
+  single-process safe, not fully multi-client safe.
+- Detailed risk record: [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md)
+
+## Planned Authority Shift
+
+- The planned direction is to move planning authority into a repo-shared planning store under the
+  canonical repo root.
+- `directions`, task state, queue projection, and planning runtime metadata move into that store as
+  the official source of truth.
+- File artifacts become import, export, review, and compatibility surfaces rather than the runtime
+  authority.
+- Detailed redesign: [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md)
+
 ## Code Entry
 
 - Application entrypoint: `src/application/service/planning`
