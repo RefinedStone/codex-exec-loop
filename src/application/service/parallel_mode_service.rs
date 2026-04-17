@@ -2548,37 +2548,17 @@ fn build_supervisor_detail_from_context(
     mode_enabled: bool,
 ) -> ParallelModeSupervisorDetailSnapshot {
     let history = load_agent_session_detail_records(&context.pool_root);
+    let queue_records = load_distributor_queue_records(&context.pool_root);
     let empty_state = if mode_enabled {
         "no agent session history captured yet"
     } else {
         "parallel mode is off / supervisor detail is read-only"
     };
 
-    let mut active_leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
-    active_leases.sort_by(|left, right| {
-        roster_state_priority(right.state)
-            .cmp(&roster_state_priority(left.state))
-            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
-            .then_with(|| left.slot_id.cmp(&right.slot_id))
-    });
-
-    if let Some(lease) = active_leases.first() {
-        let detail = history
-            .iter()
-            .find(|detail| detail.session_key == lease_session_key(lease))
-            .cloned();
-        return ParallelModeSupervisorDetailSnapshot::new(
-            Some(build_live_session_detail(lease, detail)),
-            empty_state,
-        );
-    }
-
-    let latest_history = history.into_iter().max_by(|left, right| {
-        left.updated_at
-            .cmp(&right.updated_at)
-            .then_with(|| left.session_key.cmp(&right.session_key))
-    });
-    ParallelModeSupervisorDetailSnapshot::new(latest_history, empty_state)
+    ParallelModeSupervisorDetailSnapshot::new(
+        selected_runtime_session_detail(context, &history, &queue_records),
+        empty_state,
+    )
 }
 
 fn build_live_session_detail(
@@ -3313,10 +3293,7 @@ fn build_distributor_snapshot_from_context(
         .collect::<Vec<_>>();
     let completion_feed = build_distributor_completion_feed(&history);
 
-    if let Some(queue_head) = queue_records
-        .iter()
-        .find(|record| record.queue_state.is_active())
-    {
+    if let Some(queue_head) = active_distributor_queue_head(&queue_records) {
         return ParallelModeDistributorSnapshot::new(
             queue_items,
             completion_feed,
@@ -3325,7 +3302,7 @@ fn build_distributor_snapshot_from_context(
         );
     }
 
-    let Some(detail) = selected_distributor_detail(context, &history) else {
+    let Some(detail) = selected_runtime_session_detail(context, &history, &queue_records) else {
         return build_placeholder_distributor_snapshot(
             ParallelModeQueueItemState::Idle.label(),
             "no distributor queue items are waiting",
@@ -3356,10 +3333,26 @@ fn build_distributor_snapshot_from_context(
     ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
 }
 
-fn selected_distributor_detail(
+fn active_distributor_queue_head(
+    queue_records: &[ParallelModeDistributorQueueRecord],
+) -> Option<&ParallelModeDistributorQueueRecord> {
+    queue_records
+        .iter()
+        .find(|record| record.queue_state.is_active())
+}
+
+fn selected_runtime_session_detail(
     context: &PoolRuntimeContext,
     history: &[ParallelModeAgentSessionDetailSnapshot],
+    queue_records: &[ParallelModeDistributorQueueRecord],
 ) -> Option<ParallelModeAgentSessionDetailSnapshot> {
+    if let Some(queue_head) = active_distributor_queue_head(queue_records)
+        && let Some(detail) =
+            session_detail_for_runtime_session(context, history, &queue_head.session_key)
+    {
+        return Some(detail);
+    }
+
     let mut active_leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
     active_leases.sort_by(|left, right| {
         roster_state_priority(right.state)
@@ -3369,14 +3362,36 @@ fn selected_distributor_detail(
     });
 
     if let Some(lease) = active_leases.first() {
-        let detail = history
-            .iter()
-            .find(|detail| detail.session_key == lease_session_key(lease))
-            .cloned();
-        return Some(build_live_session_detail(lease, detail));
+        return Some(build_live_session_detail(
+            lease,
+            history
+                .iter()
+                .find(|detail| detail.session_key == lease_session_key(lease))
+                .cloned(),
+        ));
     }
 
     history.first().cloned()
+}
+
+fn session_detail_for_runtime_session(
+    context: &PoolRuntimeContext,
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+    session_key: &str,
+) -> Option<ParallelModeAgentSessionDetailSnapshot> {
+    let detail = history
+        .iter()
+        .find(|detail| detail.session_key == session_key)
+        .cloned();
+    if let Some(lease) = context
+        .slot_leases
+        .values()
+        .find(|lease| lease_session_key(lease) == session_key)
+    {
+        return Some(build_live_session_detail(lease, detail));
+    }
+
+    detail
 }
 
 fn detail_has_history_state(
@@ -4244,7 +4259,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{Arc, Mutex};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     struct TempGitRepo {
         root: PathBuf,
@@ -5112,6 +5128,89 @@ mod tests {
             )
             .as_deref(),
             Some("done")
+        );
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_prefers_active_distributor_queue_head_for_selected_detail() {
+        let repo = TempGitRepo::new("distributor-detail-selection");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let queued = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("queue-head slot lease should be acquired");
+        let queued_slot_path = PathBuf::from(queued.worktree_path.clone());
+        service
+            .record_workspace_slot_thread_prepared(&queued.worktree_path, "thread-queue")
+            .expect("queue-head thread prepared should be recorded");
+        service
+            .mark_workspace_slot_running(&queued.worktree_path)
+            .expect("queue-head slot should transition to running");
+        repo.commit_file_in_slot(&queued_slot_path, "queued.txt", "done\n", "queue head work");
+        service
+            .begin_workspace_official_completion(
+                &queued.worktree_path,
+                Some("Queued result is waiting for distributor delivery."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("queue-head official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&queued.worktree_path)
+            .expect("queue-head ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &queued.worktree_path,
+                "official ledger refresh succeeded: distributor delivery approved",
+            )
+            .expect("queue-head commit-ready should be recorded");
+        service
+            .enqueue_workspace_commit_ready_result(&queued.worktree_path)
+            .expect("queue-head result should enqueue")
+            .expect("queue-head item should be created");
+
+        thread::sleep(Duration::from_millis(10));
+
+        let running = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-2", "Task Two", "agent-2", "task-two"),
+            )
+            .expect("second slot lease should be acquired");
+        service
+            .record_workspace_slot_thread_prepared(&running.worktree_path, "thread-running")
+            .expect("second thread prepared should be recorded");
+        service
+            .mark_workspace_slot_running(&running.worktree_path)
+            .expect("second slot should transition to running");
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+        let detail = snapshot
+            .detail
+            .session
+            .as_ref()
+            .expect("selected detail should exist");
+
+        assert_eq!(snapshot.distributor.head_summary, "queued");
+        assert_eq!(snapshot.distributor.queue_depth(), 1);
+        assert_eq!(snapshot.distributor.queue_items[0].source_agent, "agent-1");
+        assert_eq!(detail.agent_id, "agent-1");
+        assert_eq!(detail.task_id, "task-1");
+        assert_eq!(detail.thread_id.as_deref(), Some("thread-queue"));
+        assert_eq!(detail.state_label, "merge_queued");
+        assert_eq!(
+            detail.distributor_outcome.as_deref(),
+            Some("distributor accepted the result and queued it for GitHub delivery")
         );
     }
 
