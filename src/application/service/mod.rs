@@ -2,6 +2,7 @@ pub mod conversation_runtime_event;
 pub mod conversation_service;
 pub mod github_review_poller_service;
 pub mod parallel_mode_service;
+pub(crate) mod parallel_mode_turn_service;
 pub mod planning;
 pub mod planning_auto_follow_copy;
 pub(crate) mod planning_bootstrap_service;

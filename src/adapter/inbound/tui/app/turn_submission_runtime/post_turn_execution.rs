@@ -1,6 +1,5 @@
-use crate::application::service::parallel_mode_service::{
-    ParallelModeOfficialCompletionReport, ParallelModeService,
-};
+use crate::application::service::parallel_mode_service::ParallelModeOfficialCompletionReport;
+use crate::application::service::parallel_mode_turn_service::ParallelModeTurnService;
 
 use crate::application::service::planning::PlanningProposalPromotionRequest;
 use crate::application::service::planning::PlanningServices;
@@ -74,7 +73,7 @@ struct PostTurnEvaluationExecution {
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
     planning: PlanningServices,
-    parallel_mode_service: ParallelModeService,
+    parallel_mode_turn_service: ParallelModeTurnService,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
 }
@@ -82,13 +81,13 @@ struct PostTurnEvaluationExecutor {
 impl PostTurnEvaluationExecutor {
     fn new(
         planning: PlanningServices,
-        parallel_mode_service: ParallelModeService,
+        parallel_mode_turn_service: ParallelModeTurnService,
         active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
         planner_worker_panel_state: PlannerWorkerPanelState,
     ) -> Self {
         Self {
             planning,
-            parallel_mode_service,
+            parallel_mode_turn_service,
             active_turn_planning_capture,
             planner_worker_panel_state,
         }
@@ -257,16 +256,13 @@ impl PostTurnEvaluationExecutor {
             "turn completed with planning file changes; protected planning files were reconciled before official refresh"
         };
 
-        match self
-            .parallel_mode_service
-            .begin_workspace_official_completion(
-                &request.workspace_directory,
-                &request.queued_from_turn_id,
-                request.official_completion_refresh_order,
-                latest_main_reply,
-                Some(validation_summary),
-                None,
-            ) {
+        match self.parallel_mode_turn_service.begin_official_completion(
+            &request.workspace_directory,
+            &request.queued_from_turn_id,
+            request.official_completion_refresh_order,
+            latest_main_reply,
+            Some(validation_summary),
+        ) {
             Ok(report) => report,
             Err(error) => {
                 self.record_planner_worker_failure(
@@ -301,12 +297,8 @@ impl PostTurnEvaluationExecutor {
         {
             let failure_detail =
                 "official completion refresh is blocked because planning mode is off";
-            let _ = self
-                .parallel_mode_service
-                .mark_workspace_official_completion_failed(
-                    &request.workspace_directory,
-                    failure_detail,
-                );
+            self.parallel_mode_turn_service
+                .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot = self
                 .official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
             self.record_planner_worker_failure(
@@ -327,12 +319,8 @@ impl PostTurnEvaluationExecutor {
             let failure_detail = planning_workspace_snapshot.preview_detail().unwrap_or(
                 "official completion refresh is blocked because the planning workspace is unavailable",
             );
-            let _ = self
-                .parallel_mode_service
-                .mark_workspace_official_completion_failed(
-                    &request.workspace_directory,
-                    failure_detail,
-                );
+            self.parallel_mode_turn_service
+                .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot = self
                 .official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
             self.record_planner_worker_failure(
@@ -346,9 +334,8 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        let _ = self
-            .parallel_mode_service
-            .mark_workspace_official_completion_refreshing(&request.workspace_directory);
+        self.parallel_mode_turn_service
+            .mark_official_completion_refreshing(&request.workspace_directory);
         let latest_main_reply = conversation
             .latest_agent_message_text()
             .map(str::trim)
@@ -379,12 +366,8 @@ impl PostTurnEvaluationExecutor {
             Ok(outcome) => outcome,
             Err(error) => {
                 let detail = format!("official completion refresh failed: {error}");
-                let _ = self
-                    .parallel_mode_service
-                    .mark_workspace_official_completion_failed(
-                        &request.workspace_directory,
-                        &detail,
-                    );
+                self.parallel_mode_turn_service
+                    .mark_official_completion_failed(&request.workspace_directory, &detail);
                 let failure_snapshot = self
                     .official_completion_failure_snapshot(&planning_workspace_snapshot, &detail);
                 self.record_planner_worker_failure(
@@ -430,12 +413,8 @@ impl PostTurnEvaluationExecutor {
             let failure_detail = runtime_snapshot
                 .preview_detail()
                 .unwrap_or(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON);
-            let _ = self
-                .parallel_mode_service
-                .mark_workspace_official_completion_failed(
-                    &request.workspace_directory,
-                    failure_detail,
-                );
+            self.parallel_mode_turn_service
+                .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot =
                 self.official_completion_failure_snapshot(&runtime_snapshot, failure_detail);
             self.record_planner_worker_failure(
@@ -454,11 +433,12 @@ impl PostTurnEvaluationExecutor {
             .as_deref()
             .map(|summary| format!("official ledger refresh succeeded: {summary}"))
             .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
-        let _ = self
-            .parallel_mode_service
-            .mark_workspace_commit_ready(&request.workspace_directory, &ledger_refresh_outcome);
-        let runtime_notices =
-            self.finalize_commit_ready_distributor_delivery(&request.workspace_directory);
+        let runtime_notices = self
+            .parallel_mode_turn_service
+            .finalize_official_completion_success(
+                &request.workspace_directory,
+                &ledger_refresh_outcome,
+            );
 
         OfficialCompletionRefreshOutcome {
             runtime_snapshot,
@@ -569,39 +549,6 @@ impl PostTurnEvaluationExecutor {
             failure_detail
         };
         current_snapshot.with_auto_followup_pause_reason(detail.to_string())
-    }
-
-    fn finalize_commit_ready_distributor_delivery(&self, workspace_directory: &str) -> Vec<String> {
-        let mut notices = Vec::new();
-        match self
-            .parallel_mode_service
-            .enqueue_workspace_commit_ready_result(workspace_directory)
-        {
-            Ok(Some(item)) => notices.push(format!(
-                "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
-                item.source_agent,
-                item.task_title,
-                item.queue_state.label()
-            )),
-            Ok(None) => {}
-            Err(error) => {
-                notices.push(format!(
-                    "distributor enqueue failed after official refresh: {error}"
-                ));
-                return notices;
-            }
-        }
-        match self
-            .parallel_mode_service
-            .process_distributor_queue(workspace_directory)
-        {
-            Ok(mut delivery_notices) => notices.append(&mut delivery_notices),
-            Err(error) => notices.push(format!(
-                "distributor delivery failed after official refresh: {error}"
-            )),
-        }
-
-        notices
     }
 
     fn run_builtin_next_task_refresh(
@@ -928,14 +875,13 @@ impl NativeTuiApp {
             return;
         };
         request.official_completion_refresh_order = self
-            .parallel_mode_service
-            .reserve_workspace_official_completion_refresh_order(&request.workspace_directory)
-            .unwrap_or(None);
+            .parallel_mode_turn_service()
+            .reserve_official_completion_refresh_order(&request.workspace_directory);
 
         self.mark_post_turn_evaluation_running(&conversation, &request);
         let executor = PostTurnEvaluationExecutor::new(
             self.planning.clone(),
-            self.parallel_mode_service.clone(),
+            self.parallel_mode_turn_service(),
             self.active_turn_planning_capture.take(),
             self.planner_worker_panel_state.clone(),
         );

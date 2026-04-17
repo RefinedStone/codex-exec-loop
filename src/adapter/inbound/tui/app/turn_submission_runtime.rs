@@ -3,6 +3,7 @@ mod post_turn_execution;
 #[path = "turn_submission_runtime/stream_execution.rs"]
 mod stream_execution;
 
+use crate::application::service::parallel_mode_turn_service::ParallelModeTurnService;
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };
@@ -20,6 +21,10 @@ use super::{
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
 
 impl NativeTuiApp {
+    fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
+        ParallelModeTurnService::new(self.parallel_mode_service.clone())
+    }
+
     pub(super) fn start_turn_submission(&mut self) {
         let inline_command = match &self.conversation_state {
             ConversationState::Ready(conversation) => {
