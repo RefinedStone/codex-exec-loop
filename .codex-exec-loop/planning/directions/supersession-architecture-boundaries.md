@@ -21,7 +21,7 @@ GitHub automation, while keeping planning authority behind the existing planning
 ## Near-term bias
 
 - extract only the seams needed by the first five supersession directions
-- reuse hidden planning worker and planning runtime services through explicit facade extensions
+- reuse hidden planning worker and planning runtime services through explicit facade seams
 - keep refactors tied to visible supersession behavior, not abstract cleanup
 
 ## Relevant inputs

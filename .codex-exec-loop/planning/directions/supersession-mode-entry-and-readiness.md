@@ -21,7 +21,7 @@ whether it can become a control tower in the current workspace and explain that 
 ## Near-term bias
 
 - land capability detection and mode routing before agent launch
-- make readiness copy explicit before adding richer interactions
+- keep degraded-state copy explicit and recoverable from the first slice
 - keep normal-mode session browsing intact while parallel mode is off
 
 ## Relevant inputs

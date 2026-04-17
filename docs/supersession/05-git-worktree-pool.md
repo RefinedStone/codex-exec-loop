@@ -57,7 +57,7 @@ Parallel mode enable must reconcile the pool:
 6. mark inconsistent slots `blocked` instead of silently reusing them
 
 If the configured pool root is absent, supervisor computes the default root from the canonical repo
-root and repo-name hash before step 2.
+root and repo-root hash before step 2.
 
 ## Branch Rules
 

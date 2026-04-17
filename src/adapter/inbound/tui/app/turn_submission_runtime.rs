@@ -334,12 +334,10 @@ fn parallel_mode_slot_lease_request(
 ) -> ParallelModeSlotLeaseRequest {
     let task_id = handoff_task.task_id.trim();
     let task_title = handoff_task.task_title.trim();
-    let task_slug = sanitize_parallel_mode_identifier(task_id)
-        .or_else(|| sanitize_parallel_mode_identifier(task_title))
-        .unwrap_or_else(|| "task".to_string());
-    let agent_slug = sanitize_parallel_mode_identifier(task_id)
-        .or_else(|| sanitize_parallel_mode_identifier(task_title))
-        .unwrap_or_else(|| "agent".to_string());
+    let common_slug = sanitize_parallel_mode_identifier(task_id)
+        .or_else(|| sanitize_parallel_mode_identifier(task_title));
+    let task_slug = common_slug.clone().unwrap_or_else(|| "task".to_string());
+    let agent_slug = common_slug.unwrap_or_else(|| "agent".to_string());
 
     ParallelModeSlotLeaseRequest::new(
         task_id,

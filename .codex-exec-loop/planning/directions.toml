@@ -60,7 +60,7 @@ id = "supersession-git-worktree-pool"
 title = "Supersession git worktree pool"
 summary = "Manage `akra pool` as a collision-resistant set of git worktree slots that can be leased to agent sessions and returned only after clean `akra` reconcile."
 success_criteria = [
-    "The pool reconciles a default of three slots with explicit idle, leased, running, awaiting-cleanup, blocked, and missing states.",
+    "The pool reconciles a default of three slots with explicit idle, leased, running, awaiting cleanup, blocked, or missing states.",
     "Default pool roots avoid collisions between same-name sibling clones by incorporating stable repo-root identity.",
     "No new agent is launched when capacity is exhausted or a slot has not returned to clean `akra` state.",
 ]

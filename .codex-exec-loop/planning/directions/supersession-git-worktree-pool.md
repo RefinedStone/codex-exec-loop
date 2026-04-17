@@ -21,7 +21,7 @@ than implementation detail.
 ## Near-term bias
 
 - land slot reconcile and cleanliness checks before broader scaling behavior
-- keep default pool root collision-resistant for sibling clones
+- keep slot identity and worktree-root naming deterministic and collision-resistant
 - make `cleanup_pending` and blocked-slot recovery first-class
 
 ## Relevant inputs

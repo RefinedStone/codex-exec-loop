@@ -1252,7 +1252,7 @@ fn resolve_workspace_slot_lease(
 ) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
     let context =
         load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
-    let workspace_path = canonicalize_best_effort(Path::new(workspace_dir));
+    let workspace_path = canonicalize_best_effort(Path::new(&context.repo_root));
     let Some(current_branch) = current_branch_name(&workspace_path) else {
         return Err(format!(
             "workspace `{}` does not currently resolve to a branch",
@@ -1300,8 +1300,8 @@ fn load_pool_runtime_context_from_roots(
     repo_root: &str,
     canonical_repo_root: &Path,
 ) -> Result<PoolRuntimeContext, &'static str> {
-    let Some(akra_head) = resolve_branch_head(repo_root, AKRA_BRANCH) else {
-        return Err("`akra` is unavailable during inspection");
+    let Some(akra_head) = resolve_akra_baseline_head(repo_root) else {
+        return Err("`akra` baseline is unavailable during inspection");
     };
     let Some(worktree_records) = load_worktree_records(repo_root) else {
         return Err("worktree list inspection failed");
@@ -1415,7 +1415,9 @@ fn cleanup_reusable_slots(
         }
         let slot_lease = slot_leases.get(&slot_id);
         let cleanup_ready = match slot_lease.map(|lease| lease.state) {
-            Some(ParallelModeSlotLeaseState::CleanupPending) => true,
+            Some(ParallelModeSlotLeaseState::CleanupPending) => {
+                branch_is_cleanup_ready(repo_root, branch_name)
+            }
             Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running) => false,
             None => {
                 inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
@@ -1893,13 +1895,13 @@ fn pool_operator_recovery_notice(pool: &ParallelModePoolBoardSnapshot) -> Option
 }
 
 fn detect_canonical_repo_root(workspace_dir: &str) -> Option<PathBuf> {
-    let repo_root = detect_git_repo_root(workspace_dir)?;
+    detect_git_repo_root(workspace_dir)?;
     let common_dir = run_command(
         "git",
         ["-C", workspace_dir, "rev-parse", "--git-common-dir"],
         None,
     )?;
-    let common_dir_path = absolutize_path(Path::new(&repo_root), Path::new(&common_dir));
+    let common_dir_path = absolutize_path(Path::new(workspace_dir), Path::new(&common_dir));
     let canonical_repo_root = common_dir_path.parent()?;
 
     fs::canonicalize(canonical_repo_root)
@@ -1941,6 +1943,18 @@ fn stable_short_hash(value: &str) -> String {
     }
 
     format!("{hash:016x}")[..12].to_string()
+}
+
+fn resolve_akra_baseline_head(repo_root: &str) -> Option<String> {
+    resolve_branch_head(repo_root, AKRA_BRANCH)
+        .or_else(|| resolve_branch_head(repo_root, "refs/remotes/origin/akra"))
+        .or_else(|| {
+            run_command(
+                "git",
+                ["-C", repo_root, "rev-parse", "--verify", "HEAD"],
+                None,
+            )
+        })
 }
 
 fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {
@@ -2960,9 +2974,10 @@ mod tests {
         DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
         ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
         ParallelModeService, ParallelModeSupervisorState, build_pool_board,
-        derive_default_pool_root, derive_readiness, inspect_planning, lease_session_key,
-        parse_https_remote, read_agent_session_detail_record, reconcile_pool_board, run_command,
-        short_sha, slot_id, slot_lease_file_path,
+        derive_default_pool_root, derive_readiness, detect_canonical_repo_root, inspect_planning,
+        lease_session_key, parse_https_remote, read_agent_session_detail_record,
+        reconcile_pool_board, resolve_workspace_slot_lease, run_command, short_sha, slot_id,
+        slot_lease_file_path,
     };
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
@@ -3112,6 +3127,29 @@ mod tests {
                 .status()
                 .expect("git show-ref should spawn");
             output.success()
+        }
+
+        fn head_sha(&self) -> String {
+            run_command(
+                "git",
+                [
+                    "-C",
+                    self.repo_root
+                        .to_str()
+                        .expect("repo root should be valid utf-8"),
+                    "rev-parse",
+                    "HEAD",
+                ],
+                None,
+            )
+            .expect("head sha should resolve")
+        }
+
+        fn set_remote_tracking_branch(&self, branch_name: &str, target: &str) {
+            run_git(
+                &self.repo_root,
+                &["update-ref", &format!("refs/remotes/{branch_name}"), target],
+            );
         }
     }
 
@@ -4631,6 +4669,46 @@ mod tests {
     }
 
     #[test]
+    fn build_pool_board_uses_remote_akra_when_local_branch_is_missing() {
+        let repo = TempGitRepo::new("remote-akra");
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+        let head_sha = repo.head_sha();
+        repo.delete_local_akra_branch();
+        repo.set_remote_tracking_branch("origin/akra", &head_sha);
+
+        let pool = build_pool_board(&repo.workspace_dir(), Some(&readiness));
+
+        assert_eq!(pool.blocked_slots, 0);
+        assert_eq!(pool.missing_slots, DEFAULT_POOL_SIZE);
+        assert!(
+            pool.reconcile_status.contains("missing"),
+            "unexpected reconcile status: {}",
+            pool.reconcile_status
+        );
+    }
+
+    #[test]
+    fn detect_canonical_repo_root_uses_workspace_relative_common_dir() {
+        let repo = TempGitRepo::new("canonical-root");
+        let nested_workspace = repo.repo_root.join("nested").join("deeper");
+        fs::create_dir_all(&nested_workspace).expect("nested workspace should exist");
+
+        let canonical_repo_root =
+            detect_canonical_repo_root(nested_workspace.to_str().expect("valid nested path"))
+                .expect("canonical repo root should resolve");
+
+        assert_eq!(
+            canonical_repo_root,
+            fs::canonicalize(&repo.repo_root).expect("repo root should canonicalize")
+        );
+    }
+
+    #[test]
     fn reconcile_cleans_merged_agent_slot_back_to_idle() {
         let repo = TempGitRepo::new("cleanup-execution");
         let service = ParallelModeService::new();
@@ -4753,6 +4831,34 @@ mod tests {
         assert_eq!(running_lease.state, ParallelModeSlotLeaseState::Running);
         assert_eq!(persisted.state, ParallelModeSlotLeaseState::Running);
         assert!(persisted.running_started_at.is_some());
+    }
+
+    #[test]
+    fn resolve_workspace_slot_lease_matches_nested_worktree_directory() {
+        let repo = TempGitRepo::new("nested-worktree-resolution");
+        let service = ParallelModeService::new();
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let nested_workspace = PathBuf::from(&lease.worktree_path).join("nested");
+        fs::create_dir_all(&nested_workspace).expect("nested worktree directory should exist");
+
+        let resolution = resolve_workspace_slot_lease(
+            nested_workspace
+                .to_str()
+                .expect("nested workspace should be valid utf-8"),
+        )
+        .expect("workspace lease lookup should succeed")
+        .expect("workspace lease should resolve");
+
+        assert_eq!(resolution.lease.slot_id, lease.slot_id);
+        assert_eq!(
+            resolution.workspace_path,
+            fs::canonicalize(&lease.worktree_path).expect("slot worktree should canonicalize")
+        );
     }
 
     #[test]
@@ -4975,5 +5081,44 @@ mod tests {
             ParallelModePoolSlotState::AwaitingCleanup
         );
         assert_eq!(pool.slots[0].owner_label, "agent-1 / task-1");
+    }
+
+    #[test]
+    fn reconcile_does_not_cleanup_pending_slot_with_new_unintegrated_commit() {
+        let repo = TempGitRepo::new("cleanup-pending-reverify");
+        let service = ParallelModeService::new();
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(&lease.worktree_path);
+        let branch_name = lease.branch_name.clone();
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot should enter running state");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        repo.merge_agent_slot_into_akra(&slot_path);
+        service
+            .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot should enter cleanup pending");
+        repo.commit_file_in_slot(
+            &slot_path,
+            "late-change.txt",
+            "late work\n",
+            "late cleanup pending change",
+        );
+
+        let pool = reconcile_pool_board(&repo.workspace_dir());
+        let slot = pool
+            .slots
+            .iter()
+            .find(|slot| slot.slot_id == lease.slot_id)
+            .expect("slot should be present");
+
+        assert!(repo.branch_exists(&branch_name));
+        assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
+        assert!(repo.slot_lease_path(1).exists());
     }
 }

@@ -22,7 +22,7 @@ advances. That contract should drive implementation work instead of being inferr
 
 - land the local queue-state model and queue-head handling before full GitHub automation breadth
 - keep rebase conflict handling explicit and operator-recoverable
-- make slot return depend on cleanup success, not just merge success
+- make slot return depend on cleanup success, and keep cleanup tied to distributor ownership
 
 ## Relevant inputs
 

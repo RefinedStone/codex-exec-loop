@@ -23,6 +23,7 @@ becomes official queue state for the next assignment.
 - make the completion payload and serialized refresh contract explicit before adding more agents
 - keep official assignment blocked until ledger refresh finishes
 - treat planning invalidity as a supersession blocker, not a silent background issue
+- prefer explicit reported-versus-official state over inferred completion
 
 ## Relevant inputs
 
