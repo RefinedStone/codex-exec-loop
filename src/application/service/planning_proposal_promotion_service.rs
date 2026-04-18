@@ -6,11 +6,9 @@ use chrono::{SecondsFormat, Utc};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning_prompt_service::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
-use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
 use crate::application::service::planning_validation_service::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
@@ -36,7 +34,6 @@ pub struct PlanningProposalPromotionOutcome {
 pub struct PlanningProposalPromotionService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_prompt_service: PlanningPromptService,
-    planning_reconciliation_service: PlanningReconciliationService,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
 }
@@ -45,14 +42,12 @@ impl PlanningProposalPromotionService {
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_prompt_service: PlanningPromptService,
-        planning_reconciliation_service: PlanningReconciliationService,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
         Self {
             planning_workspace_port,
             planning_prompt_service,
-            planning_reconciliation_service,
             planning_validation_service,
             priority_queue_service,
         }
@@ -81,9 +76,6 @@ impl PlanningProposalPromotionService {
             });
         }
 
-        let execution_snapshot = self
-            .planning_reconciliation_service
-            .load_execution_snapshot(request.workspace_directory)?;
         let top_proposal = queue_snapshot
             .proposed_tasks
             .into_iter()
@@ -105,30 +97,22 @@ impl PlanningProposalPromotionService {
         promoted_task.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
         let next_task_ledger = serde_json::to_string_pretty(&task_ledger)?;
+        let next_queue_snapshot = self
+            .priority_queue_service
+            .build_snapshot(&directions, &task_ledger)?;
+        let next_queue_snapshot_json = serde_json::to_string_pretty(&next_queue_snapshot)?;
+        let mut committed_record = workspace_record.clone();
+        committed_record.task_ledger_json = Some(next_task_ledger);
+        committed_record.queue_snapshot_json = Some(next_queue_snapshot_json);
         self.planning_workspace_port
-            .replace_planning_workspace_file(
-                request.workspace_directory,
-                TASK_LEDGER_FILE_PATH,
-                Some(next_task_ledger.as_str()),
-            )?;
+            .commit_planning_workspace_files(request.workspace_directory, &committed_record)?;
 
-        let reconciliation_result = self.planning_reconciliation_service.reconcile_after_turn(
-            request.workspace_directory,
-            &format!("proposal-promotion-{}", request.root_turn_id),
-            &[TASK_LEDGER_FILE_PATH.to_string()],
-            &execution_snapshot,
-        )?;
-
-        let runtime_snapshot =
-            if let Some(block_reason) = reconciliation_result.auto_followup_block_reason.clone() {
-                PlanningRuntimeSnapshot::invalid(block_reason)
-            } else {
-                self.planning_prompt_service
-                    .load_runtime_snapshot(request.workspace_directory)?
-            };
+        let runtime_snapshot = self
+            .planning_prompt_service
+            .load_runtime_snapshot(request.workspace_directory)?;
 
         let promoted_task_title = top_proposal.task_title.trim().to_string();
-        let mut notices = reconciliation_result.notices;
+        let mut notices = Vec::new();
         notices.push(format!(
             "host promoted top follow-up proposal into the executable queue: {}",
             promoted_task_title
@@ -217,7 +201,6 @@ mod tests {
     };
     use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
     use crate::application::service::planning_prompt_service::PlanningPromptService;
-    use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
@@ -273,16 +256,9 @@ mod tests {
             validation_service.clone(),
             priority_queue_service.clone(),
         );
-        let planning_reconciliation_service = PlanningReconciliationService::new(
-            workspace_port.clone(),
-            validation_service.clone(),
-            priority_queue_service.clone(),
-        );
-
         PlanningProposalPromotionService::new(
             workspace_port,
             planning_prompt_service,
-            planning_reconciliation_service,
             validation_service,
             priority_queue_service,
         )

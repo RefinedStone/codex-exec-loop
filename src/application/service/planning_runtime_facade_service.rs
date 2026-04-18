@@ -327,9 +327,7 @@ mod tests {
     };
     use crate::application::service::planning_prompt_service::PlanningPromptService;
     use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_policy_service::{
-        PlanningAutoFollowBlockReason, PlanningRuntimePolicyService,
-    };
+    use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
     use crate::application::service::planning_validation_service::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
@@ -384,6 +382,21 @@ mod tests {
                 (Some(record), None) => Ok(record.clone()),
                 (None, None) => Ok(PlanningWorkspaceLoadRecord::default()),
             }
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            self.load_planning_workspace_files(workspace_dir)
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            _record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            Err(anyhow!("unused in test"))
         }
 
         fn load_optional_planning_file(

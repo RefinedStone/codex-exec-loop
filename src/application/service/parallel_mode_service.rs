@@ -3,10 +3,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use chrono::Utc;
 
+use crate::adapter::outbound::github_automation_adapter::GithubAutomationAdapter;
 use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -121,11 +122,6 @@ struct WorkspaceSlotLeaseResolution {
     workspace_path: PathBuf,
 }
 
-#[derive(Debug, Default)]
-struct OfficialCompletionRefreshOrderState {
-    next_refresh_order_by_repo: BTreeMap<String, u64>,
-}
-
 pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefreshContract;
 
 #[derive(Clone)]
@@ -133,7 +129,6 @@ pub struct ParallelModeService {
     distributor_service: ParallelModeDistributorService,
     supervisor_service: ParallelModeSupervisorService,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
-    official_completion_refresh_orders: Arc<Mutex<OfficialCompletionRefreshOrderState>>,
 }
 
 impl std::fmt::Debug for ParallelModeService {
@@ -152,26 +147,28 @@ impl Default for ParallelModeService {
 
 impl ParallelModeService {
     pub fn new() -> Self {
+        let planning_authority: Arc<dyn PlanningAuthorityPort> =
+            Arc::new(SqlitePlanningAuthorityAdapter::new());
         Self {
-            distributor_service: ParallelModeDistributorService::new(),
+            distributor_service: ParallelModeDistributorService::with_planning_authority(
+                Arc::new(GithubAutomationAdapter::new()),
+                planning_authority.clone(),
+            ),
             supervisor_service: ParallelModeSupervisorService::new(),
-            planning_authority: Arc::new(SqlitePlanningAuthorityAdapter::new()),
-            official_completion_refresh_orders: Arc::new(Mutex::new(
-                OfficialCompletionRefreshOrderState::default(),
-            )),
+            planning_authority,
         }
     }
 
     pub fn with_github_automation(github_automation: Arc<dyn GithubAutomationPort>) -> Self {
+        let planning_authority: Arc<dyn PlanningAuthorityPort> =
+            Arc::new(SqlitePlanningAuthorityAdapter::new());
         Self {
-            distributor_service: ParallelModeDistributorService::with_github_automation(
+            distributor_service: ParallelModeDistributorService::with_planning_authority(
                 github_automation,
+                planning_authority.clone(),
             ),
             supervisor_service: ParallelModeSupervisorService::new(),
-            planning_authority: Arc::new(SqlitePlanningAuthorityAdapter::new()),
-            official_completion_refresh_orders: Arc::new(Mutex::new(
-                OfficialCompletionRefreshOrderState::default(),
-            )),
+            planning_authority,
         }
     }
 
@@ -186,8 +183,10 @@ impl ParallelModeService {
             return Ok(None);
         }
 
-        self.allocate_official_completion_refresh_order(&resolution)
+        self.planning_authority
+            .reserve_next_official_refresh_order(&resolution.lease.worktree_path)
             .map(Some)
+            .map_err(|error| error.to_string())
     }
 
     pub fn inspect_readiness(
@@ -568,7 +567,11 @@ impl ParallelModeService {
         let completed_at = current_timestamp();
         let refresh_order = official_completion_refresh_order
             .map(Ok)
-            .unwrap_or_else(|| self.allocate_official_completion_refresh_order(&resolution))?;
+            .unwrap_or_else(|| {
+                self.planning_authority
+                    .reserve_next_official_refresh_order(&resolution.lease.worktree_path)
+                    .map_err(|error| error.to_string())
+            })?;
         let final_response_text = normalized_optional_text(final_response_text).map(str::to_string);
         let validation_summary = normalized_optional_text(validation_summary)
             .unwrap_or("validation status was not reported by runtime")
@@ -605,28 +608,6 @@ impl ParallelModeService {
                 completed_at,
             ),
         )))
-    }
-
-    fn allocate_official_completion_refresh_order(
-        &self,
-        resolution: &WorkspaceSlotLeaseResolution,
-    ) -> Result<u64, String> {
-        let mut state = self
-            .official_completion_refresh_orders
-            .lock()
-            .map_err(|_| "official completion refresh order mutex was poisoned".to_string())?;
-        let refresh_scope_key = resolution
-            .context
-            .canonical_repo_root
-            .to_string_lossy()
-            .to_string();
-        let next_refresh_order = state
-            .next_refresh_order_by_repo
-            .entry(refresh_scope_key)
-            .or_insert(1);
-        let refresh_order = *next_refresh_order;
-        *next_refresh_order += 1;
-        Ok(refresh_order)
     }
 
     pub fn mark_workspace_official_completion_refreshing(
