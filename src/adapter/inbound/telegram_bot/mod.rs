@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -18,7 +19,7 @@ use crate::application::service::planning::{
 const DEFAULT_POLL_TIMEOUT_SECONDS: u16 = 30;
 const DEFAULT_POLL_LIMIT: u8 = 100;
 const DEFAULT_FAILURE_BACKOFF: Duration = Duration::from_secs(2);
-const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nEnv: AKRA_TELEGRAM_BOT_TOKEN, AKRA_TELEGRAM_ALLOWED_CHAT_IDS=123,456";
+const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nAlias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nEnv: AKRA_TELEGRAM_BOT_TOKEN, AKRA_TELEGRAM_ALLOWED_CHAT_IDS=123,456\nConfig: $XDG_CONFIG_HOME/akra/telegram.env or ~/.config/akra/telegram.env";
 
 #[derive(Debug, Clone)]
 struct TelegramBotArgs {
@@ -60,7 +61,7 @@ where
         args.drop_pending_updates,
         DEFAULT_FAILURE_BACKOFF,
     );
-    println!("telegram bot control listening for workspace {workspace_dir}");
+    println!("telegram bot control listening for local workspace {workspace_dir}");
     runner.run()
 }
 
@@ -135,12 +136,100 @@ where
 }
 
 fn load_environment() -> Result<TelegramBotEnvironment> {
-    Ok(TelegramBotEnvironment {
-        token: std::env::var("AKRA_TELEGRAM_BOT_TOKEN").ok(),
-        allowed_chat_ids: parse_allowed_chat_ids(
-            std::env::var("AKRA_TELEGRAM_ALLOWED_CHAT_IDS").ok(),
-        )?,
-    })
+    let config_body = default_telegram_env_file_path()
+        .map(|path| {
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("failed to read Telegram config file {}", path.display()))
+        })
+        .transpose()?;
+
+    load_environment_from_sources(
+        config_body.as_deref(),
+        std::env::var("AKRA_TELEGRAM_BOT_TOKEN").ok(),
+        std::env::var("AKRA_TELEGRAM_ALLOWED_CHAT_IDS").ok(),
+    )
+}
+
+fn load_environment_from_sources(
+    config_body: Option<&str>,
+    token: Option<String>,
+    allowed_chat_ids: Option<String>,
+) -> Result<TelegramBotEnvironment> {
+    let mut environment = TelegramBotEnvironment::default();
+
+    if let Some(config_body) = config_body {
+        apply_environment_file(&mut environment, config_body)?;
+    }
+    if let Some(token) = token {
+        environment.token = Some(token);
+    }
+    if allowed_chat_ids.is_some() {
+        environment.allowed_chat_ids = parse_allowed_chat_ids(allowed_chat_ids)?;
+    }
+
+    Ok(environment)
+}
+
+fn default_telegram_env_file_path() -> Option<PathBuf> {
+    let base_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|home| home.join(".config"))
+        })?;
+    let path = base_dir.join("akra/telegram.env");
+    path.is_file().then_some(path)
+}
+
+fn apply_environment_file(environment: &mut TelegramBotEnvironment, body: &str) -> Result<()> {
+    for (line_number, raw_line) in body.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let (key, raw_value) = line.split_once('=').ok_or_else(|| {
+            anyhow!(
+                "invalid Telegram config entry on line {}: expected KEY=VALUE",
+                line_number + 1
+            )
+        })?;
+        let value = trim_optional_quotes(raw_value.trim());
+
+        match key.trim() {
+            "AKRA_TELEGRAM_BOT_TOKEN" => {
+                environment.token = Some(value.to_string());
+            }
+            "AKRA_TELEGRAM_ALLOWED_CHAT_IDS" => {
+                environment.allowed_chat_ids = parse_allowed_chat_ids(Some(value.to_string()))?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn trim_optional_quotes(value: &str) -> &str {
+    if value.len() >= 2 {
+        if let Some(stripped) = value
+            .strip_prefix('"')
+            .and_then(|inner| inner.strip_suffix('"'))
+        {
+            return stripped;
+        }
+        if let Some(stripped) = value
+            .strip_prefix('\'')
+            .and_then(|inner| inner.strip_suffix('\''))
+        {
+            return stripped;
+        }
+    }
+    value
 }
 
 fn parse_allowed_chat_ids(raw: Option<String>) -> Result<BTreeSet<i64>> {
@@ -533,7 +622,8 @@ mod tests {
 
     use super::{
         TelegramBotEnvironment, TelegramBotPolicy, TelegramBotRunner, TelegramInboundCommand,
-        TelegramParsedMessage, parse_args_with_environment, parse_message,
+        TelegramParsedMessage, apply_environment_file, load_environment_from_sources,
+        parse_args_with_environment, parse_message,
     };
     use crate::application::port::outbound::telegram_bot_port::{
         TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
@@ -793,6 +883,43 @@ mod tests {
         assert!(args.allowed_chat_ids.contains(&12));
         assert_eq!(args.poll_timeout_seconds, 45);
         assert!(args.drop_pending_updates);
+    }
+
+    #[test]
+    fn load_environment_from_sources_merges_config_file_and_process_env() {
+        let environment = load_environment_from_sources(
+            Some(
+                r#"
+                AKRA_TELEGRAM_BOT_TOKEN=config-token
+                AKRA_TELEGRAM_ALLOWED_CHAT_IDS=10,11
+                "#,
+            ),
+            Some("env-token".to_string()),
+            Some("12,13".to_string()),
+        )
+        .expect("environment should load");
+
+        assert_eq!(environment.token.as_deref(), Some("env-token"));
+        assert_eq!(environment.allowed_chat_ids, [12, 13].into_iter().collect());
+    }
+
+    #[test]
+    fn apply_environment_file_reads_token_and_allowlist() {
+        let mut environment = TelegramBotEnvironment::default();
+
+        apply_environment_file(
+            &mut environment,
+            r#"
+            # local bot config
+            export AKRA_TELEGRAM_BOT_TOKEN="stored-token"
+            AKRA_TELEGRAM_ALLOWED_CHAT_IDS='10,11'
+            UNUSED_KEY=ignored
+            "#,
+        )
+        .expect("config file should parse");
+
+        assert_eq!(environment.token.as_deref(), Some("stored-token"));
+        assert_eq!(environment.allowed_chat_ids, [10, 11].into_iter().collect());
     }
 
     #[test]

@@ -11,11 +11,13 @@ use crate::application::service::planning::{
     PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
 };
 
-const ADMIN_SERVER_USAGE: &str = "Usage: akra admin-server [--port <port>]";
+const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
+const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
-const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
+const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
+const TELEGRAM_BOT_ALIAS_USAGE: &str = "Alias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoctorReport {
@@ -159,20 +161,18 @@ where
         [] => Ok(None),
         [flag] if is_help_flag(flag) => {
             writeln!(stdout, "{ADMIN_SERVER_USAGE}")?;
+            writeln!(stdout, "{ADMIN_SERVER_ALIAS_USAGE}")?;
             writeln!(stdout, "{TELEGRAM_BOT_USAGE}")?;
+            writeln!(stdout, "{TELEGRAM_BOT_ALIAS_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
             Ok(Some(0))
         }
-        [command] if command == OsStr::new("admin-server") => Ok(Some(run_admin_server(&[])?)),
-        [command, rest @ ..] if command == OsStr::new("admin-server") => {
-            Ok(Some(run_admin_server(rest)?))
-        }
-        [command] if command == OsStr::new("telegram-bot") => Ok(Some(run_telegram_bot(&[])?)),
-        [command, rest @ ..] if command == OsStr::new("telegram-bot") => {
-            Ok(Some(run_telegram_bot(rest)?))
-        }
+        [command] if is_admin_command(command) => Ok(Some(run_admin_server(&[])?)),
+        [command, rest @ ..] if is_admin_command(command) => Ok(Some(run_admin_server(rest)?)),
+        [command] if is_telegram_command(command) => Ok(Some(run_telegram_bot(&[])?)),
+        [command, rest @ ..] if is_telegram_command(command) => Ok(Some(run_telegram_bot(rest)?)),
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
             Ok(Some(run_doctor(Some(workspace.as_os_str()), stdout)?))
@@ -206,6 +206,14 @@ where
 
 fn is_help_flag(flag: &OsStr) -> bool {
     matches!(flag.to_str(), Some("-h" | "--help"))
+}
+
+fn is_admin_command(command: &OsStr) -> bool {
+    matches!(command.to_str(), Some("admin" | "admin-server"))
+}
+
+fn is_telegram_command(command: &OsStr) -> bool {
+    matches!(command.to_str(), Some("telegram" | "telegram-bot"))
 }
 
 fn run_admin_server(args: &[OsString]) -> Result<i32> {
@@ -561,7 +569,8 @@ mod tests {
         let output = String::from_utf8(stdout).expect("help output should be valid utf-8");
 
         assert_eq!(exit_code, 0);
-        assert!(output.contains("Usage: akra admin-server [--port <port>]"));
+        assert!(output.contains("Usage: akra admin [--port <port>]"));
+        assert!(output.contains("Alias: akra admin-server [--port <port>]"));
     }
 
     #[test]
@@ -574,7 +583,8 @@ mod tests {
         let output = String::from_utf8(stdout).expect("help output should be valid utf-8");
 
         assert_eq!(exit_code, 0);
-        assert!(output.contains("Usage: akra telegram-bot"));
+        assert!(output.contains("Usage: akra telegram"));
+        assert!(output.contains("Alias: akra telegram-bot"));
     }
 
     #[test]

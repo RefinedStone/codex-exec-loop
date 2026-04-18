@@ -22,7 +22,7 @@ use crate::application::service::planning::{
     PlanningAdminOverview, PlanningAdminSessionView, PlanningResetTarget,
 };
 
-const DEFAULT_PORT: u16 = 4422;
+const DEFAULT_PORT: u16 = 18442;
 const CSRF_COOKIE_NAME: &str = "akra_admin_csrf";
 
 #[derive(Clone)]
@@ -198,7 +198,7 @@ where
         .await
         .with_context(|| format!("failed to bind admin server on 127.0.0.1:{}", args.port))?;
     println!(
-        "planning admin server listening on http://127.0.0.1:{}",
+        "local planning admin server listening on http://127.0.0.1:{}",
         args.port
     );
 
@@ -842,7 +842,8 @@ where
                     .with_context(|| format!("invalid port: {value}"))?;
             }
             "-h" | "--help" => {
-                println!("Usage: akra-admin [--port <port>]");
+                println!("Usage: akra admin [--port <port>]");
+                println!("Alias: akra admin-server [--port <port>]");
                 std::process::exit(0);
             }
             _ => bail!("unsupported argument: {arg}"),
@@ -868,7 +869,7 @@ mod tests {
     use axum::response::Response;
     use tower::ServiceExt;
 
-    use super::{AdminAppState, CSRF_COOKIE_NAME, build_router};
+    use super::{AdminAppState, CSRF_COOKIE_NAME, DEFAULT_PORT, build_router, parse_args};
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning::{
         PlanningAdminDraftKind, PlanningAdminFacadeService, PlanningServices,
@@ -934,6 +935,22 @@ mod tests {
             )),
         };
         build_router(state)
+    }
+
+    #[test]
+    fn parse_args_defaults_to_high_local_port() {
+        let parsed = parse_args(Vec::<String>::new()).expect("args should parse");
+
+        assert_eq!(parsed.port, DEFAULT_PORT);
+        assert_eq!(parsed.port, 18442);
+    }
+
+    #[test]
+    fn parse_args_accepts_port_override() {
+        let parsed =
+            parse_args(["--port".to_string(), "19442".to_string()]).expect("args should parse");
+
+        assert_eq!(parsed.port, 19442);
     }
 
     fn response_cookie(response: &Response, name: &str) -> Option<String> {
