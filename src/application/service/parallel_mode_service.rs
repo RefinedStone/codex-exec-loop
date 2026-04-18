@@ -10,7 +10,10 @@ use chrono::Utc;
 use crate::adapter::outbound::github_automation_adapter::GithubAutomationAdapter;
 use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
+    PlanningAuthorityRuntimeProjectionSnapshot,
+};
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
@@ -31,7 +34,9 @@ mod parallel_mode_distributor_service;
 #[path = "parallel_mode_supervisor_service.rs"]
 mod parallel_mode_supervisor_service;
 
-use parallel_mode_distributor_service::ParallelModeDistributorService;
+use parallel_mode_distributor_service::{
+    ParallelModeDistributorService, load_distributor_queue_records,
+};
 use parallel_mode_supervisor_service::ParallelModeSupervisorService;
 
 const AKRA_BRANCH: &str = "akra";
@@ -113,6 +118,8 @@ struct PoolRuntimeContext {
     worktree_records: Vec<GitWorktreeRecord>,
     slot_leases: BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
     invalid_slot_leases: BTreeSet<String>,
+    session_details: Vec<ParallelModeAgentSessionDetailSnapshot>,
+    distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -365,12 +372,12 @@ impl ParallelModeService {
             current_timestamp(),
             None,
         );
-        if let Err(error) = write_slot_lease(&context.pool_root, &lease) {
+        if let Err(error) = write_slot_lease(&context.repo_root, &context.pool_root, &lease) {
             let _ =
                 discard_unstarted_slot_branch(&context.repo_root, &slot_path, branch_name.as_str());
             return Err(error);
         }
-        let _ = record_assigned_session_detail(&context.pool_root, &lease);
+        let _ = record_assigned_session_detail(&context.repo_root, &context.pool_root, &lease);
 
         Ok(lease)
     }
@@ -411,8 +418,8 @@ impl ParallelModeService {
         if lease.running_started_at.is_none() {
             lease.running_started_at = Some(current_timestamp());
         }
-        write_slot_lease(&context.pool_root, &lease)?;
-        let _ = record_running_session_detail(&context.pool_root, &lease);
+        write_slot_lease(&context.repo_root, &context.pool_root, &lease)?;
+        let _ = record_running_session_detail(&context.repo_root, &context.pool_root, &lease);
         Ok(lease)
     }
 
@@ -426,6 +433,7 @@ impl ParallelModeService {
         };
 
         record_thread_prepared_session_detail(
+            &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
             thread_id,
@@ -477,8 +485,9 @@ impl ParallelModeService {
         }
 
         lease.state = ParallelModeSlotLeaseState::CleanupPending;
-        write_slot_lease(&context.pool_root, &lease)?;
-        let _ = record_cleanup_pending_session_detail(&context.pool_root, &lease);
+        write_slot_lease(&context.repo_root, &context.pool_root, &lease)?;
+        let _ =
+            record_cleanup_pending_session_detail(&context.repo_root, &context.pool_root, &lease);
         Ok(lease)
     }
 
@@ -535,8 +544,11 @@ impl ParallelModeService {
                 resolution.lease.slot_id
             ));
         }
-        let _ =
-            record_failed_start_session_detail(&resolution.context.pool_root, &resolution.lease);
+        let _ = record_failed_start_session_detail(
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            &resolution.lease,
+        );
 
         Ok(Some(resolution.lease))
     }
@@ -583,6 +595,7 @@ impl ParallelModeService {
         );
 
         record_reported_complete_session_detail(
+            &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
             &completed_at,
@@ -621,8 +634,12 @@ impl ParallelModeService {
             return Ok(None);
         }
 
-        record_ledger_refreshing_session_detail(&resolution.context.pool_root, &resolution.lease)
-            .map(Some)
+        record_ledger_refreshing_session_detail(
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            &resolution.lease,
+        )
+        .map(Some)
     }
 
     pub fn mark_workspace_commit_ready(
@@ -638,6 +655,7 @@ impl ParallelModeService {
         }
 
         record_commit_ready_session_detail(
+            &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
             ledger_refresh_outcome,
@@ -671,6 +689,7 @@ impl ParallelModeService {
         }
 
         record_official_completion_failed_session_detail(
+            &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
             failure_detail,
@@ -726,7 +745,11 @@ impl ParallelModeService {
                 resolution.lease.slot_id
             ));
         }
-        let _ = record_cleaned_session_detail(&resolution.context.pool_root, &resolution.lease);
+        let _ = record_cleaned_session_detail(
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            &resolution.lease,
+        );
 
         Ok(Some(resolution.lease))
     }
@@ -1365,7 +1388,7 @@ fn load_pool_runtime_context_from_roots(
         return Err("worktree list inspection failed");
     };
     let pool_root = derive_default_pool_root(canonical_repo_root);
-    let (slot_leases, invalid_slot_leases) = read_slot_leases(&pool_root);
+    let runtime_projections = load_runtime_projection_snapshot(repo_root, &pool_root);
 
     Ok(PoolRuntimeContext {
         repo_root: repo_root.to_string(),
@@ -1373,9 +1396,28 @@ fn load_pool_runtime_context_from_roots(
         pool_root,
         akra_head,
         worktree_records,
-        slot_leases,
-        invalid_slot_leases,
+        slot_leases: runtime_projections.slot_leases,
+        invalid_slot_leases: runtime_projections.invalid_slot_leases,
+        session_details: runtime_projections.session_details,
+        distributor_queue_records: runtime_projections.distributor_queue_records,
     })
+}
+
+fn load_runtime_projection_snapshot(
+    workspace_dir: &str,
+    pool_root: &Path,
+) -> PlanningAuthorityRuntimeProjectionSnapshot {
+    SqlitePlanningAuthorityAdapter::new()
+        .load_runtime_projections(workspace_dir)
+        .unwrap_or_else(|_| {
+            let (slot_leases, invalid_slot_leases) = read_slot_leases(pool_root);
+            PlanningAuthorityRuntimeProjectionSnapshot {
+                slot_leases,
+                invalid_slot_leases,
+                session_details: load_agent_session_detail_records(pool_root),
+                distributor_queue_records: load_distributor_queue_records(pool_root),
+            }
+        })
 }
 
 fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
@@ -1453,7 +1495,7 @@ fn cleanup_reusable_slots(
     worktree_records: &[GitWorktreeRecord],
 ) -> usize {
     let mut cleaned_slots = 0;
-    let (slot_leases, _) = read_slot_leases(pool_root);
+    let slot_leases = load_runtime_projection_snapshot(repo_root, pool_root).slot_leases;
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -1549,7 +1591,7 @@ fn cleanup_slot(
     if !command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name]) {
         return false;
     }
-    if !remove_slot_lease(pool_root, slot_id) {
+    if !remove_slot_lease(repo_root, pool_root, slot_id) {
         return false;
     }
 
@@ -2223,7 +2265,14 @@ fn read_slot_leases(
     (slot_leases, invalid_slot_leases)
 }
 
-fn write_slot_lease(pool_root: &Path, lease: &ParallelModeSlotLeaseSnapshot) -> Result<(), String> {
+fn write_slot_lease(
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<(), String> {
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(workspace_dir, lease)
+        .map_err(|error| format!("failed to store slot lease `{}`: {error}", lease.slot_id))?;
+
     let leases_root = slot_leases_root(pool_root);
     ensure_directory_exists(&leases_root)
         .map_err(|error| format!("failed to create lease directory: {error}"))?;
@@ -2241,7 +2290,10 @@ fn write_slot_lease(pool_root: &Path, lease: &ParallelModeSlotLeaseSnapshot) -> 
         .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
 }
 
-fn remove_slot_lease(pool_root: &Path, slot_id: &str) -> bool {
+fn remove_slot_lease(workspace_dir: &str, pool_root: &Path, slot_id: &str) -> bool {
+    if SqlitePlanningAuthorityAdapter::remove_runtime_slot_lease(workspace_dir, slot_id).is_err() {
+        return false;
+    }
     let lease_path = slot_lease_file_path(pool_root, slot_id);
     !lease_path.exists() || fs::remove_file(lease_path).is_ok()
 }
@@ -2421,20 +2473,22 @@ fn build_assigned_session_detail(
 }
 
 fn record_assigned_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     let detail = build_assigned_session_detail(lease);
-    write_agent_session_detail_record(pool_root, &detail)?;
+    write_agent_session_detail_record(workspace_dir, pool_root, &detail)?;
     Ok(detail)
 }
 
 fn record_thread_prepared_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     thread_id: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.thread_id = Some(thread_id.to_string());
@@ -2449,10 +2503,11 @@ fn record_thread_prepared_session_detail(
 }
 
 fn record_running_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = lease
             .running_started_at
             .clone()
@@ -2473,6 +2528,7 @@ fn record_running_session_detail(
 }
 
 fn record_reported_complete_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     completed_at: &str,
@@ -2480,7 +2536,7 @@ fn record_reported_complete_session_detail(
     validation_summary: &str,
     failure_context: Option<&str>,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "reported_complete".to_string();
         detail.completion_state_label = "reported_complete".to_string();
@@ -2506,10 +2562,11 @@ fn record_reported_complete_session_detail(
 }
 
 fn record_ledger_refreshing_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "ledger_refreshing".to_string();
@@ -2530,11 +2587,12 @@ fn record_ledger_refreshing_session_detail(
 }
 
 fn record_commit_ready_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     ledger_refresh_outcome: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "commit_ready".to_string();
@@ -2556,10 +2614,11 @@ fn record_commit_ready_session_detail(
 }
 
 fn record_merge_queued_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "merge_queued".to_string();
@@ -2580,11 +2639,12 @@ fn record_merge_queued_session_detail(
 }
 
 fn record_pushing_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "pushing".to_string();
@@ -2603,11 +2663,12 @@ fn record_pushing_session_detail(
 }
 
 fn record_pr_pending_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "pr_pending".to_string();
@@ -2626,11 +2687,12 @@ fn record_pr_pending_session_detail(
 }
 
 fn record_merge_pending_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "merge_pending".to_string();
@@ -2649,11 +2711,12 @@ fn record_merge_pending_session_detail(
 }
 
 fn record_integrating_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "integrating".to_string();
@@ -2679,11 +2742,12 @@ fn record_integrating_session_detail(
 }
 
 fn record_distributor_failed_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     failure_detail: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "failed".to_string();
@@ -2702,11 +2766,12 @@ fn record_distributor_failed_session_detail(
 }
 
 fn record_official_completion_failed_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     failure_detail: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "failed".to_string();
@@ -2728,10 +2793,11 @@ fn record_official_completion_failed_session_detail(
 }
 
 fn record_cleanup_pending_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "cleanup_pending".to_string();
@@ -2758,10 +2824,11 @@ fn record_cleanup_pending_session_detail(
 }
 
 fn record_cleaned_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "cleaned".to_string();
@@ -2782,10 +2849,11 @@ fn record_cleaned_session_detail(
 }
 
 fn record_failed_start_session_detail(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(pool_root, lease, |current| {
+    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
         let timestamp = current_timestamp();
         let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
         detail.state_label = "failed".to_string();
@@ -2835,6 +2903,7 @@ fn push_session_history(
 }
 
 fn update_agent_session_detail_record<F>(
+    workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     mutate: F,
@@ -2847,7 +2916,7 @@ where
     let session_key = lease_session_key(lease);
     let current = read_agent_session_detail_record(pool_root, &session_key);
     let detail = mutate(current);
-    write_agent_session_detail_record(pool_root, &detail)?;
+    write_agent_session_detail_record(workspace_dir, pool_root, &detail)?;
     Ok(detail)
 }
 
@@ -2887,9 +2956,19 @@ fn read_agent_session_detail_record(
 }
 
 fn write_agent_session_detail_record(
+    workspace_dir: &str,
     pool_root: &Path,
     detail: &ParallelModeAgentSessionDetailSnapshot,
 ) -> Result<(), String> {
+    SqlitePlanningAuthorityAdapter::upsert_runtime_session_detail(workspace_dir, detail).map_err(
+        |error| {
+            format!(
+                "failed to store agent session detail `{}`: {error}",
+                detail.session_key
+            )
+        },
+    )?;
+
     let history_dir = agent_session_history_dir(pool_root);
     ensure_directory_exists(&history_dir)
         .map_err(|error| format!("failed to create agent session history directory: {error}"))?;
@@ -3035,9 +3114,9 @@ mod tests {
     use super::{
         DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
         ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-        ParallelModeService, ParallelModeSupervisorState, build_pool_board,
-        derive_default_pool_root, derive_readiness, detect_canonical_repo_root, inspect_planning,
-        lease_session_key, parse_https_remote, read_agent_session_detail_record,
+        ParallelModeService, ParallelModeSupervisorState, agent_session_detail_record_path,
+        build_pool_board, derive_default_pool_root, derive_readiness, detect_canonical_repo_root,
+        inspect_planning, lease_session_key, parse_https_remote, read_agent_session_detail_record,
         reconcile_pool_board, resolve_workspace_slot_lease, run_command, short_sha, slot_id,
         slot_lease_file_path,
     };
@@ -3098,6 +3177,16 @@ mod tests {
 
         fn slot_lease_path(&self, slot_number: usize) -> PathBuf {
             slot_lease_file_path(&self.pool_root(), &slot_id(slot_number))
+        }
+
+        fn session_detail_path(&self, session_key: &str) -> PathBuf {
+            agent_session_detail_record_path(&self.pool_root(), session_key)
+        }
+
+        fn distributor_queue_path(&self, queue_item_id: &str) -> PathBuf {
+            self.pool_root()
+                .join(".distributor-queue")
+                .join(format!("{queue_item_id}.json"))
         }
 
         fn read_slot_lease(&self, slot_number: usize) -> ParallelModeSlotLeaseSnapshot {
@@ -3595,6 +3684,50 @@ mod tests {
         assert_eq!(
             entry.latest_summary,
             "slot lease acquired and branch reserved for launch"
+        );
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_reads_store_backed_runtime_projections_after_mirror_loss() {
+        let repo = TempGitRepo::new("supervisor-store-recovery");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+            .expect("slot should transition to running");
+
+        let session_key = lease_session_key(&lease);
+        fs::remove_file(repo.slot_lease_path(1)).expect("slot lease mirror should be removed");
+        fs::remove_file(repo.session_detail_path(&session_key))
+            .expect("session detail mirror should be removed");
+
+        let recovered = ParallelModeService::new();
+        let snapshot =
+            recovered.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+        assert_eq!(snapshot.pool.running_slots, 1);
+        assert_eq!(snapshot.roster.active_count(), 1);
+        assert_eq!(snapshot.roster.entries[0].state_label, "running");
+        assert_eq!(
+            snapshot
+                .detail
+                .session
+                .as_ref()
+                .expect("session detail should be recovered from the authority store")
+                .session_key,
+            session_key
         );
     }
 
@@ -4325,11 +4458,10 @@ mod tests {
         let notices = service
             .process_distributor_queue(&repo.workspace_dir())
             .expect("processing the queue head should not crash");
-        assert!(
-            notices
-                .iter()
-                .any(|notice| notice.contains("distributor queue head blocked"))
-        );
+        assert!(notices.iter().any(|notice| {
+            notice.contains("distributor queue head blocked")
+                || notice.contains("distributor queue head is blocked")
+        }));
 
         let snapshot =
             service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
@@ -4358,6 +4490,177 @@ mod tests {
                 .as_deref()
                 .expect("blocked head detail should be surfaced")
                 .contains("source worktree is missing")
+        );
+    }
+
+    #[test]
+    fn distributor_recovery_blocks_missing_worktree_from_store_backed_queue_record() {
+        let repo = TempGitRepo::new("distributor-store-recovery-missing-worktree");
+        let service = ParallelModeService::new();
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                "turn-store-recovery",
+                None,
+                Some("Distributor recovery slice completed."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official ledger refresh succeeded: queued for delivery",
+            )
+            .expect("commit-ready should be recorded");
+        service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should enqueue")
+            .expect("queue item should be created");
+
+        let session_key = lease_session_key(&lease);
+        let queue_record = load_distributor_queue_records(&repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist before mirror loss");
+        fs::remove_file(repo.slot_lease_path(1)).expect("slot lease mirror should be removed");
+        fs::remove_file(repo.session_detail_path(&session_key))
+            .expect("session detail mirror should be removed");
+        fs::remove_file(repo.distributor_queue_path(&queue_record.queue_item_id))
+            .expect("queue mirror should be removed");
+        fs::remove_dir_all(&lease.worktree_path).expect("source worktree should be removed");
+
+        let recovered = ParallelModeService::new();
+        let notices = recovered
+            .process_distributor_queue(&repo.workspace_dir())
+            .expect("recovery should classify the missing worktree as blocked");
+        assert!(
+            notices.iter().any(|notice| {
+                notice.contains("blocked") && notice.contains("recovered after restart")
+            }),
+            "recovery notice should explain the blocked head: {notices:?}"
+        );
+
+        let recovered_record = load_distributor_queue_records(&repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("blocked queue record should be rewritten from the authority store");
+        assert_eq!(
+            recovered_record.queue_state,
+            ParallelModeQueueItemState::Blocked
+        );
+        assert!(
+            recovered_record
+                .integration_note
+                .contains("recovered after restart: source worktree is missing")
+        );
+
+        let recovered_detail = read_agent_session_detail_record(&repo.pool_root(), &session_key)
+            .expect("failed session detail should be rewritten from the authority store");
+        assert_eq!(recovered_detail.state_label, "failed");
+        assert!(
+            recovered_detail
+                .history
+                .last()
+                .expect("failure history entry should exist")
+                .summary
+                .contains("recovered after restart")
+        );
+    }
+
+    #[test]
+    fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_recovery() {
+        let repo = TempGitRepo::new("supervisor-store-recovery-integrated");
+        let service = ParallelModeService::new();
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                "turn-integrated-recovery",
+                None,
+                Some("Integrated queue recovery slice completed."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official ledger refresh succeeded: queued for delivery",
+            )
+            .expect("commit-ready should be recorded");
+        service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should enqueue")
+            .expect("queue item should be created");
+        let session_key = lease_session_key(&lease);
+        let queue_record = load_distributor_queue_records(&repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
+        repo.merge_agent_slot_into_akra(&slot_path);
+        fs::remove_file(repo.slot_lease_path(1)).expect("slot lease mirror should be removed");
+        fs::remove_file(repo.session_detail_path(&session_key))
+            .expect("session detail mirror should be removed");
+        fs::remove_file(repo.distributor_queue_path(&queue_record.queue_item_id))
+            .expect("queue mirror should be removed");
+
+        let recovered = ParallelModeService::new();
+        let snapshot =
+            recovered.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+        assert_eq!(snapshot.distributor.head_summary, "cleaning");
+        assert_eq!(snapshot.distributor.queue_depth(), 1);
+        assert_eq!(
+            snapshot.distributor.queue_items[0].queue_state,
+            ParallelModeQueueItemState::Cleaning
+        );
+        assert!(
+            snapshot
+                .distributor
+                .note
+                .contains("recovered after restart"),
+            "snapshot should surface the recovery note: {}",
+            snapshot.distributor.note
+        );
+        assert_eq!(
+            repo.read_slot_lease(1).state,
+            ParallelModeSlotLeaseState::CleanupPending
         );
     }
 
