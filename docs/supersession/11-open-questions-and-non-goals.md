@@ -1,6 +1,6 @@
 # Open Questions And Non-Goals
 
-This document defines the target supersession model, not shipped behavior.
+Keep this file limited to genuinely open supersession questions and explicit non-goals.
 
 ## V1 Non-Goals
 
@@ -13,8 +13,6 @@ This document defines the target supersession model, not shipped behavior.
 - approval-review automation beyond currently available app-server capabilities
 
 ## Closed Decisions
-
-The following are intentionally not open in v1:
 
 - official task authority lives in one repo-scoped planning authority domain
 - tracked planning files are review or portability artifacts, not runtime authority
@@ -45,25 +43,4 @@ The following are intentionally not open in v1:
 - review-thread summarization and richer GitHub awareness
 - ledger-derived heuristics for grouping follow-up work by branch affinity
 
-## Promotion Guidance
-
-When parts of supersession ship:
-
-- move shipped operator behavior into `docs/design`
-- keep forward-looking or still-open mechanics in `docs/supersession`
-- delete superseded planning notes once current contracts are documented elsewhere
-
-## Related Docs
-
-- [README.md](README.md)
-- [01-product-model.md](01-product-model.md)
-- [10-implementation-slices.md](10-implementation-slices.md)
-- [../README.md](../README.md)
-
-## Code Impact
-
-Expected entrypoints:
-
-- future impact spans `src/adapter/inbound/tui/app`
-- future impact spans `src/application/service`
-- future impact spans `src/adapter/outbound`
+Related remaining-work context lives in [10-implementation-slices.md](10-implementation-slices.md).

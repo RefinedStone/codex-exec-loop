@@ -14,18 +14,12 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 - Planning is part of the main operator loop, with accepted queue state shaping automation and next-task behavior.
 - The project ships native packaging, validation capture helpers, and release automation rather than relying on ad hoc local setup.
 
-## What Changed Since `v1.2.9`
+## Status
 
-The current `prerelease` line adds a focused Phase 1 operator-surface upgrade over `v1.2.9` (`b0413ee`):
-
-- Planning lifecycle commands are now shipped outside and inside the shell: `akra doctor`, `akra init`, `akra reset`, `:doctor`, `:init`, and `:reset`.
-- First-run planning now defaults to the simple happy path instead of pushing the operator straight into detail-mode authoring.
-- Queue-idle review and next-task expectations are explained during onboarding instead of staying implicit.
-- Resumed sessions immediately surface planning status and queue context.
-- Shared planning status projection logic now drives resume text, queue framing, and compact shell surfaces.
-- Validation records are codified around named check profiles: `terminal-baseline` and `phase1-operator-surface`.
-
-Detailed notes live in [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md).
+- Current product contract: [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
+- Planning contract: [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
+- Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
+- Remaining supersession follow-through and open questions: [docs/supersession/README.md](docs/supersession/README.md)
 
 ## Install
 
@@ -126,16 +120,13 @@ Supported aliases remain available for common commands such as `:q`, `:diagnosti
 ## Planning And Automation
 
 Accepted planning state lives under `.codex-exec-loop/planning/`.
-The operator owns staged drafts and explicit promotion; runtime owns queue snapshots and rejected-write archives.
 
-Key rules:
-
-- Simple mode is the default first-run path.
+- The operator owns staged drafts and explicit promotion.
+- Runtime owns queue snapshots and rejected-write archives.
 - Builtin next-task logic only acts on accepted queue state.
 - Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
-- `akra reset directions` and `:reset directions confirm` refuse to rewrite live direction state while non-done tasks still exist.
 
-For the full planning contract, see [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md).
+Full planning behavior lives in [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md).
 
 ## Packaging And Validation
 
@@ -158,11 +149,7 @@ cargo clippy --all-targets --all-features -D warnings
 
 ## Docs
 
-Start with:
-
 - [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
 - [docs/design/02-tui-shell-flow.md](docs/design/02-tui-shell-flow.md)
 - [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
-- [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
-
-Broader docs navigation lives in [docs/README.md](docs/README.md).
+- [docs/README.md](docs/README.md)

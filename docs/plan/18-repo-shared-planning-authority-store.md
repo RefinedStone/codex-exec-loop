@@ -323,4 +323,4 @@ Examples that must be single-transaction:
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)
 - [16-planning-and-automation-evolution.md](16-planning-and-automation-evolution.md)
 - [../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md)
-- [../supersession/09-architecture-boundaries.md](../supersession/09-architecture-boundaries.md)
+- [../supersession/implemented-summary.md](../supersession/implemented-summary.md)
