@@ -606,7 +606,7 @@ mod tests {
         AppServerConnectionConfig, ConnectionDiagnostics, PendingNotifications,
         RESPONSE_TIMEOUT_ENV_VAR,
     };
-    use crate::adapter::outbound::codex_app_server_adapter::protocol::AppServerNotification;
+    use crate::adapter::outbound::app_server::protocol::AppServerNotification;
 
     #[test]
     fn response_timeout_defaults_to_fifteen_seconds() {

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::adapter::outbound::github_review_poller_adapter::GithubReviewPollerAdapter;
+use crate::adapter::outbound::github::GithubReviewPollerAdapter;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::domain::github_review::{

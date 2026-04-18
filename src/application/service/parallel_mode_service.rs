@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
-use crate::adapter::outbound::github_automation_adapter::GithubAutomationAdapter;
-use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::github::GithubAutomationAdapter;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
@@ -3116,7 +3116,7 @@ mod tests {
         reconcile_pool_board, resolve_workspace_slot_lease, run_command, short_sha, slot_id,
         slot_lease_file_path,
     };
-    use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
     };

@@ -11,7 +11,7 @@ use ratatui::style::Color;
 
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
-use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };

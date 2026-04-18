@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
     PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
@@ -420,7 +420,7 @@ mod tests {
     use anyhow::{Context, Result};
 
     use super::run_with_args;
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,

@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,

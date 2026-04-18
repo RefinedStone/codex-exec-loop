@@ -27,10 +27,10 @@ use super::{
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
 };
-use crate::adapter::outbound::app_server_planning_worker_adapter::{
+use crate::adapter::outbound::app_server::{
     AppServerPlanningWorkerAdapter, PlanningThreadLauncher,
 };
-use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };

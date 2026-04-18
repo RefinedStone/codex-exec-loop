@@ -194,7 +194,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{PlanningProposalPromotionRequest, PlanningProposalPromotionService};
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,

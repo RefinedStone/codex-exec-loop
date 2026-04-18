@@ -595,7 +595,7 @@ mod tests {
         PlanningExecutionSnapshot, PlanningQueueSnapshotAction, PlanningReconciliationService,
         PlanningRepairRetryReason, build_planning_repair_prompt,
     };
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };

@@ -817,7 +817,7 @@ mod tests {
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN,
         DIRECTIONS_FILE_PATH, DirectionsSupportingFileStatus, PlanningDirectionsService,
     };
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning_bootstrap_service::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };

@@ -1,6 +1,7 @@
-mod connection;
-mod protocol;
-mod runtime;
+pub(crate) mod connection;
+pub(crate) mod protocol;
+pub(crate) mod runtime;
+mod planning_worker;
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, TryLockError};
@@ -8,6 +9,8 @@ use std::sync::{Arc, Mutex, TryLockError};
 use anyhow::{Result, anyhow};
 
 use self::connection::{AppServerConnection, AppServerConnectionConfig};
+pub use self::planning_worker::AppServerPlanningWorkerAdapter;
+pub(crate) use self::planning_worker::PlanningThreadLauncher;
 use self::protocol::{
     ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
     ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputText, TurnStartParams,
@@ -18,7 +21,6 @@ use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
-use crate::adapter::outbound::app_server_planning_worker_adapter::PlanningThreadLauncher;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
@@ -520,7 +522,7 @@ mod tests {
         APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AppServerExecutionPolicy,
         SANDBOX_MODE_ENV_VAR,
     };
-    use crate::adapter::outbound::codex_app_server_adapter::protocol::{
+    use crate::adapter::outbound::app_server::protocol::{
         ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue,
     };
 

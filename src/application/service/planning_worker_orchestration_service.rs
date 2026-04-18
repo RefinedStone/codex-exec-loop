@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
 };
@@ -480,7 +480,7 @@ mod tests {
         PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
         PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     };
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     };

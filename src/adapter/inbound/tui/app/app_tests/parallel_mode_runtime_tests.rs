@@ -10,7 +10,7 @@ use super::{
     git_branch_exists, install_ready_github_automation, make_test_app,
     merge_active_branch_into_akra, ready_conversation, run_git, sample_startup_diagnostics,
 };
-use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{

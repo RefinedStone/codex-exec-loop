@@ -200,7 +200,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{PlanningDoctorService, PlanningDoctorState};
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
     use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;

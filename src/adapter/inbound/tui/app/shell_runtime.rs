@@ -282,7 +282,7 @@ mod tests {
         ConversationInputState, ConversationState, ConversationViewModel, InlineShellCommand,
     };
     use crate::adapter::inbound::tui::shell_chrome::{ShellOverlay, StartupState};
-    use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
