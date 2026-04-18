@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 pub mod admin;
 pub(crate) mod authoring;
+pub mod control;
 pub(crate) mod repair;
 pub(crate) mod runtime;
 pub(crate) mod shared;
@@ -48,6 +49,7 @@ pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspac
 pub use self::authoring::proposal_promotion::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
 };
+pub use self::control::{PlanningControlCommand, PlanningControlReply, PlanningControlService};
 pub use self::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueSnapshotAction,
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,

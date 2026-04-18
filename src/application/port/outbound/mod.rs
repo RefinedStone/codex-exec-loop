@@ -4,3 +4,4 @@ pub mod github_review_poller_port;
 pub mod planning_authority_port;
 pub mod planning_worker_port;
 pub mod planning_workspace_port;
+pub mod telegram_bot_port;

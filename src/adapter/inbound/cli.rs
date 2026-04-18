@@ -15,6 +15,7 @@ const ADMIN_SERVER_USAGE: &str = "Usage: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
+const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoctorReport {
@@ -158,6 +159,7 @@ where
         [] => Ok(None),
         [flag] if is_help_flag(flag) => {
             writeln!(stdout, "{ADMIN_SERVER_USAGE}")?;
+            writeln!(stdout, "{TELEGRAM_BOT_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
@@ -166,6 +168,10 @@ where
         [command] if command == OsStr::new("admin-server") => Ok(Some(run_admin_server(&[])?)),
         [command, rest @ ..] if command == OsStr::new("admin-server") => {
             Ok(Some(run_admin_server(rest)?))
+        }
+        [command] if command == OsStr::new("telegram-bot") => Ok(Some(run_telegram_bot(&[])?)),
+        [command, rest @ ..] if command == OsStr::new("telegram-bot") => {
+            Ok(Some(run_telegram_bot(rest)?))
         }
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
@@ -210,6 +216,13 @@ fn run_admin_server(args: &[OsString]) -> Result<i32> {
     runtime.block_on(crate::adapter::inbound::admin_api::run_with_args(
         args.iter().map(|arg| arg.to_string_lossy().to_string()),
     ))?;
+    Ok(0)
+}
+
+fn run_telegram_bot(args: &[OsString]) -> Result<i32> {
+    crate::adapter::inbound::telegram_bot::run_with_args(
+        args.iter().map(|arg| arg.to_string_lossy().to_string()),
+    )?;
     Ok(0)
 }
 
@@ -549,6 +562,19 @@ mod tests {
 
         assert_eq!(exit_code, 0);
         assert!(output.contains("Usage: akra admin-server [--port <port>]"));
+    }
+
+    #[test]
+    fn help_output_mentions_telegram_bot_command() {
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args([OsString::from("--help")], &mut stdout)
+            .expect("help should run")
+            .expect("help should produce an exit code");
+        let output = String::from_utf8(stdout).expect("help output should be valid utf-8");
+
+        assert_eq!(exit_code, 0);
+        assert!(output.contains("Usage: akra telegram-bot"));
     }
 
     #[test]
