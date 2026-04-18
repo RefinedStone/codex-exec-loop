@@ -2374,7 +2374,7 @@ fn bounded_agent_branch_slug(slug: &str, max_len: usize) -> String {
     }
 
     let prefix_len = max_len.saturating_sub(hash.len() + 1);
-    let prefix = slug[..prefix_len].trim_end_matches('-');
+    let prefix = truncate_to_char_boundary(slug, prefix_len).trim_end_matches('-');
     if prefix.is_empty() {
         return hash[..max_len.min(hash.len())].to_string();
     }
@@ -2393,6 +2393,23 @@ fn short_branch_slug_hash(input: &str) -> String {
     }
 
     format!("{hash:016x}")[..AGENT_BRANCH_TRUNCATION_HASH_LEN].to_string()
+}
+
+fn truncate_to_char_boundary(value: &str, max_len: usize) -> &str {
+    if value.len() <= max_len {
+        return value;
+    }
+
+    let mut boundary = 0usize;
+    for (index, character) in value.char_indices() {
+        let next_boundary = index + character.len_utf8();
+        if next_boundary > max_len {
+            break;
+        }
+        boundary = next_boundary;
+    }
+
+    &value[..boundary]
 }
 
 fn sanitize_task_slug(input: &str) -> Option<String> {
