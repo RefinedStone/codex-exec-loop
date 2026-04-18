@@ -6,8 +6,9 @@ This file records the active planning contract in the current branch workspace.
 
 - Git-backed workspaces resolve one canonical repo authority root and persist planning authority under `.codex-exec-loop/runtime/planning-authority.db`.
 - Active planning, staged drafts, official refresh claims, distributor queue claims, and runtime slot, session, and distributor projections are repo-scoped authority-store data.
-- Tracked planning files under `.codex-exec-loop/planning/` remain exported review and portability artifacts for git-backed workspaces, while non-git workspaces still use direct local planning files.
-- Authority inspection can repair exported planning files from store truth when they drift or disappear.
+- Git-backed runtime writes exported review views under `.codex-exec-loop/runtime/exports/` and no longer rewrites tracked planning files during normal authority updates.
+- Tracked planning files under `.codex-exec-loop/planning/` remain explicit import, review, and portability artifacts for git-backed workspaces, while non-git workspaces still use direct local planning files.
+- Authority inspection can repair runtime export views from store truth when they drift or disappear.
 
 ## Planning Artifacts
 
@@ -19,9 +20,12 @@ This file records the active planning contract in the current branch workspace.
 | `.codex-exec-loop/planning/task-ledger.schema.json` | protected planning contract | task-ledger validation schema |
 | `.codex-exec-loop/planning/result-output.md` | protected planning contract | result-output guidance fragment |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | operator-owned through staged drafts | prompt used when queue-idle review is enabled |
-| `.codex-exec-loop/planning/queue.snapshot.json` | runtime-derived | executable queue projection only |
+| `.codex-exec-loop/planning/queue.snapshot.json` | explicit import and review surface in git-backed mode | executable queue projection artifact only |
 | `.codex-exec-loop/planning/drafts/<draft>/...` | staged workspace | inactive edits awaiting validation and promotion |
 | `.codex-exec-loop/planning/rejected/<turn>/...` | runtime archive | rejected planning writes preserved for inspection |
+| `.codex-exec-loop/runtime/exports/planning-snapshot.json` | runtime-derived export | full store-backed planning snapshot for diagnostics and review |
+| `.codex-exec-loop/runtime/exports/task-ledger.json` | runtime-derived export | convenience export for the accepted task ledger |
+| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | runtime-derived export | convenience export for the accepted queue projection |
 
 ## Operator Entry
 
@@ -89,7 +93,7 @@ This file records the active planning contract in the current branch workspace.
 ## Current Limits
 
 - Non-git workspaces still fall back to direct local planning files instead of the repo-scoped authority store.
-- Exported planning files can still drift when edited out of band and may require authority inspection, repair, or explicit import to restore parity.
+- Runtime export views can still drift when edited out of band and may require authority inspection to restore parity; tracked planning files require explicit import if the operator wants them accepted again.
 - Real-terminal validation is still required for restart recovery, distributor delivery, and multi-worktree operator flow.
 - The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
 

@@ -17,9 +17,8 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
 };
 use crate::application::service::planning::shared::contract::{
-    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
-    PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
@@ -30,14 +29,16 @@ use crate::domain::planning::{
 };
 
 const RUNTIME_DIRECTORY: &str = ".codex-exec-loop/runtime";
+const RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
+const PLANNING_SNAPSHOT_EXPORT_FILE_NAME: &str = "planning-snapshot.json";
+const TASK_LEDGER_EXPORT_FILE_NAME: &str = "task-ledger.json";
+const QUEUE_SNAPSHOT_EXPORT_FILE_NAME: &str = "queue.snapshot.json";
 const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 4;
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
 const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
-const MAX_COLLECTED_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const CLAIM_STALE_AFTER_SECS: i64 = 300;
-const ALLOWED_DIRECTORY_DOCUMENT_EXTENSIONS: &[&str] = &["json", "md", "toml"];
 
 #[derive(Default)]
 pub struct SqlitePlanningAuthorityAdapter;
@@ -206,7 +207,7 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store active commit transaction")?;
 
-        export_active_workspace_record(&location, record)?;
+        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -247,7 +248,7 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store active file transaction")?;
 
-        export_active_document(&location, relative_path, body)?;
+        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -257,7 +258,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        let canonical_repo_root = PathBuf::from(&location.canonical_repo_root);
 
         let transaction = connection
             .transaction()
@@ -271,16 +271,7 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store active removal transaction")?;
 
-        let export_path = canonical_repo_root.join(relative_path);
-        if export_path.exists() {
-            if export_path.is_dir() {
-                fs::remove_dir_all(&export_path)
-                    .with_context(|| format!("failed to remove {}", export_path.display()))?;
-            } else {
-                fs::remove_file(&export_path)
-                    .with_context(|| format!("failed to remove {}", export_path.display()))?;
-            }
-        }
+        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -693,34 +684,14 @@ impl SqlitePlanningAuthorityAdapter {
         })
     }
 
-    fn collect_authority_documents(canonical_repo_root: &Path) -> Result<BTreeMap<String, String>> {
-        let mut documents = BTreeMap::new();
-        for relative_path in ACTIVE_PLANNING_FILE_PATHS
-            .iter()
-            .copied()
-            .chain(std::iter::once(PLAN_OFF_FILE_PATH))
-        {
-            let path = canonical_repo_root.join(relative_path);
-            if !path.is_file() {
-                continue;
-            }
-            let body = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            documents.insert(relative_path.to_string(), body);
-        }
-
-        collect_directory_documents(
-            canonical_repo_root,
-            PLANNING_DIRECTION_DOCS_DIRECTORY,
-            &mut documents,
-        )?;
-        collect_directory_documents(
-            canonical_repo_root,
-            PLANNING_PROMPTS_DIRECTORY,
-            &mut documents,
-        )?;
-
-        Ok(documents)
+    fn collect_runtime_export_view(
+        location: &PlanningAuthorityLocation,
+    ) -> Result<PlanningAuthorityExportView> {
+        Ok(PlanningAuthorityExportView {
+            snapshot_documents: load_planning_snapshot_export(location)?,
+            task_ledger_view: read_optional_export_file(&task_ledger_export_path(location))?,
+            queue_snapshot_view: read_optional_export_file(&queue_snapshot_export_path(location))?,
+        })
     }
 
     fn inspect_shadow_store_impl(
@@ -728,23 +699,21 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityShadowStoreInspection> {
         let location = self.resolve_authority_location(workspace_dir)?;
-        let canonical_repo_root = PathBuf::from(&location.canonical_repo_root);
         let authority_store_path = PathBuf::from(&location.authority_store_path);
         let had_store = authority_store_path.is_file();
         let mut connection = open_authority_connection(&location)?;
         let previous_documents = load_shadow_documents(&connection)?;
         let source_documents = load_active_documents(&connection)?;
         let shadow_parity_issues = compare_shadow_documents(&source_documents, &previous_documents);
-        let exported_documents = Self::collect_authority_documents(&canonical_repo_root)?;
-        if source_documents.is_empty() && !exported_documents.is_empty() {
+        let exported_view = Self::collect_runtime_export_view(&location)?;
+        if source_documents.is_empty() && exported_view.has_any_content() {
             return Err(anyhow!(
-                "authority store is empty while tracked exports still exist"
+                "authority store is empty while runtime exports still exist"
             ));
         }
-        let export_parity_issues =
-            compare_exported_documents(&source_documents, &exported_documents);
+        let export_parity_issues = compare_exported_documents(&source_documents, &exported_view);
         if !export_parity_issues.is_empty() {
-            sync_exported_authority_documents(&location, &source_documents, &exported_documents)?;
+            sync_exported_authority_documents(&location, &source_documents)?;
         }
         store_shadow_documents(&mut connection, &location, &source_documents)?;
 
@@ -1215,6 +1184,21 @@ fn append_runtime_event(
     Ok(())
 }
 
+#[derive(Default)]
+struct PlanningAuthorityExportView {
+    snapshot_documents: BTreeMap<String, String>,
+    task_ledger_view: Option<String>,
+    queue_snapshot_view: Option<String>,
+}
+
+impl PlanningAuthorityExportView {
+    fn has_any_content(&self) -> bool {
+        !self.snapshot_documents.is_empty()
+            || self.task_ledger_view.is_some()
+            || self.queue_snapshot_view.is_some()
+    }
+}
+
 fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
     connection
         .query_row(
@@ -1587,56 +1571,50 @@ fn table_exists(connection: &Connection, table_name: &str) -> Result<bool> {
         .map(|value| value.is_some())
 }
 
-fn export_active_workspace_record(
-    location: &PlanningAuthorityLocation,
-    record: &PlanningWorkspaceLoadRecord,
-) -> Result<()> {
-    export_active_document(
-        location,
-        DIRECTIONS_FILE_PATH,
-        record.directions_toml.as_deref(),
-    )?;
-    export_active_document(
-        location,
-        TASK_LEDGER_FILE_PATH,
-        record.task_ledger_json.as_deref(),
-    )?;
-    export_active_document(
-        location,
-        TASK_LEDGER_SCHEMA_FILE_PATH,
-        record.task_ledger_schema_json.as_deref(),
-    )?;
-    export_active_document(
-        location,
-        QUEUE_SNAPSHOT_FILE_PATH,
-        record.queue_snapshot_json.as_deref(),
-    )?;
-    export_active_document(
-        location,
-        RESULT_OUTPUT_FILE_PATH,
-        record.result_output_markdown.as_deref(),
-    )?;
-    Ok(())
+fn refresh_runtime_exports(location: &PlanningAuthorityLocation) -> Result<()> {
+    let connection = open_authority_connection(location)?;
+    let source_documents = load_active_documents(&connection)?;
+    sync_exported_authority_documents(location, &source_documents)
 }
 
-fn export_active_document(
-    location: &PlanningAuthorityLocation,
-    relative_path: &str,
-    body: Option<&str>,
-) -> Result<()> {
-    let path = Path::new(&location.canonical_repo_root).join(relative_path);
+fn runtime_exports_root(location: &PlanningAuthorityLocation) -> PathBuf {
+    Path::new(&location.canonical_repo_root).join(RUNTIME_EXPORTS_DIRECTORY)
+}
+
+fn planning_snapshot_export_path(location: &PlanningAuthorityLocation) -> PathBuf {
+    runtime_exports_root(location).join(PLANNING_SNAPSHOT_EXPORT_FILE_NAME)
+}
+
+fn task_ledger_export_path(location: &PlanningAuthorityLocation) -> PathBuf {
+    runtime_exports_root(location).join(TASK_LEDGER_EXPORT_FILE_NAME)
+}
+
+fn queue_snapshot_export_path(location: &PlanningAuthorityLocation) -> PathBuf {
+    runtime_exports_root(location).join(QUEUE_SNAPSHOT_EXPORT_FILE_NAME)
+}
+
+fn read_optional_export_file(path: &Path) -> Result<Option<String>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))
+        .map(Some)
+}
+
+fn write_optional_export_file(path: &Path, body: Option<&str>) -> Result<()> {
     match body {
         Some(body) => {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;
             }
-            fs::write(&path, body)
-                .with_context(|| format!("failed to write {}", path.display()))?;
+            fs::write(path, body).with_context(|| format!("failed to write {}", path.display()))?;
         }
         None => {
             if path.exists() {
-                fs::remove_file(&path)
+                fs::remove_file(path)
                     .with_context(|| format!("failed to remove {}", path.display()))?;
             }
         }
@@ -1644,59 +1622,47 @@ fn export_active_document(
     Ok(())
 }
 
+fn load_planning_snapshot_export(
+    location: &PlanningAuthorityLocation,
+) -> Result<BTreeMap<String, String>> {
+    let Some(snapshot_body) = read_optional_export_file(&planning_snapshot_export_path(location))?
+    else {
+        return Ok(BTreeMap::new());
+    };
+    serde_json::from_str::<BTreeMap<String, String>>(&snapshot_body).with_context(|| {
+        format!(
+            "failed to parse {}",
+            planning_snapshot_export_path(location).display()
+        )
+    })
+}
+
 fn sync_exported_authority_documents(
     location: &PlanningAuthorityLocation,
     source_documents: &BTreeMap<String, String>,
-    exported_documents: &BTreeMap<String, String>,
 ) -> Result<()> {
-    for (relative_path, content) in source_documents {
-        export_active_document(location, relative_path, Some(content))?;
-    }
-    for relative_path in exported_documents.keys() {
-        if !source_documents.contains_key(relative_path) {
-            export_active_document(location, relative_path, None)?;
-        }
-    }
-    Ok(())
-}
-
-fn collect_directory_documents(
-    workspace_root: &Path,
-    relative_directory: &str,
-    documents: &mut BTreeMap<String, String>,
-) -> Result<()> {
-    let directory = workspace_root.join(relative_directory);
-    if !directory.is_dir() {
-        return Ok(());
-    }
-
-    let mut stack = vec![directory];
-    while let Some(current) = stack.pop() {
-        for entry in fs::read_dir(&current)
-            .with_context(|| format!("failed to read {}", current.display()))?
-        {
-            let entry =
-                entry.with_context(|| format!("failed to inspect {}", current.display()))?;
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if !allowed_directory_document(&path)? {
-                continue;
-            }
-
-            let relative_path = path
-                .strip_prefix(workspace_root)
-                .with_context(|| format!("failed to strip {}", workspace_root.display()))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let body = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            documents.insert(relative_path, body);
-        }
-    }
-
+    let snapshot_path = planning_snapshot_export_path(location);
+    let snapshot_body = if source_documents.is_empty() {
+        None
+    } else {
+        let mut snapshot_json = serde_json::to_string_pretty(source_documents)
+            .context("failed to serialize runtime export planning snapshot")?;
+        snapshot_json.push('\n');
+        Some(snapshot_json)
+    };
+    write_optional_export_file(&snapshot_path, snapshot_body.as_deref())?;
+    write_optional_export_file(
+        &task_ledger_export_path(location),
+        source_documents
+            .get(TASK_LEDGER_FILE_PATH)
+            .map(String::as_str),
+    )?;
+    write_optional_export_file(
+        &queue_snapshot_export_path(location),
+        source_documents
+            .get(QUEUE_SNAPSHOT_FILE_PATH)
+            .map(String::as_str),
+    )?;
     Ok(())
 }
 
@@ -1734,13 +1700,33 @@ fn compare_shadow_documents(
     issues
 }
 
+fn compare_runtime_export_view(
+    label: &str,
+    source: Option<&str>,
+    exported: Option<&str>,
+    issues: &mut Vec<String>,
+) {
+    match (source, exported) {
+        (Some(_), None) => {
+            issues.push(format!("{label}: runtime export missing"));
+        }
+        (None, Some(_)) => {
+            issues.push(format!("{label}: runtime export contains stale content"));
+        }
+        (Some(source), Some(exported)) if source != exported => {
+            issues.push(format!("{label}: runtime export mismatch"));
+        }
+        _ => {}
+    }
+}
+
 fn compare_exported_documents(
     source_documents: &BTreeMap<String, String>,
-    exported_documents: &BTreeMap<String, String>,
+    exported_view: &PlanningAuthorityExportView,
 ) -> Vec<String> {
     let document_paths = source_documents
         .keys()
-        .chain(exported_documents.keys())
+        .chain(exported_view.snapshot_documents.keys())
         .cloned()
         .collect::<BTreeSet<_>>();
 
@@ -1748,22 +1734,39 @@ fn compare_exported_documents(
     for relative_path in document_paths {
         match (
             source_documents.get(&relative_path),
-            exported_documents.get(&relative_path),
+            exported_view.snapshot_documents.get(&relative_path),
         ) {
             (Some(_), None) => {
-                issues.push(format!("{relative_path}: missing tracked export"));
+                issues.push(format!("{relative_path}: runtime export snapshot missing"));
             }
             (None, Some(_)) => {
                 issues.push(format!(
-                    "{relative_path}: tracked export contains stale content"
+                    "{relative_path}: runtime export snapshot contains stale content"
                 ));
             }
             (Some(source), Some(exported)) if source != exported => {
-                issues.push(format!("{relative_path}: tracked export mismatch"));
+                issues.push(format!("{relative_path}: runtime export snapshot mismatch"));
             }
             _ => {}
         }
     }
+
+    compare_runtime_export_view(
+        TASK_LEDGER_FILE_PATH,
+        source_documents
+            .get(TASK_LEDGER_FILE_PATH)
+            .map(String::as_str),
+        exported_view.task_ledger_view.as_deref(),
+        &mut issues,
+    );
+    compare_runtime_export_view(
+        QUEUE_SNAPSHOT_FILE_PATH,
+        source_documents
+            .get(QUEUE_SNAPSHOT_FILE_PATH)
+            .map(String::as_str),
+        exported_view.queue_snapshot_view.as_deref(),
+        &mut issues,
+    );
 
     issues
 }
@@ -1826,23 +1829,6 @@ fn resolve_canonical_repo_root_uncached(workspace_dir: &str) -> Option<PathBuf> 
     Some(canonical_toplevel)
 }
 
-fn allowed_directory_document(path: &Path) -> Result<bool> {
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("failed to inspect metadata for {}", path.display()))?;
-    if metadata.len() > MAX_COLLECTED_DOCUMENT_BYTES {
-        return Ok(false);
-    }
-
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase());
-    Ok(matches!(
-        extension.as_deref(),
-        Some(ext) if ALLOWED_DIRECTORY_DOCUMENT_EXTENSIONS.contains(&ext)
-    ))
-}
-
 fn canonical_repo_root_cache() -> &'static Mutex<BTreeMap<String, PathBuf>> {
     static CACHE: OnceLock<Mutex<BTreeMap<String, PathBuf>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -1862,6 +1848,7 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1955,6 +1942,29 @@ mod tests {
             "git command should succeed: git {}",
             args.join(" ")
         );
+    }
+
+    fn runtime_exports_root(repo_root: &Path) -> PathBuf {
+        repo_root.join(".codex-exec-loop/runtime/exports")
+    }
+
+    fn planning_snapshot_export_path(repo_root: &Path) -> PathBuf {
+        runtime_exports_root(repo_root).join("planning-snapshot.json")
+    }
+
+    fn task_ledger_export_path(repo_root: &Path) -> PathBuf {
+        runtime_exports_root(repo_root).join("task-ledger.json")
+    }
+
+    fn queue_snapshot_export_path(repo_root: &Path) -> PathBuf {
+        runtime_exports_root(repo_root).join("queue.snapshot.json")
+    }
+
+    fn read_planning_snapshot_export(repo_root: &Path) -> BTreeMap<String, String> {
+        let snapshot_body = fs::read_to_string(planning_snapshot_export_path(repo_root))
+            .expect("planning snapshot export should exist");
+        serde_json::from_str::<BTreeMap<String, String>>(&snapshot_body)
+            .expect("planning snapshot export should parse")
     }
 
     #[test]
@@ -2079,7 +2089,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_shadow_store_restores_diverged_tracked_exports_from_active_store() {
+    fn inspect_shadow_store_restores_diverged_runtime_exports_from_active_store() {
         let repo = TempGitRepo::new("shadow-resync");
         let adapter = SqlitePlanningAuthorityAdapter::new();
         SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
@@ -2097,7 +2107,11 @@ mod tests {
             .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
             .expect("initial shadow store sync should succeed");
 
-        repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 2\n");
+        fs::write(
+            planning_snapshot_export_path(&repo.repo_root),
+            "{\n  \".codex-exec-loop/planning/directions.toml\": \"version = 2\\n\"\n}\n",
+        )
+        .expect("runtime export snapshot should diverge");
 
         let inspection = adapter
             .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
@@ -2112,11 +2126,12 @@ mod tests {
             inspection
                 .parity_issue_examples
                 .iter()
-                .any(|issue| issue.contains("tracked export"))
+                .any(|issue| issue.contains("runtime export"))
         );
         assert_eq!(
-            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
-                .expect("tracked export should be restored"),
+            read_planning_snapshot_export(&repo.repo_root)
+                .get(DIRECTIONS_FILE_PATH)
+                .expect("runtime export snapshot should be restored"),
             "version = 1\n"
         );
     }
@@ -2125,7 +2140,13 @@ mod tests {
     fn inspect_shadow_store_rejects_export_only_legacy_state() {
         let repo = TempGitRepo::new("shadow-export-only");
         let adapter = SqlitePlanningAuthorityAdapter::new();
-        repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
+        fs::create_dir_all(runtime_exports_root(&repo.repo_root))
+            .expect("runtime exports root should exist");
+        fs::write(
+            planning_snapshot_export_path(&repo.repo_root),
+            "{\n  \".codex-exec-loop/planning/directions.toml\": \"version = 1\\n\"\n}\n",
+        )
+        .expect("runtime export snapshot should write");
 
         let error = adapter
             .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
@@ -2134,7 +2155,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("authority store is empty while tracked exports still exist")
+                .contains("authority store is empty while runtime exports still exist")
         );
     }
 
@@ -2202,9 +2223,20 @@ mod tests {
         .expect("active commit should succeed");
 
         assert_eq!(
-            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
-                .expect("repo directions should exist"),
+            read_planning_snapshot_export(&repo.repo_root)
+                .get(DIRECTIONS_FILE_PATH)
+                .expect("runtime export directions should exist"),
             "version = 4\n"
+        );
+        assert_eq!(
+            fs::read_to_string(task_ledger_export_path(&repo.repo_root))
+                .expect("runtime export task ledger should exist"),
+            "{\"version\":1,\"tasks\":[]}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(queue_snapshot_export_path(&repo.repo_root))
+                .expect("runtime export queue snapshot should exist"),
+            "{\"next_task\":null}\n"
         );
         let location = SqlitePlanningAuthorityAdapter::new()
             .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
@@ -2236,8 +2268,10 @@ mod tests {
             },
         )
         .expect("active commit should succeed");
-        fs::remove_file(repo.repo_root.join(DIRECTIONS_FILE_PATH))
-            .expect("tracked export should be removable");
+        assert!(
+            !repo.repo_root.join(DIRECTIONS_FILE_PATH).exists(),
+            "tracked planning files should stay untouched in git-backed mode"
+        );
 
         let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(
             repo.worktree_root.to_str().expect("valid worktree path"),

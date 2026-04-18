@@ -760,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn git_backed_active_commit_exports_to_canonical_repo_root() {
+    fn git_backed_active_commit_exports_runtime_views_to_canonical_repo_root() {
         let repo = TempGitRepo::new("planning-workspace-active-commit");
         let adapter = FilesystemPlanningWorkspaceAdapter::new();
 
@@ -777,15 +777,24 @@ mod tests {
             )
             .expect("git-backed active commit should succeed");
 
+        let runtime_exports_root = repo.repo_root.join(".codex-exec-loop/runtime/exports");
         assert_eq!(
-            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
-                .expect("canonical directions should exist"),
-            "version = 3\n"
+            fs::read_to_string(runtime_exports_root.join("task-ledger.json"))
+                .expect("runtime task ledger export should exist"),
+            "{\"version\":1,\"tasks\":[]}\n"
         );
         assert_eq!(
-            fs::read_to_string(repo.repo_root.join(TASK_LEDGER_FILE_PATH))
-                .expect("canonical task ledger should exist"),
-            "{\"version\":1,\"tasks\":[]}\n"
+            fs::read_to_string(runtime_exports_root.join("queue.snapshot.json"))
+                .expect("runtime queue export should exist"),
+            "{\"next_task\":null}\n"
+        );
+        assert!(
+            !repo.repo_root.join(DIRECTIONS_FILE_PATH).exists(),
+            "tracked directions should not be rewritten during git-backed runtime export"
+        );
+        assert!(
+            !repo.repo_root.join(TASK_LEDGER_FILE_PATH).exists(),
+            "tracked task ledger should not be rewritten during git-backed runtime export"
         );
         assert!(
             !repo.worktree_root.join(".codex-exec-loop/runtime").exists(),

@@ -6,3 +6,4 @@ target/
 dist/
 npm/vendor/
 npm/.staging/
+.codex-exec-loop/runtime/
