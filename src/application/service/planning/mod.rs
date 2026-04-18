@@ -105,7 +105,6 @@ impl PlanningFeature {
         let proposal_promotion = PlanningProposalPromotionService::new(
             planning_workspace_port,
             planning_prompt_service,
-            planning_reconciliation_service,
             validation_service,
             priority_queue_service,
         );
