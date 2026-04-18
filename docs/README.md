@@ -6,7 +6,7 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - `docs/releases/`: curated change summaries between notable tags and the current product
 - `docs/validation/`: captured terminal validation records and naming rules
 - `docs/plan/`: operator runbooks plus roadmap and architecture references
-- `docs/supersession/`: target parallel-mode and supersession architecture planning
+- `docs/supersession/`: remaining supersession follow-through and historical architecture reference
 - `docs/agent/`: contributor guidance for repo-specific workflows
 
 ## Start Here
@@ -28,7 +28,7 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md)
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md)
 - [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md): repo-shared planning authority redesign
-- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md): current supersession and planning runtime failure modes
+- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md): historical pre-cutover supersession and planning runtime failure audit
 
 ## Roadmap References
 
@@ -42,8 +42,8 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 
 ## Supersession Status
 
-- Current shipped behavior: [design/01-current-product-state.md](design/01-current-product-state.md)
-- Remaining target and architecture follow-through: [supersession/README.md](supersession/README.md)
+- Current branch implementation status: [design/01-current-product-state.md](design/01-current-product-state.md) and [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md)
+- Remaining target and historical design detail: [supersession/README.md](supersession/README.md)
 
 ## Repo Workflow References
 
@@ -56,6 +56,6 @@ The repository keeps shipped contracts, release deltas, validation records, and 
 - Keep shipped behavior in `docs/design/`.
 - Keep release-delta summaries in `docs/releases/`.
 - Keep runbooks and active roadmap work in `docs/plan/`.
-- Keep target supersession and remaining parallel-mode architecture planning in `docs/supersession/`; link current shipped supersession behavior from `docs/design/`.
+- Keep remaining supersession follow-through and historical parallel-mode architecture references in `docs/supersession/`; move implemented operator-facing behavior back into `docs/design/` and keep the supersession side compact.
 - Delete superseded plan docs once the shipped contract has moved back into `docs/design/`.
 - Prefer linking to code entrypoints instead of embedding long implementation walkthroughs.

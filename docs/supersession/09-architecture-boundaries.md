@@ -11,6 +11,12 @@ The stable dependency direction remains:
 
 `adapter -> application -> domain`
 
+## Current Branch Status
+
+- `PlanningAuthorityPort` is live.
+- The SQLite authority adapter now owns repo-scoped active planning, staged drafts, official refresh claims, distributor queue claims, runtime projections, export repair, and restart recovery for git-backed workspaces.
+- Treat the rest of this file as historical design rationale and boundary intent; the remaining work is decomposition polish rather than first-time port introduction.
+
 ## New Domain Snapshots
 
 | Type | Role |

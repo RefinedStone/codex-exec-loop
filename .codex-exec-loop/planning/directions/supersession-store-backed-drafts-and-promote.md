@@ -5,6 +5,11 @@
 Move draft storage, validation, rejection resume metadata, and promote semantics into the
 repo-shared authority domain while leaving active planning unchanged until promote succeeds.
 
+## Status
+
+- Current branch status: implemented and recorded as `done` in `task-ledger.json`.
+- Keep this file as compact rationale for what shipped; the remaining work moved on to validation, doc alignment, and residual polish rather than another draft-migration slice.
+
 ## Why this direction exists
 
 The updated authority design keeps the operator mental model of `draft -> validate -> promote`, but

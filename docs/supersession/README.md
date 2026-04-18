@@ -10,6 +10,7 @@ current hidden planning worker or session browser.
 
 Current shipped supersession behavior should be read from `docs/design/` first.
 This directory now exists to track the remaining target model and architecture follow-through.
+Most major supersession slices are already implemented on the current branch, so treat this directory as residual follow-through and historical design context rather than the primary source of current behavior.
 
 ## Current Shipped Status
 
@@ -21,10 +22,24 @@ Current `prerelease` already ships:
 - `reported_complete` versus official completion through hidden planning refresh
 - a serial distributor queue with GitHub automation and slot return
 
+Current branch follow-through also includes:
+
+- canonical repo-scoped authority location and shadow-store parity inspection
+- store-backed drafts, validation, promote, and rollback-safe activation
+- store-backed active planning mutation plus official refresh and distributor queue claims
+- store-backed runtime projections and restart recovery classification
+- store-primary active planning reads and export repair, plus legacy bootstrap cleanup
+
 Use these docs for current behavior:
 
 - [../design/01-current-product-state.md](../design/01-current-product-state.md)
+- [../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md)
 - [../releases/v1.2.9-to-prerelease.md](../releases/v1.2.9-to-prerelease.md)
+
+Branch-local slice completion status also lives in:
+
+- `./.codex-exec-loop/planning/directions.toml`
+- `./.codex-exec-loop/planning/task-ledger.json`
 
 ## Fixed V1 Decisions
 
@@ -68,7 +83,13 @@ Use these docs for current behavior:
 | `10-implementation-slices.md` | delivery plan | defines slice order, validation, and worktree-safe boundaries |
 | `11-open-questions-and-non-goals.md` | future boundary | records deferred design, non-goals, and later expansion points |
 
-## Implementation Handoff Summary
+## Remaining Follow-Through
+
+- real-terminal validation depth for restart and recovery paths
+- compact docs alignment now that most architecture slices are implemented
+- residual copy and surface polish instead of new authority or distributor subsystems
+
+## Historical Handoff Summary
 
 - Build a separate supersession runtime instead of stretching the current single conversation runtime.
 - Reuse the hidden planning worker only for ledger refresh after agent milestones.
