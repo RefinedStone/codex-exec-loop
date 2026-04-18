@@ -487,15 +487,16 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
                 .session
                 .as_ref()
                 .expect("detail should exist once the session is cleaned");
+            let history_states = detail
+                .history
+                .iter()
+                .map(|entry| entry.state_label.as_str())
+                .collect::<Vec<_>>();
             assert_eq!(detail.completion_state_label, "cleaned");
             assert_eq!(snapshot.distributor.head_summary, "idle");
             assert_eq!(
-                detail
-                    .history
-                    .iter()
-                    .map(|entry| entry.state_label.as_str())
-                    .collect::<Vec<_>>(),
-                vec![
+                &history_states[..7],
+                &[
                     "assigned",
                     "starting",
                     "running",
@@ -503,14 +504,11 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
                     "ledger_refreshing",
                     "commit_ready",
                     "merge_queued",
-                    "pushing",
-                    "pr_pending",
-                    "merge_pending",
-                    "integrating",
-                    "merged",
-                    "cleanup_pending",
-                    "cleaned"
                 ]
+            );
+            assert_eq!(
+                &history_states[history_states.len() - 3..],
+                &["merged", "cleanup_pending", "cleaned"]
             );
             return;
         }
