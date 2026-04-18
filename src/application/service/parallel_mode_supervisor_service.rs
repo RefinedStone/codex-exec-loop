@@ -7,14 +7,12 @@ use crate::domain::parallel_mode::{
 
 use super::parallel_mode_distributor_service::{
     ParallelModeDistributorQueueRecord, ParallelModeDistributorService,
-    load_distributor_queue_records,
 };
 use super::{
     PoolRuntimeContext, build_assigned_session_detail, build_pool_board,
     default_ledger_refresh_outcome, default_supervisor_notice, default_validation_summary,
     derive_supervisor_state, format_elapsed_label_from_timestamp, lease_session_key,
-    load_agent_session_detail_records, load_pool_runtime_context, pool_operator_recovery_notice,
-    reconcile_pool_board,
+    load_pool_runtime_context, pool_operator_recovery_notice, reconcile_pool_board,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -139,7 +137,7 @@ fn build_agent_roster_from_context(
     context: &PoolRuntimeContext,
     mode_enabled: bool,
 ) -> ParallelModeAgentRosterSnapshot {
-    let history = load_agent_session_detail_records(&context.pool_root);
+    let history = context.session_details.clone();
     let leases = sorted_active_leases(context);
 
     let entries = leases
@@ -293,8 +291,8 @@ fn build_supervisor_detail_from_context(
     context: &PoolRuntimeContext,
     mode_enabled: bool,
 ) -> ParallelModeSupervisorDetailSnapshot {
-    let history = load_agent_session_detail_records(&context.pool_root);
-    let queue_records = load_distributor_queue_records(&context.pool_root);
+    let history = context.session_details.clone();
+    let queue_records = context.distributor_queue_records.clone();
     let empty_state = if mode_enabled {
         "no agent session history captured yet"
     } else {

@@ -8,7 +8,8 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::application::port::outbound::planning_authority_port::{
-    PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
@@ -19,6 +20,9 @@ use crate::application::service::planning_contract::{
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
     RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
+use crate::domain::parallel_mode::{
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
+};
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
     PlanningAuthorityShadowStoreSyncState,
@@ -28,7 +32,8 @@ const RUNTIME_DIRECTORY: &str = ".codex-exec-loop/runtime";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
 const LEGACY_SHADOW_STORE_SCHEMA_VERSION: i64 = 1;
 const ACTIVE_DRAFT_SCHEMA_VERSION: i64 = 2;
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 3;
+const ACTIVE_MUTATION_SCHEMA_VERSION: i64 = 3;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 4;
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
 const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
@@ -440,6 +445,226 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn load_runtime_projections(
+        workspace_dir: &str,
+    ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_runtime_projections(&mut connection, &location)?;
+        load_runtime_projection_snapshot(&connection)
+    }
+
+    pub(crate) fn upsert_runtime_slot_lease(
+        workspace_dir: &str,
+        lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_runtime_projections(&mut connection, &location)?;
+
+        let payload_json = serde_json::to_string(lease)
+            .context("failed to serialize runtime slot lease projection")?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime slot lease transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        transaction
+            .execute(
+                "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(slot_id) DO UPDATE
+                 SET updated_at = excluded.updated_at,
+                     content = excluded.content",
+                params![lease.slot_id, Utc::now().to_rfc3339(), payload_json],
+            )
+            .with_context(|| format!("failed to persist runtime slot lease `{}`", lease.slot_id))?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
+                params![lease.slot_id],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to clear invalid runtime slot lease `{}`",
+                    lease.slot_id
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "slot_lease_upsert",
+            "slot_lease",
+            &lease.slot_id,
+            &format!(
+                "runtime slot lease stored / slot: {} / state: {}",
+                lease.slot_id,
+                lease.state.label()
+            ),
+            &serde_json::to_string(lease)
+                .context("failed to serialize runtime slot lease event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime slot lease transaction")?;
+
+        mirror_runtime_slot_lease(&location, lease)?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_runtime_slot_lease(workspace_dir: &str, slot_id: &str) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_runtime_projections(&mut connection, &location)?;
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime slot lease removal transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let deleted_rows = transaction
+            .execute(
+                "DELETE FROM runtime_slot_leases WHERE slot_id = ?1",
+                params![slot_id],
+            )
+            .with_context(|| format!("failed to delete runtime slot lease `{slot_id}`"))?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
+                params![slot_id],
+            )
+            .with_context(|| format!("failed to clear invalid runtime slot lease `{slot_id}`"))?;
+        if deleted_rows > 0 {
+            append_runtime_event(
+                &transaction,
+                "slot_lease_removed",
+                "slot_lease",
+                slot_id,
+                &format!("runtime slot lease removed / slot: {slot_id}"),
+                "{}",
+            )?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit runtime slot lease removal transaction")?;
+
+        remove_runtime_slot_lease_mirror(&location, slot_id)?;
+        Ok(())
+    }
+
+    pub(crate) fn upsert_runtime_session_detail(
+        workspace_dir: &str,
+        detail: &ParallelModeAgentSessionDetailSnapshot,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_runtime_projections(&mut connection, &location)?;
+
+        let payload_json = serde_json::to_string(detail)
+            .context("failed to serialize runtime session detail projection")?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime session detail transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        transaction
+            .execute(
+                "INSERT INTO runtime_session_details (session_key, slot_id, updated_at, content)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_key) DO UPDATE
+                 SET slot_id = excluded.slot_id,
+                     updated_at = excluded.updated_at,
+                     content = excluded.content",
+                params![
+                    detail.session_key,
+                    detail.slot_id,
+                    detail.updated_at,
+                    payload_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to persist runtime session detail `{}`",
+                    detail.session_key
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "session_detail_upsert",
+            "session_detail",
+            &detail.session_key,
+            &format!(
+                "runtime session detail stored / session: {} / state: {}",
+                detail.session_key, detail.state_label
+            ),
+            &serde_json::to_string(detail)
+                .context("failed to serialize runtime session detail event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime session detail transaction")?;
+
+        mirror_runtime_session_detail(&location, detail)?;
+        Ok(())
+    }
+
+    pub(crate) fn upsert_runtime_distributor_queue_record(
+        workspace_dir: &str,
+        record: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_runtime_projections(&mut connection, &location)?;
+
+        let payload_json = serde_json::to_string(record)
+            .context("failed to serialize runtime distributor queue projection")?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime distributor queue transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        transaction
+            .execute(
+                "INSERT INTO runtime_distributor_queue
+                 (queue_item_id, session_key, queue_state, enqueued_at, updated_at, content)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(queue_item_id) DO UPDATE
+                 SET session_key = excluded.session_key,
+                     queue_state = excluded.queue_state,
+                     enqueued_at = excluded.enqueued_at,
+                     updated_at = excluded.updated_at,
+                     content = excluded.content",
+                params![
+                    record.queue_item_id,
+                    record.session_key,
+                    record.queue_state.label(),
+                    record.enqueued_at,
+                    record.updated_at,
+                    payload_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to persist runtime distributor queue record `{}`",
+                    record.queue_item_id
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "distributor_queue_upsert",
+            "distributor_queue",
+            &record.queue_item_id,
+            &format!(
+                "runtime distributor queue stored / item: {} / state: {}",
+                record.queue_item_id,
+                record.queue_state.label()
+            ),
+            &serde_json::to_string(record)
+                .context("failed to serialize runtime distributor queue event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime distributor queue transaction")?;
+
+        mirror_runtime_distributor_queue_record(&location, record)?;
+        Ok(())
+    }
+
     fn resolve_authority_location_from_workspace(
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityLocation> {
@@ -587,6 +812,41 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         Self::release_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
     }
+
+    fn load_runtime_projections(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
+        Self::load_runtime_projections(workspace_dir)
+    }
+
+    fn upsert_runtime_slot_lease(
+        &self,
+        workspace_dir: &str,
+        lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<()> {
+        Self::upsert_runtime_slot_lease(workspace_dir, lease)
+    }
+
+    fn remove_runtime_slot_lease(&self, workspace_dir: &str, slot_id: &str) -> Result<()> {
+        Self::remove_runtime_slot_lease(workspace_dir, slot_id)
+    }
+
+    fn upsert_runtime_session_detail(
+        &self,
+        workspace_dir: &str,
+        detail: &ParallelModeAgentSessionDetailSnapshot,
+    ) -> Result<()> {
+        Self::upsert_runtime_session_detail(workspace_dir, detail)
+    }
+
+    fn upsert_runtime_distributor_queue_record(
+        &self,
+        workspace_dir: &str,
+        record: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<()> {
+        Self::upsert_runtime_distributor_queue_record(workspace_dir, record)
+    }
 }
 
 fn ensure_schema(connection: &Connection) -> Result<()> {
@@ -628,6 +888,44 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
                 claim_value TEXT NOT NULL,
                 claimed_at TEXT NOT NULL,
                 PRIMARY KEY (claim_kind, scope_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_slot_leases (
+                slot_id TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_invalid_slot_leases (
+                slot_id TEXT PRIMARY KEY,
+                detected_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_session_details (
+                session_key TEXT PRIMARY KEY,
+                slot_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_distributor_queue (
+                queue_item_id TEXT PRIMARY KEY,
+                session_key TEXT NOT NULL,
+                queue_state TEXT NOT NULL,
+                enqueued_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_events (
+                sequence INTEGER PRIMARY KEY,
+                event_kind TEXT NOT NULL,
+                projection_kind TEXT NOT NULL,
+                projection_key TEXT NOT NULL,
+                observed_planning_revision INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
             );
             "#,
         )
@@ -706,6 +1004,7 @@ fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String,
         let parsed = schema_version.parse::<i64>().ok();
         if parsed != Some(LEGACY_SHADOW_STORE_SCHEMA_VERSION)
             && parsed != Some(ACTIVE_DRAFT_SCHEMA_VERSION)
+            && parsed != Some(ACTIVE_MUTATION_SCHEMA_VERSION)
             && parsed != Some(AUTHORITY_STORE_SCHEMA_VERSION)
         {
             return Err(anyhow!(
@@ -745,6 +1044,244 @@ fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Con
         .context("failed to enable authority-store foreign keys")?;
     ensure_schema(&connection)?;
     Ok(connection)
+}
+
+fn bootstrap_runtime_projections(
+    connection: &mut Connection,
+    location: &PlanningAuthorityLocation,
+) -> Result<()> {
+    let runtime_projection_count = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM runtime_slot_leases) +
+                (SELECT COUNT(*) FROM runtime_invalid_slot_leases) +
+                (SELECT COUNT(*) FROM runtime_session_details) +
+                (SELECT COUNT(*) FROM runtime_distributor_queue)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("failed to count runtime authority projections")?;
+    if runtime_projection_count > 0 {
+        return Ok(());
+    }
+
+    let pool_root = legacy_runtime_pool_root(location);
+    let (slot_leases, invalid_slot_leases) = read_legacy_slot_leases(&pool_root);
+    let session_details = read_legacy_session_details(&pool_root);
+    let distributor_queue_records = read_legacy_distributor_queue_records(&pool_root);
+    if slot_leases.is_empty()
+        && invalid_slot_leases.is_empty()
+        && session_details.is_empty()
+        && distributor_queue_records.is_empty()
+    {
+        return Ok(());
+    }
+
+    let transaction = connection
+        .transaction()
+        .context("failed to open runtime projection bootstrap transaction")?;
+    upsert_authority_metadata(&transaction, location, "last_runtime_projection_at")?;
+    for lease in slot_leases.values() {
+        transaction
+            .execute(
+                "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    lease.slot_id,
+                    lease
+                        .running_started_at
+                        .as_deref()
+                        .unwrap_or(lease.leased_at.as_str()),
+                    serde_json::to_string(lease)
+                        .context("failed to serialize bootstrapped slot lease")?,
+                ],
+            )
+            .with_context(|| {
+                format!("failed to bootstrap runtime slot lease `{}`", lease.slot_id)
+            })?;
+    }
+    for slot_id in &invalid_slot_leases {
+        transaction
+            .execute(
+                "INSERT INTO runtime_invalid_slot_leases (slot_id, detected_at)
+                 VALUES (?1, ?2)",
+                params![slot_id, Utc::now().to_rfc3339()],
+            )
+            .with_context(|| {
+                format!("failed to bootstrap invalid runtime slot lease `{slot_id}`")
+            })?;
+    }
+    for detail in &session_details {
+        transaction
+            .execute(
+                "INSERT INTO runtime_session_details (session_key, slot_id, updated_at, content)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    detail.session_key,
+                    detail.slot_id,
+                    detail.updated_at,
+                    serde_json::to_string(detail)
+                        .context("failed to serialize bootstrapped session detail")?,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to bootstrap runtime session detail `{}`",
+                    detail.session_key
+                )
+            })?;
+    }
+    for record in &distributor_queue_records {
+        transaction
+            .execute(
+                "INSERT INTO runtime_distributor_queue
+                 (queue_item_id, session_key, queue_state, enqueued_at, updated_at, content)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    record.queue_item_id,
+                    record.session_key,
+                    record.queue_state.label(),
+                    record.enqueued_at,
+                    record.updated_at,
+                    serde_json::to_string(record)
+                        .context("failed to serialize bootstrapped distributor queue record")?,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to bootstrap runtime distributor queue record `{}`",
+                    record.queue_item_id
+                )
+            })?;
+    }
+    upsert_metadata(&transaction, "runtime_event_sequence", "0")?;
+    transaction
+        .commit()
+        .context("failed to commit runtime projection bootstrap transaction")?;
+    Ok(())
+}
+
+fn load_runtime_projection_snapshot(
+    connection: &Connection,
+) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
+    let mut slot_leases = BTreeMap::new();
+    let mut invalid_slot_leases = BTreeSet::new();
+    let mut session_details = Vec::new();
+    let mut distributor_queue_records = Vec::new();
+
+    let mut slot_statement = connection
+        .prepare("SELECT slot_id, content FROM runtime_slot_leases ORDER BY slot_id")
+        .context("failed to read runtime slot leases")?;
+    let slot_rows = slot_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate runtime slot leases")?;
+    for row in slot_rows {
+        let (slot_id, content) = row.context("failed to decode runtime slot lease row")?;
+        let lease = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&content)
+            .with_context(|| format!("failed to deserialize runtime slot lease `{slot_id}`"))?;
+        slot_leases.insert(slot_id, lease);
+    }
+
+    let mut invalid_slot_statement = connection
+        .prepare("SELECT slot_id FROM runtime_invalid_slot_leases ORDER BY slot_id")
+        .context("failed to read invalid runtime slot leases")?;
+    let invalid_slot_rows = invalid_slot_statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .context("failed to iterate invalid runtime slot leases")?;
+    for row in invalid_slot_rows {
+        invalid_slot_leases.insert(row.context("failed to decode invalid runtime slot row")?);
+    }
+
+    let mut session_statement = connection
+        .prepare(
+            "SELECT session_key, content
+             FROM runtime_session_details
+             ORDER BY updated_at DESC, session_key ASC",
+        )
+        .context("failed to read runtime session details")?;
+    let session_rows = session_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate runtime session details")?;
+    for row in session_rows {
+        let (session_key, content) = row.context("failed to decode runtime session detail row")?;
+        session_details.push(
+            serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content).with_context(
+                || format!("failed to deserialize runtime session detail `{session_key}`"),
+            )?,
+        );
+    }
+
+    let mut queue_statement = connection
+        .prepare(
+            "SELECT queue_item_id, content
+             FROM runtime_distributor_queue
+             ORDER BY enqueued_at ASC, queue_item_id ASC",
+        )
+        .context("failed to read runtime distributor queue records")?;
+    let queue_rows = queue_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate runtime distributor queue records")?;
+    for row in queue_rows {
+        let (queue_item_id, content) =
+            row.context("failed to decode runtime distributor queue row")?;
+        distributor_queue_records.push(
+            serde_json::from_str::<PlanningAuthorityDistributorQueueRecord>(&content)
+                .with_context(|| {
+                    format!(
+                        "failed to deserialize runtime distributor queue record `{queue_item_id}`"
+                    )
+                })?,
+        );
+    }
+
+    Ok(PlanningAuthorityRuntimeProjectionSnapshot {
+        slot_leases,
+        invalid_slot_leases,
+        session_details,
+        distributor_queue_records,
+    })
+}
+
+fn append_runtime_event(
+    transaction: &rusqlite::Transaction<'_>,
+    event_kind: &str,
+    projection_kind: &str,
+    projection_key: &str,
+    summary: &str,
+    payload_json: &str,
+) -> Result<()> {
+    let sequence = read_metadata_i64(transaction, "runtime_event_sequence")?.unwrap_or(0) + 1;
+    let observed_planning_revision =
+        read_metadata_i64(transaction, "planning_revision")?.unwrap_or(0);
+    upsert_metadata(transaction, "runtime_event_sequence", &sequence.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO runtime_events
+             (sequence, event_kind, projection_kind, projection_key, observed_planning_revision, summary, payload_json, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                sequence,
+                event_kind,
+                projection_kind,
+                projection_key,
+                observed_planning_revision,
+                summary,
+                payload_json,
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .with_context(|| {
+            format!(
+                "failed to append runtime event `{event_kind}` for `{projection_kind}:{projection_key}`"
+            )
+        })?;
+    Ok(())
 }
 
 fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
@@ -787,6 +1324,233 @@ fn draft_display_path(
         "{}#drafts/{draft_name}/{draft_relative_path}",
         location.authority_store_path
     )
+}
+
+fn legacy_runtime_pool_root(location: &PlanningAuthorityLocation) -> PathBuf {
+    let canonical_repo_root = Path::new(&location.canonical_repo_root);
+    let repo_name = canonical_repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace");
+    let parent_dir = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
+    parent_dir
+        .join(format!("{repo_name}-worktrees"))
+        .join(stable_short_hash(&canonical_repo_root.to_string_lossy()))
+        .join("akra-pool")
+}
+
+fn stable_short_hash(value: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    format!("{hash:016x}")[..12].to_string()
+}
+
+fn runtime_slot_leases_root(location: &PlanningAuthorityLocation) -> PathBuf {
+    legacy_runtime_pool_root(location).join(".leases")
+}
+
+fn runtime_slot_lease_path(location: &PlanningAuthorityLocation, slot_id: &str) -> PathBuf {
+    runtime_slot_leases_root(location).join(format!("{slot_id}.json"))
+}
+
+fn runtime_session_history_dir(location: &PlanningAuthorityLocation) -> PathBuf {
+    legacy_runtime_pool_root(location).join(".agent-sessions")
+}
+
+fn runtime_session_detail_path(location: &PlanningAuthorityLocation, session_key: &str) -> PathBuf {
+    let filename = session_key
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    runtime_session_history_dir(location).join(format!("{filename}.json"))
+}
+
+fn runtime_distributor_queue_root(location: &PlanningAuthorityLocation) -> PathBuf {
+    legacy_runtime_pool_root(location).join(".distributor-queue")
+}
+
+fn runtime_distributor_queue_path(
+    location: &PlanningAuthorityLocation,
+    queue_item_id: &str,
+) -> PathBuf {
+    runtime_distributor_queue_root(location).join(format!("{queue_item_id}.json"))
+}
+
+fn mirror_runtime_slot_lease(
+    location: &PlanningAuthorityLocation,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<()> {
+    let leases_root = runtime_slot_leases_root(location);
+    fs::create_dir_all(&leases_root)
+        .with_context(|| format!("failed to create {}", leases_root.display()))?;
+    fs::write(
+        runtime_slot_lease_path(location, &lease.slot_id),
+        serde_json::to_string_pretty(lease)
+            .context("failed to serialize mirrored runtime slot lease")?,
+    )
+    .with_context(|| format!("failed to mirror runtime slot lease `{}`", lease.slot_id))?;
+    Ok(())
+}
+
+fn remove_runtime_slot_lease_mirror(
+    location: &PlanningAuthorityLocation,
+    slot_id: &str,
+) -> Result<()> {
+    let path = runtime_slot_lease_path(location, slot_id);
+    if path.exists() {
+        fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn mirror_runtime_session_detail(
+    location: &PlanningAuthorityLocation,
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+) -> Result<()> {
+    let history_dir = runtime_session_history_dir(location);
+    fs::create_dir_all(&history_dir)
+        .with_context(|| format!("failed to create {}", history_dir.display()))?;
+    fs::write(
+        runtime_session_detail_path(location, &detail.session_key),
+        serde_json::to_string_pretty(detail)
+            .context("failed to serialize mirrored runtime session detail")?,
+    )
+    .with_context(|| {
+        format!(
+            "failed to mirror runtime session detail `{}`",
+            detail.session_key
+        )
+    })?;
+    Ok(())
+}
+
+fn mirror_runtime_distributor_queue_record(
+    location: &PlanningAuthorityLocation,
+    record: &PlanningAuthorityDistributorQueueRecord,
+) -> Result<()> {
+    let queue_root = runtime_distributor_queue_root(location);
+    fs::create_dir_all(&queue_root)
+        .with_context(|| format!("failed to create {}", queue_root.display()))?;
+    fs::write(
+        runtime_distributor_queue_path(location, &record.queue_item_id),
+        serde_json::to_string_pretty(record)
+            .context("failed to serialize mirrored distributor queue record")?,
+    )
+    .with_context(|| {
+        format!(
+            "failed to mirror runtime distributor queue record `{}`",
+            record.queue_item_id
+        )
+    })?;
+    Ok(())
+}
+
+fn read_legacy_slot_leases(
+    pool_root: &Path,
+) -> (
+    BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+    BTreeSet<String>,
+) {
+    let leases_root = pool_root.join(".leases");
+    let Ok(entries) = fs::read_dir(&leases_root) else {
+        return (BTreeMap::new(), BTreeSet::new());
+    };
+
+    let mut slot_leases = BTreeMap::new();
+    let mut invalid_slot_leases = BTreeSet::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let slot_id = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        if slot_id.is_empty() {
+            continue;
+        }
+
+        let Ok(contents) = fs::read_to_string(&path) else {
+            invalid_slot_leases.insert(slot_id);
+            continue;
+        };
+        let Ok(lease) = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&contents) else {
+            invalid_slot_leases.insert(slot_id);
+            continue;
+        };
+        if lease.slot_id != slot_id {
+            invalid_slot_leases.insert(slot_id);
+            continue;
+        }
+        slot_leases.insert(slot_id, lease);
+    }
+
+    (slot_leases, invalid_slot_leases)
+}
+
+fn read_legacy_session_details(pool_root: &Path) -> Vec<ParallelModeAgentSessionDetailSnapshot> {
+    let history_dir = pool_root.join(".agent-sessions");
+    let Ok(entries) = fs::read_dir(&history_dir) else {
+        return Vec::new();
+    };
+
+    let mut records = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("json"))
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|content| {
+            serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content).ok()
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.session_key.cmp(&right.session_key))
+    });
+    records
+}
+
+fn read_legacy_distributor_queue_records(
+    pool_root: &Path,
+) -> Vec<PlanningAuthorityDistributorQueueRecord> {
+    let queue_root = pool_root.join(".distributor-queue");
+    let Ok(entries) = fs::read_dir(&queue_root) else {
+        return Vec::new();
+    };
+
+    let mut records = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|content| {
+            serde_json::from_str::<PlanningAuthorityDistributorQueueRecord>(&content).ok()
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.enqueued_at
+            .cmp(&right.enqueued_at)
+            .then_with(|| left.queue_item_id.cmp(&right.queue_item_id))
+    });
+    records
 }
 
 fn bootstrap_active_documents(
