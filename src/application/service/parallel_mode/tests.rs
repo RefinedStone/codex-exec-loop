@@ -1,12 +1,13 @@
     use super::distributor::load_distributor_queue_records;
     use super::{
-        DEFAULT_POOL_SIZE, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-        ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-        ParallelModeService, ParallelModeSupervisorState, agent_session_detail_record_path,
-        build_pool_board, derive_default_pool_root, derive_readiness, detect_canonical_repo_root,
-        inspect_planning, lease_session_key, parse_https_remote, read_agent_session_detail_record,
-        reconcile_pool_board, resolve_workspace_slot_lease, run_command, short_sha, slot_id,
-        slot_lease_file_path,
+        DEFAULT_POOL_SIZE, MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey,
+        ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
+        ParallelModeReadinessState, ParallelModeService, ParallelModeSupervisorState,
+        agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
+        derive_default_pool_root, derive_readiness, detect_canonical_repo_root, inspect_planning,
+        lease_session_key, parse_https_remote, read_agent_session_detail_record,
+        reconcile_pool_board, resolve_workspace_slot_lease, run_command, sanitize_task_slug,
+        short_branch_slug_hash, short_sha, slot_id, slot_lease_file_path,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::application::port::outbound::github_automation_port::{
@@ -2169,6 +2170,67 @@
         assert_eq!(pool.running_slots, 0);
         assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Leased);
         assert_eq!(pool.slots[0].owner_label, "agent-1 / task-1");
+    }
+
+    #[test]
+    fn acquire_slot_lease_truncates_long_branch_slug_with_stable_hash() {
+        let repo = TempGitRepo::new("lease-slot-long-branch");
+        let service = ParallelModeService::new();
+        let long_slug = format!("{}tail", "very-long-task-segment-".repeat(8));
+        let sanitized_slug = sanitize_task_slug(&long_slug).expect("long slug should sanitize");
+
+        assert!(sanitized_slug.len() > MAX_AGENT_BRANCH_SLUG_LEN);
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", &long_slug),
+            )
+            .expect("slot lease should be acquired");
+        let slug = lease
+            .branch_name
+            .strip_prefix("akra-agent/slot-1/")
+            .expect("slot branch prefix should be present");
+
+        assert!(slug.len() <= MAX_AGENT_BRANCH_SLUG_LEN);
+        assert!(slug.ends_with(short_branch_slug_hash(&sanitized_slug).as_str()));
+        assert!(repo.branch_exists(&lease.branch_name));
+    }
+
+    #[test]
+    fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() {
+        let repo = TempGitRepo::new("lease-slot-branch-collision");
+        let long_slug = format!("{}tail", "collision-prone-task-segment-".repeat(6));
+        let sanitized_slug = sanitize_task_slug(&long_slug).expect("long slug should sanitize");
+
+        assert!(sanitized_slug.len() > MAX_AGENT_BRANCH_SLUG_LEN);
+
+        let first = allocate_agent_branch_name(
+            &repo.workspace_dir(),
+            "slot-1",
+            &long_slug,
+            "task-1",
+            "Task One",
+        );
+        run_git(&repo.repo_root, &["branch", first.as_str(), "akra"]);
+
+        let second = allocate_agent_branch_name(
+            &repo.workspace_dir(),
+            "slot-1",
+            &long_slug,
+            "task-1",
+            "Task One",
+        );
+        let slug = second
+            .strip_prefix("akra-agent/slot-1/")
+            .expect("slot branch prefix should be present");
+        let base_slug = slug
+            .strip_suffix("-2")
+            .expect("collision branch should carry a numbered suffix");
+
+        assert_ne!(first, second);
+        assert!(slug.len() <= MAX_AGENT_BRANCH_SLUG_LEN);
+        assert!(base_slug.ends_with(short_branch_slug_hash(&sanitized_slug).as_str()));
     }
 
     #[test]
