@@ -1,11 +1,11 @@
-use crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
-use crate::application::service::planning_prompt_service::{
+use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+use crate::application::service::planning::runtime::prompt::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
-use crate::application::service::planning_reconciliation_service::{
+use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
-use crate::application::service::planning_runtime_policy_service::{
+use crate::application::service::planning::runtime::policy::{
     PlanningAutoFollowBlockReason, PlanningAutoFollowPolicyDecision, PlanningAutoFollowPromptMode,
     PlanningRuntimePolicyService,
 };
@@ -17,7 +17,7 @@ use crate::application::service::turn_prompt_assembly_service::{
 use crate::domain::planning::PriorityQueueTask;
 use anyhow::Result;
 
-pub use crate::application::service::planning_runtime_policy_service::{
+pub use crate::application::service::planning::runtime::policy::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     PlanningRuntimeSummaryRequest,
@@ -321,14 +321,14 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::shared::contract::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
         RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning_prompt_service::PlanningPromptService;
-    use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+    use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
+    use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::domain::planning::PriorityQueueTask;
@@ -474,8 +474,8 @@ mod tests {
     }
 
     fn ready_snapshot()
-    -> crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot {
-        crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
+    -> crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot {
+        crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot::ready(
             "Planning Context".to_string(),
             "next task: rank 1 / task-1".to_string(),
             Some(PriorityQueueTask {
@@ -498,7 +498,7 @@ mod tests {
 
         let snapshot = service.load_runtime_snapshot_or_invalid("/tmp/workspace");
 
-        assert_eq!(snapshot.workspace_status(), crate::application::service::planning_prompt_service::PlanningRuntimeWorkspaceStatus::Invalid);
+        assert_eq!(snapshot.workspace_status(), crate::application::service::planning::runtime::prompt::PlanningRuntimeWorkspaceStatus::Invalid);
         assert_eq!(
             snapshot.failure_reason(),
             Some("failed to load planning workspace: permission denied")
@@ -542,7 +542,7 @@ mod tests {
     fn decide_auto_followup_blocks_when_queue_head_is_missing() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
-            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
+            crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot::ready(
                 "Planning Context".to_string(),
                 "next_task: none".to_string(),
                 None,
@@ -569,7 +569,7 @@ mod tests {
     fn decide_auto_followup_refreshes_when_only_proposals_exist_without_queue_head() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
-            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
+            crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context\nRuntime Follow-up Proposal Rules".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 Some(
@@ -628,7 +628,7 @@ mod tests {
     fn build_auto_follow_preview_uses_planning_refresh_prompt_when_queue_is_idle() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
-            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready(
+            crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot::ready(
                 "Planning Context".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 None,
@@ -688,7 +688,7 @@ mod tests {
     fn build_summary_line_includes_proposals_when_queue_is_idle() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
-            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
+            crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 Some(
@@ -755,7 +755,7 @@ mod tests {
     fn build_followup_status_projection_surfaces_proposal_line() {
         let service = runtime_facade_with_load_result(Ok(PlanningWorkspaceLoadRecord::default()));
         let snapshot =
-            crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot::ready_with_details(
+            crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot::ready_with_details(
                 "Planning Context".to_string(),
                 "queue idle: no executable planning task".to_string(),
                 Some(

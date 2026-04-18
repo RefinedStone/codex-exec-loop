@@ -11,12 +11,12 @@ use anyhow::Result;
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
 };
-use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
-use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
-use crate::application::service::planning_reconciliation_service::{
+use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
+use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
+use crate::application::service::planning::repair::reconciliation::{
     PlanningRepairRequest, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
-use crate::application::service::planning_runtime_facade_service::{
+use crate::application::service::planning::runtime::facade::{
     PlanningRuntimeFacadeService, PlanningTaskHandoff,
 };
 
@@ -485,19 +485,19 @@ mod tests {
         PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning_prompt_service::PlanningPromptService;
-    use crate::application::service::planning_reconciliation_service::PlanningReconciliationService;
-    use crate::application::service::planning_runtime_facade_service::{
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+    use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
+    use crate::application::service::planning::runtime::facade::{
         PlanningRuntimeFacadeService, PlanningTaskHandoff,
     };
-    use crate::application::service::planning_runtime_policy_service::PlanningRuntimePolicyService;
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::domain::planning::{

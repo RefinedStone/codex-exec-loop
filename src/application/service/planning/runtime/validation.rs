@@ -5,7 +5,7 @@ use chrono::DateTime;
 use jsonschema::Validator;
 use serde_json::Value;
 
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY,
 };
@@ -829,7 +829,7 @@ fn placeholder_marker(line: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::PlanningValidationService;
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
     use crate::domain::planning::{PlanningFileKind, PlanningWorkspaceFiles};
@@ -843,7 +843,7 @@ mod tests {
     }
 
     fn bootstrap_files<'a>(
-        artifacts: &'a crate::application::service::planning_bootstrap_service::PlanningBootstrapArtifacts,
+        artifacts: &'a crate::application::service::planning::authoring::bootstrap::PlanningBootstrapArtifacts,
     ) -> PlanningWorkspaceFiles<'a> {
         PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,

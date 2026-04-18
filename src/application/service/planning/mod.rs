@@ -1,47 +1,52 @@
 use std::sync::Arc;
 
+pub(crate) mod authoring;
+pub(crate) mod repair;
+pub(crate) mod runtime;
+pub(crate) mod shared;
+pub(crate) mod worker;
+
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
-use super::planning_bootstrap_service::PlanningBootstrapService;
-use super::planning_directions_service::PlanningDirectionsService;
-use super::planning_doctor_service::PlanningDoctorService;
-use super::planning_init_service::PlanningInitService;
-use super::planning_prompt_service::PlanningPromptService;
-use super::planning_proposal_promotion_service::PlanningProposalPromotionService;
-use super::planning_reconciliation_service::PlanningReconciliationService;
-use super::planning_reset_service::PlanningResetService;
-use super::planning_runtime_facade_service::PlanningRuntimeFacadeService;
-use super::planning_runtime_policy_service::PlanningRuntimePolicyService;
-use super::planning_validation_service::PlanningValidationService;
-use super::planning_worker_orchestration_service::PlanningWorkerOrchestrationService;
 use super::priority_queue_service::PriorityQueueService;
 use super::turn_prompt_assembly_service::TurnPromptAssemblyService;
+use self::authoring::bootstrap::PlanningBootstrapService;
+use self::authoring::directions::PlanningDirectionsService;
+use self::authoring::init::PlanningInitService;
+use self::authoring::proposal_promotion::PlanningProposalPromotionService;
+use self::repair::doctor::PlanningDoctorService;
+use self::repair::reconciliation::PlanningReconciliationService;
+use self::repair::reset::PlanningResetService;
+use self::runtime::facade::PlanningRuntimeFacadeService;
+use self::runtime::policy::PlanningRuntimePolicyService;
+use self::runtime::prompt::PlanningPromptService;
+use self::runtime::validation::PlanningValidationService;
+use self::worker::orchestration::PlanningWorkerOrchestrationService;
 
 pub use self::PlanningFeature as PlanningServices;
-pub use super::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
-pub use super::planning_bootstrap_service::PlanningBootstrapMode;
-pub use super::planning_directions_service::{
+pub use self::authoring::bootstrap::PlanningBootstrapMode;
+pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
 };
-pub use super::planning_doctor_service::{PlanningDoctorReport, PlanningDoctorState};
-pub use super::planning_init_service::{
+pub use self::repair::doctor::{PlanningDoctorReport, PlanningDoctorState};
+pub use self::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
     PlanningDraftSaveResult, PlanningInitStageResult, PlanningWorkspaceInitResult,
 };
-pub use super::planning_prompt_service::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
-pub use super::planning_proposal_promotion_service::{
+pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
+pub use self::authoring::proposal_promotion::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
 };
-pub use super::planning_reconciliation_service::{
+pub use self::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueSnapshotAction,
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
-pub use super::planning_reset_service::{PlanningResetTarget, PlanningWorkspaceResetResult};
-pub use super::planning_runtime_facade_service::{
+pub use self::repair::reset::{PlanningResetTarget, PlanningWorkspaceResetResult};
+pub use self::runtime::facade::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimePreviewRequest,
     PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeRenderedPreview,
@@ -49,8 +54,9 @@ pub use super::planning_runtime_facade_service::{
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     PlanningRuntimeSummaryRequest, PlanningTaskHandoff,
 };
-pub use super::planning_runtime_policy_service::PlanningAutoFollowBlockReason;
-pub use super::planning_worker_orchestration_service::{
+pub use self::runtime::policy::PlanningAutoFollowBlockReason;
+pub use self::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+pub use self::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
     PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerRunOutcome,
 };

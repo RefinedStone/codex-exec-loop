@@ -8,14 +8,16 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningStagedFileRecord,
     PlanningWorkspacePort,
 };
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::planning::PlanningValidationReport;
 
-use super::planning_bootstrap_service::{PlanningBootstrapMode, PlanningBootstrapService};
-use super::planning_validation_service::PlanningValidationService;
+use crate::application::service::planning::authoring::bootstrap::{
+    PlanningBootstrapMode, PlanningBootstrapService,
+};
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
 #[derive(Clone)]
 pub struct PlanningInitService {
@@ -517,15 +519,15 @@ mod tests {
         PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
         PlanningWorkspacePort,
     };
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::shared::contract::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
         QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
     #[derive(Default)]
     struct FakePlanningWorkspacePort {

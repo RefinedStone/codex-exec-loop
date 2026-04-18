@@ -39,15 +39,15 @@ use crate::application::port::outbound::github_automation_port::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::parallel_mode_service::ParallelModeService;
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
-use crate::application::service::planning_bootstrap_service::{
+use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
 use crate::application::service::session_service::SessionService;

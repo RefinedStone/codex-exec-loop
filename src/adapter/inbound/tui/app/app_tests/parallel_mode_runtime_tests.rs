@@ -16,7 +16,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };
-use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
+use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
 
 fn current_branch(workspace_directory: &str) -> String {

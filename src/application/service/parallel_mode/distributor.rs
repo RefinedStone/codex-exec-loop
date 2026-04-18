@@ -14,7 +14,7 @@ use crate::domain::parallel_mode::{
     ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
-use super::parallel_mode_supervisor_service::selected_runtime_session_detail;
+use super::supervisor::selected_runtime_session_detail;
 use super::{
     AKRA_BRANCH, DEFAULT_PUSH_REMOTE_NAME, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
     branch_exists, branch_is_integrated_into_akra, cleanup_slot, command_succeeds,

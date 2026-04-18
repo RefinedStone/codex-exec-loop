@@ -1,4 +1,4 @@
-use super::planning_auto_follow_copy::PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY;
+use super::planning::shared::auto_follow_copy::PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY;
 
 pub(crate) const PREVIEW_LAST_MESSAGE_PLACEHOLDER: &str = "(waiting for next agent reply)";
 

@@ -5,14 +5,14 @@ use anyhow::{Context, Result, anyhow};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
 };
+use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::PlanningWorkspaceFiles;
 
-use super::planning_validation_service::PlanningValidationService;
-use super::priority_queue_service::PriorityQueueService;
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
 #[derive(Clone)]
 pub struct PlanningReconciliationService {
@@ -596,14 +596,14 @@ mod tests {
         PlanningRepairRetryReason, build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {

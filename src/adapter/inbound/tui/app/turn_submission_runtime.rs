@@ -3,7 +3,7 @@ mod post_turn_execution;
 #[path = "turn_submission_runtime/stream_execution.rs"]
 mod stream_execution;
 
-use crate::application::service::parallel_mode_turn_service::ParallelModeTurnService;
+use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };

@@ -5,7 +5,7 @@ use crossterm::event::Event;
 
 use super::super::shell_runtime;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning_contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
+use crate::application::service::planning::shared::contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState,

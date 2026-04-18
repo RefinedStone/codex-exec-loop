@@ -1,7 +1,7 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
-use crate::application::service::parallel_mode_service::ParallelModeService;
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 use super::{ConversationInputEvent, NativeTuiApp};

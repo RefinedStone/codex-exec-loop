@@ -7,17 +7,17 @@ use anyhow::Result;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
+use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueSnapshot,
     PriorityQueueTask, QueueIdlePolicy, TaskLedgerDocument,
 };
 
-use super::planning_validation_service::PlanningValidationService;
-use super::priority_queue_service::PriorityQueueService;
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
 const MAX_VISIBLE_QUEUE_TASKS: usize = 5;
 const MAX_SKIPPED_QUEUE_TASKS: usize = 3;
@@ -707,14 +707,14 @@ mod tests {
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
         TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     #[derive(Default)]

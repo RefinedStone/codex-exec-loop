@@ -5,10 +5,10 @@ use anyhow::{Result, anyhow};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_bootstrap_service::{
+use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
     RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
@@ -261,8 +261,8 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::authoring::bootstrap::PlanningBootstrapService;
+    use crate::application::service::planning::shared::contract::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
         PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
         RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,

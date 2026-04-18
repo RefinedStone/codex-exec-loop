@@ -9,7 +9,7 @@ use super::super::{
     make_test_app, rewrite_active_directions_toml, sample_startup_diagnostics,
     sync_draft_conversation_to_startup_workspace,
 };
-use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
+use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 
 #[test]
 fn planning_command_opens_first_run_simple_review() {

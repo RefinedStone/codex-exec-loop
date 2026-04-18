@@ -13,7 +13,7 @@ use crate::adapter::inbound::tui::shell_chrome::{
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::parallel_mode_service::ParallelModeService;
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;

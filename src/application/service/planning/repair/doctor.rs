@@ -1,8 +1,10 @@
-use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;
+use crate::application::service::planning::shared::contract::PLAN_OFF_FILE_PATH;
 use crate::domain::text::compact_whitespace_detail;
 
-use super::planning_prompt_service::PlanningPromptService;
-use super::planning_prompt_service::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
+use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+use crate::application::service::planning::runtime::prompt::{
+    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+};
 
 const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
 
@@ -202,11 +204,11 @@ mod tests {
     use super::{PlanningDoctorService, PlanningDoctorState};
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning_bootstrap_service::PlanningBootstrapService;
-    use crate::application::service::planning_contract::PLAN_OFF_FILE_PATH;
-    use crate::application::service::planning_init_service::PlanningInitService;
-    use crate::application::service::planning_prompt_service::PlanningPromptService;
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::authoring::bootstrap::PlanningBootstrapService;
+    use crate::application::service::planning::shared::contract::PLAN_OFF_FILE_PATH;
+    use crate::application::service::planning::authoring::init::PlanningInitService;
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(label: &str) -> String {

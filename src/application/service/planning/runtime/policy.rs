@@ -1,8 +1,8 @@
-use crate::application::service::planning_auto_follow_copy::{
+use crate::application::service::planning::shared::auto_follow_copy::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
     PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
 };
-use crate::application::service::planning_prompt_service::{
+use crate::application::service::planning::runtime::prompt::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::planning::PlanningWorkspaceState;
@@ -430,7 +430,7 @@ mod tests {
         PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
         PlanningRuntimeSummaryRequest,
     };
-    use crate::application::service::planning_prompt_service::PlanningRuntimeSnapshot;
+    use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
     use crate::domain::planning::{PlanningWorkspaceState, PriorityQueueTask, TaskStatus};
 
     fn queue_head() -> PriorityQueueTask {
@@ -605,7 +605,7 @@ mod tests {
                 &snapshot,
                 PlanningAutoFollowPromptMode::ContinueQueuedTask,
             ),
-            crate::application::service::planning_auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
+            crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
         );
     }
 

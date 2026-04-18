@@ -16,7 +16,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
 };
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::contract::{
     ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
     RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
@@ -1874,7 +1874,7 @@ mod tests {
         PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-    use crate::application::service::planning_contract::{
+    use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
     use crate::domain::parallel_mode::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};

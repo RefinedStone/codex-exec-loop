@@ -7,7 +7,7 @@ use crate::adapter::inbound::tui::app::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::parallel_mode_turn_service::{
+use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelTurnStreamLaunchRequest,
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;

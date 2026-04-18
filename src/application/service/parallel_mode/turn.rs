@@ -1,5 +1,5 @@
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::parallel_mode_service::{
+use crate::application::service::parallel_mode::{
     ParallelModeOfficialCompletionReport, ParallelModeService,
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
@@ -305,7 +305,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::application::service::parallel_mode_service::ParallelModeService;
+    use crate::application::service::parallel_mode::ParallelModeService;
 
     use super::{
         ParallelModeTurnService, should_mark_cleanup_pending_after_success,

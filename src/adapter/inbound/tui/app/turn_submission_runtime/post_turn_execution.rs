@@ -1,5 +1,5 @@
-use crate::application::service::parallel_mode_service::ParallelModeOfficialCompletionReport;
-use crate::application::service::parallel_mode_turn_service::ParallelModeTurnService;
+use crate::application::service::parallel_mode::ParallelModeOfficialCompletionReport;
+use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 
 use crate::application::service::planning::PlanningProposalPromotionRequest;
 use crate::application::service::planning::PlanningServices;

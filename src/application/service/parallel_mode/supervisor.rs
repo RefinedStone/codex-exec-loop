@@ -5,7 +5,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
 };
 
-use super::parallel_mode_distributor_service::{
+use super::distributor::{
     ParallelModeDistributorQueueRecord, ParallelModeDistributorService,
 };
 use super::{

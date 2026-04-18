@@ -9,10 +9,11 @@
 
 - `src/domain/`: pure models such as session summaries and startup diagnostics
 - `src/application/service/`: use-case orchestration such as `StartupService` and `ConversationService`
-- `src/application/service/planning/`: planning feature facades exposed to the TUI
+- `src/application/service/parallel_mode/`: supersession and multi-worktree runtime boundaries
+- `src/application/service/planning/`: planning feature facade plus `authoring`, `runtime`, `repair`, `worker`, and `shared` sub-boundaries
 - `src/application/port/`: interfaces owned by the application layer
 - `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
-- `src/adapter/outbound/`: `codex app-server` integration and filesystem adapters
+- `src/adapter/outbound/`: infra-specific adapters grouped under `app_server`, `db`, `filesystem`, and `github`
 - `schema/`: checked-in protocol snapshot used to pin app-server shapes
 - `docs/`: design notes, state docs, and validation references
 

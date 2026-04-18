@@ -9,16 +9,16 @@ use toml_edit::{DocumentMut, Item, value};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
-use crate::application::service::planning_contract::{
+use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
+use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH, default_direction_detail_doc_path,
 };
-use crate::application::service::planning_init_service::{
+use crate::application::service::planning::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession,
 };
-use crate::application::service::planning_validation_service::PlanningValidationService;
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, QueueIdlePolicy,
 };
@@ -818,11 +818,11 @@ mod tests {
         DIRECTIONS_FILE_PATH, DirectionsSupportingFileStatus, PlanningDirectionsService,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_contract::default_direction_detail_doc_path;
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::shared::contract::default_direction_detail_doc_path;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::domain::planning::QueueIdlePolicy;
 
     fn create_temp_workspace(prefix: &str) -> String {

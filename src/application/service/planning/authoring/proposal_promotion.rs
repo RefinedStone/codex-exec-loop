@@ -6,10 +6,10 @@ use chrono::{SecondsFormat, Utc};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning_prompt_service::{
+use crate::application::service::planning::runtime::prompt::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
-use crate::application::service::planning_validation_service::PlanningValidationService;
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles, TaskActor,
@@ -196,12 +196,12 @@ mod tests {
     use super::{PlanningProposalPromotionRequest, PlanningProposalPromotionService};
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning_bootstrap_service::{
+    use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
-    use crate::application::service::planning_prompt_service::PlanningPromptService;
-    use crate::application::service::planning_validation_service::PlanningValidationService;
+    use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {

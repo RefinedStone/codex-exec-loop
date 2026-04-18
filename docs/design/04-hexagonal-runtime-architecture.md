@@ -10,7 +10,8 @@ every adapter and every helper file in the repo.
 
 - `src/adapter/inbound/tui`: operator input, reducer state, overlay state, and rendering
 - `src/application/service`: use-case orchestration and outbound-port ownership
-- `src/application/service/planning`: planning feature facades exposed to the TUI
+- `src/application/service/parallel_mode`: supersession, pool, distributor, and turn boundaries
+- `src/application/service/planning`: planning feature facade with `authoring`, `runtime`, `repair`, `worker`, and `shared` sub-boundaries
 - `src/application/port/outbound`: boundaries for app-server, filesystem, and worker execution
 - `src/adapter/outbound`: concrete adapters grouped by infrastructure boundary such as app-server, DB, filesystem, and GitHub
 - `src/domain`: UI-neutral models and invariants
