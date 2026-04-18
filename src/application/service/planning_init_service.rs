@@ -650,6 +650,41 @@ mod tests {
             })
         }
 
+        fn load_planning_workspace_candidate_files(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            self.load_planning_workspace_files(workspace_dir)
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            let mut active_file_bodies = self
+                .active_file_bodies
+                .lock()
+                .expect("active_file_bodies mutex should not be poisoned");
+            active_file_bodies.clear();
+            if let Some(body) = record.directions_toml.as_ref() {
+                active_file_bodies.insert(DIRECTIONS_FILE_PATH.to_string(), body.clone());
+            }
+            if let Some(body) = record.task_ledger_json.as_ref() {
+                active_file_bodies.insert(TASK_LEDGER_FILE_PATH.to_string(), body.clone());
+            }
+            if let Some(body) = record.task_ledger_schema_json.as_ref() {
+                active_file_bodies.insert(TASK_LEDGER_SCHEMA_FILE_PATH.to_string(), body.clone());
+            }
+            if let Some(body) = record.queue_snapshot_json.as_ref() {
+                active_file_bodies.insert(QUEUE_SNAPSHOT_FILE_PATH.to_string(), body.clone());
+            }
+            if let Some(body) = record.result_output_markdown.as_ref() {
+                active_file_bodies.insert(RESULT_OUTPUT_FILE_PATH.to_string(), body.clone());
+            }
+            Ok(())
+        }
+
         fn load_optional_planning_file(
             &self,
             _workspace_dir: &str,

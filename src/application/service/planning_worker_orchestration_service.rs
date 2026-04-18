@@ -1,8 +1,10 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
+};
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use anyhow::Result;
 
@@ -68,112 +70,40 @@ pub struct PlanningWorkerRunOutcome {
 pub struct PlanningWorkerOrchestrationService {
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     runtime_facade: PlanningRuntimeFacadeService,
-    official_completion_refresh_gate: Arc<OfficialCompletionRefreshGate>,
+    planning_authority: Arc<dyn PlanningAuthorityPort>,
 }
 
-#[derive(Debug, Default)]
-struct OfficialCompletionRefreshGate {
-    workspace_state: Mutex<BTreeMap<String, OfficialCompletionRefreshWorkspaceState>>,
-    wake_all: Condvar,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OfficialCompletionRefreshWorkspaceState {
-    next_refresh_order: u64,
-    in_flight_refresh_order: Option<u64>,
-}
-
-#[derive(Debug)]
-struct OfficialCompletionRefreshPermit<'a> {
-    gate: &'a OfficialCompletionRefreshGate,
-    refresh_scope_key: String,
+#[derive(Clone)]
+struct OfficialCompletionRefreshPermit {
+    planning_authority: Arc<dyn PlanningAuthorityPort>,
+    workspace_directory: String,
     refresh_order: u64,
+    owner_token: String,
 }
 
-impl Default for OfficialCompletionRefreshWorkspaceState {
-    fn default() -> Self {
-        Self {
-            next_refresh_order: 1,
-            in_flight_refresh_order: None,
-        }
-    }
-}
-
-impl<'a> OfficialCompletionRefreshPermit<'a> {
+impl OfficialCompletionRefreshPermit {
     fn new(
-        gate: &'a OfficialCompletionRefreshGate,
-        refresh_scope_key: String,
-        refresh_order: u64,
-    ) -> Self {
-        Self {
-            gate,
-            refresh_scope_key,
-            refresh_order,
-        }
-    }
-}
-
-impl Drop for OfficialCompletionRefreshPermit<'_> {
-    fn drop(&mut self) {
-        let mut workspace_state = self
-            .gate
-            .workspace_state
-            .lock()
-            .expect("official completion refresh gate mutex should not be poisoned");
-        if let Some(state) = workspace_state.get_mut(&self.refresh_scope_key) {
-            if state.in_flight_refresh_order == Some(self.refresh_order) {
-                state.in_flight_refresh_order = None;
-                state.next_refresh_order = self.refresh_order + 1;
-            }
-        }
-        self.gate.wake_all.notify_all();
-    }
-}
-
-impl OfficialCompletionRefreshGate {
-    fn run_in_order<T, F>(
-        &self,
-        refresh_scope_key: &str,
+        planning_authority: Arc<dyn PlanningAuthorityPort>,
         workspace_directory: &str,
         refresh_order: u64,
-        operation: F,
-    ) -> Result<T>
-    where
-        F: FnOnce() -> Result<T>,
-    {
-        let mut workspace_state = self
-            .workspace_state
-            .lock()
-            .expect("official completion refresh gate mutex should not be poisoned");
-        loop {
-            let state = workspace_state
-                .entry(refresh_scope_key.to_string())
-                .or_default();
-            if refresh_order < state.next_refresh_order {
-                return Err(anyhow::anyhow!(
-                    "official completion refresh order {refresh_order} already completed for `{workspace_directory}`"
-                ));
-            }
-            if refresh_order == state.next_refresh_order && state.in_flight_refresh_order.is_none()
-            {
-                state.in_flight_refresh_order = Some(refresh_order);
-                break;
-            }
-            workspace_state = self
-                .wake_all
-                .wait(workspace_state)
-                .expect("official completion refresh gate wait should succeed");
-        }
-        drop(workspace_state);
-
-        let _permit = OfficialCompletionRefreshPermit::new(
-            self,
-            refresh_scope_key.to_string(),
+        owner_token: String,
+    ) -> Self {
+        Self {
+            planning_authority,
+            workspace_directory: workspace_directory.to_string(),
             refresh_order,
-        );
-        let result = operation();
+            owner_token,
+        }
+    }
+}
 
-        result
+impl Drop for OfficialCompletionRefreshPermit {
+    fn drop(&mut self) {
+        let _ = self.planning_authority.release_official_refresh_claim(
+            &self.workspace_directory,
+            self.refresh_order,
+            &self.owner_token,
+        );
     }
 }
 
@@ -182,10 +112,22 @@ impl PlanningWorkerOrchestrationService {
         planning_worker_port: Arc<dyn PlanningWorkerPort>,
         runtime_facade: PlanningRuntimeFacadeService,
     ) -> Self {
+        Self::with_planning_authority(
+            planning_worker_port,
+            runtime_facade,
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        )
+    }
+
+    pub fn with_planning_authority(
+        planning_worker_port: Arc<dyn PlanningWorkerPort>,
+        runtime_facade: PlanningRuntimeFacadeService,
+        planning_authority: Arc<dyn PlanningAuthorityPort>,
+    ) -> Self {
         Self {
             planning_worker_port,
             runtime_facade,
-            official_completion_refresh_gate: Arc::new(OfficialCompletionRefreshGate::default()),
+            planning_authority,
         }
     }
 
@@ -207,19 +149,15 @@ impl PlanningWorkerOrchestrationService {
         request: PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
         let prompt = self.render_official_completion_refresh_prompt(&request);
-        let refresh_scope_key = resolve_refresh_scope_key(request.workspace_directory);
-        self.official_completion_refresh_gate.run_in_order(
-            &refresh_scope_key,
+        let _permit = self.acquire_official_refresh_permit(
             request.workspace_directory,
             request.contract.refresh_order,
-            || {
-                self.run_worker_and_reconcile(
-                    request.workspace_directory,
-                    &format!("planner-refresh-{}", request.contract.root_turn_id),
-                    PlanningWorkerOperation::RefreshQueue,
-                    prompt,
-                )
-            },
+        )?;
+        self.run_worker_and_reconcile(
+            request.workspace_directory,
+            &format!("planner-refresh-{}", request.contract.root_turn_id),
+            PlanningWorkerOperation::RefreshQueue,
+            prompt,
         )
     }
 
@@ -279,6 +217,38 @@ impl PlanningWorkerOrchestrationService {
             request.max_attempts,
             request.retry_reason,
         )
+    }
+
+    fn acquire_official_refresh_permit(
+        &self,
+        workspace_directory: &str,
+        refresh_order: u64,
+    ) -> Result<OfficialCompletionRefreshPermit> {
+        let owner_token = authority_claim_owner_token("official-refresh", refresh_order);
+        loop {
+            match self.planning_authority.acquire_official_refresh_claim(
+                workspace_directory,
+                refresh_order,
+                &owner_token,
+            )? {
+                PlanningAuthorityOfficialRefreshClaimStatus::Acquired => {
+                    return Ok(OfficialCompletionRefreshPermit::new(
+                        self.planning_authority.clone(),
+                        workspace_directory,
+                        refresh_order,
+                        owner_token,
+                    ));
+                }
+                PlanningAuthorityOfficialRefreshClaimStatus::Waiting => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted => {
+                    anyhow::bail!(
+                        "official completion refresh order {refresh_order} already completed for `{workspace_directory}`"
+                    );
+                }
+            }
+        }
     }
 
     fn run_worker_and_reconcile(
@@ -455,43 +425,6 @@ fn serialize_official_completion_refresh_contract(
         .expect("official completion refresh contract should serialize")
 }
 
-fn resolve_refresh_scope_key(workspace_directory: &str) -> String {
-    detect_canonical_repo_root(workspace_directory)
-        .unwrap_or_else(|| PathBuf::from(workspace_directory))
-        .display()
-        .to_string()
-}
-
-fn detect_canonical_repo_root(workspace_directory: &str) -> Option<PathBuf> {
-    git_stdout(workspace_directory, &["rev-parse", "--show-toplevel"])?;
-    let common_dir = git_stdout(workspace_directory, &["rev-parse", "--git-common-dir"])?;
-    let common_dir_path = absolutize_path(Path::new(workspace_directory), Path::new(&common_dir));
-    let canonical_common_dir = std::fs::canonicalize(&common_dir_path).unwrap_or(common_dir_path);
-    canonical_common_dir.parent().map(Path::to_path_buf)
-}
-
-fn absolutize_path(base: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-
-    base.join(path)
-}
-
-fn git_stdout(workspace_directory: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .current_dir(workspace_directory)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let trimmed = stdout.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 fn latest_user_request_section(latest_user_message: Option<&str>) -> String {
     latest_user_message
         .map(str::trim)
@@ -512,6 +445,14 @@ fn previous_handoff_section(previous_handoff_task: Option<&PlanningTaskHandoff>)
     })
 }
 
+fn authority_claim_owner_token(prefix: &str, nonce: u64) -> String {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{prefix}-{}-{nonce}-{unique_suffix}", std::process::id())
+}
+
 fn first_non_empty_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
 }
@@ -528,7 +469,6 @@ mod tests {
     use std::collections::VecDeque;
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -537,9 +477,8 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::{
-        OfficialCompletionRefreshGate, PlanningOfficialCompletionRefreshRequest,
-        PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
-        PlanningWorkerOrchestrationService, resolve_refresh_scope_key,
+        PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
+        PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     };
     use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_worker_port::{
@@ -664,28 +603,6 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
         fs::create_dir_all(&path).expect("temp workspace should be created");
         path.display().to_string()
-    }
-
-    fn initialize_git_repo(workspace_dir: &str) {
-        run_git(workspace_dir, &["init"]);
-        run_git(workspace_dir, &["config", "user.name", "RefinedStone"]);
-        run_git(
-            workspace_dir,
-            &["config", "user.email", "chem.en.9273@gmail.com"],
-        );
-        fs::write(Path::new(workspace_dir).join("README.md"), "temp repo\n")
-            .expect("seed file should write");
-        run_git(workspace_dir, &["add", "README.md"]);
-        run_git(workspace_dir, &["commit", "-m", "Initial commit"]);
-    }
-
-    fn run_git(workspace_dir: &str, args: &[&str]) {
-        let status = Command::new("git")
-            .current_dir(workspace_dir)
-            .args(args)
-            .status()
-            .expect("git command should launch");
-        assert!(status.success(), "git command failed: git {}", args.join(" "));
     }
 
     fn write_bootstrap_workspace(workspace_dir: &str) {
@@ -929,7 +846,9 @@ mod tests {
             prompt.contains("\"final_response_summary\": \"official completion lifecycle wired\"")
         );
         assert!(prompt.contains("Implemented official completion reporting."));
-        assert!(prompt.contains("이번 refresh에서 처리할 단일 official ledger update input입니다."));
+        assert!(
+            prompt.contains("이번 refresh에서 처리할 단일 official ledger update input입니다.")
+        );
         assert!(prompt.contains("latest operator request:"));
     }
 
@@ -948,9 +867,8 @@ mod tests {
             ],
             observed_orders.clone(),
         ));
-        let service = service_with_worker(worker);
-
-        let later_service = service.clone();
+        let earlier_service = service_with_worker(worker.clone());
+        let later_service = service_with_worker(worker);
         let later_workspace_dir = workspace_dir.clone();
         let later_refresh = thread::spawn(move || {
             let contract = PlanningOfficialCompletionRefreshContract::new(
@@ -983,7 +901,6 @@ mod tests {
 
         thread::sleep(Duration::from_millis(50));
 
-        let earlier_service = service.clone();
         let earlier_workspace_dir = workspace_dir.clone();
         let earlier_refresh = thread::spawn(move || {
             let contract = PlanningOfficialCompletionRefreshContract::new(
@@ -1030,112 +947,6 @@ mod tests {
                 .as_slice(),
             &[1, 2]
         );
-    }
-
-    #[test]
-    fn refresh_scope_key_collapses_subdirectories_under_one_repo() {
-        let workspace_dir = create_temp_workspace("planning-worker-refresh-scope");
-        initialize_git_repo(&workspace_dir);
-        let nested_one = Path::new(&workspace_dir).join("slot-a");
-        let nested_two = Path::new(&workspace_dir).join("slot-b/deeper");
-        fs::create_dir_all(&nested_one).expect("nested workspace one should exist");
-        fs::create_dir_all(&nested_two).expect("nested workspace two should exist");
-
-        let first_scope = resolve_refresh_scope_key(
-            nested_one
-                .to_str()
-                .expect("nested workspace one should be valid utf-8"),
-        );
-        let second_scope = resolve_refresh_scope_key(
-            nested_two
-                .to_str()
-                .expect("nested workspace two should be valid utf-8"),
-        );
-
-        assert_eq!(first_scope, second_scope);
-        assert_eq!(first_scope, workspace_dir);
-    }
-
-    #[test]
-    fn refresh_gate_orders_distinct_workspace_paths_by_shared_repo_scope() {
-        let workspace_dir = create_temp_workspace("planning-worker-refresh-gate");
-        initialize_git_repo(&workspace_dir);
-        let nested_one = Path::new(&workspace_dir).join("slot-a");
-        let nested_two = Path::new(&workspace_dir).join("slot-b");
-        fs::create_dir_all(&nested_one).expect("nested workspace one should exist");
-        fs::create_dir_all(&nested_two).expect("nested workspace two should exist");
-
-        let first_scope = resolve_refresh_scope_key(
-            nested_one
-                .to_str()
-                .expect("nested workspace one should be valid utf-8"),
-        );
-        let second_scope = resolve_refresh_scope_key(
-            nested_two
-                .to_str()
-                .expect("nested workspace two should be valid utf-8"),
-        );
-        let gate = Arc::new(OfficialCompletionRefreshGate::default());
-        let observed_orders = Arc::new(Mutex::new(Vec::new()));
-
-        let later_gate = gate.clone();
-        let later_orders = observed_orders.clone();
-        let later_workspace = nested_two.display().to_string();
-        let later_scope = second_scope.clone();
-        let later_refresh = thread::spawn(move || {
-            later_gate
-                .run_in_order(&later_scope, &later_workspace, 2, || {
-                    later_orders
-                        .lock()
-                        .expect("observed orders mutex should not be poisoned")
-                        .push(2);
-                    Ok(())
-                })
-                .expect("later refresh should eventually succeed");
-        });
-
-        thread::sleep(Duration::from_millis(50));
-
-        gate.run_in_order(
-            &first_scope,
-            nested_one
-                .to_str()
-                .expect("nested workspace one should be valid utf-8"),
-            1,
-            || {
-                observed_orders
-                    .lock()
-                    .expect("observed orders mutex should not be poisoned")
-                    .push(1);
-                Ok(())
-            },
-        )
-        .expect("earlier refresh should succeed");
-        later_refresh
-            .join()
-            .expect("later refresh thread should not panic");
-
-        assert_eq!(
-            observed_orders
-                .lock()
-                .expect("observed orders mutex should not be poisoned")
-                .as_slice(),
-            &[1, 2]
-        );
-    }
-
-    #[test]
-    fn refresh_gate_releases_scope_after_panic() {
-        let gate = OfficialCompletionRefreshGate::default();
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = gate.run_in_order("repo-scope", "/tmp/workspace", 1, || -> Result<()> {
-                panic!("simulated worker panic");
-            });
-        }));
-        assert!(panic_result.is_err(), "worker panic should propagate");
-
-        gate.run_in_order("repo-scope", "/tmp/workspace", 2, || Ok(()))
-            .expect("next refresh order should not remain blocked after panic");
     }
 
     #[test]

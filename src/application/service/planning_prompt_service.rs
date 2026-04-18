@@ -741,6 +741,21 @@ mod tests {
             Ok(self.load_record.clone())
         }
 
+        fn load_planning_workspace_candidate_files(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            self.load_planning_workspace_files(workspace_dir)
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            _record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            unreachable!("workspace commits are not used in planning prompt service tests")
+        }
+
         fn load_optional_planning_file(
             &self,
             _workspace_dir: &str,

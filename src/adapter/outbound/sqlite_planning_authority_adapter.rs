@@ -7,14 +7,17 @@ use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
-    PlanningDraftStageRecord, PlanningStagedFileRecord,
+    PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
 };
 use crate::application::service::planning_contract::{
-    ACTIVE_PLANNING_FILE_PATHS, PLAN_OFF_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
-    PLANNING_PROMPTS_DIRECTORY,
+    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
+    PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
+    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
@@ -24,8 +27,11 @@ use crate::domain::planning::{
 const RUNTIME_DIRECTORY: &str = ".codex-exec-loop/runtime";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
 const LEGACY_SHADOW_STORE_SCHEMA_VERSION: i64 = 1;
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 2;
+const ACTIVE_DRAFT_SCHEMA_VERSION: i64 = 2;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 3;
 const AUTHORITY_STORE_MODE: &str = "authority-store";
+const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
+const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
 
 #[derive(Default)]
 pub struct SqlitePlanningAuthorityAdapter;
@@ -175,6 +181,265 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(draft_display_path(&location, draft_name, active_path))
     }
 
+    pub(crate) fn commit_active_workspace_files(
+        workspace_dir: &str,
+        record: &PlanningWorkspaceLoadRecord,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_active_documents(&mut connection, &location)?;
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open authority-store active commit transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
+        let changed = apply_active_workspace_record(&transaction, record)?;
+        if changed {
+            bump_planning_revision(&transaction)?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit authority-store active commit transaction")?;
+
+        export_active_workspace_record(&location, record)?;
+        Ok(())
+    }
+
+    pub(crate) fn replace_active_planning_file(
+        workspace_dir: &str,
+        relative_path: &str,
+        body: Option<&str>,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_active_documents(&mut connection, &location)?;
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open authority-store active file transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
+        let changed = set_active_document(&transaction, relative_path, body)?;
+        if changed {
+            bump_planning_revision(&transaction)?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit authority-store active file transaction")?;
+
+        export_active_document(&location, relative_path, body)?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_active_planning_entry(
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_active_documents(&mut connection, &location)?;
+        let canonical_repo_root = PathBuf::from(&location.canonical_repo_root);
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open authority-store active removal transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
+        let changed = remove_active_documents(&transaction, relative_path)?;
+        if changed {
+            bump_planning_revision(&transaction)?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit authority-store active removal transaction")?;
+
+        let export_path = canonical_repo_root.join(relative_path);
+        if export_path.exists() {
+            if export_path.is_dir() {
+                fs::remove_dir_all(&export_path)
+                    .with_context(|| format!("failed to remove {}", export_path.display()))?;
+            } else {
+                fs::remove_file(&export_path)
+                    .with_context(|| format!("failed to remove {}", export_path.display()))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reserve_next_official_refresh_order(workspace_dir: &str) -> Result<u64> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open official refresh order transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        let next_refresh_order =
+            read_metadata_i64(&transaction, "next_official_refresh_order")?.unwrap_or(1);
+        upsert_metadata(
+            &transaction,
+            "next_official_refresh_order",
+            &(next_refresh_order + 1).to_string(),
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit official refresh order transaction")?;
+        Ok(next_refresh_order as u64)
+    }
+
+    pub(crate) fn acquire_official_refresh_claim(
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> Result<PlanningAuthorityOfficialRefreshClaimStatus> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open official refresh claim transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        let next_executable =
+            read_metadata_i64(&transaction, "next_executable_refresh_order")?.unwrap_or(1);
+        if (refresh_order as i64) < next_executable {
+            transaction
+                .rollback()
+                .context("failed to roll back completed official refresh claim transaction")?;
+            return Ok(PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted);
+        }
+        if (refresh_order as i64) > next_executable {
+            transaction
+                .rollback()
+                .context("failed to roll back waiting official refresh claim transaction")?;
+            return Ok(PlanningAuthorityOfficialRefreshClaimStatus::Waiting);
+        }
+
+        let existing_owner = transaction
+            .query_row(
+                "SELECT owner_token FROM runtime_claims
+                 WHERE claim_kind = 'official-refresh' AND scope_key = ?1",
+                params![OFFICIAL_REFRESH_SCOPE_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("failed to read official refresh claim")?;
+        if let Some(existing_owner) = existing_owner {
+            if existing_owner == owner_token {
+                transaction
+                    .commit()
+                    .context("failed to commit existing official refresh claim transaction")?;
+                return Ok(PlanningAuthorityOfficialRefreshClaimStatus::Acquired);
+            }
+            transaction
+                .rollback()
+                .context("failed to roll back contended official refresh claim transaction")?;
+            return Ok(PlanningAuthorityOfficialRefreshClaimStatus::Waiting);
+        }
+
+        transaction
+            .execute(
+                "INSERT INTO runtime_claims (claim_kind, scope_key, owner_token, claim_value, claimed_at)
+                 VALUES ('official-refresh', ?1, ?2, ?3, ?4)",
+                params![
+                    OFFICIAL_REFRESH_SCOPE_KEY,
+                    owner_token,
+                    refresh_order.to_string(),
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .context("failed to acquire official refresh claim")?;
+        transaction
+            .commit()
+            .context("failed to commit official refresh claim transaction")?;
+        Ok(PlanningAuthorityOfficialRefreshClaimStatus::Acquired)
+    }
+
+    pub(crate) fn release_official_refresh_claim(
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open official refresh release transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        let deleted_rows = transaction
+            .execute(
+                "DELETE FROM runtime_claims
+                 WHERE claim_kind = 'official-refresh' AND scope_key = ?1 AND owner_token = ?2 AND claim_value = ?3",
+                params![OFFICIAL_REFRESH_SCOPE_KEY, owner_token, refresh_order.to_string()],
+            )
+            .context("failed to release official refresh claim")?;
+        if deleted_rows > 0 {
+            let next_executable =
+                read_metadata_i64(&transaction, "next_executable_refresh_order")?.unwrap_or(1);
+            if next_executable <= refresh_order as i64 {
+                upsert_metadata(
+                    &transaction,
+                    "next_executable_refresh_order",
+                    &(refresh_order + 1).to_string(),
+                )?;
+            }
+        }
+        transaction
+            .commit()
+            .context("failed to commit official refresh release transaction")?;
+        Ok(())
+    }
+
+    pub(crate) fn try_acquire_distributor_queue_claim(
+        workspace_dir: &str,
+        queue_item_id: &str,
+        owner_token: &str,
+    ) -> Result<bool> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open distributor queue claim transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        let inserted_rows = transaction
+            .execute(
+                "INSERT OR IGNORE INTO runtime_claims
+                 (claim_kind, scope_key, owner_token, claim_value, claimed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    DISTRIBUTOR_QUEUE_CLAIM_KIND,
+                    queue_item_id,
+                    owner_token,
+                    queue_item_id,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .context("failed to acquire distributor queue claim")?;
+        transaction
+            .commit()
+            .context("failed to commit distributor queue claim transaction")?;
+        Ok(inserted_rows > 0)
+    }
+
+    pub(crate) fn release_distributor_queue_claim(
+        workspace_dir: &str,
+        queue_item_id: &str,
+        owner_token: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open distributor queue release transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_claims
+                 WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3",
+                params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id, owner_token],
+            )
+            .context("failed to release distributor queue claim")?;
+        transaction
+            .commit()
+            .context("failed to commit distributor queue release transaction")?;
+        Ok(())
+    }
+
     fn resolve_authority_location_from_workspace(
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityLocation> {
@@ -282,6 +547,46 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
     ) -> Result<PlanningAuthorityShadowStoreInspection> {
         self.inspect_shadow_store_impl(workspace_dir)
     }
+
+    fn reserve_next_official_refresh_order(&self, workspace_dir: &str) -> Result<u64> {
+        Self::reserve_next_official_refresh_order(workspace_dir)
+    }
+
+    fn acquire_official_refresh_claim(
+        &self,
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> Result<PlanningAuthorityOfficialRefreshClaimStatus> {
+        Self::acquire_official_refresh_claim(workspace_dir, refresh_order, owner_token)
+    }
+
+    fn release_official_refresh_claim(
+        &self,
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> Result<()> {
+        Self::release_official_refresh_claim(workspace_dir, refresh_order, owner_token)
+    }
+
+    fn try_acquire_distributor_queue_claim(
+        &self,
+        workspace_dir: &str,
+        queue_item_id: &str,
+        owner_token: &str,
+    ) -> Result<bool> {
+        Self::try_acquire_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
+    }
+
+    fn release_distributor_queue_claim(
+        &self,
+        workspace_dir: &str,
+        queue_item_id: &str,
+        owner_token: &str,
+    ) -> Result<()> {
+        Self::release_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
+    }
 }
 
 fn ensure_schema(connection: &Connection) -> Result<()> {
@@ -309,6 +614,20 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
                 content TEXT NOT NULL,
                 PRIMARY KEY (draft_name, active_path),
                 FOREIGN KEY (draft_name) REFERENCES staged_drafts(draft_name) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS active_documents (
+                relative_path TEXT PRIMARY KEY,
+                content TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_claims (
+                claim_kind TEXT NOT NULL,
+                scope_key TEXT NOT NULL,
+                owner_token TEXT NOT NULL,
+                claim_value TEXT NOT NULL,
+                claimed_at TEXT NOT NULL,
+                PRIMARY KEY (claim_kind, scope_key)
             );
             "#,
         )
@@ -386,6 +705,7 @@ fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String,
     if let Some(schema_version) = load_schema_version(&connection)? {
         let parsed = schema_version.parse::<i64>().ok();
         if parsed != Some(LEGACY_SHADOW_STORE_SCHEMA_VERSION)
+            && parsed != Some(ACTIVE_DRAFT_SCHEMA_VERSION)
             && parsed != Some(AUTHORITY_STORE_SCHEMA_VERSION)
         {
             return Err(anyhow!(
@@ -467,6 +787,207 @@ fn draft_display_path(
         "{}#drafts/{draft_name}/{draft_relative_path}",
         location.authority_store_path
     )
+}
+
+fn bootstrap_active_documents(
+    connection: &mut Connection,
+    location: &PlanningAuthorityLocation,
+) -> Result<()> {
+    let active_document_count = connection
+        .query_row("SELECT COUNT(*) FROM active_documents", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .context("failed to count active authority documents")?;
+    if active_document_count > 0 {
+        return Ok(());
+    }
+
+    let documents = SqlitePlanningAuthorityAdapter::collect_authority_documents(Path::new(
+        &location.canonical_repo_root,
+    ))?;
+    let transaction = connection
+        .transaction()
+        .context("failed to open active document bootstrap transaction")?;
+    upsert_authority_metadata(&transaction, location, "last_active_commit_at")?;
+    for (relative_path, content) in &documents {
+        transaction
+            .execute(
+                "INSERT INTO active_documents (relative_path, content) VALUES (?1, ?2)",
+                params![relative_path, content],
+            )
+            .with_context(|| format!("failed to bootstrap active document `{relative_path}`"))?;
+    }
+    upsert_metadata(
+        &transaction,
+        "planning_revision",
+        if documents.is_empty() { "0" } else { "1" },
+    )?;
+    transaction
+        .commit()
+        .context("failed to commit active document bootstrap transaction")?;
+    Ok(())
+}
+
+fn apply_active_workspace_record(
+    transaction: &rusqlite::Transaction<'_>,
+    record: &PlanningWorkspaceLoadRecord,
+) -> Result<bool> {
+    let mut changed = false;
+    changed |= set_active_document(
+        transaction,
+        DIRECTIONS_FILE_PATH,
+        record.directions_toml.as_deref(),
+    )?;
+    changed |= set_active_document(
+        transaction,
+        TASK_LEDGER_FILE_PATH,
+        record.task_ledger_json.as_deref(),
+    )?;
+    changed |= set_active_document(
+        transaction,
+        TASK_LEDGER_SCHEMA_FILE_PATH,
+        record.task_ledger_schema_json.as_deref(),
+    )?;
+    changed |= set_active_document(
+        transaction,
+        QUEUE_SNAPSHOT_FILE_PATH,
+        record.queue_snapshot_json.as_deref(),
+    )?;
+    changed |= set_active_document(
+        transaction,
+        RESULT_OUTPUT_FILE_PATH,
+        record.result_output_markdown.as_deref(),
+    )?;
+    Ok(changed)
+}
+
+fn set_active_document(
+    transaction: &rusqlite::Transaction<'_>,
+    relative_path: &str,
+    body: Option<&str>,
+) -> Result<bool> {
+    let existing = transaction
+        .query_row(
+            "SELECT content FROM active_documents WHERE relative_path = ?1",
+            params![relative_path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to read active document `{relative_path}`"))?;
+    if existing.as_deref() == body {
+        return Ok(false);
+    }
+
+    match body {
+        Some(body) => {
+            transaction
+                .execute(
+                    "INSERT INTO active_documents (relative_path, content) VALUES (?1, ?2)
+                     ON CONFLICT(relative_path) DO UPDATE SET content = excluded.content",
+                    params![relative_path, body],
+                )
+                .with_context(|| format!("failed to store active document `{relative_path}`"))?;
+        }
+        None => {
+            transaction
+                .execute(
+                    "DELETE FROM active_documents WHERE relative_path = ?1",
+                    params![relative_path],
+                )
+                .with_context(|| format!("failed to delete active document `{relative_path}`"))?;
+        }
+    }
+
+    Ok(true)
+}
+
+fn remove_active_documents(
+    transaction: &rusqlite::Transaction<'_>,
+    relative_path: &str,
+) -> Result<bool> {
+    let deleted_rows = transaction
+        .execute(
+            "DELETE FROM active_documents
+             WHERE relative_path = ?1 OR relative_path LIKE ?2",
+            params![relative_path, format!("{relative_path}/%")],
+        )
+        .with_context(|| format!("failed to remove active authority entry `{relative_path}`"))?;
+    Ok(deleted_rows > 0)
+}
+
+fn bump_planning_revision(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    let next_revision = read_metadata_i64(transaction, "planning_revision")?.unwrap_or(0) + 1;
+    upsert_metadata(transaction, "planning_revision", &next_revision.to_string())?;
+    Ok(())
+}
+
+fn read_metadata_i64(transaction: &rusqlite::Transaction<'_>, key: &str) -> Result<Option<i64>> {
+    transaction
+        .query_row(
+            "SELECT value FROM authority_metadata WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to read authority metadata `{key}`"))
+        .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
+}
+
+fn export_active_workspace_record(
+    location: &PlanningAuthorityLocation,
+    record: &PlanningWorkspaceLoadRecord,
+) -> Result<()> {
+    export_active_document(
+        location,
+        DIRECTIONS_FILE_PATH,
+        record.directions_toml.as_deref(),
+    )?;
+    export_active_document(
+        location,
+        TASK_LEDGER_FILE_PATH,
+        record.task_ledger_json.as_deref(),
+    )?;
+    export_active_document(
+        location,
+        TASK_LEDGER_SCHEMA_FILE_PATH,
+        record.task_ledger_schema_json.as_deref(),
+    )?;
+    export_active_document(
+        location,
+        QUEUE_SNAPSHOT_FILE_PATH,
+        record.queue_snapshot_json.as_deref(),
+    )?;
+    export_active_document(
+        location,
+        RESULT_OUTPUT_FILE_PATH,
+        record.result_output_markdown.as_deref(),
+    )?;
+    Ok(())
+}
+
+fn export_active_document(
+    location: &PlanningAuthorityLocation,
+    relative_path: &str,
+    body: Option<&str>,
+) -> Result<()> {
+    let path = Path::new(&location.canonical_repo_root).join(relative_path);
+    match body {
+        Some(body) => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            fs::write(&path, body)
+                .with_context(|| format!("failed to write {}", path.display()))?;
+        }
+        None => {
+            if path.exists() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_directory_documents(
@@ -588,7 +1109,13 @@ mod tests {
     use rusqlite::Connection;
 
     use super::SqlitePlanningAuthorityAdapter;
-    use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+    use crate::application::port::outbound::planning_authority_port::{
+        PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
+    };
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
+    use crate::application::service::planning_contract::{
+        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    };
     use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
 
     struct TempGitRepo {
@@ -829,5 +1356,149 @@ mod tests {
             )
             .expect("staged_drafts table should exist after upgrade");
         assert_eq!(draft_table, "staged_drafts");
+    }
+
+    #[test]
+    fn active_commit_updates_repo_scoped_documents_for_linked_worktree() {
+        let repo = TempGitRepo::new("authority-active-commit");
+
+        SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+            &PlanningWorkspaceLoadRecord {
+                directions_toml: Some("version = 4\n".to_string()),
+                task_ledger_json: Some("{\"version\":1,\"tasks\":[]}\n".to_string()),
+                task_ledger_schema_json: Some("{\"type\":\"object\"}\n".to_string()),
+                queue_snapshot_json: Some("{\"next_task\":null}\n".to_string()),
+                result_output_markdown: Some("# result\n".to_string()),
+            },
+        )
+        .expect("active commit should succeed");
+
+        assert_eq!(
+            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
+                .expect("repo directions should exist"),
+            "version = 4\n"
+        );
+        let location = SqlitePlanningAuthorityAdapter::new()
+            .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
+            .expect("authority location should resolve");
+        let connection =
+            Connection::open(&location.authority_store_path).expect("authority store should open");
+        let stored_task_ledger = connection
+            .query_row(
+                "SELECT content FROM active_documents WHERE relative_path = ?1",
+                [TASK_LEDGER_FILE_PATH],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("active task ledger should be stored");
+        assert_eq!(stored_task_ledger, "{\"version\":1,\"tasks\":[]}\n");
+    }
+
+    #[test]
+    fn official_refresh_claims_enforce_reserved_execution_order() {
+        let repo = TempGitRepo::new("authority-official-claims");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+
+        let first =
+            SqlitePlanningAuthorityAdapter::reserve_next_official_refresh_order(workspace_dir)
+                .expect("first order should reserve");
+        let second =
+            SqlitePlanningAuthorityAdapter::reserve_next_official_refresh_order(workspace_dir)
+                .expect("second order should reserve");
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                second,
+                "owner-2",
+            )
+            .expect("later order claim should inspect"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+        );
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                first,
+                "owner-1",
+            )
+            .expect("first order claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                first,
+                "other-owner",
+            )
+            .expect("contended first order claim should inspect"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+        );
+
+        SqlitePlanningAuthorityAdapter::release_official_refresh_claim(
+            workspace_dir,
+            first,
+            "owner-1",
+        )
+        .expect("first order claim should release");
+
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                first,
+                "owner-1",
+            )
+            .expect("completed first order claim should inspect"),
+            PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
+        );
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                second,
+                "owner-2",
+            )
+            .expect("second order claim should acquire after release"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+    }
+
+    #[test]
+    fn distributor_queue_claims_are_unique_until_release() {
+        let repo = TempGitRepo::new("authority-distributor-claims");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+
+        assert!(
+            SqlitePlanningAuthorityAdapter::try_acquire_distributor_queue_claim(
+                workspace_dir,
+                "queue-item-1",
+                "owner-1",
+            )
+            .expect("first queue claim should succeed")
+        );
+        assert!(
+            !SqlitePlanningAuthorityAdapter::try_acquire_distributor_queue_claim(
+                workspace_dir,
+                "queue-item-1",
+                "owner-2",
+            )
+            .expect("duplicate queue claim should be rejected")
+        );
+
+        SqlitePlanningAuthorityAdapter::release_distributor_queue_claim(
+            workspace_dir,
+            "queue-item-1",
+            "owner-1",
+        )
+        .expect("queue claim should release");
+
+        assert!(
+            SqlitePlanningAuthorityAdapter::try_acquire_distributor_queue_claim(
+                workspace_dir,
+                "queue-item-1",
+                "owner-2",
+            )
+            .expect("released queue claim should be reacquired")
+        );
     }
 }

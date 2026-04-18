@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::adapter::outbound::github_automation_adapter::GithubAutomationAdapter;
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort,
 };
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCompletionFeedEntry,
     ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot, ParallelModeQueueItemState,
@@ -67,15 +68,35 @@ impl ParallelModeDistributorQueueRecord {
 #[derive(Clone)]
 pub(super) struct ParallelModeDistributorService {
     github_automation: Arc<dyn GithubAutomationPort>,
+    planning_authority: Arc<dyn PlanningAuthorityPort>,
+}
+
+struct DistributorQueueHeadClaimPermit {
+    planning_authority: Arc<dyn PlanningAuthorityPort>,
+    workspace_directory: String,
+    queue_item_id: String,
+    owner_token: String,
+}
+
+impl Drop for DistributorQueueHeadClaimPermit {
+    fn drop(&mut self) {
+        let _ = self.planning_authority.release_distributor_queue_claim(
+            &self.workspace_directory,
+            &self.queue_item_id,
+            &self.owner_token,
+        );
+    }
 }
 
 impl ParallelModeDistributorService {
-    pub(super) fn new() -> Self {
-        Self::with_github_automation(Arc::new(GithubAutomationAdapter::new()))
-    }
-
-    pub(super) fn with_github_automation(github_automation: Arc<dyn GithubAutomationPort>) -> Self {
-        Self { github_automation }
+    pub(super) fn with_planning_authority(
+        github_automation: Arc<dyn GithubAutomationPort>,
+        planning_authority: Arc<dyn PlanningAuthorityPort>,
+    ) -> Self {
+        Self {
+            github_automation,
+            planning_authority,
+        }
     }
 
     pub(super) fn build_snapshot(
@@ -197,6 +218,15 @@ impl ParallelModeDistributorService {
             )]);
         }
 
+        let Some(_claim_permit) =
+            self.acquire_queue_head_claim(workspace_dir, &head.queue_item_id)?
+        else {
+            return Ok(vec![format!(
+                "distributor queue head is already claimed by another process / agent: {} / task: {}",
+                head.agent_id, head.task_id
+            )]);
+        };
+
         process_distributor_queue_record(&context.pool_root, head, self.github_automation.as_ref())
     }
 
@@ -209,6 +239,40 @@ impl ParallelModeDistributorService {
             ),
         }
     }
+
+    fn acquire_queue_head_claim(
+        &self,
+        workspace_dir: &str,
+        queue_item_id: &str,
+    ) -> Result<Option<DistributorQueueHeadClaimPermit>, String> {
+        let owner_token = distributor_claim_owner_token(queue_item_id);
+        let acquired = self
+            .planning_authority
+            .try_acquire_distributor_queue_claim(workspace_dir, queue_item_id, &owner_token)
+            .map_err(|error| error.to_string())?;
+        if !acquired {
+            return Ok(None);
+        }
+
+        Ok(Some(DistributorQueueHeadClaimPermit {
+            planning_authority: self.planning_authority.clone(),
+            workspace_directory: workspace_dir.to_string(),
+            queue_item_id: queue_item_id.to_string(),
+            owner_token,
+        }))
+    }
+}
+
+fn distributor_claim_owner_token(queue_item_id: &str) -> String {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "distributor-queue-head-{}-{}-{unique_suffix}",
+        std::process::id(),
+        sanitize_runtime_record_key(queue_item_id)
+    )
 }
 
 fn build_distributor_snapshot_from_context(
@@ -299,9 +363,7 @@ fn history_rebase_provenance(detail: &ParallelModeAgentSessionDetailSnapshot) ->
         .history
         .iter()
         .rev()
-        .find(|entry| {
-            entry.state_label == "integrating" && entry.summary.starts_with("rebased ")
-        })
+        .find(|entry| entry.state_label == "integrating" && entry.summary.starts_with("rebased "))
         .map(|entry| entry.summary.clone())
 }
 

@@ -43,6 +43,10 @@ impl FilesystemPlanningWorkspaceAdapter {
         Self::active_workspace_root(workspace_dir).join(relative_path)
     }
 
+    fn candidate_workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
+        Path::new(workspace_dir).join(relative_path)
+    }
+
     fn read_optional_workspace_file(
         workspace_dir: &str,
         relative_path: &str,
@@ -55,6 +59,65 @@ impl FilesystemPlanningWorkspaceAdapter {
         fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))
             .map(Some)
+    }
+
+    fn read_optional_candidate_workspace_file(
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>> {
+        let path = Self::candidate_workspace_path(workspace_dir, relative_path);
+        if !path.is_file() {
+            return Ok(None);
+        }
+
+        fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))
+            .map(Some)
+    }
+
+    fn load_workspace_record_from(
+        workspace_dir: &str,
+        file_loader: impl Fn(&str, &str) -> Result<Option<String>>,
+    ) -> Result<PlanningWorkspaceLoadRecord> {
+        Ok(PlanningWorkspaceLoadRecord {
+            directions_toml: file_loader(workspace_dir, DIRECTIONS_FILE_PATH)?,
+            task_ledger_json: file_loader(workspace_dir, TASK_LEDGER_FILE_PATH)?,
+            task_ledger_schema_json: file_loader(workspace_dir, TASK_LEDGER_SCHEMA_FILE_PATH)?,
+            queue_snapshot_json: file_loader(workspace_dir, QUEUE_SNAPSHOT_FILE_PATH)?,
+            result_output_markdown: file_loader(workspace_dir, RESULT_OUTPUT_FILE_PATH)?,
+        })
+    }
+
+    fn commit_workspace_record_to_filesystem(
+        workspace_root: &Path,
+        record: &PlanningWorkspaceLoadRecord,
+    ) -> Result<()> {
+        write_optional_workspace_file(
+            workspace_root,
+            DIRECTIONS_FILE_PATH,
+            record.directions_toml.as_deref(),
+        )?;
+        write_optional_workspace_file(
+            workspace_root,
+            TASK_LEDGER_FILE_PATH,
+            record.task_ledger_json.as_deref(),
+        )?;
+        write_optional_workspace_file(
+            workspace_root,
+            TASK_LEDGER_SCHEMA_FILE_PATH,
+            record.task_ledger_schema_json.as_deref(),
+        )?;
+        write_optional_workspace_file(
+            workspace_root,
+            QUEUE_SNAPSHOT_FILE_PATH,
+            record.queue_snapshot_json.as_deref(),
+        )?;
+        write_optional_workspace_file(
+            workspace_root,
+            RESULT_OUTPUT_FILE_PATH,
+            record.result_output_markdown.as_deref(),
+        )?;
+        Ok(())
     }
 
     fn staged_draft_file_path(
@@ -280,28 +343,32 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
-        Ok(PlanningWorkspaceLoadRecord {
-            directions_toml: Self::read_optional_workspace_file(
+        Self::load_workspace_record_from(workspace_dir, Self::read_optional_workspace_file)
+    }
+
+    fn load_planning_workspace_candidate_files(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningWorkspaceLoadRecord> {
+        Self::load_workspace_record_from(
+            workspace_dir,
+            Self::read_optional_candidate_workspace_file,
+        )
+    }
+
+    fn commit_planning_workspace_files(
+        &self,
+        workspace_dir: &str,
+        record: &PlanningWorkspaceLoadRecord,
+    ) -> Result<()> {
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
                 workspace_dir,
-                DIRECTIONS_FILE_PATH,
-            )?,
-            task_ledger_json: Self::read_optional_workspace_file(
-                workspace_dir,
-                TASK_LEDGER_FILE_PATH,
-            )?,
-            task_ledger_schema_json: Self::read_optional_workspace_file(
-                workspace_dir,
-                TASK_LEDGER_SCHEMA_FILE_PATH,
-            )?,
-            queue_snapshot_json: Self::read_optional_workspace_file(
-                workspace_dir,
-                QUEUE_SNAPSHOT_FILE_PATH,
-            )?,
-            result_output_markdown: Self::read_optional_workspace_file(
-                workspace_dir,
-                RESULT_OUTPUT_FILE_PATH,
-            )?,
-        })
+                record,
+            );
+        }
+
+        Self::commit_workspace_record_to_filesystem(Path::new(workspace_dir), record)
     }
 
     fn load_optional_planning_file(
@@ -326,6 +393,13 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+                workspace_dir,
+                &relative_path,
+                body,
+            );
+        }
         let path = Self::active_workspace_path(workspace_dir, &relative_path);
         match body {
             Some(body) => {
@@ -353,6 +427,12 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::remove_active_planning_entry(
+                workspace_dir,
+                &relative_path,
+            );
+        }
         let path = Self::active_workspace_path(workspace_dir, &relative_path);
         if !path.exists() {
             return Ok(());
@@ -391,6 +471,31 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
     }
 }
 
+fn write_optional_workspace_file(
+    workspace_root: &Path,
+    relative_path: &str,
+    body: Option<&str>,
+) -> Result<()> {
+    let path = workspace_root.join(relative_path);
+    match body {
+        Some(body) => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            fs::write(&path, body)
+                .with_context(|| format!("failed to write {}", path.display()))?;
+        }
+        None => {
+            if path.exists() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -400,7 +505,7 @@ mod tests {
 
     use super::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_workspace_port::{
-        PlanningDraftFileRecord, PlanningWorkspacePort,
+        PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
@@ -597,6 +702,71 @@ mod tests {
             .expect("directions.toml should exist");
 
         assert_eq!(body, "version = 1\n");
+    }
+
+    #[test]
+    fn candidate_workspace_files_read_linked_worktree_copy_for_git_backed_workspace() {
+        let repo = TempGitRepo::new("planning-workspace-candidate-root");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 1\n");
+
+        let linked_worktree_path = repo.worktree_root.join(DIRECTIONS_FILE_PATH);
+        fs::create_dir_all(
+            linked_worktree_path
+                .parent()
+                .expect("linked worktree directions should have a parent directory"),
+        )
+        .expect("linked worktree planning directory should exist");
+        fs::write(&linked_worktree_path, "version = 2\n")
+            .expect("linked worktree file should diverge");
+
+        let active = adapter
+            .load_planning_workspace_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+            )
+            .expect("active workspace files should load");
+        let candidate = adapter
+            .load_planning_workspace_candidate_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+            )
+            .expect("candidate workspace files should load");
+
+        assert_eq!(active.directions_toml.as_deref(), Some("version = 1\n"));
+        assert_eq!(candidate.directions_toml.as_deref(), Some("version = 2\n"));
+    }
+
+    #[test]
+    fn git_backed_active_commit_exports_to_canonical_repo_root() {
+        let repo = TempGitRepo::new("planning-workspace-active-commit");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        adapter
+            .commit_planning_workspace_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some("version = 3\n".to_string()),
+                    task_ledger_json: Some("{\"version\":1,\"tasks\":[]}\n".to_string()),
+                    task_ledger_schema_json: Some("{\"type\":\"object\"}\n".to_string()),
+                    queue_snapshot_json: Some("{\"next_task\":null}\n".to_string()),
+                    result_output_markdown: Some("# result\n".to_string()),
+                },
+            )
+            .expect("git-backed active commit should succeed");
+
+        assert_eq!(
+            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
+                .expect("canonical directions should exist"),
+            "version = 3\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.repo_root.join(TASK_LEDGER_FILE_PATH))
+                .expect("canonical task ledger should exist"),
+            "{\"version\":1,\"tasks\":[]}\n"
+        );
+        assert!(
+            !repo.worktree_root.join(".codex-exec-loop/runtime").exists(),
+            "runtime authority state should remain repo-scoped"
+        );
     }
 
     #[test]

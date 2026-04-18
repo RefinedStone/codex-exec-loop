@@ -103,6 +103,21 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
         Ok(PlanningWorkspaceLoadRecord::default())
     }
 
+    fn load_planning_workspace_candidate_files(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningWorkspaceLoadRecord> {
+        self.load_planning_workspace_files(workspace_dir)
+    }
+
+    fn commit_planning_workspace_files(
+        &self,
+        _workspace_dir: &str,
+        _record: &PlanningWorkspaceLoadRecord,
+    ) -> Result<()> {
+        Err(anyhow!("unused in test"))
+    }
+
     fn load_optional_planning_file(
         &self,
         _workspace_dir: &str,

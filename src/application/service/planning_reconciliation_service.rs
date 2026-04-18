@@ -146,7 +146,7 @@ impl PlanningReconciliationService {
     ) -> Result<PlanningExecutionSnapshot> {
         let workspace_record = self
             .planning_workspace_port
-            .load_planning_workspace_files(workspace_dir)?;
+            .load_planning_workspace_candidate_files(workspace_dir)?;
 
         Ok(PlanningExecutionSnapshot {
             directions_toml: workspace_record.directions_toml,
@@ -194,11 +194,20 @@ impl PlanningReconciliationService {
             )?;
         } else if change_set.queue_snapshot_changed {
             self.restore_queue_snapshot(
-                workspace_dir,
                 workspace_record.queue_snapshot_json.as_deref(),
                 execution_snapshot,
                 &mut result,
             )?;
+        }
+
+        if !change_set.task_ledger_changed
+            && (change_set.queue_snapshot_changed || !result.restored_protected_files.is_empty())
+        {
+            self.planning_workspace_port
+                .commit_planning_workspace_files(
+                    workspace_dir,
+                    &execution_snapshot_to_workspace_record(execution_snapshot),
+                )?;
         }
 
         Ok(result)
@@ -273,12 +282,6 @@ impl PlanningReconciliationService {
             request.current_body,
             request.execution_snapshot_body,
         )?;
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                request.workspace_dir,
-                request.relative_path,
-                request.execution_snapshot_body,
-            )?;
 
         result
             .restored_protected_files
@@ -359,12 +362,11 @@ impl PlanningReconciliationService {
                 })?;
             let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)
                 .context("failed to serialize queue snapshot")?;
+            let mut committed_record = execution_snapshot_to_workspace_record(execution_snapshot);
+            committed_record.task_ledger_json = workspace_record.task_ledger_json.clone();
+            committed_record.queue_snapshot_json = Some(queue_snapshot_json);
             self.planning_workspace_port
-                .replace_planning_workspace_file(
-                    workspace_dir,
-                    QUEUE_SNAPSHOT_FILE_PATH,
-                    Some(queue_snapshot_json.as_str()),
-                )?;
+                .commit_planning_workspace_files(workspace_dir, &committed_record)?;
             result.queue_snapshot_action =
                 Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning);
             result.notices.push(
@@ -386,18 +388,16 @@ impl PlanningReconciliationService {
             result.rejected_archive_path = Some(archive_path);
         }
 
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                workspace_dir,
-                TASK_LEDGER_FILE_PATH,
-                execution_snapshot.task_ledger_json.as_deref(),
-            )?;
         self.restore_queue_snapshot(
-            workspace_dir,
             workspace_record.queue_snapshot_json.as_deref(),
             execution_snapshot,
             result,
         )?;
+        self.planning_workspace_port
+            .commit_planning_workspace_files(
+                workspace_dir,
+                &execution_snapshot_to_workspace_record(execution_snapshot),
+            )?;
         let validation_errors = validation_error_summaries(&validation_result);
         result.rejected_task_ledger = true;
         result.repair_request = Some(PlanningRepairRequest {
@@ -430,7 +430,6 @@ impl PlanningReconciliationService {
 
     fn restore_queue_snapshot(
         &self,
-        workspace_dir: &str,
         current_queue_snapshot_json: Option<&str>,
         execution_snapshot: &PlanningExecutionSnapshot,
         result: &mut PlanningReconciliationResult,
@@ -439,12 +438,6 @@ impl PlanningReconciliationService {
             return Ok(());
         }
 
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                workspace_dir,
-                QUEUE_SNAPSHOT_FILE_PATH,
-                execution_snapshot.queue_snapshot_json.as_deref(),
-            )?;
         result.queue_snapshot_action =
             Some(PlanningQueueSnapshotAction::RestoredFromExecutionSnapshot);
         result.notices.push(
@@ -452,6 +445,18 @@ impl PlanningReconciliationService {
                 .to_string(),
         );
         Ok(())
+    }
+}
+
+fn execution_snapshot_to_workspace_record(
+    execution_snapshot: &PlanningExecutionSnapshot,
+) -> PlanningWorkspaceLoadRecord {
+    PlanningWorkspaceLoadRecord {
+        directions_toml: execution_snapshot.directions_toml.clone(),
+        task_ledger_json: execution_snapshot.task_ledger_json.clone(),
+        task_ledger_schema_json: execution_snapshot.task_ledger_schema_json.clone(),
+        queue_snapshot_json: execution_snapshot.queue_snapshot_json.clone(),
+        result_output_markdown: execution_snapshot.result_output_markdown.clone(),
     }
 }
 
