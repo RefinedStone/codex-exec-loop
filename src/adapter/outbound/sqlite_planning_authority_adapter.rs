@@ -30,9 +30,6 @@ use crate::domain::planning::{
 
 const RUNTIME_DIRECTORY: &str = ".codex-exec-loop/runtime";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
-const LEGACY_SHADOW_STORE_SCHEMA_VERSION: i64 = 1;
-const ACTIVE_DRAFT_SCHEMA_VERSION: i64 = 2;
-const ACTIVE_MUTATION_SCHEMA_VERSION: i64 = 3;
 const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 4;
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
@@ -192,7 +189,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_active_documents(&mut connection, &location)?;
 
         let transaction = connection
             .transaction()
@@ -214,8 +210,7 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let mut connection = open_authority_connection(&location)?;
-        bootstrap_active_documents(&mut connection, &location)?;
+        let connection = open_authority_connection(&location)?;
         load_active_workspace_record(&connection)
     }
 
@@ -224,8 +219,7 @@ impl SqlitePlanningAuthorityAdapter {
         relative_path: &str,
     ) -> Result<Option<String>> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let mut connection = open_authority_connection(&location)?;
-        bootstrap_active_documents(&mut connection, &location)?;
+        let connection = open_authority_connection(&location)?;
         load_active_document(&connection, relative_path)
     }
 
@@ -236,7 +230,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_active_documents(&mut connection, &location)?;
 
         let transaction = connection
             .transaction()
@@ -260,7 +253,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_active_documents(&mut connection, &location)?;
         let canonical_repo_root = PathBuf::from(&location.canonical_repo_root);
 
         let transaction = connection
@@ -468,8 +460,7 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        let mut connection = open_authority_connection(&location)?;
-        bootstrap_runtime_projections(&mut connection, &location)?;
+        let connection = open_authority_connection(&location)?;
         load_runtime_projection_snapshot(&connection)
     }
 
@@ -479,7 +470,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_runtime_projections(&mut connection, &location)?;
 
         let payload_json = serde_json::to_string(lease)
             .context("failed to serialize runtime slot lease projection")?;
@@ -532,7 +522,6 @@ impl SqlitePlanningAuthorityAdapter {
     pub(crate) fn remove_runtime_slot_lease(workspace_dir: &str, slot_id: &str) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_runtime_projections(&mut connection, &location)?;
 
         let transaction = connection
             .transaction()
@@ -574,7 +563,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_runtime_projections(&mut connection, &location)?;
 
         let payload_json = serde_json::to_string(detail)
             .context("failed to serialize runtime session detail projection")?;
@@ -629,7 +617,6 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_runtime_projections(&mut connection, &location)?;
 
         let payload_json = serde_json::to_string(record)
             .context("failed to serialize runtime distributor queue projection")?;
@@ -741,10 +728,14 @@ impl SqlitePlanningAuthorityAdapter {
         let had_store = authority_store_path.is_file();
         let previous_documents = load_shadow_documents(&authority_store_path)?;
         let mut connection = open_authority_connection(&location)?;
-        bootstrap_active_documents(&mut connection, &location)?;
         let source_documents = load_active_documents(&connection)?;
         let shadow_parity_issues = compare_shadow_documents(&source_documents, &previous_documents);
         let exported_documents = Self::collect_authority_documents(&canonical_repo_root)?;
+        if source_documents.is_empty() && !exported_documents.is_empty() {
+            return Err(anyhow!(
+                "authority store is empty while tracked exports still exist"
+            ));
+        }
         let export_parity_issues =
             compare_exported_documents(&source_documents, &exported_documents);
         if !export_parity_issues.is_empty() {
@@ -761,7 +752,7 @@ impl SqlitePlanningAuthorityAdapter {
             ));
         }
 
-        let sync_state = if !had_store {
+        let sync_state = if !had_store || previous_documents.is_empty() {
             PlanningAuthorityShadowStoreSyncState::Bootstrapped
         } else if shadow_parity_issues.is_empty() && export_parity_issues.is_empty() {
             PlanningAuthorityShadowStoreSyncState::InSync
@@ -1024,18 +1015,8 @@ fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String,
 
     let connection = Connection::open(authority_store_path)
         .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
-    if let Some(schema_version) = load_schema_version(&connection)? {
-        let parsed = schema_version.parse::<i64>().ok();
-        if parsed != Some(LEGACY_SHADOW_STORE_SCHEMA_VERSION)
-            && parsed != Some(ACTIVE_DRAFT_SCHEMA_VERSION)
-            && parsed != Some(ACTIVE_MUTATION_SCHEMA_VERSION)
-            && parsed != Some(AUTHORITY_STORE_SCHEMA_VERSION)
-        {
-            return Err(anyhow!(
-                "unsupported authority-store schema version: {schema_version}"
-            ));
-        }
-    }
+    validate_authority_store_schema(&connection)?;
+    ensure_schema(&connection)?;
 
     let mut statement = connection
         .prepare("SELECT relative_path, content FROM shadow_documents ORDER BY relative_path")
@@ -1103,126 +1084,12 @@ fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Con
 
     let connection = Connection::open(authority_store_path)
         .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
+    validate_authority_store_schema(&connection)?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .context("failed to enable authority-store foreign keys")?;
     ensure_schema(&connection)?;
     Ok(connection)
-}
-
-fn bootstrap_runtime_projections(
-    connection: &mut Connection,
-    location: &PlanningAuthorityLocation,
-) -> Result<()> {
-    let runtime_projection_count = connection
-        .query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM runtime_slot_leases) +
-                (SELECT COUNT(*) FROM runtime_invalid_slot_leases) +
-                (SELECT COUNT(*) FROM runtime_session_details) +
-                (SELECT COUNT(*) FROM runtime_distributor_queue)",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .context("failed to count runtime authority projections")?;
-    if runtime_projection_count > 0 {
-        return Ok(());
-    }
-
-    let pool_root = legacy_runtime_pool_root(location);
-    let (slot_leases, invalid_slot_leases) = read_legacy_slot_leases(&pool_root);
-    let session_details = read_legacy_session_details(&pool_root);
-    let distributor_queue_records = read_legacy_distributor_queue_records(&pool_root);
-    if slot_leases.is_empty()
-        && invalid_slot_leases.is_empty()
-        && session_details.is_empty()
-        && distributor_queue_records.is_empty()
-    {
-        return Ok(());
-    }
-
-    let transaction = connection
-        .transaction()
-        .context("failed to open runtime projection bootstrap transaction")?;
-    upsert_authority_metadata(&transaction, location, "last_runtime_projection_at")?;
-    for lease in slot_leases.values() {
-        transaction
-            .execute(
-                "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
-                 VALUES (?1, ?2, ?3)",
-                params![
-                    lease.slot_id,
-                    lease
-                        .running_started_at
-                        .as_deref()
-                        .unwrap_or(lease.leased_at.as_str()),
-                    serde_json::to_string(lease)
-                        .context("failed to serialize bootstrapped slot lease")?,
-                ],
-            )
-            .with_context(|| {
-                format!("failed to bootstrap runtime slot lease `{}`", lease.slot_id)
-            })?;
-    }
-    for slot_id in &invalid_slot_leases {
-        transaction
-            .execute(
-                "INSERT INTO runtime_invalid_slot_leases (slot_id, detected_at)
-                 VALUES (?1, ?2)",
-                params![slot_id, Utc::now().to_rfc3339()],
-            )
-            .with_context(|| {
-                format!("failed to bootstrap invalid runtime slot lease `{slot_id}`")
-            })?;
-    }
-    for detail in &session_details {
-        transaction
-            .execute(
-                "INSERT INTO runtime_session_details (session_key, slot_id, updated_at, content)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    detail.session_key,
-                    detail.slot_id,
-                    detail.updated_at,
-                    serde_json::to_string(detail)
-                        .context("failed to serialize bootstrapped session detail")?,
-                ],
-            )
-            .with_context(|| {
-                format!(
-                    "failed to bootstrap runtime session detail `{}`",
-                    detail.session_key
-                )
-            })?;
-    }
-    for record in &distributor_queue_records {
-        transaction
-            .execute(
-                "INSERT INTO runtime_distributor_queue
-                 (queue_item_id, session_key, queue_state, enqueued_at, updated_at, content)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    record.queue_item_id,
-                    record.session_key,
-                    record.queue_state.label(),
-                    record.enqueued_at,
-                    record.updated_at,
-                    serde_json::to_string(record)
-                        .context("failed to serialize bootstrapped distributor queue record")?,
-                ],
-            )
-            .with_context(|| {
-                format!(
-                    "failed to bootstrap runtime distributor queue record `{}`",
-                    record.queue_item_id
-                )
-            })?;
-    }
-    upsert_metadata(&transaction, "runtime_event_sequence", "0")?;
-    transaction
-        .commit()
-        .context("failed to commit runtime projection bootstrap transaction")?;
-    Ok(())
 }
 
 fn load_runtime_projection_snapshot(
@@ -1357,6 +1224,32 @@ fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
         )
         .optional()
         .context("failed to read authority-store schema version")
+}
+
+fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
+    let metadata_exists = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'authority_metadata'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .context("failed to inspect authority-store metadata table")?
+        .is_some();
+    if !metadata_exists {
+        return Ok(());
+    }
+
+    if let Some(schema_version) = load_schema_version(connection)? {
+        let parsed = schema_version.parse::<i64>().ok();
+        if parsed != Some(AUTHORITY_STORE_SCHEMA_VERSION) {
+            return Err(anyhow!(
+                "unsupported authority-store schema version: {schema_version}"
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn upsert_draft_entry(transaction: &rusqlite::Transaction<'_>, draft_name: &str) -> Result<()> {
@@ -1520,139 +1413,6 @@ fn mirror_runtime_distributor_queue_record(
             record.queue_item_id
         )
     })?;
-    Ok(())
-}
-
-fn read_legacy_slot_leases(
-    pool_root: &Path,
-) -> (
-    BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
-    BTreeSet<String>,
-) {
-    let leases_root = pool_root.join(".leases");
-    let Ok(entries) = fs::read_dir(&leases_root) else {
-        return (BTreeMap::new(), BTreeSet::new());
-    };
-
-    let mut slot_leases = BTreeMap::new();
-    let mut invalid_slot_leases = BTreeSet::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-            continue;
-        }
-        let slot_id = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_string)
-            .unwrap_or_default();
-        if slot_id.is_empty() {
-            continue;
-        }
-
-        let Ok(contents) = fs::read_to_string(&path) else {
-            invalid_slot_leases.insert(slot_id);
-            continue;
-        };
-        let Ok(lease) = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&contents) else {
-            invalid_slot_leases.insert(slot_id);
-            continue;
-        };
-        if lease.slot_id != slot_id {
-            invalid_slot_leases.insert(slot_id);
-            continue;
-        }
-        slot_leases.insert(slot_id, lease);
-    }
-
-    (slot_leases, invalid_slot_leases)
-}
-
-fn read_legacy_session_details(pool_root: &Path) -> Vec<ParallelModeAgentSessionDetailSnapshot> {
-    let history_dir = pool_root.join(".agent-sessions");
-    let Ok(entries) = fs::read_dir(&history_dir) else {
-        return Vec::new();
-    };
-
-    let mut records = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("json"))
-        .filter_map(|path| fs::read_to_string(path).ok())
-        .filter_map(|content| {
-            serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content).ok()
-        })
-        .collect::<Vec<_>>();
-    records.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| left.session_key.cmp(&right.session_key))
-    });
-    records
-}
-
-fn read_legacy_distributor_queue_records(
-    pool_root: &Path,
-) -> Vec<PlanningAuthorityDistributorQueueRecord> {
-    let queue_root = pool_root.join(".distributor-queue");
-    let Ok(entries) = fs::read_dir(&queue_root) else {
-        return Vec::new();
-    };
-
-    let mut records = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .filter_map(|path| fs::read_to_string(path).ok())
-        .filter_map(|content| {
-            serde_json::from_str::<PlanningAuthorityDistributorQueueRecord>(&content).ok()
-        })
-        .collect::<Vec<_>>();
-    records.sort_by(|left, right| {
-        left.enqueued_at
-            .cmp(&right.enqueued_at)
-            .then_with(|| left.queue_item_id.cmp(&right.queue_item_id))
-    });
-    records
-}
-
-fn bootstrap_active_documents(
-    connection: &mut Connection,
-    location: &PlanningAuthorityLocation,
-) -> Result<()> {
-    let active_document_count = connection
-        .query_row("SELECT COUNT(*) FROM active_documents", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .context("failed to count active authority documents")?;
-    if active_document_count > 0 {
-        return Ok(());
-    }
-
-    let documents = SqlitePlanningAuthorityAdapter::collect_authority_documents(Path::new(
-        &location.canonical_repo_root,
-    ))?;
-    let transaction = connection
-        .transaction()
-        .context("failed to open active document bootstrap transaction")?;
-    upsert_authority_metadata(&transaction, location, "last_active_commit_at")?;
-    for (relative_path, content) in &documents {
-        transaction
-            .execute(
-                "INSERT INTO active_documents (relative_path, content) VALUES (?1, ?2)",
-                params![relative_path, content],
-            )
-            .with_context(|| format!("failed to bootstrap active document `{relative_path}`"))?;
-    }
-    upsert_metadata(
-        &transaction,
-        "planning_revision",
-        if documents.is_empty() { "0" } else { "1" },
-    )?;
-    transaction
-        .commit()
-        .context("failed to commit active document bootstrap transaction")?;
     Ok(())
 }
 
@@ -1994,6 +1754,7 @@ mod tests {
     use crate::application::service::planning_contract::{
         DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
+    use crate::domain::parallel_mode::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
     use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
 
     struct TempGitRepo {
@@ -2105,18 +1866,27 @@ mod tests {
     }
 
     #[test]
-    fn inspect_shadow_store_bootstraps_from_canonical_repo_root() {
+    fn inspect_shadow_store_bootstraps_from_active_store() {
         let repo = TempGitRepo::new("shadow-bootstrap");
         let adapter = SqlitePlanningAuthorityAdapter::new();
-        repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
-        repo.write_repo_file(
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            repo.worktree_root.to_str().expect("valid path"),
+            ".codex-exec-loop/planning/directions.toml",
+            Some("version = 1\n"),
+        )
+        .expect("directions should seed the authority store");
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            repo.worktree_root.to_str().expect("valid path"),
             ".codex-exec-loop/planning/task-ledger.json",
-            "{\"version\":1,\"tasks\":[]}\n",
-        );
-        repo.write_repo_file(
+            Some("{\"version\":1,\"tasks\":[]}\n"),
+        )
+        .expect("task ledger should seed the authority store");
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            repo.worktree_root.to_str().expect("valid path"),
             ".codex-exec-loop/planning/prompts/queue-idle-review.md",
-            "# review\n",
-        );
+            Some("# review\n"),
+        )
+        .expect("prompt should seed the authority store");
 
         let inspection = adapter
             .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
@@ -2183,7 +1953,24 @@ mod tests {
     }
 
     #[test]
-    fn inspect_shadow_store_upgrades_legacy_schema_version_one_store() {
+    fn inspect_shadow_store_rejects_export_only_legacy_state() {
+        let repo = TempGitRepo::new("shadow-export-only");
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
+
+        let error = adapter
+            .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
+            .expect_err("export-only legacy state should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("authority store is empty while tracked exports still exist")
+        );
+    }
+
+    #[test]
+    fn inspect_shadow_store_rejects_legacy_schema_version_one_store() {
         let repo = TempGitRepo::new("shadow-upgrade-v1");
         let adapter = SqlitePlanningAuthorityAdapter::new();
         repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
@@ -2219,35 +2006,14 @@ mod tests {
             )
             .expect("legacy shadow document should insert");
 
-        let inspection = adapter
+        let error = adapter
             .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
-            .expect("legacy store should upgrade during inspection");
+            .expect_err("legacy schema version should be rejected");
 
         assert_eq!(
-            inspection.sync_state,
-            PlanningAuthorityShadowStoreSyncState::Resynced
+            error.to_string(),
+            "unsupported authority-store schema version: 1"
         );
-        let connection =
-            Connection::open(&authority_store_path).expect("upgraded authority store should open");
-        let schema_version = connection
-            .query_row(
-                "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .expect("schema version should load");
-        assert_eq!(
-            schema_version,
-            super::AUTHORITY_STORE_SCHEMA_VERSION.to_string()
-        );
-        let draft_table = connection
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'staged_drafts'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .expect("staged_drafts table should exist after upgrade");
-        assert_eq!(draft_table, "staged_drafts");
     }
 
     #[test]
@@ -2316,6 +2082,72 @@ mod tests {
 
         assert_eq!(loaded.directions_toml.as_deref(), Some("version = 4\n"));
         assert_eq!(directions.as_deref(), Some("version = 4\n"));
+    }
+
+    #[test]
+    fn active_workspace_load_does_not_bootstrap_tracked_exports() {
+        let repo = TempGitRepo::new("authority-active-no-bootstrap");
+        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 9\n");
+
+        let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+        )
+        .expect("active workspace should load without bootstrap");
+        let directions = SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+            DIRECTIONS_FILE_PATH,
+        )
+        .expect("active directions should inspect without bootstrap");
+
+        assert_eq!(loaded, PlanningWorkspaceLoadRecord::default());
+        assert_eq!(directions, None);
+        assert_eq!(
+            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
+                .expect("tracked export should remain untouched"),
+            "version = 9\n"
+        );
+    }
+
+    #[test]
+    fn runtime_projection_load_does_not_bootstrap_legacy_mirror_files() {
+        let repo = TempGitRepo::new("runtime-projection-no-bootstrap");
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let location = adapter
+            .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
+            .expect("authority location should resolve");
+        let mirrored_lease = ParallelModeSlotLeaseSnapshot::new(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            "akra-agent/slot-1/task-one",
+            repo.worktree_root.display().to_string(),
+            ParallelModeSlotLeaseState::Running,
+            "2026-04-18T10:00:00Z",
+            Some("2026-04-18T10:05:00Z".to_string()),
+        );
+        let mirrored_path = super::runtime_slot_lease_path(&location, &mirrored_lease.slot_id);
+        fs::create_dir_all(
+            mirrored_path
+                .parent()
+                .expect("runtime mirror should have a parent directory"),
+        )
+        .expect("runtime mirror parent should exist");
+        fs::write(
+            &mirrored_path,
+            serde_json::to_string_pretty(&mirrored_lease).expect("mirrored lease should serialize"),
+        )
+        .expect("runtime mirror should write");
+
+        let snapshot = SqlitePlanningAuthorityAdapter::load_runtime_projections(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+        )
+        .expect("runtime projections should load without bootstrap");
+
+        assert!(snapshot.slot_leases.is_empty());
+        assert!(snapshot.invalid_slot_leases.is_empty());
+        assert!(snapshot.session_details.is_empty());
+        assert!(snapshot.distributor_queue_records.is_empty());
     }
 
     #[test]

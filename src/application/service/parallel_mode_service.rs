@@ -3120,6 +3120,7 @@ mod tests {
         reconcile_pool_board, resolve_workspace_slot_lease, run_command, short_sha, slot_id,
         slot_lease_file_path,
     };
+    use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
     };
@@ -5103,15 +5104,14 @@ mod tests {
     fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
         let repo = TempGitRepo::new("authority-readiness");
         let linked_worktree = repo.create_linked_worktree("feature/authority-readiness");
-        let repo_directions_path = repo.repo_root.join(DIRECTIONS_FILE_PATH);
-        fs::create_dir_all(
-            repo_directions_path
-                .parent()
-                .expect("repo directions path should have a parent directory"),
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            linked_worktree
+                .to_str()
+                .expect("valid linked worktree path"),
+            DIRECTIONS_FILE_PATH,
+            Some("version = 1\n"),
         )
-        .expect("repo planning directory should exist");
-        fs::write(&repo_directions_path, "version = 1\n")
-            .expect("repo-root directions should write");
+        .expect("authority store should seed active directions");
         let worktree_directions_path = linked_worktree.join(DIRECTIONS_FILE_PATH);
         fs::create_dir_all(
             worktree_directions_path
