@@ -18,8 +18,19 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 
 - Current product contract: [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
 - Planning contract: [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
+- Architecture and boundary rules: [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md)
 - Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
 - Remaining supersession follow-through and open questions: [docs/supersession/README.md](docs/supersession/README.md)
+
+## Architecture Principles
+
+- Dependency flow stays `adapter -> application -> domain`.
+- Operator-visible flows should be readable with a small local context instead of requiring a repo-wide scan.
+- Infrastructure details such as DB, GitHub, filesystem, and app-server adapters should live behind clear directory and port boundaries so main product logic can skip them.
+- Large files are a boundary smell. Split mixed-responsibility files by subsystem before they become the only safe place to edit.
+
+The design baseline lives in [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md).
+Current structural debt and refactor targets live in [docs/plan/17-structure-and-architecture-debt-map.md](docs/plan/17-structure-and-architecture-debt-map.md).
 
 ## Install
 

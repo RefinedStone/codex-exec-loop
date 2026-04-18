@@ -2,6 +2,13 @@
 
 Use one source of truth per question.
 
+## Architecture Principles
+
+- `docs/design/04-hexagonal-runtime-architecture.md` is the source of truth for boundary rules.
+- Small-context readability is a first-class design constraint for both humans and LLM-guided edits.
+- Infrastructure-heavy implementations should sit behind ports and infra-specific directories so feature flow analysis can skip them.
+- When behavior, rendering, storage, and recovery logic pile into one file, prefer boundary-first splits over local convenience.
+
 ## Current Product
 
 - [design/01-current-product-state.md](design/01-current-product-state.md): current product and supersession status
@@ -43,3 +50,4 @@ Use one source of truth per question.
 - `docs/supersession/` holds remaining work plus merged historical context, not the primary current truth.
 - `docs/plan/` holds runbooks, roadmap, and historical design audits.
 - Prefer links to current truth over repeating the same contract in multiple places.
+- Prefer flow-local documents over repo-spanning narrative; one question should usually require one primary doc plus at most one supporting link.

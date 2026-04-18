@@ -51,10 +51,13 @@ Keep mapping logic in adapters, not domain models.
 
 - Treat `src/adapter/inbound/tui/app/` as an LLM-facing surface: reduce the number of files and types needed for a safe edit.
 - Keep new TUI/controller/presentation files near 600 LOC or less; once a file crosses roughly 800 LOC, split it by subsystem or view concern in the same PR.
+- Prefer infra-skippable layout. Storage, GitHub, filesystem, and app-server implementations should sit in boundary-specific directories so a product-flow edit does not have to open them first.
+- Keep composition root wiring near entrypoints. Do not make feature logic import concrete leaf adapters just because they are nearby.
 - Do not use `use super::*;` or `use super::super::*;` in app runtime, controller, presentation, or planning modules. Import only the symbols the file actually uses.
 - Do not rely on parent-module wildcard imports for child modules. Child modules should import their own dependencies explicitly so they remain readable in isolation.
 - Keep rendering, presentation projection/builders, controller/event handling, and long integration-style tests in separate files when practical.
 - Split broad shell tests by concern such as planning, session browser, follow-up overlay, or shell surface behavior instead of growing one monolithic test file.
+- Treat mixed-responsibility files as design debt even when they still compile cleanly. If one file owns storage writes, recovery, status wording, and operator policy together, split it before adding more behavior.
 
 ## Testing
 
