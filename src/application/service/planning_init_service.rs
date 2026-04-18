@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 
 use crate::application::port::outbound::planning_workspace_port::{
@@ -242,21 +242,73 @@ impl PlanningInitService {
                 validation_report,
             });
         }
+        let mut previous_active_files = HashMap::new();
         for file in &loaded.staged_files {
-            self.planning_workspace_port
-                .replace_planning_workspace_file(
-                    workspace_dir,
-                    &file.active_path,
-                    Some(file.body.as_str()),
-                )?;
+            previous_active_files.insert(
+                file.active_path.clone(),
+                self.planning_workspace_port
+                    .load_optional_planning_file(workspace_dir, &file.active_path)?,
+            );
         }
-        self.set_plan_enabled(workspace_dir, true)?;
+        let plan_off_before = self
+            .planning_workspace_port
+            .load_optional_planning_file(workspace_dir, PLAN_OFF_FILE_PATH)?;
+
+        let mut applied_paths = Vec::with_capacity(loaded.staged_files.len());
+        let promote_result = (|| -> Result<()> {
+            for file in &loaded.staged_files {
+                self.planning_workspace_port
+                    .replace_planning_workspace_file(
+                        workspace_dir,
+                        &file.active_path,
+                        Some(file.body.as_str()),
+                    )?;
+                applied_paths.push(file.active_path.clone());
+            }
+            self.set_plan_enabled(workspace_dir, true)?;
+            Ok(())
+        })();
+        if let Err(error) = promote_result {
+            if let Err(rollback_error) = self.restore_promoted_active_state(
+                workspace_dir,
+                &applied_paths,
+                &previous_active_files,
+                plan_off_before.as_deref(),
+            ) {
+                return Err(anyhow!(
+                    "failed to promote staged draft `{draft_name}`: {error}; rollback failed: {rollback_error}"
+                ));
+            }
+            return Err(error);
+        }
 
         Ok(PlanningDraftPromoteResult {
             draft_name: draft_name.to_string(),
             promoted_file_count: loaded.staged_files.len(),
             validation_report,
         })
+    }
+
+    fn restore_promoted_active_state(
+        &self,
+        workspace_dir: &str,
+        applied_paths: &[String],
+        previous_active_files: &HashMap<String, Option<String>>,
+        plan_off_before: Option<&str>,
+    ) -> Result<()> {
+        for active_path in applied_paths.iter().rev() {
+            self.planning_workspace_port
+                .replace_planning_workspace_file(
+                    workspace_dir,
+                    active_path,
+                    previous_active_files
+                        .get(active_path)
+                        .and_then(|body| body.as_deref()),
+                )?;
+        }
+        self.planning_workspace_port
+            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, plan_off_before)?;
+        Ok(())
     }
 
     fn stage_draft(
@@ -475,6 +527,25 @@ mod tests {
         staged_files: std::sync::Mutex<Vec<PlanningDraftFileRecord>>,
         draft_file_bodies: std::sync::Mutex<HashMap<String, String>>,
         active_file_bodies: std::sync::Mutex<HashMap<String, String>>,
+        fail_next_active_write_for_path: std::sync::Mutex<Option<String>>,
+        fail_next_workspace_load: std::sync::Mutex<bool>,
+    }
+
+    impl FakePlanningWorkspacePort {
+        fn fail_next_active_write_for_path(&self, relative_path: &str) {
+            *self
+                .fail_next_active_write_for_path
+                .lock()
+                .expect("fail_next_active_write_for_path mutex should not be poisoned") =
+                Some(relative_path.to_string());
+        }
+
+        fn fail_next_workspace_load(&self) {
+            *self
+                .fail_next_workspace_load
+                .lock()
+                .expect("fail_next_workspace_load mutex should not be poisoned") = true;
+        }
     }
 
     impl PlanningWorkspacePort for FakePlanningWorkspacePort {
@@ -555,6 +626,15 @@ mod tests {
             &self,
             _workspace_dir: &str,
         ) -> Result<PlanningWorkspaceLoadRecord> {
+            let mut fail_next_workspace_load = self
+                .fail_next_workspace_load
+                .lock()
+                .expect("fail_next_workspace_load mutex should not be poisoned");
+            if *fail_next_workspace_load {
+                *fail_next_workspace_load = false;
+                anyhow::bail!("simulated workspace load failure");
+            }
+
             let active_file_bodies = self
                 .active_file_bodies
                 .lock()
@@ -589,6 +669,16 @@ mod tests {
             relative_path: &str,
             body: Option<&str>,
         ) -> Result<()> {
+            if body.is_some() {
+                let mut fail_next_active_write_for_path = self
+                    .fail_next_active_write_for_path
+                    .lock()
+                    .expect("fail_next_active_write_for_path mutex should not be poisoned");
+                if fail_next_active_write_for_path.as_deref() == Some(relative_path) {
+                    *fail_next_active_write_for_path = None;
+                    anyhow::bail!("simulated active write failure: {relative_path}");
+                }
+            }
             let mut active_file_bodies = self
                 .active_file_bodies
                 .lock()
@@ -811,6 +901,153 @@ mod tests {
         assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
         assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
         assert!(active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
+    }
+
+    #[test]
+    fn promote_draft_editor_files_restores_active_state_when_active_write_fails() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned")
+            .extend([
+                (DIRECTIONS_FILE_PATH.to_string(), "version = 0".to_string()),
+                (
+                    TASK_LEDGER_FILE_PATH.to_string(),
+                    "{\"version\":0,\"tasks\":[]}".to_string(),
+                ),
+                (
+                    TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
+                    "{\"type\":\"array\"}".to_string(),
+                ),
+                (
+                    RESULT_OUTPUT_FILE_PATH.to_string(),
+                    "# previous".to_string(),
+                ),
+                (PLAN_OFF_FILE_PATH.to_string(), "plan off\n".to_string()),
+            ]);
+        workspace_port.fail_next_active_write_for_path(TASK_LEDGER_FILE_PATH);
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let session = service
+            .stage_manual_editor_session("/tmp/workspace")
+            .expect("manual editor session should stage");
+
+        let error = service
+            .promote_draft_editor_files(
+                "/tmp/workspace",
+                &session.draft_name,
+                &session.editable_files,
+            )
+            .expect_err("failed active write should abort promotion");
+
+        assert!(error.to_string().contains(TASK_LEDGER_FILE_PATH));
+        let active_files = workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned");
+        assert_eq!(
+            active_files.get(DIRECTIONS_FILE_PATH).map(String::as_str),
+            Some("version = 0")
+        );
+        assert_eq!(
+            active_files.get(TASK_LEDGER_FILE_PATH).map(String::as_str),
+            Some("{\"version\":0,\"tasks\":[]}")
+        );
+        assert_eq!(
+            active_files
+                .get(TASK_LEDGER_SCHEMA_FILE_PATH)
+                .map(String::as_str),
+            Some("{\"type\":\"array\"}")
+        );
+        assert_eq!(
+            active_files
+                .get(RESULT_OUTPUT_FILE_PATH)
+                .map(String::as_str),
+            Some("# previous")
+        );
+        assert_eq!(
+            active_files.get(PLAN_OFF_FILE_PATH).map(String::as_str),
+            Some("plan off\n")
+        );
+    }
+
+    #[test]
+    fn promote_staged_draft_restores_active_state_when_plan_enable_fails() {
+        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
+        workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned")
+            .extend([
+                (DIRECTIONS_FILE_PATH.to_string(), "version = 0".to_string()),
+                (
+                    TASK_LEDGER_FILE_PATH.to_string(),
+                    "{\"version\":0,\"tasks\":[]}".to_string(),
+                ),
+                (
+                    TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
+                    "{\"type\":\"array\"}".to_string(),
+                ),
+                (
+                    RESULT_OUTPUT_FILE_PATH.to_string(),
+                    "# previous".to_string(),
+                ),
+                (PLAN_OFF_FILE_PATH.to_string(), "plan off\n".to_string()),
+            ]);
+        workspace_port.fail_next_workspace_load();
+        let service = PlanningInitService::new(
+            workspace_port.clone(),
+            PlanningBootstrapService::new(),
+            PlanningValidationService::new(),
+        );
+
+        let staged = service
+            .stage_simple_mode_draft("/tmp/workspace")
+            .expect("simple staged draft should be created");
+
+        let error = service
+            .promote_staged_draft("/tmp/workspace", &staged.draft_name)
+            .expect_err("failed plan enable should abort promotion");
+
+        assert!(
+            error
+                .to_string()
+                .contains("simulated workspace load failure")
+        );
+        let active_files = workspace_port
+            .active_file_bodies
+            .lock()
+            .expect("active_file_bodies mutex should not be poisoned");
+        assert_eq!(
+            active_files.get(DIRECTIONS_FILE_PATH).map(String::as_str),
+            Some("version = 0")
+        );
+        assert_eq!(
+            active_files.get(TASK_LEDGER_FILE_PATH).map(String::as_str),
+            Some("{\"version\":0,\"tasks\":[]}")
+        );
+        assert_eq!(
+            active_files
+                .get(TASK_LEDGER_SCHEMA_FILE_PATH)
+                .map(String::as_str),
+            Some("{\"type\":\"array\"}")
+        );
+        assert_eq!(
+            active_files
+                .get(RESULT_OUTPUT_FILE_PATH)
+                .map(String::as_str),
+            Some("# previous")
+        );
+        assert_eq!(
+            active_files.get(PLAN_OFF_FILE_PATH).map(String::as_str),
+            Some("plan off\n")
+        );
+        assert!(!active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
     }
 
     #[test]

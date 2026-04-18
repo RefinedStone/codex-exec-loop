@@ -104,7 +104,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             ],
             summary_lines: vec![
                 Line::from(
-                    "Every guided path stages draft files under .codex-exec-loop/planning/drafts/.",
+                    "Every guided path stages a promotable draft before active planning changes.",
                 ),
                 Line::from(
                     "Simple mode keeps one generic active direction; detail mode prepares richer direction authoring.",
@@ -289,7 +289,9 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         Line::from(
                             "controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes",
                         ),
-                        Line::from("validation: use a whole number greater than 0, or type infinite."),
+                        Line::from(
+                            "validation: use a whole number greater than 0, or type infinite.",
+                        ),
                     ]
                 } else {
                     vec![
