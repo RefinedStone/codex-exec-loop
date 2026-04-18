@@ -213,7 +213,6 @@ impl ParallelModeDistributorService {
     }
 
     fn inspect_snapshot(&self, workspace_dir: &str) -> ParallelModeDistributorSnapshot {
-        let _ = self.recover_runtime_state(workspace_dir);
         match load_pool_runtime_context(workspace_dir) {
             Ok(context) => build_distributor_snapshot_from_context(&context),
             Err((_, detail)) => build_placeholder_distributor_snapshot(
@@ -245,7 +244,7 @@ impl ParallelModeDistributorService {
         }))
     }
 
-    fn recover_runtime_state(&self, workspace_dir: &str) -> Result<(), String> {
+    pub(super) fn recover_runtime_state(&self, workspace_dir: &str) -> Result<(), String> {
         let context =
             load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
 

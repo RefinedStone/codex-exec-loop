@@ -275,8 +275,13 @@ impl PlanningInitService {
                 &previous_active_files,
                 plan_off_before.as_deref(),
             ) {
+                let mut manual_recovery_paths = applied_paths.clone();
+                manual_recovery_paths.push(PLAN_OFF_FILE_PATH.to_string());
+                manual_recovery_paths.sort();
+                manual_recovery_paths.dedup();
                 return Err(anyhow!(
-                    "failed to promote staged draft `{draft_name}`: {error}; rollback failed: {rollback_error}"
+                    "failed to promote staged draft `{draft_name}`: {error}; rollback failed: {rollback_error}; manual recovery may be required for: {}",
+                    manual_recovery_paths.join(", ")
                 ));
             }
             return Err(error);

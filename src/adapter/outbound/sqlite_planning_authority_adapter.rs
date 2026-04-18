@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -34,6 +35,9 @@ const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 4;
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
 const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
+const MAX_COLLECTED_DOCUMENT_BYTES: u64 = 1024 * 1024;
+const CLAIM_STALE_AFTER_SECS: i64 = 300;
+const ALLOWED_DIRECTORY_DOCUMENT_EXTENSIONS: &[&str] = &["json", "md", "toml"];
 
 #[derive(Default)]
 pub struct SqlitePlanningAuthorityAdapter;
@@ -326,15 +330,13 @@ impl SqlitePlanningAuthorityAdapter {
             return Ok(PlanningAuthorityOfficialRefreshClaimStatus::Waiting);
         }
 
-        let existing_owner = transaction
-            .query_row(
-                "SELECT owner_token FROM runtime_claims
-                 WHERE claim_kind = 'official-refresh' AND scope_key = ?1",
-                params![OFFICIAL_REFRESH_SCOPE_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .context("failed to read official refresh claim")?;
+        if clear_stale_runtime_claim(&transaction, "official-refresh", OFFICIAL_REFRESH_SCOPE_KEY)?
+        {
+            upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        }
+        let existing_owner =
+            load_runtime_claim(&transaction, "official-refresh", OFFICIAL_REFRESH_SCOPE_KEY)?
+                .map(|claim| claim.owner_token);
         if let Some(existing_owner) = existing_owner {
             if existing_owner == owner_token {
                 transaction
@@ -412,6 +414,9 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction()
             .context("failed to open distributor queue claim transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        if clear_stale_runtime_claim(&transaction, DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id)? {
+            upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        }
         let inserted_rows = transaction
             .execute(
                 "INSERT OR IGNORE INTO runtime_claims
@@ -726,8 +731,8 @@ impl SqlitePlanningAuthorityAdapter {
         let canonical_repo_root = PathBuf::from(&location.canonical_repo_root);
         let authority_store_path = PathBuf::from(&location.authority_store_path);
         let had_store = authority_store_path.is_file();
-        let previous_documents = load_shadow_documents(&authority_store_path)?;
         let mut connection = open_authority_connection(&location)?;
+        let previous_documents = load_shadow_documents(&connection)?;
         let source_documents = load_active_documents(&connection)?;
         let shadow_parity_issues = compare_shadow_documents(&source_documents, &previous_documents);
         let exported_documents = Self::collect_authority_documents(&canonical_repo_root)?;
@@ -743,7 +748,7 @@ impl SqlitePlanningAuthorityAdapter {
         }
         store_shadow_documents(&mut connection, &location, &source_documents)?;
 
-        let mirrored_documents = load_shadow_documents(&authority_store_path)?;
+        let mirrored_documents = load_shadow_documents(&connection)?;
         let post_sync_issues = compare_shadow_documents(&source_documents, &mirrored_documents);
         if !post_sync_issues.is_empty() {
             let summary = post_sync_issues.join(", ");
@@ -1008,15 +1013,10 @@ fn upsert_metadata(transaction: &rusqlite::Transaction<'_>, key: &str, value: &s
     Ok(())
 }
 
-fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String, String>> {
-    if !authority_store_path.is_file() {
+fn load_shadow_documents(connection: &Connection) -> Result<BTreeMap<String, String>> {
+    if !table_exists(connection, "shadow_documents")? {
         return Ok(BTreeMap::new());
     }
-
-    let connection = Connection::open(authority_store_path)
-        .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
-    validate_authority_store_schema(&connection)?;
-    ensure_schema(&connection)?;
 
     let mut statement = connection
         .prepare("SELECT relative_path, content FROM shadow_documents ORDER BY relative_path")
@@ -1227,15 +1227,7 @@ fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
 }
 
 fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
-    let metadata_exists = connection
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'authority_metadata'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .context("failed to inspect authority-store metadata table")?
-        .is_some();
+    let metadata_exists = table_exists(connection, "authority_metadata")?;
     if !metadata_exists {
         return Ok(());
     }
@@ -1250,6 +1242,57 @@ fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct RuntimeClaimRecord {
+    owner_token: String,
+    claimed_at: String,
+}
+
+fn load_runtime_claim(
+    transaction: &rusqlite::Transaction<'_>,
+    claim_kind: &str,
+    scope_key: &str,
+) -> Result<Option<RuntimeClaimRecord>> {
+    transaction
+        .query_row(
+            "SELECT owner_token, claimed_at
+             FROM runtime_claims
+             WHERE claim_kind = ?1 AND scope_key = ?2",
+            params![claim_kind, scope_key],
+            |row| {
+                Ok(RuntimeClaimRecord {
+                    owner_token: row.get::<_, String>(0)?,
+                    claimed_at: row.get::<_, String>(1)?,
+                })
+            },
+        )
+        .optional()
+        .with_context(|| format!("failed to read runtime claim `{claim_kind}:{scope_key}`"))
+}
+
+fn clear_stale_runtime_claim(
+    transaction: &rusqlite::Transaction<'_>,
+    claim_kind: &str,
+    scope_key: &str,
+) -> Result<bool> {
+    let Some(existing_claim) = load_runtime_claim(transaction, claim_kind, scope_key)? else {
+        return Ok(false);
+    };
+    if !claim_is_stale(&existing_claim.claimed_at) {
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "DELETE FROM runtime_claims WHERE claim_kind = ?1 AND scope_key = ?2",
+            params![claim_kind, scope_key],
+        )
+        .with_context(|| {
+            format!("failed to clear stale runtime claim `{claim_kind}:{scope_key}`")
+        })?;
+    Ok(true)
 }
 
 fn upsert_draft_entry(transaction: &rusqlite::Transaction<'_>, draft_name: &str) -> Result<()> {
@@ -1521,6 +1564,29 @@ fn read_metadata_i64(transaction: &rusqlite::Transaction<'_>, key: &str) -> Resu
         .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
 }
 
+fn claim_is_stale(claimed_at: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(claimed_at)
+        .map(|timestamp| {
+            Utc::now()
+                .signed_duration_since(timestamp.with_timezone(&Utc))
+                .num_seconds()
+                >= CLAIM_STALE_AFTER_SECS
+        })
+        .unwrap_or(true)
+}
+
+fn table_exists(connection: &Connection, table_name: &str) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table_name],
+            |_| Ok(()),
+        )
+        .optional()
+        .with_context(|| format!("failed to inspect sqlite table `{table_name}`"))
+        .map(|value| value.is_some())
+}
+
 fn export_active_workspace_record(
     location: &PlanningAuthorityLocation,
     record: &PlanningWorkspaceLoadRecord,
@@ -1616,6 +1682,9 @@ fn collect_directory_documents(
                 stack.push(path);
                 continue;
             }
+            if !allowed_directory_document(&path)? {
+                continue;
+            }
 
             let relative_path = path
                 .strip_prefix(workspace_root)
@@ -1700,10 +1769,24 @@ fn compare_exported_documents(
 }
 
 fn resolve_canonical_repo_root(workspace_dir: &str) -> Option<PathBuf> {
-    let common_dir = git_stdout(workspace_dir, &["rev-parse", "--git-common-dir"])?;
-    let common_dir_path = absolutize_path(Path::new(workspace_dir), Path::new(&common_dir));
-    let canonical_common_dir = canonicalize_best_effort(&common_dir_path);
-    canonical_common_dir.parent().map(Path::to_path_buf)
+    let cache_key = canonicalize_best_effort(Path::new(workspace_dir))
+        .display()
+        .to_string();
+    if let Some(cached_root) = canonical_repo_root_cache()
+        .lock()
+        .expect("canonical repo root cache mutex poisoned")
+        .get(&cache_key)
+        .cloned()
+    {
+        return Some(cached_root);
+    }
+
+    let resolved_root = resolve_canonical_repo_root_uncached(workspace_dir)?;
+    canonical_repo_root_cache()
+        .lock()
+        .expect("canonical repo root cache mutex poisoned")
+        .insert(cache_key, resolved_root.clone());
+    Some(resolved_root)
 }
 
 fn git_stdout(workspace_dir: &str, args: &[&str]) -> Option<String> {
@@ -1723,6 +1806,46 @@ fn git_stdout(workspace_dir: &str, args: &[&str]) -> Option<String> {
     }
 
     Some(trimmed.to_string())
+}
+
+fn resolve_canonical_repo_root_uncached(workspace_dir: &str) -> Option<PathBuf> {
+    let show_toplevel = git_stdout(workspace_dir, &["rev-parse", "--show-toplevel"])?;
+    let common_dir = git_stdout(workspace_dir, &["rev-parse", "--git-common-dir"])?;
+    let git_dir = git_stdout(workspace_dir, &["rev-parse", "--git-dir"])?;
+    let workspace_path = Path::new(workspace_dir);
+    let canonical_toplevel =
+        canonicalize_best_effort(&absolutize_path(workspace_path, Path::new(&show_toplevel)));
+    let canonical_common_dir =
+        canonicalize_best_effort(&absolutize_path(workspace_path, Path::new(&common_dir)));
+    let canonical_git_dir =
+        canonicalize_best_effort(&absolutize_path(workspace_path, Path::new(&git_dir)));
+    let worktrees_root = canonical_common_dir.join("worktrees");
+    if canonical_git_dir.starts_with(&worktrees_root) {
+        return canonical_common_dir.parent().map(Path::to_path_buf);
+    }
+    Some(canonical_toplevel)
+}
+
+fn allowed_directory_document(path: &Path) -> Result<bool> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to inspect metadata for {}", path.display()))?;
+    if metadata.len() > MAX_COLLECTED_DOCUMENT_BYTES {
+        return Ok(false);
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    Ok(matches!(
+        extension.as_deref(),
+        Some(ext) if ALLOWED_DIRECTORY_DOCUMENT_EXTENSIONS.contains(&ext)
+    ))
+}
+
+fn canonical_repo_root_cache() -> &'static Mutex<BTreeMap<String, PathBuf>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, PathBuf>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 fn absolutize_path(base: &Path, path: &Path) -> PathBuf {
@@ -1863,6 +1986,52 @@ mod tests {
                 .authority_store_path
                 .ends_with(".codex-exec-loop/runtime/planning-authority.db")
         );
+    }
+
+    #[test]
+    fn resolve_authority_location_uses_workspace_root_for_separate_git_dir_repo() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("separate-git-dir-{unique}"));
+        let workspace_root = root.join("workspace");
+        let external_git_dir = root.join("external-git-dir");
+        fs::create_dir_all(&workspace_root).expect("workspace root should exist");
+        let status = Command::new("git")
+            .current_dir(&root)
+            .args([
+                "init",
+                "--separate-git-dir",
+                external_git_dir.to_str().expect("valid git dir path"),
+                workspace_root.to_str().expect("valid workspace path"),
+            ])
+            .status()
+            .expect("git init should spawn");
+        assert!(
+            status.success(),
+            "git init with separate git dir should succeed"
+        );
+
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let location = adapter
+            .resolve_authority_location(workspace_root.to_str().expect("valid path"))
+            .expect("authority location should resolve");
+
+        assert_eq!(
+            location.canonical_repo_root,
+            fs::canonicalize(&workspace_root)
+                .expect("workspace root should canonicalize")
+                .display()
+                .to_string()
+        );
+        assert!(
+            location
+                .authority_store_path
+                .ends_with(".codex-exec-loop/runtime/planning-authority.db")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2255,6 +2424,85 @@ mod tests {
                 "owner-2",
             )
             .expect("released queue claim should be reacquired")
+        );
+    }
+
+    #[test]
+    fn official_refresh_claims_can_reclaim_stale_owner() {
+        let repo = TempGitRepo::new("authority-official-stale-claim");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+        let refresh_order =
+            SqlitePlanningAuthorityAdapter::reserve_next_official_refresh_order(workspace_dir)
+                .expect("refresh order should reserve");
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                refresh_order,
+                "stale-owner",
+            )
+            .expect("initial claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+
+        let location = SqlitePlanningAuthorityAdapter::new()
+            .resolve_authority_location(workspace_dir)
+            .expect("authority location should resolve");
+        let connection =
+            Connection::open(&location.authority_store_path).expect("authority store should open");
+        connection
+            .execute(
+                "UPDATE runtime_claims
+                 SET claimed_at = '2000-01-01T00:00:00Z'
+                 WHERE claim_kind = 'official-refresh' AND scope_key = ?1",
+                ["official-refresh"],
+            )
+            .expect("stale official refresh claim should update");
+
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+                workspace_dir,
+                refresh_order,
+                "fresh-owner",
+            )
+            .expect("stale claim should be reclaimed"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+    }
+
+    #[test]
+    fn distributor_queue_claims_can_reclaim_stale_owner() {
+        let repo = TempGitRepo::new("authority-distributor-stale-claim");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+        assert!(
+            SqlitePlanningAuthorityAdapter::try_acquire_distributor_queue_claim(
+                workspace_dir,
+                "queue-item-stale",
+                "stale-owner",
+            )
+            .expect("initial queue claim should acquire")
+        );
+
+        let location = SqlitePlanningAuthorityAdapter::new()
+            .resolve_authority_location(workspace_dir)
+            .expect("authority location should resolve");
+        let connection =
+            Connection::open(&location.authority_store_path).expect("authority store should open");
+        connection
+            .execute(
+                "UPDATE runtime_claims
+                 SET claimed_at = '2000-01-01T00:00:00Z'
+                 WHERE claim_kind = ?1 AND scope_key = ?2",
+                ["distributor-queue-head", "queue-item-stale"],
+            )
+            .expect("stale distributor claim should update");
+
+        assert!(
+            SqlitePlanningAuthorityAdapter::try_acquire_distributor_queue_claim(
+                workspace_dir,
+                "queue-item-stale",
+                "fresh-owner",
+            )
+            .expect("stale queue claim should be reclaimed")
         );
     }
 }

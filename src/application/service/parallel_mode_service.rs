@@ -266,8 +266,14 @@ impl ParallelModeService {
             .iter()
             .find(|capability| capability.state != ParallelModeCapabilityState::Ready)
             .map(ParallelModeCapabilitySnapshot::summary);
-
-        ParallelModeReadinessSnapshot::new(workspace_dir, readiness, capabilities, top_alert)
+        let snapshot =
+            ParallelModeReadinessSnapshot::new(workspace_dir, readiness, capabilities, top_alert);
+        if snapshot.allows_parallel_mode() {
+            let _ = self
+                .distributor_service
+                .recover_runtime_state(workspace_dir);
+        }
+        snapshot
     }
 
     pub fn build_supervisor_snapshot(
@@ -2000,17 +2006,7 @@ fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> Str
 
 fn detect_canonical_repo_root(workspace_dir: &str) -> Option<PathBuf> {
     detect_git_repo_root(workspace_dir)?;
-    let common_dir = run_command(
-        "git",
-        ["-C", workspace_dir, "rev-parse", "--git-common-dir"],
-        None,
-    )?;
-    let common_dir_path = absolutize_path(Path::new(workspace_dir), Path::new(&common_dir));
-    let canonical_repo_root = common_dir_path.parent()?;
-
-    fs::canonicalize(canonical_repo_root)
-        .ok()
-        .or_else(|| Some(canonical_repo_root.to_path_buf()))
+    Some(SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir))
 }
 
 fn derive_pool_root_label(workspace_dir: &str) -> String {
@@ -4333,6 +4329,79 @@ mod tests {
                 "pushing",
                 "failed"
             ]
+        );
+    }
+
+    #[test]
+    fn build_supervisor_snapshot_does_not_trigger_runtime_recovery_side_effects() {
+        let repo = TempGitRepo::new("snapshot-no-recovery");
+        let github = Arc::new(FakeGithubAutomationPort::ready());
+        let operations = github.operations.clone();
+        let service = ParallelModeService::with_github_automation(github);
+        let readiness = ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        );
+
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                "turn-snapshot",
+                None,
+                Some("Snapshot render should stay read-only."),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official ledger refresh succeeded: distributor delivery approved",
+            )
+            .expect("commit-ready should be recorded");
+        service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should enqueue")
+            .expect("queue item should be created");
+
+        let mut queue_record = load_distributor_queue_records(&repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queued record should exist");
+        queue_record.queue_state = ParallelModeQueueItemState::MergePending;
+        queue_record.pull_request_number = Some(77);
+        queue_record.pull_request_url =
+            Some("https://github.com/RefinedStone/codex-exec-loop/pull/77".to_string());
+        SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+            &repo.workspace_dir(),
+            &queue_record,
+        )
+        .expect("queue record should update");
+
+        let snapshot =
+            service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+        assert_eq!(snapshot.distributor.head_summary, "merge pending");
+        assert!(
+            operations
+                .lock()
+                .expect("fake github operations mutex poisoned")
+                .is_empty(),
+            "snapshot rendering should not invoke GitHub recovery work"
         );
     }
 
