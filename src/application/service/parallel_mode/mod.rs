@@ -42,6 +42,8 @@ const AKRA_BRANCH: &str = "akra";
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
+const MAX_AGENT_BRANCH_SLUG_LEN: usize = 96;
+const AGENT_BRANCH_TRUNCATION_HASH_LEN: usize = 10;
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL: &str =
     "agent branch is not integrated into `akra` and has no lease metadata";
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
@@ -2334,20 +2336,63 @@ fn allocate_agent_branch_name(
     task_id: &str,
     task_title: &str,
 ) -> String {
-    let base_slug = sanitize_task_slug(task_slug)
+    let sanitized_slug = sanitize_task_slug(task_slug)
         .or_else(|| sanitize_task_slug(task_id))
         .or_else(|| sanitize_task_slug(task_title))
         .unwrap_or_else(|| "task".to_string());
-    let base_branch_name = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/{base_slug}");
+    let mut collision_index = 1usize;
+    loop {
+        let candidate = build_agent_branch_name(slot_id, &sanitized_slug, collision_index);
+        if !branch_exists(repo_root, &candidate) {
+            return candidate;
+        }
+        collision_index += 1;
+    }
+}
 
-    let mut candidate = base_branch_name.clone();
-    let mut suffix = 2;
-    while branch_exists(repo_root, &candidate) {
-        candidate = format!("{base_branch_name}-{suffix}");
-        suffix += 1;
+fn build_agent_branch_name(slot_id: &str, sanitized_slug: &str, collision_index: usize) -> String {
+    let collision_suffix = if collision_index > 1 {
+        format!("-{collision_index}")
+    } else {
+        String::new()
+    };
+    let bounded_slug = bounded_agent_branch_slug(
+        sanitized_slug,
+        MAX_AGENT_BRANCH_SLUG_LEN.saturating_sub(collision_suffix.len()),
+    );
+    format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/{bounded_slug}{collision_suffix}")
+}
+
+fn bounded_agent_branch_slug(slug: &str, max_len: usize) -> String {
+    if slug.len() <= max_len {
+        return slug.to_string();
     }
 
-    candidate
+    let hash = short_branch_slug_hash(slug);
+    if max_len <= hash.len() {
+        return hash[..max_len].to_string();
+    }
+
+    let prefix_len = max_len.saturating_sub(hash.len() + 1);
+    let prefix = slug[..prefix_len].trim_end_matches('-');
+    if prefix.is_empty() {
+        return hash[..max_len.min(hash.len())].to_string();
+    }
+
+    format!("{prefix}-{hash}")
+}
+
+fn short_branch_slug_hash(input: &str) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    format!("{hash:016x}")[..AGENT_BRANCH_TRUNCATION_HASH_LEN].to_string()
 }
 
 fn sanitize_task_slug(input: &str) -> Option<String> {

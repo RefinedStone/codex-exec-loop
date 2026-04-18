@@ -17,14 +17,14 @@ use crate::domain::parallel_mode::{
 use super::supervisor::selected_runtime_session_detail;
 use super::{
     AKRA_BRANCH, DEFAULT_PUSH_REMOTE_NAME, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
-    branch_exists, branch_is_integrated_into_akra, cleanup_slot, command_succeeds,
-    current_branch_name, current_timestamp, ensure_directory_exists, inspect_slot_git_status,
-    lease_session_key, load_pool_runtime_context, record_cleaned_session_detail,
-    record_cleanup_pending_session_detail, record_distributor_failed_session_detail,
-    record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_pr_pending_session_detail,
-    record_pushing_session_detail, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    short_sha, write_slot_lease,
+    agent_session_detail_record_path, branch_exists, branch_is_integrated_into_akra, cleanup_slot,
+    command_succeeds, current_branch_name, current_timestamp, ensure_directory_exists,
+    inspect_slot_git_status, lease_session_key, load_pool_runtime_context,
+    record_cleaned_session_detail, record_cleanup_pending_session_detail,
+    record_distributor_failed_session_detail, record_integrating_session_detail,
+    record_merge_pending_session_detail, record_merge_queued_session_detail,
+    record_pr_pending_session_detail, record_pushing_session_detail, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, short_sha, slot_lease_file_path, write_slot_lease,
 };
 
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
@@ -213,6 +213,7 @@ impl ParallelModeDistributorService {
     }
 
     fn inspect_snapshot(&self, workspace_dir: &str) -> ParallelModeDistributorSnapshot {
+        let _ = self.recover_locally_observable_state(workspace_dir);
         match load_pool_runtime_context(workspace_dir) {
             Ok(context) => build_distributor_snapshot_from_context(&context),
             Err((_, detail)) => build_placeholder_distributor_snapshot(
@@ -314,6 +315,31 @@ impl ParallelModeDistributorService {
 
         Ok(())
     }
+
+    fn recover_locally_observable_state(&self, workspace_dir: &str) -> Result<(), String> {
+        let context =
+            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+
+        for mut record in context.distributor_queue_records.clone() {
+            if !record.queue_state.is_active() {
+                continue;
+            }
+            if !Path::new(&record.worktree_path).exists() {
+                continue;
+            }
+            if !branch_is_integrated_into_akra(&context.repo_root, &record.branch_name) {
+                continue;
+            }
+
+            let matching_lease = matching_lease_for_queue_record(&context, &record);
+            if !runtime_mirror_missing(&context, &record, matching_lease) {
+                continue;
+            }
+            recover_integrated_queue_record(&context, matching_lease, &mut record)?;
+        }
+
+        Ok(())
+    }
 }
 
 fn matching_lease_for_queue_record<'a>(
@@ -330,6 +356,24 @@ fn matching_lease_for_queue_record<'a>(
                     && lease.worktree_path == record.worktree_path
             })
         })
+}
+
+fn runtime_mirror_missing(
+    context: &PoolRuntimeContext,
+    record: &ParallelModeDistributorQueueRecord,
+    matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+) -> bool {
+    if !distributor_queue_record_path(&context.pool_root, &record.queue_item_id).exists() {
+        return true;
+    }
+
+    let Some(lease) = matching_lease else {
+        return false;
+    };
+
+    !slot_lease_file_path(&context.pool_root, &lease.slot_id).exists()
+        || !agent_session_detail_record_path(&context.pool_root, &lease_session_key(lease))
+            .exists()
 }
 
 fn recover_integrated_queue_record(

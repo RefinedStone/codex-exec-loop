@@ -23,13 +23,13 @@ Keep this file limited to genuinely open supersession questions and explicit non
 - pool default size is `3`
 - distributor is serial
 - agent completion contract is `commit ready`
+- agent branch names use sanitized task slugs, deterministic hash truncation, and numbered collision suffixes
 
 ## Open Questions
 
 | Question | Why it remains open |
 | --- | --- |
 | exact stale-agent timeout policy | depends on real terminal behavior and app-server event cadence |
-| branch-name truncation and collision policy | needs implementation constraints from git and remote naming |
 | operator override flow for blocked merge queue items | depends on the final TUI interaction model |
 | persistence depth for supervisor history | may be unnecessary for first shipped slice |
 | whether blocked but pushed queue items may release slots early | depends on recovery and audit expectations |
