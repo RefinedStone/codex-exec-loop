@@ -343,6 +343,9 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::load_active_workspace_files(workspace_dir);
+        }
         Self::load_workspace_record_from(workspace_dir, Self::read_optional_workspace_file)
     }
 
@@ -380,6 +383,12 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::load_active_planning_file(
+                workspace_dir,
+                &relative_path,
+            );
+        }
         Self::read_optional_workspace_file(workspace_dir, &relative_path)
     }
 
@@ -678,27 +687,30 @@ mod tests {
     }
 
     #[test]
-    fn active_workspace_files_resolve_to_canonical_repo_root_for_linked_worktrees() {
+    fn git_backed_active_workspace_reads_store_primary_documents() {
         let repo = TempGitRepo::new("planning-workspace-linked-root");
         let adapter = FilesystemPlanningWorkspaceAdapter::new();
-        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 1\n");
+        adapter
+            .commit_planning_workspace_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some("version = 1\n".to_string()),
+                    task_ledger_json: None,
+                    task_ledger_schema_json: None,
+                    queue_snapshot_json: None,
+                    result_output_markdown: None,
+                },
+            )
+            .expect("git-backed active commit should seed the authority store");
 
-        let linked_worktree_path = repo.worktree_root.join(DIRECTIONS_FILE_PATH);
-        fs::create_dir_all(
-            linked_worktree_path
-                .parent()
-                .expect("linked worktree directions should have a parent directory"),
-        )
-        .expect("linked worktree planning directory should exist");
-        fs::write(&linked_worktree_path, "version = 0\n")
-            .expect("linked worktree file should diverge");
+        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 0\n");
 
         let body = adapter
             .load_optional_planning_file(
                 repo.worktree_root.to_str().expect("valid worktree path"),
                 DIRECTIONS_FILE_PATH,
             )
-            .expect("canonical directions should load")
+            .expect("store-backed directions should load")
             .expect("directions.toml should exist");
 
         assert_eq!(body, "version = 1\n");
@@ -708,7 +720,18 @@ mod tests {
     fn candidate_workspace_files_read_linked_worktree_copy_for_git_backed_workspace() {
         let repo = TempGitRepo::new("planning-workspace-candidate-root");
         let adapter = FilesystemPlanningWorkspaceAdapter::new();
-        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 1\n");
+        adapter
+            .commit_planning_workspace_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some("version = 1\n".to_string()),
+                    task_ledger_json: None,
+                    task_ledger_schema_json: None,
+                    queue_snapshot_json: None,
+                    result_output_markdown: None,
+                },
+            )
+            .expect("git-backed active commit should seed the authority store");
 
         let linked_worktree_path = repo.worktree_root.join(DIRECTIONS_FILE_PATH);
         fs::create_dir_all(
@@ -717,6 +740,7 @@ mod tests {
                 .expect("linked worktree directions should have a parent directory"),
         )
         .expect("linked worktree planning directory should exist");
+        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 0\n");
         fs::write(&linked_worktree_path, "version = 2\n")
             .expect("linked worktree file should diverge");
 

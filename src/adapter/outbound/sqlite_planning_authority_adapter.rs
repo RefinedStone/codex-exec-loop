@@ -210,6 +210,25 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn load_active_workspace_files(
+        workspace_dir: &str,
+    ) -> Result<PlanningWorkspaceLoadRecord> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_active_documents(&mut connection, &location)?;
+        load_active_workspace_record(&connection)
+    }
+
+    pub(crate) fn load_active_planning_file(
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_active_documents(&mut connection, &location)?;
+        load_active_document(&connection, relative_path)
+    }
+
     pub(crate) fn replace_active_planning_file(
         workspace_dir: &str,
         relative_path: &str,
@@ -719,23 +738,22 @@ impl SqlitePlanningAuthorityAdapter {
         let location = self.resolve_authority_location(workspace_dir)?;
         let canonical_repo_root = PathBuf::from(&location.canonical_repo_root);
         let authority_store_path = PathBuf::from(&location.authority_store_path);
-        let source_documents = Self::collect_authority_documents(&canonical_repo_root)?;
         let had_store = authority_store_path.is_file();
         let previous_documents = load_shadow_documents(&authority_store_path)?;
-        let parity_issues = compare_documents(&source_documents, &previous_documents);
-
-        if let Some(parent) = authority_store_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
+        let mut connection = open_authority_connection(&location)?;
+        bootstrap_active_documents(&mut connection, &location)?;
+        let source_documents = load_active_documents(&connection)?;
+        let shadow_parity_issues = compare_shadow_documents(&source_documents, &previous_documents);
+        let exported_documents = Self::collect_authority_documents(&canonical_repo_root)?;
+        let export_parity_issues =
+            compare_exported_documents(&source_documents, &exported_documents);
+        if !export_parity_issues.is_empty() {
+            sync_exported_authority_documents(&location, &source_documents, &exported_documents)?;
         }
-
-        let mut connection = Connection::open(&authority_store_path)
-            .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
-        ensure_schema(&connection)?;
         store_shadow_documents(&mut connection, &location, &source_documents)?;
 
         let mirrored_documents = load_shadow_documents(&authority_store_path)?;
-        let post_sync_issues = compare_documents(&source_documents, &mirrored_documents);
+        let post_sync_issues = compare_shadow_documents(&source_documents, &mirrored_documents);
         if !post_sync_issues.is_empty() {
             let summary = post_sync_issues.join(", ");
             return Err(anyhow!(
@@ -745,18 +763,24 @@ impl SqlitePlanningAuthorityAdapter {
 
         let sync_state = if !had_store {
             PlanningAuthorityShadowStoreSyncState::Bootstrapped
-        } else if parity_issues.is_empty() {
+        } else if shadow_parity_issues.is_empty() && export_parity_issues.is_empty() {
             PlanningAuthorityShadowStoreSyncState::InSync
         } else {
             PlanningAuthorityShadowStoreSyncState::Resynced
         };
+        let parity_issue_examples = shadow_parity_issues
+            .iter()
+            .chain(export_parity_issues.iter())
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>();
 
         Ok(PlanningAuthorityShadowStoreInspection {
             location,
             sync_state,
             mirrored_document_count: source_documents.len(),
-            parity_issue_count: parity_issues.len(),
-            parity_issue_examples: parity_issues.into_iter().take(3).collect(),
+            parity_issue_count: shadow_parity_issues.len() + export_parity_issues.len(),
+            parity_issue_examples,
         })
     }
 }
@@ -1028,6 +1052,46 @@ fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String,
     }
 
     Ok(documents)
+}
+
+fn load_active_documents(connection: &Connection) -> Result<BTreeMap<String, String>> {
+    let mut statement = connection
+        .prepare("SELECT relative_path, content FROM active_documents ORDER BY relative_path")
+        .context("failed to read active authority documents")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate active authority documents")?;
+    let mut documents = BTreeMap::new();
+    for row in rows {
+        let (relative_path, content) = row.context("failed to decode active authority row")?;
+        documents.insert(relative_path, content);
+    }
+
+    Ok(documents)
+}
+
+fn load_active_workspace_record(connection: &Connection) -> Result<PlanningWorkspaceLoadRecord> {
+    let documents = load_active_documents(connection)?;
+    Ok(PlanningWorkspaceLoadRecord {
+        directions_toml: documents.get(DIRECTIONS_FILE_PATH).cloned(),
+        task_ledger_json: documents.get(TASK_LEDGER_FILE_PATH).cloned(),
+        task_ledger_schema_json: documents.get(TASK_LEDGER_SCHEMA_FILE_PATH).cloned(),
+        queue_snapshot_json: documents.get(QUEUE_SNAPSHOT_FILE_PATH).cloned(),
+        result_output_markdown: documents.get(RESULT_OUTPUT_FILE_PATH).cloned(),
+    })
+}
+
+fn load_active_document(connection: &Connection, relative_path: &str) -> Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT content FROM active_documents WHERE relative_path = ?1",
+            params![relative_path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to read active authority document `{relative_path}`"))
 }
 
 fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Connection> {
@@ -1754,6 +1818,22 @@ fn export_active_document(
     Ok(())
 }
 
+fn sync_exported_authority_documents(
+    location: &PlanningAuthorityLocation,
+    source_documents: &BTreeMap<String, String>,
+    exported_documents: &BTreeMap<String, String>,
+) -> Result<()> {
+    for (relative_path, content) in source_documents {
+        export_active_document(location, relative_path, Some(content))?;
+    }
+    for relative_path in exported_documents.keys() {
+        if !source_documents.contains_key(relative_path) {
+            export_active_document(location, relative_path, None)?;
+        }
+    }
+    Ok(())
+}
+
 fn collect_directory_documents(
     workspace_root: &Path,
     relative_directory: &str,
@@ -1791,7 +1871,7 @@ fn collect_directory_documents(
     Ok(())
 }
 
-fn compare_documents(
+fn compare_shadow_documents(
     source_documents: &BTreeMap<String, String>,
     mirrored_documents: &BTreeMap<String, String>,
 ) -> Vec<String> {
@@ -1817,6 +1897,40 @@ fn compare_documents(
             }
             (Some(source), Some(mirrored)) if source != mirrored => {
                 issues.push(format!("{relative_path}: content mismatch"));
+            }
+            _ => {}
+        }
+    }
+
+    issues
+}
+
+fn compare_exported_documents(
+    source_documents: &BTreeMap<String, String>,
+    exported_documents: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let document_paths = source_documents
+        .keys()
+        .chain(exported_documents.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let mut issues = Vec::new();
+    for relative_path in document_paths {
+        match (
+            source_documents.get(&relative_path),
+            exported_documents.get(&relative_path),
+        ) {
+            (Some(_), None) => {
+                issues.push(format!("{relative_path}: missing tracked export"));
+            }
+            (None, Some(_)) => {
+                issues.push(format!(
+                    "{relative_path}: tracked export contains stale content"
+                ));
+            }
+            (Some(source), Some(exported)) if source != exported => {
+                issues.push(format!("{relative_path}: tracked export mismatch"));
             }
             _ => {}
         }
@@ -2026,11 +2140,20 @@ mod tests {
     }
 
     #[test]
-    fn inspect_shadow_store_reports_resynced_when_source_changes() {
+    fn inspect_shadow_store_restores_diverged_tracked_exports_from_active_store() {
         let repo = TempGitRepo::new("shadow-resync");
         let adapter = SqlitePlanningAuthorityAdapter::new();
-        repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
-
+        SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
+            repo.worktree_root.to_str().expect("valid path"),
+            &PlanningWorkspaceLoadRecord {
+                directions_toml: Some("version = 1\n".to_string()),
+                task_ledger_json: None,
+                task_ledger_schema_json: None,
+                queue_snapshot_json: None,
+                result_output_markdown: None,
+            },
+        )
+        .expect("active planning should seed the authority store");
         adapter
             .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
             .expect("initial shadow store sync should succeed");
@@ -2050,7 +2173,12 @@ mod tests {
             inspection
                 .parity_issue_examples
                 .iter()
-                .any(|issue| issue.contains("directions.toml"))
+                .any(|issue| issue.contains("tracked export"))
+        );
+        assert_eq!(
+            fs::read_to_string(repo.repo_root.join(DIRECTIONS_FILE_PATH))
+                .expect("tracked export should be restored"),
+            "version = 1\n"
         );
     }
 
@@ -2156,6 +2284,38 @@ mod tests {
             )
             .expect("active task ledger should be stored");
         assert_eq!(stored_task_ledger, "{\"version\":1,\"tasks\":[]}\n");
+    }
+
+    #[test]
+    fn active_workspace_load_reads_store_when_tracked_export_is_missing() {
+        let repo = TempGitRepo::new("authority-active-load");
+
+        SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+            &PlanningWorkspaceLoadRecord {
+                directions_toml: Some("version = 4\n".to_string()),
+                task_ledger_json: None,
+                task_ledger_schema_json: None,
+                queue_snapshot_json: None,
+                result_output_markdown: None,
+            },
+        )
+        .expect("active commit should succeed");
+        fs::remove_file(repo.repo_root.join(DIRECTIONS_FILE_PATH))
+            .expect("tracked export should be removable");
+
+        let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+        )
+        .expect("active workspace should load from store");
+        let directions = SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+            DIRECTIONS_FILE_PATH,
+        )
+        .expect("active directions should load");
+
+        assert_eq!(loaded.directions_toml.as_deref(), Some("version = 4\n"));
+        assert_eq!(directions.as_deref(), Some("version = 4\n"));
     }
 
     #[test]

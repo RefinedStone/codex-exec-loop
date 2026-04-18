@@ -10,10 +10,13 @@ use super::{
     git_branch_exists, install_ready_github_automation, make_test_app,
     merge_active_branch_into_akra, ready_conversation, run_git, sample_startup_diagnostics,
 };
+use crate::adapter::outbound::filesystem_planning_workspace_adapter::FilesystemPlanningWorkspaceAdapter;
+use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };
+use crate::application::service::planning_contract::TASK_LEDGER_FILE_PATH;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
 
 fn current_branch(workspace_directory: &str) -> String {
@@ -645,15 +648,14 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
     let repo = TempGitWorkspace::new("parallel-mode-runtime-repeat-gate");
     commit_active_planning_workspace_into_akra(repo.workspace_dir());
     let repeated_ledger = repeated_official_completion_task_ledger();
-    let task_ledger_path = Path::new(repo.workspace_dir())
-        .join(".codex-exec-loop")
-        .join("planning")
-        .join("task-ledger.json");
-    std::fs::write(&task_ledger_path, &repeated_ledger).expect("repeated task ledger should write");
-    run_git(
-        repo.workspace_dir(),
-        &["add", ".codex-exec-loop/planning/task-ledger.json"],
-    );
+    FilesystemPlanningWorkspaceAdapter::new()
+        .replace_planning_workspace_file(
+            repo.workspace_dir(),
+            TASK_LEDGER_FILE_PATH,
+            Some(&repeated_ledger),
+        )
+        .expect("repeated task ledger should write");
+    run_git(repo.workspace_dir(), &["add", TASK_LEDGER_FILE_PATH]);
     run_git(
         repo.workspace_dir(),
         &["commit", "-m", "Seed repeated official completion task"],
