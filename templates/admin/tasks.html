@@ -1,0 +1,45 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="grid">
+  <article class="card span-12">
+    <h2>Task Ledger</h2>
+    <p>Stage a draft that focuses on `task-ledger.json` and `result-output.md`, validate it against the current directions, and promote when ready.</p>
+    <div class="actions">
+      <form method="post" action="/admin/drafts">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="kind" value="task_ledger">
+        <button type="submit">Open Task Draft</button>
+      </form>
+    </div>
+  </article>
+
+  <article class="card span-6">
+    <h2>Queue Head</h2>
+    {% if let Some(queue_head) = overview.runtime.queue_head %}
+    <p><strong>{{ queue_head.task_title }}</strong></p>
+    <p class="mono">{{ queue_head.task_id }} / {{ queue_head.direction_id }}</p>
+    <p>Priority {{ queue_head.combined_priority }} / {{ queue_head.status }}</p>
+    {% else %}
+    <p>No actionable queue head.</p>
+    {% endif %}
+  </article>
+
+  <article class="card span-6">
+    <h2>Proposals</h2>
+    {% if overview.runtime.proposed_tasks.is_empty() %}
+    <p>No promotable proposals are currently visible.</p>
+    {% else %}
+    <table>
+      <tbody>
+        {% for task in overview.runtime.proposed_tasks %}
+        <tr>
+          <td><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
+          <td>{{ task.combined_priority }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </article>
+</section>
+{% endblock %}

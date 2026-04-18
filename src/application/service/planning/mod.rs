@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+pub mod admin;
 pub(crate) mod authoring;
 pub(crate) mod repair;
 pub(crate) mod runtime;
@@ -27,6 +28,12 @@ use self::runtime::validation::PlanningValidationService;
 use self::worker::orchestration::PlanningWorkerOrchestrationService;
 
 pub use self::PlanningFeature as PlanningServices;
+pub use self::admin::{
+    PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
+    PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
+    PlanningAdminOverview, PlanningAdminResetOutcome, PlanningAdminSessionView,
+    PlanningAdminTogglePlanOutcome,
+};
 pub use self::authoring::bootstrap::PlanningBootstrapMode;
 pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,

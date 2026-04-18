@@ -1,0 +1,45 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="grid">
+  <article class="card span-8">
+    <h2>{{ session.editor_heading }}</h2>
+    <p class="mono">{{ session.draft_name }}</p>
+    <form method="post" action="/admin/drafts/{{ session.draft_name }}/save" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="{{ session.kind }}">
+      {% if let Some(direction_id) = session.direction_id %}
+      <input type="hidden" name="direction_id" value="{{ direction_id }}">
+      {% endif %}
+
+      {% for file in session.files %}
+      <div class="field">
+        <label for="file_{{ file.key }}">{{ file.label }}</label>
+        <div class="mono">{{ file.active_path }}</div>
+        <textarea id="file_{{ file.key }}" name="file_{{ file.key }}" data-editor-textarea data-editor-language="{{ file.editor_language }}">{{ file.body }}</textarea>
+      </div>
+      {% endfor %}
+
+      <div class="actions">
+        <button type="submit">Save Draft</button>
+        <button
+          type="submit"
+          formaction="/admin/drafts/{{ session.draft_name }}/validate"
+          class="secondary"
+          hx-post="/admin/drafts/{{ session.draft_name }}/validate"
+          hx-target="#draft-status-panel"
+          hx-swap="outerHTML"
+          hx-include="closest form"
+        >
+          Validate
+        </button>
+        <button type="submit" formaction="/admin/drafts/{{ session.draft_name }}/promote" class="warn">Promote</button>
+        <a class="button secondary" href="{{ session.return_path }}">Back</a>
+      </div>
+    </form>
+  </article>
+
+  <article class="card span-4" id="draft-status-panel">
+    {% include "admin/partials/draft_status.html" %}
+  </article>
+</section>
+{% endblock %}

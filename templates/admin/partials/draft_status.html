@@ -1,0 +1,36 @@
+<div id="draft-status-panel">
+  <h3>Validation</h3>
+  {% if let Some(message) = notice %}
+  <p>{{ message }}</p>
+  {% endif %}
+  <div class="statline">
+    <span class="pill">valid: {{ session.validation.is_valid }}</span>
+    <span class="pill">errors: {{ session.validation.error_count }}</span>
+    <span class="pill">warnings: {{ session.validation.warning_count }}</span>
+  </div>
+
+  {% if session.validation.issues.is_empty() %}
+  <p>No validation issues.</p>
+  {% else %}
+  <div class="issues">
+    {% for issue in session.validation.issues %}
+    <div class="issue {{ issue.severity }}">
+      <small>{{ issue.file_kind }} / {{ issue.code }} / {{ issue.severity }}</small>
+      {{ issue.message }}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if let Some(queue_preview) = session.queue_preview %}
+  <h3>Queue Preview</h3>
+  <p>{{ queue_preview.queue_summary }}</p>
+  {% if let Some(summary) = queue_preview.proposal_summary %}
+  <p>Top proposal: {{ summary }}</p>
+  {% endif %}
+  {% if let Some(queue_head) = queue_preview.queue_head %}
+  <p><strong>{{ queue_head.task_title }}</strong></p>
+  <p class="mono">{{ queue_head.task_id }} / {{ queue_head.direction_id }}</p>
+  {% endif %}
+  {% endif %}
+</div>

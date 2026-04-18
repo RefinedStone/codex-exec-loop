@@ -1,0 +1,68 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="grid">
+  <article class="card span-12">
+    <h2>Direction Surfaces</h2>
+    <div class="actions">
+      <form method="post" action="/admin/drafts">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="kind" value="directions">
+        <button type="submit">Edit Directions Catalog</button>
+      </form>
+      <form method="post" action="/admin/drafts">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="kind" value="queue_idle_prompt">
+        <button type="submit" class="secondary">Edit Queue-Idle Prompt</button>
+      </form>
+    </div>
+  </article>
+
+  {% if let Some(directions) = overview.directions %}
+  <article class="card span-12">
+    <h2>Directions</h2>
+    <div class="statline">
+      <span class="pill">queue-idle: {{ directions.queue_idle_policy }}</span>
+      <span class="pill">missing detail docs: {{ directions.missing_detail_doc_count }}</span>
+      <span class="pill">broken detail docs: {{ directions.broken_detail_doc_count }}</span>
+      <span class="pill">prompt status: {{ directions.queue_idle_prompt_status }}</span>
+    </div>
+    {% if let Some(parse_error) = directions.parse_error %}
+    <p><strong>Parse error:</strong> {{ parse_error }}</p>
+    {% endif %}
+    <table>
+      <thead>
+        <tr>
+          <th>Direction</th>
+          <th>Detail Doc</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for direction in directions.directions %}
+        <tr>
+          <td><strong>{{ direction.title }}</strong><br><small class="mono">{{ direction.id }}</small></td>
+          <td>
+            {% if let Some(path) = direction.detail_doc_path %}
+            <span class="mono">{{ path }}</span>
+            {% else %}
+            <em>unset</em>
+            {% endif %}
+          </td>
+          <td>{{ direction.detail_doc_status }}</td>
+          <td>
+            <form method="post" action="/admin/drafts">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="kind" value="direction_detail">
+              <input type="hidden" name="direction_id" value="{{ direction.id }}">
+              <button type="submit" class="secondary">Edit Detail</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+  {% endif %}
+</section>
+{% endblock %}
