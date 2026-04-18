@@ -62,17 +62,28 @@ impl FilesystemPlanningWorkspaceAdapter {
         draft_name: &str,
         active_path: &str,
     ) -> Result<PathBuf> {
+        let relative_path = Self::draft_relative_path(active_path)?;
+        let relative_path = Path::new(&relative_path);
+        Ok(Self::draft_directory(workspace_dir, draft_name).join(relative_path))
+    }
+
+    fn draft_relative_path(active_path: &str) -> Result<String> {
         let normalized = active_path.replace('\\', "/");
         let normalized = normalized.trim_start_matches("./");
         let relative_path = normalized
             .strip_prefix(".codex-exec-loop/planning/")
             .unwrap_or(normalized);
-        let relative_path = normalize_workspace_relative_path(
+        normalize_workspace_relative_path(
             relative_path,
             &format!("planning draft file has invalid relative path: {active_path}"),
-        )?;
-        let relative_path = Path::new(&relative_path);
-        Ok(Self::draft_directory(workspace_dir, draft_name).join(relative_path))
+        )
+    }
+
+    fn canonical_draft_active_path(active_path: &str) -> Result<String> {
+        Ok(format!(
+            ".codex-exec-loop/planning/{}",
+            Self::draft_relative_path(active_path)?
+        ))
     }
 
     fn read_all_draft_files(
@@ -165,11 +176,28 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         draft_name: &str,
         files: &[PlanningDraftFileRecord],
     ) -> Result<PlanningDraftStageRecord> {
+        let canonical_files = files
+            .iter()
+            .map(|file| {
+                Ok(PlanningDraftFileRecord {
+                    active_path: Self::canonical_draft_active_path(&file.active_path)?,
+                    body: file.body.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::stage_repo_scoped_draft_files(
+                workspace_dir,
+                draft_name,
+                &canonical_files,
+            );
+        }
+
         let draft_directory = Self::draft_directory(workspace_dir, draft_name);
         fs::create_dir_all(&draft_directory)
             .with_context(|| format!("failed to create {}", draft_directory.display()))?;
 
-        let staged_files = files
+        let staged_files = canonical_files
             .iter()
             .map(|file| {
                 let staged_path =
@@ -197,6 +225,18 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         draft_name: &str,
     ) -> Result<PlanningDraftLoadRecord> {
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            let mut loaded = SqlitePlanningAuthorityAdapter::load_repo_scoped_draft_files(
+                workspace_dir,
+                draft_name,
+            )?;
+            loaded.staged_files.sort_by(|left, right| {
+                Self::draft_sort_order(&left.active_path)
+                    .cmp(&Self::draft_sort_order(&right.active_path))
+            });
+            return Ok(loaded);
+        }
+
         let draft_directory = Self::draft_directory(workspace_dir, draft_name);
         let mut staged_files = Vec::new();
         Self::read_all_draft_files(&draft_directory, &draft_directory, &mut staged_files)?;
@@ -219,7 +259,17 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         active_path: &str,
         body: &str,
     ) -> Result<String> {
-        let staged_path = Self::staged_draft_file_path(workspace_dir, draft_name, active_path)?;
+        let active_path = Self::canonical_draft_active_path(active_path)?;
+        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
+            return SqlitePlanningAuthorityAdapter::replace_repo_scoped_draft_file(
+                workspace_dir,
+                draft_name,
+                &active_path,
+                body,
+            );
+        }
+
+        let staged_path = Self::staged_draft_file_path(workspace_dir, draft_name, &active_path)?;
         Self::ensure_parent_directory(&staged_path)?;
         fs::write(&staged_path, body)
             .with_context(|| format!("failed to write {}", staged_path.display()))?;
@@ -547,6 +597,95 @@ mod tests {
             .expect("directions.toml should exist");
 
         assert_eq!(body, "version = 1\n");
+    }
+
+    #[test]
+    fn git_backed_draft_stage_uses_repo_scoped_authority_store() {
+        let repo = TempGitRepo::new("planning-draft-linked-stage");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let stage = adapter
+            .stage_planning_draft_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                "bootstrap-20260410T120000Z",
+                &[
+                    PlanningDraftFileRecord {
+                        active_path: DIRECTIONS_FILE_PATH.to_string(),
+                        body: "version = 1".to_string(),
+                    },
+                    PlanningDraftFileRecord {
+                        active_path: TASK_LEDGER_FILE_PATH.to_string(),
+                        body: "{\"version\":1,\"tasks\":[]}".to_string(),
+                    },
+                ],
+            )
+            .expect("git-backed draft should stage");
+
+        assert!(
+            stage
+                .draft_directory
+                .contains("planning-authority.db#drafts/")
+        );
+        assert!(
+            !repo
+                .worktree_root
+                .join(".codex-exec-loop/planning/drafts/bootstrap-20260410T120000Z")
+                .exists()
+        );
+
+        let loaded = adapter
+            .load_planning_draft_files(
+                repo.repo_root.to_str().expect("valid repo path"),
+                "bootstrap-20260410T120000Z",
+            )
+            .expect("repo-scoped draft should load from canonical root");
+
+        assert_eq!(loaded.staged_files.len(), 2);
+        assert_eq!(loaded.staged_files[0].active_path, DIRECTIONS_FILE_PATH);
+        assert_eq!(loaded.staged_files[0].body, "version = 1");
+        assert!(
+            loaded.staged_files[0]
+                .staged_path
+                .contains("planning-authority.db#drafts/")
+        );
+    }
+
+    #[test]
+    fn git_backed_draft_replace_is_visible_across_worktree_boundaries() {
+        let repo = TempGitRepo::new("planning-draft-linked-replace");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let draft_name = "bootstrap-20260410T120000Z";
+        adapter
+            .stage_planning_draft_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                draft_name,
+                &[PlanningDraftFileRecord {
+                    active_path: DIRECTIONS_FILE_PATH.to_string(),
+                    body: "version = 1".to_string(),
+                }],
+            )
+            .expect("git-backed draft should stage");
+
+        let staged_path = adapter
+            .replace_planning_draft_file(
+                repo.repo_root.to_str().expect("valid repo path"),
+                draft_name,
+                DIRECTIONS_FILE_PATH,
+                "version = 2",
+            )
+            .expect("repo-scoped staged draft should update");
+
+        assert!(staged_path.contains("planning-authority.db#drafts/"));
+
+        let loaded = adapter
+            .load_planning_draft_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                draft_name,
+            )
+            .expect("updated repo-scoped draft should load");
+
+        assert_eq!(loaded.staged_files.len(), 1);
+        assert_eq!(loaded.staged_files[0].body, "version = 2");
     }
 
     #[test]

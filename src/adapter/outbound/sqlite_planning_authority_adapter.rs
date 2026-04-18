@@ -8,6 +8,10 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_workspace_port::{
+    PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
+    PlanningDraftStageRecord, PlanningStagedFileRecord,
+};
 use crate::application::service::planning_contract::{
     ACTIVE_PLANNING_FILE_PATHS, PLAN_OFF_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY,
@@ -19,8 +23,9 @@ use crate::domain::planning::{
 
 const RUNTIME_DIRECTORY: &str = ".codex-exec-loop/runtime";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
-const SHADOW_STORE_SCHEMA_VERSION: i64 = 1;
-const SHADOW_STORE_MODE: &str = "shadow-store";
+const LEGACY_SHADOW_STORE_SCHEMA_VERSION: i64 = 1;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 2;
+const AUTHORITY_STORE_MODE: &str = "authority-store";
 
 #[derive(Default)]
 pub struct SqlitePlanningAuthorityAdapter;
@@ -30,10 +35,144 @@ impl SqlitePlanningAuthorityAdapter {
         Self
     }
 
+    pub(crate) fn is_git_backed_workspace(workspace_dir: &str) -> bool {
+        resolve_canonical_repo_root(workspace_dir).is_some()
+    }
+
     pub(crate) fn resolve_active_workspace_root(workspace_dir: &str) -> PathBuf {
         Self::resolve_authority_location_from_workspace(workspace_dir)
             .map(|location| PathBuf::from(location.canonical_repo_root))
             .unwrap_or_else(|_| canonicalize_best_effort(Path::new(workspace_dir)))
+    }
+
+    pub(crate) fn stage_repo_scoped_draft_files(
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftFileRecord],
+    ) -> Result<PlanningDraftStageRecord> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open authority-store draft stage transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_draft_updated_at")?;
+        upsert_draft_entry(&transaction, draft_name)?;
+        transaction
+            .execute(
+                "DELETE FROM staged_draft_files WHERE draft_name = ?1",
+                params![draft_name],
+            )
+            .with_context(|| format!("failed to clear staged draft `{draft_name}`"))?;
+
+        let mut staged_files = Vec::with_capacity(files.len());
+        for file in files {
+            transaction
+                .execute(
+                    "INSERT INTO staged_draft_files (draft_name, active_path, content)
+                     VALUES (?1, ?2, ?3)",
+                    params![draft_name, &file.active_path, &file.body],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to persist staged draft file `{}` for `{draft_name}`",
+                        file.active_path
+                    )
+                })?;
+            staged_files.push(PlanningStagedFileRecord {
+                active_path: file.active_path.clone(),
+                staged_path: draft_display_path(&location, draft_name, &file.active_path),
+            });
+        }
+
+        transaction
+            .commit()
+            .context("failed to commit authority-store draft stage transaction")?;
+
+        Ok(PlanningDraftStageRecord {
+            draft_name: draft_name.to_string(),
+            draft_directory: draft_directory_display_path(&location, draft_name),
+            staged_files,
+        })
+    }
+
+    pub(crate) fn load_repo_scoped_draft_files(
+        workspace_dir: &str,
+        draft_name: &str,
+    ) -> Result<PlanningDraftLoadRecord> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let draft_exists = connection
+            .query_row(
+                "SELECT 1 FROM staged_drafts WHERE draft_name = ?1",
+                params![draft_name],
+                |_| Ok(()),
+            )
+            .optional()
+            .with_context(|| format!("failed to inspect staged draft `{draft_name}`"))?
+            .is_some();
+        if !draft_exists {
+            return Err(anyhow!("staged draft `{draft_name}` does not exist"));
+        }
+
+        let mut statement = connection
+            .prepare(
+                "SELECT active_path, content
+                 FROM staged_draft_files
+                 WHERE draft_name = ?1
+                 ORDER BY active_path",
+            )
+            .with_context(|| format!("failed to read staged draft `{draft_name}`"))?;
+        let rows = statement
+            .query_map(params![draft_name], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .with_context(|| format!("failed to iterate staged draft `{draft_name}`"))?;
+
+        let mut staged_files = Vec::new();
+        for row in rows {
+            let (active_path, body) = row.context("failed to decode staged draft row")?;
+            staged_files.push(PlanningDraftLoadFileRecord {
+                staged_path: draft_display_path(&location, draft_name, &active_path),
+                body,
+                active_path,
+            });
+        }
+
+        Ok(PlanningDraftLoadRecord {
+            draft_name: draft_name.to_string(),
+            draft_directory: draft_directory_display_path(&location, draft_name),
+            staged_files,
+        })
+    }
+
+    pub(crate) fn replace_repo_scoped_draft_file(
+        workspace_dir: &str,
+        draft_name: &str,
+        active_path: &str,
+        body: &str,
+    ) -> Result<String> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open authority-store draft replace transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_draft_updated_at")?;
+        upsert_draft_entry(&transaction, draft_name)?;
+        transaction
+            .execute(
+                "INSERT INTO staged_draft_files (draft_name, active_path, content)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(draft_name, active_path) DO UPDATE
+                 SET content = excluded.content",
+                params![draft_name, active_path, body],
+            )
+            .with_context(|| {
+                format!("failed to update staged draft file `{active_path}` for `{draft_name}`")
+            })?;
+        transaction
+            .commit()
+            .context("failed to commit authority-store draft replace transaction")?;
+        Ok(draft_display_path(&location, draft_name, active_path))
     }
 
     fn resolve_authority_location_from_workspace(
@@ -158,9 +297,22 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
                 relative_path TEXT PRIMARY KEY,
                 content TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS staged_drafts (
+                draft_name TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS staged_draft_files (
+                draft_name TEXT NOT NULL,
+                active_path TEXT NOT NULL,
+                content TEXT NOT NULL,
+                PRIMARY KEY (draft_name, active_path),
+                FOREIGN KEY (draft_name) REFERENCES staged_drafts(draft_name) ON DELETE CASCADE
+            );
             "#,
         )
-        .context("failed to initialize shadow-store schema")?;
+        .context("failed to initialize authority-store schema")?;
     Ok(())
 }
 
@@ -184,23 +336,32 @@ fn store_shadow_documents(
             .with_context(|| format!("failed to mirror `{relative_path}` into the shadow store"))?;
     }
 
-    upsert_metadata(
-        &transaction,
-        "schema_version",
-        &SHADOW_STORE_SCHEMA_VERSION.to_string(),
-    )?;
-    upsert_metadata(&transaction, "mode", SHADOW_STORE_MODE)?;
-    upsert_metadata(
-        &transaction,
-        "canonical_repo_root",
-        &location.canonical_repo_root,
-    )?;
-    upsert_metadata(&transaction, "workspace_root", &location.workspace_root)?;
-    upsert_metadata(&transaction, "last_synced_at", &Utc::now().to_rfc3339())?;
+    upsert_authority_metadata(&transaction, location, "last_synced_at")?;
 
     transaction
         .commit()
         .context("failed to commit shadow-store transaction")?;
+    Ok(())
+}
+
+fn upsert_authority_metadata(
+    transaction: &rusqlite::Transaction<'_>,
+    location: &PlanningAuthorityLocation,
+    timestamp_key: &str,
+) -> Result<()> {
+    upsert_metadata(
+        transaction,
+        "schema_version",
+        &AUTHORITY_STORE_SCHEMA_VERSION.to_string(),
+    )?;
+    upsert_metadata(transaction, "mode", AUTHORITY_STORE_MODE)?;
+    upsert_metadata(
+        transaction,
+        "canonical_repo_root",
+        &location.canonical_repo_root,
+    )?;
+    upsert_metadata(transaction, "workspace_root", &location.workspace_root)?;
+    upsert_metadata(transaction, timestamp_key, &Utc::now().to_rfc3339())?;
     Ok(())
 }
 
@@ -222,19 +383,13 @@ fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String,
 
     let connection = Connection::open(authority_store_path)
         .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
-    let schema_version = connection
-        .query_row(
-            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .context("failed to read shadow-store schema version")?;
-    if let Some(schema_version) = schema_version {
+    if let Some(schema_version) = load_schema_version(&connection)? {
         let parsed = schema_version.parse::<i64>().ok();
-        if parsed != Some(SHADOW_STORE_SCHEMA_VERSION) {
+        if parsed != Some(LEGACY_SHADOW_STORE_SCHEMA_VERSION)
+            && parsed != Some(AUTHORITY_STORE_SCHEMA_VERSION)
+        {
             return Err(anyhow!(
-                "unsupported shadow-store schema version: {schema_version}"
+                "unsupported authority-store schema version: {schema_version}"
             ));
         }
     }
@@ -254,6 +409,64 @@ fn load_shadow_documents(authority_store_path: &Path) -> Result<BTreeMap<String,
     }
 
     Ok(documents)
+}
+
+fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Connection> {
+    let authority_store_path = Path::new(&location.authority_store_path);
+    if let Some(parent) = authority_store_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let connection = Connection::open(authority_store_path)
+        .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .context("failed to enable authority-store foreign keys")?;
+    ensure_schema(&connection)?;
+    Ok(connection)
+}
+
+fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to read authority-store schema version")
+}
+
+fn upsert_draft_entry(transaction: &rusqlite::Transaction<'_>, draft_name: &str) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO staged_drafts (draft_name, updated_at) VALUES (?1, ?2)
+             ON CONFLICT(draft_name) DO UPDATE SET updated_at = excluded.updated_at",
+            params![draft_name, Utc::now().to_rfc3339()],
+        )
+        .with_context(|| format!("failed to update staged draft `{draft_name}`"))?;
+    Ok(())
+}
+
+fn draft_directory_display_path(location: &PlanningAuthorityLocation, draft_name: &str) -> String {
+    format!("{}#drafts/{draft_name}", location.authority_store_path)
+}
+
+fn draft_display_path(
+    location: &PlanningAuthorityLocation,
+    draft_name: &str,
+    active_path: &str,
+) -> String {
+    let draft_relative_path = active_path
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches(".codex-exec-loop/planning/")
+        .to_string();
+    format!(
+        "{}#drafts/{draft_name}/{draft_relative_path}",
+        location.authority_store_path
+    )
 }
 
 fn collect_directory_documents(
@@ -548,5 +761,73 @@ mod tests {
                 .iter()
                 .any(|issue| issue.contains("directions.toml"))
         );
+    }
+
+    #[test]
+    fn inspect_shadow_store_upgrades_legacy_schema_version_one_store() {
+        let repo = TempGitRepo::new("shadow-upgrade-v1");
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
+        let runtime_dir = repo.repo_root.join(".codex-exec-loop/runtime");
+        fs::create_dir_all(&runtime_dir).expect("runtime directory should exist");
+        let authority_store_path = runtime_dir.join("planning-authority.db");
+        let connection =
+            Connection::open(&authority_store_path).expect("legacy authority store should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE authority_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE shadow_documents (
+                    relative_path TEXT PRIMARY KEY,
+                    content TEXT NOT NULL
+                );
+                "#,
+            )
+            .expect("legacy shadow-store schema should initialize");
+        connection
+            .execute(
+                "INSERT INTO authority_metadata (key, value) VALUES ('schema_version', '1')",
+                [],
+            )
+            .expect("legacy schema version should insert");
+        connection
+            .execute(
+                "INSERT INTO shadow_documents (relative_path, content) VALUES (?1, ?2)",
+                [".codex-exec-loop/planning/directions.toml", "version = 0\n"],
+            )
+            .expect("legacy shadow document should insert");
+
+        let inspection = adapter
+            .inspect_shadow_store(repo.worktree_root.to_str().expect("valid path"))
+            .expect("legacy store should upgrade during inspection");
+
+        assert_eq!(
+            inspection.sync_state,
+            PlanningAuthorityShadowStoreSyncState::Resynced
+        );
+        let connection =
+            Connection::open(&authority_store_path).expect("upgraded authority store should open");
+        let schema_version = connection
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("schema version should load");
+        assert_eq!(
+            schema_version,
+            super::AUTHORITY_STORE_SCHEMA_VERSION.to_string()
+        );
+        let draft_table = connection
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'staged_drafts'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("staged_drafts table should exist after upgrade");
+        assert_eq!(draft_table, "staged_drafts");
     }
 }
