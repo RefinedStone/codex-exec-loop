@@ -1550,12 +1550,6 @@
     fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_recovery() {
         let repo = TempGitRepo::new("supervisor-store-recovery-integrated");
         let service = ParallelModeService::new();
-        let readiness = ParallelModeReadinessSnapshot::new(
-            repo.workspace_dir(),
-            ParallelModeReadinessState::Ready,
-            vec![],
-            None,
-        );
 
         let lease = service
             .acquire_slot_lease(
@@ -1604,6 +1598,11 @@
             .expect("queue mirror should be removed");
 
         let recovered = ParallelModeService::new();
+        let readiness = recovered.inspect_readiness(
+            &repo.workspace_dir(),
+            &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+                .with_workspace_present(true),
+        );
         let snapshot =
             recovered.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
 
