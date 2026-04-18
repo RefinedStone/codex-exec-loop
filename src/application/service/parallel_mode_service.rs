@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 
+use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
@@ -130,6 +132,7 @@ pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefres
 pub struct ParallelModeService {
     distributor_service: ParallelModeDistributorService,
     supervisor_service: ParallelModeSupervisorService,
+    planning_authority: Arc<dyn PlanningAuthorityPort>,
     official_completion_refresh_orders: Arc<Mutex<OfficialCompletionRefreshOrderState>>,
 }
 
@@ -152,6 +155,7 @@ impl ParallelModeService {
         Self {
             distributor_service: ParallelModeDistributorService::new(),
             supervisor_service: ParallelModeSupervisorService::new(),
+            planning_authority: Arc::new(SqlitePlanningAuthorityAdapter::new()),
             official_completion_refresh_orders: Arc::new(Mutex::new(
                 OfficialCompletionRefreshOrderState::default(),
             )),
@@ -164,6 +168,7 @@ impl ParallelModeService {
                 github_automation,
             ),
             supervisor_service: ParallelModeSupervisorService::new(),
+            planning_authority: Arc::new(SqlitePlanningAuthorityAdapter::new()),
             official_completion_refresh_orders: Arc::new(Mutex::new(
                 OfficialCompletionRefreshOrderState::default(),
             )),
@@ -233,6 +238,12 @@ impl ParallelModeService {
         let gh_binary = inspect_gh_binary();
         let gh_auth = inspect_gh_auth(&gh_binary, repo_root.as_deref());
         let planning = inspect_planning(planning_snapshot);
+        let authority_store = inspect_authority_store(
+            self.planning_authority.as_ref(),
+            workspace_dir,
+            &git_repository,
+            &planning,
+        );
 
         let capabilities = vec![
             git_repository,
@@ -242,6 +253,7 @@ impl ParallelModeService {
             gh_binary,
             gh_auth,
             planning,
+            authority_store,
         ];
         let readiness = derive_readiness(&capabilities);
         let top_alert = capabilities
@@ -997,6 +1009,71 @@ fn inspect_planning(snapshot: &PlanningRuntimeSnapshot) -> ParallelModeCapabilit
                 .queue_summary()
                 .unwrap_or("planning workspace is ready"),
             None,
+        ),
+    }
+}
+
+fn inspect_authority_store(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    git_repository: &ParallelModeCapabilitySnapshot,
+    planning: &ParallelModeCapabilitySnapshot,
+) -> ParallelModeCapabilitySnapshot {
+    if git_repository.state != ParallelModeCapabilityState::Ready {
+        return blocked_prerequisite_capability(
+            ParallelModeCapabilityKey::AuthorityStore,
+            "waiting for git repository detection",
+            "enter a git repository first",
+        );
+    }
+
+    if planning.state != ParallelModeCapabilityState::Ready {
+        return blocked_prerequisite_capability(
+            ParallelModeCapabilityKey::AuthorityStore,
+            "waiting for planning readiness",
+            "repair or initialize planning before inspecting authority parity",
+        );
+    }
+
+    match planning_authority.inspect_shadow_store(workspace_dir) {
+        Ok(inspection) => {
+            let canonical_root = inspection.location.canonical_repo_root;
+            let document_count = inspection.mirrored_document_count;
+            let detail = match inspection.sync_state {
+                crate::domain::planning::PlanningAuthorityShadowStoreSyncState::Bootstrapped => {
+                    format!(
+                        "shadow store bootstrapped from {document_count} mirrored documents / canonical root: {canonical_root}"
+                    )
+                }
+                crate::domain::planning::PlanningAuthorityShadowStoreSyncState::InSync => {
+                    format!(
+                        "shadow store in sync across {document_count} mirrored documents / canonical root: {canonical_root}"
+                    )
+                }
+                crate::domain::planning::PlanningAuthorityShadowStoreSyncState::Resynced => {
+                    let sample = inspection
+                        .parity_issue_examples
+                        .first()
+                        .map(|example| format!(" / sample: {example}"))
+                        .unwrap_or_default();
+                    format!(
+                        "shadow store resynced {} parity issue(s) across {document_count} mirrored documents / canonical root: {canonical_root}{sample}",
+                        inspection.parity_issue_count,
+                    )
+                }
+            };
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::AuthorityStore,
+                ParallelModeCapabilityState::Ready,
+                detail,
+                None,
+            )
+        }
+        Err(error) => ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::AuthorityStore,
+            ParallelModeCapabilityState::Degraded,
+            format!("shadow store inspection failed: {error}"),
+            Some("inspect the repo-scoped authority store and rerun readiness".to_string()),
         ),
     }
 }
@@ -2987,6 +3064,7 @@ mod tests {
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::application::service::planning_contract::DIRECTIONS_FILE_PATH;
     use crate::domain::parallel_mode::{
         ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
         ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
@@ -3089,6 +3167,30 @@ mod tests {
                 ],
             );
             slot_path
+        }
+
+        fn create_linked_worktree(&self, branch_name: &str) -> PathBuf {
+            let slug = branch_name.replace('/', "-");
+            let worktree_path = self.root.join("linked-worktrees").join(slug);
+            fs::create_dir_all(
+                worktree_path
+                    .parent()
+                    .expect("worktree path should have a parent directory"),
+            )
+            .expect("linked worktree parent should exist");
+            run_git(
+                &self.repo_root,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch_name,
+                    worktree_path
+                        .to_str()
+                        .expect("worktree path should be valid utf-8"),
+                ],
+            );
+            worktree_path
         }
 
         fn delete_local_akra_branch(&self) {
@@ -4711,6 +4813,47 @@ mod tests {
             canonical_repo_root,
             fs::canonicalize(&repo.repo_root).expect("repo root should canonicalize")
         );
+    }
+
+    #[test]
+    fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
+        let repo = TempGitRepo::new("authority-readiness");
+        let linked_worktree = repo.create_linked_worktree("feature/authority-readiness");
+        let repo_directions_path = repo.repo_root.join(DIRECTIONS_FILE_PATH);
+        fs::create_dir_all(
+            repo_directions_path
+                .parent()
+                .expect("repo directions path should have a parent directory"),
+        )
+        .expect("repo planning directory should exist");
+        fs::write(&repo_directions_path, "version = 1\n")
+            .expect("repo-root directions should write");
+        let worktree_directions_path = linked_worktree.join(DIRECTIONS_FILE_PATH);
+        fs::create_dir_all(
+            worktree_directions_path
+                .parent()
+                .expect("worktree directions path should have a parent directory"),
+        )
+        .expect("worktree planning directory should exist");
+        fs::write(&worktree_directions_path, "version = 0\n")
+            .expect("linked-worktree directions should diverge");
+        let service = ParallelModeService::new();
+
+        let snapshot = service.inspect_readiness(
+            linked_worktree
+                .to_str()
+                .expect("valid linked worktree path"),
+            &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+                .with_workspace_present(true),
+        );
+        let capability = snapshot
+            .capability(ParallelModeCapabilityKey::AuthorityStore)
+            .expect("authority store capability should exist");
+
+        assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+        assert!(capability.detail.contains("shadow store"));
+        assert!(capability.detail.contains(&repo.workspace_dir()));
+        assert!(!capability.detail.contains("version = 0"));
     }
 
     #[test]

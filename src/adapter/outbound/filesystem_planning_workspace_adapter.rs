@@ -3,6 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::adapter::outbound::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
@@ -29,20 +30,24 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 
     fn rejected_directory(workspace_dir: &str, archive_name: &str) -> PathBuf {
-        Path::new(workspace_dir)
+        Self::active_workspace_root(workspace_dir)
             .join(PLANNING_REJECTED_DIRECTORY)
             .join(archive_name)
     }
 
-    fn workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
-        Path::new(workspace_dir).join(relative_path)
+    fn active_workspace_root(workspace_dir: &str) -> PathBuf {
+        SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir)
+    }
+
+    fn active_workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
+        Self::active_workspace_root(workspace_dir).join(relative_path)
     }
 
     fn read_optional_workspace_file(
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        let path = Self::workspace_path(workspace_dir, relative_path);
+        let path = Self::active_workspace_path(workspace_dir, relative_path);
         if !path.is_file() {
             return Ok(None);
         }
@@ -271,7 +276,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        let path = Self::workspace_path(workspace_dir, &relative_path);
+        let path = Self::active_workspace_path(workspace_dir, &relative_path);
         match body {
             Some(body) => {
                 Self::ensure_parent_directory(&path)?;
@@ -298,7 +303,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        let path = Self::workspace_path(workspace_dir, &relative_path);
+        let path = Self::active_workspace_path(workspace_dir, &relative_path);
         if !path.exists() {
             return Ok(());
         }
@@ -339,7 +344,8 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::FilesystemPlanningWorkspaceAdapter;
@@ -358,6 +364,79 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
         fs::create_dir_all(&path).expect("temp workspace should be created");
         path.display().to_string()
+    }
+
+    struct TempGitRepo {
+        root: PathBuf,
+        repo_root: PathBuf,
+        worktree_root: PathBuf,
+    }
+
+    impl TempGitRepo {
+        fn new(label: &str) -> Self {
+            let root = PathBuf::from(create_temp_workspace(label));
+            let repo_root = root.join("repo");
+            let worktree_root = root.join("worktrees").join("linked");
+            fs::create_dir_all(&repo_root).expect("temp repo root should be created");
+            run_git(&repo_root, &["init", "-q"]);
+            run_git(&repo_root, &["config", "user.name", "RefinedStone"]);
+            run_git(
+                &repo_root,
+                &["config", "user.email", "chem.en.9273@gmail.com"],
+            );
+            fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
+            run_git(&repo_root, &["add", "README.md"]);
+            run_git(&repo_root, &["commit", "-qm", "init"]);
+            fs::create_dir_all(
+                worktree_root
+                    .parent()
+                    .expect("worktree parent should exist"),
+            )
+            .expect("worktree parent should be created");
+            run_git(
+                &repo_root,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    "feature/worktree",
+                    worktree_root.to_str().expect("valid worktree path"),
+                ],
+            );
+
+            Self {
+                root,
+                repo_root,
+                worktree_root,
+            }
+        }
+
+        fn write_repo_file(&self, relative_path: &str, body: &str) {
+            let path = self.repo_root.join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("repo file parent should exist");
+            }
+            fs::write(path, body).expect("repo file should write");
+        }
+    }
+
+    impl Drop for TempGitRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn run_git(repo_root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo_root)
+            .args(args)
+            .status()
+            .expect("git command should spawn");
+        assert!(
+            status.success(),
+            "git command should succeed: git {}",
+            args.join(" ")
+        );
     }
 
     #[test]
@@ -441,6 +520,33 @@ mod tests {
         assert_eq!(result.result_output_markdown.as_deref(), Some("# result"));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn active_workspace_files_resolve_to_canonical_repo_root_for_linked_worktrees() {
+        let repo = TempGitRepo::new("planning-workspace-linked-root");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        repo.write_repo_file(DIRECTIONS_FILE_PATH, "version = 1\n");
+
+        let linked_worktree_path = repo.worktree_root.join(DIRECTIONS_FILE_PATH);
+        fs::create_dir_all(
+            linked_worktree_path
+                .parent()
+                .expect("linked worktree directions should have a parent directory"),
+        )
+        .expect("linked worktree planning directory should exist");
+        fs::write(&linked_worktree_path, "version = 0\n")
+            .expect("linked worktree file should diverge");
+
+        let body = adapter
+            .load_optional_planning_file(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                DIRECTIONS_FILE_PATH,
+            )
+            .expect("canonical directions should load")
+            .expect("directions.toml should exist");
+
+        assert_eq!(body, "version = 1\n");
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub enum ParallelModeCapabilityKey {
     GhBinary,
     GhAuth,
     Planning,
+    AuthorityStore,
 }
 
 impl ParallelModeCapabilityKey {
@@ -45,6 +46,7 @@ impl ParallelModeCapabilityKey {
             Self::GhBinary => "gh binary",
             Self::GhAuth => "gh auth",
             Self::Planning => "planning",
+            Self::AuthorityStore => "authority store",
         }
     }
 }

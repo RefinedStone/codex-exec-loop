@@ -3,3 +3,4 @@ pub mod codex_app_server_adapter;
 pub mod filesystem_planning_workspace_adapter;
 pub mod github_automation_adapter;
 pub mod github_review_poller_adapter;
+pub mod sqlite_planning_authority_adapter;
