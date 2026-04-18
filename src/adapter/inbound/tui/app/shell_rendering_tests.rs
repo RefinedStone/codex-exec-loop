@@ -26,8 +26,11 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
-    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+    ParallelModeCapabilityState, ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 use crate::domain::planning::PlanningValidationReport;
 use crate::domain::recent_sessions::RecentSessions;
@@ -364,6 +367,15 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
     app.parallel_mode_enabled = true;
     app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
+    ));
+    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
     ));
 
     let rendered = build_inline_tail_lines(&app)

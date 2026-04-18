@@ -13,6 +13,40 @@ pub enum PlanningWorkspaceState {
     BlockedInvalid,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningAuthorityLocation {
+    pub workspace_root: String,
+    pub canonical_repo_root: String,
+    pub runtime_dir: String,
+    pub authority_store_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningAuthorityShadowStoreSyncState {
+    Bootstrapped,
+    InSync,
+    Resynced,
+}
+
+impl PlanningAuthorityShadowStoreSyncState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bootstrapped => "bootstrapped",
+            Self::InSync => "in_sync",
+            Self::Resynced => "resynced",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningAuthorityShadowStoreInspection {
+    pub location: PlanningAuthorityLocation,
+    pub sync_state: PlanningAuthorityShadowStoreSyncState,
+    pub mirrored_document_count: usize,
+    pub parity_issue_count: usize,
+    pub parity_issue_examples: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningFileKind {
     Directions,
