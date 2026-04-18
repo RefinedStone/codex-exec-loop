@@ -11,6 +11,7 @@ use crate::application::service::planning::{
     PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
 };
 
+const ADMIN_SERVER_USAGE: &str = "Usage: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
@@ -156,10 +157,15 @@ where
     match args.as_slice() {
         [] => Ok(None),
         [flag] if is_help_flag(flag) => {
+            writeln!(stdout, "{ADMIN_SERVER_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
             Ok(Some(0))
+        }
+        [command] if command == OsStr::new("admin-server") => Ok(Some(run_admin_server(&[])?)),
+        [command, rest @ ..] if command == OsStr::new("admin-server") => {
+            Ok(Some(run_admin_server(rest)?))
         }
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
@@ -194,6 +200,17 @@ where
 
 fn is_help_flag(flag: &OsStr) -> bool {
     matches!(flag.to_str(), Some("-h" | "--help"))
+}
+
+fn run_admin_server(args: &[OsString]) -> Result<i32> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to start tokio runtime for admin server")?;
+    runtime.block_on(crate::adapter::inbound::admin_api::run_with_args(
+        args.iter().map(|arg| arg.to_string_lossy().to_string()),
+    ))?;
+    Ok(0)
 }
 
 fn run_doctor(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i32> {
@@ -519,6 +536,19 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(output.contains("planning state: absent"));
         assert!(output.contains("health: planning workspace is not initialized"));
+    }
+
+    #[test]
+    fn help_output_mentions_admin_server_command() {
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args([OsString::from("--help")], &mut stdout)
+            .expect("help should run")
+            .expect("help should produce an exit code");
+        let output = String::from_utf8(stdout).expect("help output should be valid utf-8");
+
+        assert_eq!(exit_code, 0);
+        assert!(output.contains("Usage: akra admin-server [--port <port>]"));
     }
 
     #[test]

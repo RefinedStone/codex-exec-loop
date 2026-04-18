@@ -176,7 +176,14 @@ struct DraftStatusTemplate {
 }
 
 pub async fn run_from_env() -> Result<()> {
-    let args = parse_args(std::env::args().skip(1))?;
+    run_with_args(std::env::args().skip(1)).await
+}
+
+pub async fn run_with_args<I>(args: I) -> Result<()>
+where
+    I: IntoIterator<Item = String>,
+{
+    let args = parse_args(args)?;
     let workspace_dir = std::env::current_dir()
         .context("failed to resolve current directory for admin server")?
         .canonicalize()
