@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
@@ -15,6 +17,7 @@ use crate::application::service::planning::{
 
 const DEFAULT_POLL_TIMEOUT_SECONDS: u16 = 30;
 const DEFAULT_POLL_LIMIT: u8 = 100;
+const DEFAULT_FAILURE_BACKOFF: Duration = Duration::from_secs(2);
 const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nEnv: AKRA_TELEGRAM_BOT_TOKEN, AKRA_TELEGRAM_ALLOWED_CHAT_IDS=123,456";
 
 #[derive(Debug, Clone)]
@@ -23,6 +26,12 @@ struct TelegramBotArgs {
     allowed_chat_ids: BTreeSet<i64>,
     poll_timeout_seconds: u16,
     drop_pending_updates: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TelegramBotEnvironment {
+    token: Option<String>,
+    allowed_chat_ids: BTreeSet<i64>,
 }
 
 pub fn run_from_env() -> Result<()> {
@@ -49,6 +58,7 @@ where
         TelegramBotPolicy::new(args.allowed_chat_ids),
         args.poll_timeout_seconds,
         args.drop_pending_updates,
+        DEFAULT_FAILURE_BACKOFF,
     );
     println!("telegram bot control listening for workspace {workspace_dir}");
     runner.run()
@@ -58,8 +68,18 @@ fn parse_args<I>(args: I) -> Result<TelegramBotArgs>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut token = std::env::var("AKRA_TELEGRAM_BOT_TOKEN").ok();
-    let mut allowed_chat_ids = parse_allowed_chat_ids_env()?;
+    parse_args_with_environment(args, load_environment()?)
+}
+
+fn parse_args_with_environment<I>(
+    args: I,
+    environment: TelegramBotEnvironment,
+) -> Result<TelegramBotArgs>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut token = environment.token;
+    let mut allowed_chat_ids = environment.allowed_chat_ids;
     let mut poll_timeout_seconds = DEFAULT_POLL_TIMEOUT_SECONDS;
     let mut drop_pending_updates = true;
 
@@ -114,12 +134,20 @@ where
     })
 }
 
-fn parse_allowed_chat_ids_env() -> Result<BTreeSet<i64>> {
-    let Some(raw) = std::env::var("AKRA_TELEGRAM_ALLOWED_CHAT_IDS").ok() else {
-        return Ok(BTreeSet::new());
-    };
+fn load_environment() -> Result<TelegramBotEnvironment> {
+    Ok(TelegramBotEnvironment {
+        token: std::env::var("AKRA_TELEGRAM_BOT_TOKEN").ok(),
+        allowed_chat_ids: parse_allowed_chat_ids(
+            std::env::var("AKRA_TELEGRAM_ALLOWED_CHAT_IDS").ok(),
+        )?,
+    })
+}
 
+fn parse_allowed_chat_ids(raw: Option<String>) -> Result<BTreeSet<i64>> {
     let mut values = BTreeSet::new();
+    let Some(raw) = raw else {
+        return Ok(values);
+    };
     for entry in raw
         .split(',')
         .map(str::trim)
@@ -173,6 +201,7 @@ struct TelegramBotRunner {
     policy: TelegramBotPolicy,
     poll_timeout_seconds: u16,
     drop_pending_updates: bool,
+    failure_backoff: Duration,
 }
 
 impl TelegramBotRunner {
@@ -182,6 +211,7 @@ impl TelegramBotRunner {
         policy: TelegramBotPolicy,
         poll_timeout_seconds: u16,
         drop_pending_updates: bool,
+        failure_backoff: Duration,
     ) -> Self {
         Self {
             gateway,
@@ -189,27 +219,53 @@ impl TelegramBotRunner {
             policy,
             poll_timeout_seconds,
             drop_pending_updates,
+            failure_backoff,
         }
     }
 
     fn run(&self) -> Result<()> {
-        let mut next_offset = if self.drop_pending_updates {
-            self.drop_pending_updates()?
-        } else {
-            None
-        };
+        let mut next_offset = self.bootstrap_offset();
 
         loop {
-            let updates = self.gateway.get_updates(&TelegramPollRequest::new(
-                next_offset,
-                self.poll_timeout_seconds,
-                DEFAULT_POLL_LIMIT,
-            ))?;
-            if let Some(last_update) = updates.last() {
-                next_offset = Some(last_update.update_id + 1);
-            }
-            self.process_updates(&updates)?;
+            next_offset = self.run_poll_cycle(next_offset);
         }
+    }
+
+    fn bootstrap_offset(&self) -> Option<i64> {
+        if !self.drop_pending_updates {
+            return None;
+        }
+
+        match self.drop_pending_updates() {
+            Ok(next_offset) => next_offset,
+            Err(error) => {
+                eprintln!("telegram bot failed to drop pending updates: {error:#}");
+                self.sleep_backoff();
+                None
+            }
+        }
+    }
+
+    fn run_poll_cycle(&self, next_offset: Option<i64>) -> Option<i64> {
+        let updates = match self.gateway.get_updates(&TelegramPollRequest::new(
+            next_offset,
+            self.poll_timeout_seconds,
+            DEFAULT_POLL_LIMIT,
+        )) {
+            Ok(updates) => updates,
+            Err(error) => {
+                eprintln!("telegram bot failed to poll updates: {error:#}");
+                self.sleep_backoff();
+                return next_offset;
+            }
+        };
+
+        let next_offset = updates
+            .last()
+            .map(|update| update.update_id + 1)
+            .or(next_offset);
+        self.process_updates(&updates);
+        next_offset
     }
 
     fn drop_pending_updates(&self) -> Result<Option<i64>> {
@@ -219,17 +275,32 @@ impl TelegramBotRunner {
         Ok(pending_updates.last().map(|update| update.update_id + 1))
     }
 
-    fn process_updates(&self, updates: &[TelegramUpdate]) -> Result<()> {
+    fn process_updates(&self, updates: &[TelegramUpdate]) {
         for update in updates {
             let Some(message) = update.message.as_ref() else {
                 continue;
             };
-            if let Some(reply) = self.handle_message(message)? {
-                self.gateway
-                    .send_message(&TelegramSendMessageRequest::new(message.chat_id, reply))?;
+            let reply = match self.handle_message(message) {
+                Ok(reply) => reply,
+                Err(error) => {
+                    eprintln!(
+                        "telegram bot failed to handle message {} from chat {}: {error:#}",
+                        message.message_id, message.chat_id
+                    );
+                    Some(self.render_command_failure(message, &error))
+                }
+            };
+            if let Some(reply) = reply
+                && let Err(error) = self
+                    .gateway
+                    .send_message(&TelegramSendMessageRequest::new(message.chat_id, reply))
+            {
+                eprintln!(
+                    "telegram bot failed to send reply for message {} to chat {}: {error:#}",
+                    message.message_id, message.chat_id
+                );
             }
         }
-        Ok(())
     }
 
     fn handle_message(&self, message: &TelegramInboundMessage) -> Result<Option<String>> {
@@ -284,6 +355,23 @@ impl TelegramBotRunner {
     fn render_help(&self) -> String {
         format!("{}\n/whoami", self.control_service.help_text())
     }
+
+    fn render_command_failure(
+        &self,
+        message: &TelegramInboundMessage,
+        error: &anyhow::Error,
+    ) -> String {
+        format!(
+            "명령 처리에 실패했습니다.\nchat_id: {}\nmessage_id: {}\nerror: {}",
+            message.chat_id, message.message_id, error
+        )
+    }
+
+    fn sleep_backoff(&self) {
+        if !self.failure_backoff.is_zero() {
+            thread::sleep(self.failure_backoff);
+        }
+    }
 }
 
 fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
@@ -299,38 +387,74 @@ fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
     let arguments = parts.collect::<Vec<_>>();
 
     match command.as_str() {
-        "/start" | "/help" | "help" => TelegramParsedMessage::Command(
+        "/start" | "/help" | "help" => parse_command_without_arguments(
+            &arguments,
             TelegramInboundCommand::Planning(PlanningControlCommand::Help),
+            "/help",
         ),
-        "/whoami" => TelegramParsedMessage::Command(TelegramInboundCommand::WhoAmI),
-        "/status" | "status" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::Status,
-        )),
-        "/queue" | "queue" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::Queue,
-        )),
-        "/plan_on" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::EnablePlan,
-        )),
-        "/plan_off" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::DisablePlan,
-        )),
+        "/whoami" => {
+            parse_command_without_arguments(&arguments, TelegramInboundCommand::WhoAmI, "/whoami")
+        }
+        "/status" | "status" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::Status),
+            "/status",
+        ),
+        "/queue" | "queue" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::Queue),
+            "/queue",
+        ),
+        "/plan_on" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::EnablePlan),
+            "/plan_on",
+        ),
+        "/plan_off" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::DisablePlan),
+            "/plan_off",
+        ),
         "/plan" => parse_plan_arguments(&arguments),
-        "/reset_queue" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::Reset(PlanningResetTarget::Queue),
-        )),
-        "/reset_directions" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::Reset(PlanningResetTarget::Directions),
-        )),
-        "/reset_all" => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::Reset(PlanningResetTarget::All),
-        )),
+        "/reset_queue" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
+                PlanningResetTarget::Queue,
+            )),
+            "/reset_queue",
+        ),
+        "/reset_directions" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
+                PlanningResetTarget::Directions,
+            )),
+            "/reset_directions",
+        ),
+        "/reset_all" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
+                PlanningResetTarget::All,
+            )),
+            "/reset_all",
+        ),
         "/reset" => parse_reset_arguments(&arguments),
         token if token.starts_with('/') => TelegramParsedMessage::Error(format!(
             "지원하지 않는 명령어입니다: {token}\n{}",
             PlanningControlService::new(Arc::new(NoopPlanningControlSurface)).help_text()
         )),
         _ => TelegramParsedMessage::Ignore,
+    }
+}
+
+fn parse_command_without_arguments(
+    arguments: &[&str],
+    command: TelegramInboundCommand,
+    usage: &'static str,
+) -> TelegramParsedMessage {
+    if arguments.is_empty() {
+        TelegramParsedMessage::Command(command)
+    } else {
+        TelegramParsedMessage::Error(format!("사용법: {usage}"))
     }
 }
 
@@ -347,13 +471,13 @@ fn parse_plan_arguments(arguments: &[&str]) -> TelegramParsedMessage {
 }
 
 fn parse_reset_arguments(arguments: &[&str]) -> TelegramParsedMessage {
-    let Some(target) = arguments.first().copied() else {
+    let [target] = arguments else {
         return TelegramParsedMessage::Error(
             "사용법: /reset queue | /reset directions | /reset all".to_string(),
         );
     };
 
-    let command = match target {
+    let command = match *target {
         "queue" => PlanningControlCommand::Reset(PlanningResetTarget::Queue),
         "directions" => PlanningControlCommand::Reset(PlanningResetTarget::Directions),
         "all" => PlanningControlCommand::Reset(PlanningResetTarget::All),
@@ -401,24 +525,26 @@ impl crate::application::service::planning::control::PlanningControlSurface
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
-    use anyhow::Result;
+    use anyhow::{Result, anyhow, bail};
 
     use super::{
-        parse_args, parse_message, TelegramBotPolicy, TelegramBotRunner, TelegramInboundCommand,
-        TelegramParsedMessage,
+        TelegramBotEnvironment, TelegramBotPolicy, TelegramBotRunner, TelegramInboundCommand,
+        TelegramParsedMessage, parse_args_with_environment, parse_message,
     };
     use crate::application::port::outbound::telegram_bot_port::{
         TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
         TelegramUpdate,
     };
+    use crate::application::service::planning::PlanningResetTarget;
     use crate::application::service::planning::control::{
         PlanningControlCommand, PlanningControlPlanToggleOutcome, PlanningControlQueueEntry,
         PlanningControlResetOutcome, PlanningControlService, PlanningControlStatusSnapshot,
         PlanningControlSurface,
     };
-    use crate::application::service::planning::PlanningResetTarget;
 
     struct FakePlanningControlSurface;
 
@@ -475,14 +601,55 @@ mod tests {
         }
     }
 
+    struct FlakyPlanningControlSurface {
+        load_calls: AtomicUsize,
+    }
+
+    impl PlanningControlSurface for FlakyPlanningControlSurface {
+        fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
+            let call = self.load_calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                bail!("temporary planning failure");
+            }
+            FakePlanningControlSurface.load_status_snapshot()
+        }
+
+        fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningControlPlanToggleOutcome> {
+            FakePlanningControlSurface.set_plan_enabled(enabled)
+        }
+
+        fn reset_workspace(
+            &self,
+            target: PlanningResetTarget,
+        ) -> Result<PlanningControlResetOutcome> {
+            FakePlanningControlSurface.reset_workspace(target)
+        }
+    }
+
     #[derive(Default)]
     struct FakeTelegramBotPort {
+        poll_errors: Mutex<Vec<anyhow::Error>>,
+        updates: Mutex<Vec<Vec<TelegramUpdate>>>,
         sent_messages: Mutex<Vec<TelegramSendMessageRequest>>,
     }
 
     impl TelegramBotPort for FakeTelegramBotPort {
         fn get_updates(&self, _request: &TelegramPollRequest) -> Result<Vec<TelegramUpdate>> {
-            Ok(Vec::new())
+            if let Some(error) = self
+                .poll_errors
+                .lock()
+                .expect("poll error mutex should lock")
+                .pop()
+            {
+                return Err(error);
+            }
+
+            Ok(self
+                .updates
+                .lock()
+                .expect("updates mutex should lock")
+                .pop()
+                .unwrap_or_default())
         }
 
         fn send_message(&self, request: &TelegramSendMessageRequest) -> Result<()> {
@@ -502,6 +669,7 @@ mod tests {
             TelegramBotPolicy::new(allowed_chat_ids.iter().copied().collect()),
             1,
             false,
+            Duration::ZERO,
         );
         (gateway, runner)
     }
@@ -527,6 +695,28 @@ mod tests {
             TelegramParsedMessage::Error(
                 "사용법: /reset queue | /reset directions | /reset all".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn parse_message_rejects_reset_with_extra_arguments() {
+        let parsed = parse_message(Some("/reset queue now"));
+
+        assert_eq!(
+            parsed,
+            TelegramParsedMessage::Error(
+                "사용법: /reset queue | /reset directions | /reset all".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn parse_message_rejects_reset_alias_with_extra_arguments() {
+        let parsed = parse_message(Some("/reset_queue now"));
+
+        assert_eq!(
+            parsed,
+            TelegramParsedMessage::Error("사용법: /reset_queue".to_string())
         );
     }
 
@@ -582,16 +772,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_reads_token_and_chat_ids_from_env_and_flags() {
-        let _token_guard = EnvGuard::set("AKRA_TELEGRAM_BOT_TOKEN", Some("env-token"));
-        let _chat_guard = EnvGuard::set("AKRA_TELEGRAM_ALLOWED_CHAT_IDS", Some("10,11"));
-
-        let args = parse_args([
-            "--allow-chat-id".to_string(),
-            "12".to_string(),
-            "--poll-timeout-seconds".to_string(),
-            "45".to_string(),
-        ])
+    fn parse_args_reads_token_and_chat_ids_from_environment_and_flags() {
+        let args = parse_args_with_environment(
+            [
+                "--allow-chat-id".to_string(),
+                "12".to_string(),
+                "--poll-timeout-seconds".to_string(),
+                "45".to_string(),
+            ],
+            TelegramBotEnvironment {
+                token: Some("env-token".to_string()),
+                allowed_chat_ids: [10, 11].into_iter().collect(),
+            },
+        )
         .expect("args should parse");
 
         assert_eq!(args.token, "env-token");
@@ -602,32 +795,61 @@ mod tests {
         assert!(args.drop_pending_updates);
     }
 
-    struct EnvGuard {
-        key: &'static str,
-        previous: Option<String>,
+    #[test]
+    fn run_poll_cycle_keeps_loop_alive_after_poll_error() {
+        let (gateway, runner) = build_runner(&[42]);
+        gateway
+            .poll_errors
+            .lock()
+            .expect("poll error mutex should lock")
+            .push(anyhow!("network unavailable"));
+
+        let next_offset = runner.run_poll_cycle(Some(99));
+
+        assert_eq!(next_offset, Some(99));
     }
 
-    impl EnvGuard {
-        fn set(key: &'static str, value: Option<&str>) -> Self {
-            let previous = std::env::var(key).ok();
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-            Self { key, previous }
-        }
-    }
+    #[test]
+    fn process_updates_continues_after_individual_message_failure() {
+        let gateway = Arc::new(FakeTelegramBotPort::default());
+        let runner = TelegramBotRunner::new(
+            gateway.clone(),
+            PlanningControlService::new(Arc::new(FlakyPlanningControlSurface {
+                load_calls: AtomicUsize::new(0),
+            })),
+            TelegramBotPolicy::new([42].into_iter().collect()),
+            1,
+            false,
+            Duration::ZERO,
+        );
 
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match self.previous.as_deref() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
+        runner.process_updates(&[
+            TelegramUpdate {
+                update_id: 1,
+                message: Some(TelegramInboundMessage {
+                    message_id: 10,
+                    chat_id: 42,
+                    text: Some("/status".to_string()),
+                    sender_display_name: None,
+                }),
+            },
+            TelegramUpdate {
+                update_id: 2,
+                message: Some(TelegramInboundMessage {
+                    message_id: 11,
+                    chat_id: 42,
+                    text: Some("/status".to_string()),
+                    sender_display_name: None,
+                }),
+            },
+        ]);
+
+        let sent_messages = gateway
+            .sent_messages
+            .lock()
+            .expect("sent messages mutex should lock");
+        assert_eq!(sent_messages.len(), 2);
+        assert!(sent_messages[0].text.contains("명령 처리에 실패했습니다."));
+        assert!(sent_messages[1].text.contains("상태 요약"));
     }
 }

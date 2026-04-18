@@ -1,6 +1,7 @@
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -40,25 +41,26 @@ impl CurlTelegramBotAdapter {
     {
         let url = format!("{}/bot{}/{}", self.api_base_url, self.token, method_name);
         let json_body = serde_json::to_string(body).context("failed to serialize request body")?;
-        let max_time_seconds = u32::from(timeout_seconds).saturating_add(15).to_string();
-        let output = Command::new(&self.curl_path)
-            .args([
-                "--silent",
-                "--show-error",
-                "--connect-timeout",
-                CURL_CONNECT_TIMEOUT_SECONDS,
-                "--max-time",
-                max_time_seconds.as_str(),
-                "-X",
-                "POST",
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                json_body.as_str(),
-                url.as_str(),
-            ])
-            .output()
+        let max_time_seconds = u32::from(timeout_seconds).saturating_add(15);
+        let mut child = Command::new(&self.curl_path)
+            .args(["--config", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .with_context(|| format!("failed to invoke curl for Telegram {method_name}"))?;
+        let config = build_curl_config(url.as_str(), json_body.as_str(), max_time_seconds);
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("failed to open curl stdin for Telegram {method_name}"))?;
+        stdin
+            .write_all(config.as_bytes())
+            .with_context(|| format!("failed to write curl config for Telegram {method_name}"))?;
+        drop(stdin);
+        let output = child
+            .wait_with_output()
+            .with_context(|| format!("failed to wait for curl during Telegram {method_name}"))?;
 
         if !output.status.success() {
             bail!(
@@ -188,12 +190,31 @@ struct TelegramUserResponse {
 
 #[derive(Debug, Deserialize)]
 struct TelegramSendMessageResponse {
+    #[serde(rename = "message_id")]
     _message_id: i64,
+}
+
+fn build_curl_config(url: &str, body: &str, max_time_seconds: u32) -> String {
+    format!(
+        "silent\nshow-error\nconnect-timeout = {connect_timeout}\nmax-time = {max_time}\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\nurl = \"{url}\"\ndata = \"{body}\"\n",
+        connect_timeout = CURL_CONNECT_TIMEOUT_SECONDS,
+        max_time = max_time_seconds,
+        url = escape_curl_config_value(url),
+        body = escape_curl_config_value(body),
+    )
+}
+
+fn escape_curl_config_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TelegramApiEnvelope;
+    use super::{TelegramApiEnvelope, TelegramSendMessageResponse, build_curl_config};
 
     #[test]
     fn telegram_envelope_parses_success_payload() {
@@ -218,5 +239,28 @@ mod tests {
             envelope.description.expect("description should exist"),
             "Bad Request: chat not found"
         );
+    }
+
+    #[test]
+    fn send_message_response_maps_message_id_field() {
+        let envelope = serde_json::from_str::<TelegramApiEnvelope<TelegramSendMessageResponse>>(
+            r#"{"ok":true,"result":{"message_id":42}}"#,
+        )
+        .expect("telegram sendMessage envelope should parse");
+
+        assert!(envelope.ok);
+        assert!(envelope.result.is_some());
+    }
+
+    #[test]
+    fn build_curl_config_supports_stdin_delivery() {
+        let config = build_curl_config(
+            "https://api.telegram.org/bot123456:secret/getUpdates",
+            r#"{"offset":1}"#,
+            45,
+        );
+
+        assert!(config.contains("bot123456:secret"));
+        assert!(config.contains("request = \"POST\""));
     }
 }
