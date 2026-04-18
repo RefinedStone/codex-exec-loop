@@ -1,6 +1,13 @@
 # Planning Runtime And Draft Editor
 
-This file records the active planning contract on `prerelease`.
+This file records the active planning contract in the current branch workspace.
+
+## Git-Backed Authority Model
+
+- Git-backed workspaces resolve one canonical repo authority root and persist planning authority under `.codex-exec-loop/runtime/planning-authority.db`.
+- Active planning, staged drafts, official refresh claims, distributor queue claims, and runtime slot, session, and distributor projections are repo-scoped authority-store data.
+- Tracked planning files under `.codex-exec-loop/planning/` remain exported review and portability artifacts for git-backed workspaces, while non-git workspaces still use direct local planning files.
+- Authority inspection can repair exported planning files from store truth when they drift or disappear.
 
 ## Planning Artifacts
 
@@ -81,31 +88,20 @@ This file records the active planning contract on `prerelease`.
 
 ## Current Limits
 
-- Active planning files are still resolved from the current workspace path, not from a canonical
-  repo-shared planning authority root.
-- `task-ledger.json` and `queue.snapshot.json` are logically coupled but are still written and
-  restored as separate filesystem artifacts.
-- Official completion refresh ordering is coordinated only inside one app process.
-- Current supersession and planning behavior should be treated as effectively single-operator and
-  single-process safe, not fully multi-client safe.
-- Detailed risk record: [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md)
+- Non-git workspaces still fall back to direct local planning files instead of the repo-scoped authority store.
+- Exported planning files can still drift when edited out of band and may require authority inspection, repair, or explicit import to restore parity.
+- Real-terminal validation is still required for restart recovery, distributor delivery, and multi-worktree operator flow.
+- The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
 
-## Planned Authority Shift
+## Historical Redesign References
 
-- The planned direction is to move planning authority into a repo-shared planning store under the
-  canonical repo root.
-- `directions`, active task state, queue projection, draft state, runtime planning metadata, and
-  supersession claims or projections move into one repo-scoped authority domain.
-- `draft -> validate -> promote` stays as the authoring contract, but draft state becomes
-  store-backed instead of worktree-local authority.
-- File artifacts become revision-stamped import, export, review, and compatibility surfaces rather
-  than the runtime authority.
-- The intended rollout is `legacy-file -> shadow-store -> store-primary`, with one-way mirroring
-  only and no long-lived dual authority.
-- Detailed redesign: [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md)
+- The repo-shared authority migration described in [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md) is now implemented on this branch.
+- The pre-cutover failure record in [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md) should be read as historical context for the issues the authority-store cutover addressed.
 
 ## Code Entry
 
 - Application entrypoint: `src/application/service/planning`
+- Planning authority port: `src/application/port/outbound/planning_authority_port.rs`
+- Planning authority adapter: `src/adapter/outbound/sqlite_planning_authority_adapter.rs`
 - TUI entrypoint: `src/adapter/inbound/tui/app/planning`
 - CLI lifecycle entrypoint: `src/adapter/inbound/cli.rs`

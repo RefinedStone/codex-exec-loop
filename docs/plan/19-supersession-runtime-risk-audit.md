@@ -1,11 +1,17 @@
 # Supersession Runtime Risk Audit
 
-This document records the main structural risks in the current `prerelease` supersession and
+This document recorded the main structural risks in the pre-store-primary supersession and
 planning runtime.
 
-It describes current failure modes, not the target design.
+It should now be read as historical failure analysis rather than the current target design.
 
-## Current Operating Envelope
+## Status Note
+
+- This audit captured the pre-store-primary supersession risk set.
+- The current branch addresses R1 through R8 through repo-scoped planning authority, store-backed official refresh and distributor claims, runtime projections, and recovery rechecks.
+- Keep the remaining sections as historical failure analysis for the issues the authority-store cutover closed.
+
+## Historical Operating Envelope
 
 The current shipped loop should be treated as effectively safe only for:
 

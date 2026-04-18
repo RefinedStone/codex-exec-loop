@@ -5,6 +5,11 @@
 Make the repo-shared authority store the default active and draft planning authority while tracked
 planning files become revision-stamped exports and explicit imports only.
 
+## Status
+
+- Current branch status: implemented and recorded as `done` in `task-ledger.json`.
+- Keep this file as compact rationale for what shipped; the remaining work moved on to validation, doc alignment, and residual polish rather than another store-primary cutover slice.
+
 ## Why this direction exists
 
 The earlier slices only harden the architecture if runtime authority actually moves. This cutover

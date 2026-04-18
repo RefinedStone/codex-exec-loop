@@ -1,15 +1,15 @@
 # Implementation Slices
 
-This document defines the target supersession model, not shipped behavior.
+This document records the historical supersession slice plan plus the current branch completion status.
 
 ## Delivery Strategy
 
 Supersession should land as several reviewable slices. Each slice must leave the product in a
 buildable and understandable state even if the full feature is not yet operator-complete.
 
-## Current `prerelease` Status
+## Current Branch Status
 
-The first operator-visible supersession loop is already shipped on current `prerelease`.
+`origin/prerelease` already ships the first operator-visible supersession loop.
 
 - Slice 1 shipped: readiness gating and `:parallel` mode entry are live.
 - Slice 2 shipped: the control-tower board and domain snapshots are live.
@@ -17,9 +17,9 @@ The first operator-visible supersession loop is already shipped on current `prer
 - Slice 4 shipped in native form: queue-driven handoff launches main-grade agent sessions into leased slots and tracks lifecycle state.
 - Slice 5 shipped: completion becomes official only after serialized hidden planning refresh succeeds.
 - Slice 6 and Slice 7 shipped together in native form: distributor queue delivery, rebase provenance, GitHub automation, and slot return are live.
-
-The remaining supersession work is mostly architecture follow-through around repo-shared planning
-authority, store-backed drafts, cross-process claims, and restart recovery.
+- The current branch also implements Slice 9 through Slice 13: authority locator and shadow store, store-backed drafts and promote, active planning mutation and queue claims, runtime projection recovery, and store-primary cutover.
+- Post-cutover legacy bootstrap cleanup is also implemented on the current branch.
+- The remaining work is validation depth, compact docs alignment, and residual surface polish rather than additional core supersession architecture.
 
 ## Shipped Slices
 
@@ -122,13 +122,13 @@ Verification:
 - `cargo clippy --all-targets --all-features -D warnings`
 - terminal validation runs covering mode switch, agent activity, ledger refresh, and distributor cleanup
 
-## Remaining Architecture Follow-Through
+## Branch-Complete Follow-Through
 
 ### Slice 9: Authority Locator And Shadow Store
 
-- add canonical repo authority location rules
-- bootstrap SQLite schema and read-only snapshot loading
-- mirror tracked planning files into the store without changing runtime authority yet
+- resolve canonical repo authority location rules
+- bootstrap SQLite schema and shadow-store inspection
+- mirror tracked planning files into the store before runtime authority moves
 
 Verification:
 
@@ -139,7 +139,7 @@ Verification:
 
 - move draft storage, validation, and rejection resume data into the authority store
 - preserve `draft -> validate -> promote` semantics
-- prove that active planning does not change until promote succeeds
+- keep active planning unchanged until promote succeeds
 
 Verification:
 
@@ -162,8 +162,8 @@ Verification:
 ### Slice 12: Runtime Projection Migration And Recovery
 
 - move slot, session, and distributor delivery projections into the authority store
-- append runtime-domain events
-- add restart recovery that reconciles Git and GitHub truth before reclassifying in-flight work
+- append runtime-domain events and recover from store-backed projections
+- recheck Git and GitHub truth before reclassifying in-flight work
 
 Verification:
 
@@ -209,8 +209,8 @@ Potential hotspots:
 
 Current status:
 
-- achieved on current `prerelease` for the first operator-visible loop
-- not yet achieved for the repo-shared authority and recovery hardening slices
+- achieved on the current branch for both the first operator-visible loop and the repo-shared authority and recovery hardening slices
+- remaining work is no longer core supersession enablement
 
 ## Related Docs
 

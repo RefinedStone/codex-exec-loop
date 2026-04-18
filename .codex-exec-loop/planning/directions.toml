@@ -104,7 +104,7 @@ scope_hints = [
     "Prefer worktree-family consistency checks over early mutation features.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-authority-locator-and-shadow-store.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-store-backed-drafts-and-promote"
@@ -121,7 +121,7 @@ scope_hints = [
     "Treat rejected promote attempts as resume-able draft state, not discarded temporary edits.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-store-backed-drafts-and-promote.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-active-planning-mutation-and-queue-claims"
@@ -138,7 +138,7 @@ scope_hints = [
     "Keep runtime events linked to observed planning revision without inflating planning revision on every event.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-active-planning-mutation-and-queue-claims.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-runtime-projections-and-recovery"
@@ -155,7 +155,7 @@ scope_hints = [
     "Keep recovery states explicit and operator-readable from the first slice.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-runtime-projections-and-recovery.md"
-state = "active"
+state = "done"
 
 [[directions]]
 id = "supersession-store-primary-cutover"
@@ -172,4 +172,4 @@ scope_hints = [
     "Keep operator review and portability ergonomics explicit even after file authority ends.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/supersession-store-primary-cutover.md"
-state = "active"
+state = "done"

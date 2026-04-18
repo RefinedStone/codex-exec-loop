@@ -5,6 +5,11 @@
 Commit hidden planning refresh, queue projection rebuild, and supersession claim ownership through
 one repo-scoped authority domain instead of separate file and runtime updates.
 
+## Status
+
+- Current branch status: implemented and recorded as `done` in `task-ledger.json`.
+- Keep this file as compact rationale for what shipped; the remaining work moved on to validation, doc alignment, and residual polish rather than another queue-claim migration slice.
+
 ## Why this direction exists
 
 The redesign only closes the current split-brain risk if active planning mutation, official refresh

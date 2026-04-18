@@ -5,6 +5,11 @@
 Move slot, session, distributor, and recovery projections into the repo-shared authority domain and
 recover in-flight work by reconciling committed state with Git and GitHub truth.
 
+## Status
+
+- Current branch status: implemented and recorded as `done` in `task-ledger.json`.
+- Keep this file as compact rationale for what shipped; the remaining work moved on to validation, doc alignment, and residual polish rather than another runtime-projection slice.
+
 ## Why this direction exists
 
 Store-backed claims are not enough on their own. Supersession still needs durable runtime

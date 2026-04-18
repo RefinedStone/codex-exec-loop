@@ -5,6 +5,11 @@
 Replace worktree-local planning roots with one canonical repo-scoped authority location and a
 shadow store that can mirror tracked planning state without taking runtime authority yet.
 
+## Status
+
+- Current branch status: implemented and recorded as `done` in `task-ledger.json`.
+- Keep this file as compact rationale for what shipped; the remaining work moved on to validation, doc alignment, and residual polish rather than another authority-locator slice.
+
 ## Why this direction exists
 
 The updated supersession design rejects worktree-local planning authority. Every leased worktree in

@@ -1,6 +1,6 @@
 # Current Product State
 
-`prerelease` currently ships a shell-first personal execution cockpit built on `codex app-server`.
+This file tracks the current branch product state. `origin/prerelease` already ships the first operator-facing supersession loop, and the current branch also includes the repo-scoped planning authority follow-through built on top of it.
 
 ## Product Identity
 
@@ -36,15 +36,13 @@
 - Recovery model:
   Invalid planning changes are restored, archived, and surfaced back to the operator instead of being silently accepted.
 
-## Supersession On `prerelease`
+## Supersession Status
 
-- `:parallel on` runs readiness checks for git, worktree support, `akra`, push credentials, `gh`, and planning before the shell enters supersession mode.
-- The supersession control tower already projects capabilities, pool capacity, active agent roster, selected session detail, and distributor queue state from live snapshots.
-- Queue-driven auto follow-up can lease one of three `akra` worktree slots, launch a main-grade agent session in that slot, and keep slot lifecycle state synchronized through thread preparation, turn start, and completion.
-- Agent completion is intentionally split into `reported_complete` and official completion: hidden planning refresh must succeed before the result becomes `commit_ready` and enters distributor delivery.
-- Distributor delivery is already serial: it processes one queue head at a time, rebases stale branches onto `akra`, force-pushes rebased heads when needed, ensures and closes PRs through GitHub automation, and only returns the slot after cleanup succeeds.
-- The main supersession work that still remains is architectural cleanup around explicit runtime ports and seams, not the first-pass operator-facing loop.
-- Parallel supersession still relies on worktree-local planning authority and process-local runtime serialization in key places; see [06-planning-runtime-and-draft-editor.md](06-planning-runtime-and-draft-editor.md) and [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md).
+- `origin/prerelease` already ships readiness gating, the supersession control tower, the three-slot `akra` worktree pool, `reported_complete` versus official completion, and serial distributor delivery.
+- The current branch also routes git-backed planning authority through a repo-scoped SQLite store under `.codex-exec-loop/runtime/`, including active planning, staged drafts, official refresh claims, distributor queue claims, and runtime slot, session, and distributor projections.
+- Store-backed restart recovery now rechecks worktree, branch, and PR truth before reclassifying in-flight distributor work, and authority inspection can repair exported planning files from store truth when they drift or disappear.
+- `auto stop` remains an automation control, not the supersession completion contract. When a leased parallel session reaches official completion, the same slot session stops and hands control back to the supervisor or distributor instead of reusing that slot session for another auto-follow turn.
+- The main remaining supersession work is validation depth, compact doc alignment, and residual surface polish rather than the core loop or repo-scoped authority migration.
 
 ## Active Constraints
 
@@ -67,5 +65,7 @@
 - Shell runtime entrypoint: `src/adapter/inbound/tui/app.rs`
 - Supersession shell entrypoint: `src/adapter/inbound/tui/app/parallel_mode.rs`
 - Supersession application services: `src/application/service/parallel_mode_service.rs`
+- Planning authority port: `src/application/port/outbound/planning_authority_port.rs`
+- Planning authority adapter: `src/adapter/outbound/sqlite_planning_authority_adapter.rs`
 - Planning feature entrypoint: `src/adapter/inbound/tui/app/planning/`
 - Application planning services: `src/application/service/planning/`
