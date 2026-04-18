@@ -2,97 +2,120 @@
   "version": 1,
   "tasks": [
     {
-      "id": "task-supersession-authority-locator-shadow-store",
-      "direction_id": "supersession-authority-locator-and-shadow-store",
-      "direction_relation_note": "The supersession docs now define the next work as replacing worktree-local planning roots with one repo-shared authority location and proving parity through a read-only shadow store before runtime authority moves.",
-      "title": "Introduce canonical authority locator and shadow-store parity path",
-      "description": "Resolve every active workspace to one canonical repo authority root, bootstrap the repo-shared planning store, and mirror tracked planning files into it with parity diagnostics while tracked files remain the active authority.",
-      "status": "ready",
-      "base_priority": 90,
+      "id": "supersession-pr294-prerelease-dirty-classification",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Derived from the latest operator request to turn the previous answer's executable work into queue items and complete only the queue head before reorganizing the remainder.",
+      "title": "Classify dirty prerelease checkout before PR #294 integration",
+      "description": "Re-evaluate the dirty `prerelease` checkout with `--ignore-cr-at-eol`, separate line-ending churn from real content changes, and confirm whether PR #294's supersession branch-policy work materially overlaps with meaningful local diffs.",
+      "status": "done",
+      "base_priority": 97,
       "dynamic_priority_delta": 0,
-      "priority_reason": "Every remaining supersession hardening slice depends on one repo-scoped authority location, so proving shadow-store parity is the first concrete step after the shipped operator loop.",
+      "priority_reason": "The latest main-session reply states this was the queue-head task actually executed in the previous turn, narrowing 65 raw diffs to a small set of planning/runtime files and finding no meaningful overlap with PR #294.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T13:30:00Z"
+      "updated_at": "2026-04-18T08:30:00Z"
     },
     {
-      "id": "task-supersession-store-backed-drafts-promote",
-      "direction_id": "supersession-store-backed-drafts-and-promote",
-      "direction_relation_note": "Once the repo-shared shadow store exists, the next architectural step is to preserve the current `draft -> validate -> promote` UX while moving draft storage and rejection resume semantics into the authority domain.",
-      "title": "Move draft, validation, and promote flow into the authority store",
-      "description": "Store draft planning state, validation results, rejection archives, and resume metadata in the repo-shared authority domain so active planning remains unchanged until store-backed promote succeeds.",
-      "status": "proposed",
-      "base_priority": 86,
+      "id": "supersession-pr294-prerelease-lane-clearance",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "The latest main-session reply identifies this as the immediate next gate after dirty-checkout classification: choose how to preserve or clear the remaining local planning/runtime work before attempting integration.",
+      "title": "Decide how to clear the dirty prerelease lane for PR #294",
+      "description": "Choose whether the remaining local planning/runtime changes in the dirty `prerelease` checkout should be preserved into a separate lane or whether only generated/churn changes should be discarded so the integration lane can be restored.",
+      "status": "awaiting_user",
+      "base_priority": 96,
       "dynamic_priority_delta": 0,
-      "priority_reason": "Store-backed draft semantics are the next gate after shadow-store parity because they keep the current authoring model intact while removing worktree-local draft authority.",
+      "priority_reason": "This is the first unresolved follow-up named in the latest answer, and every executable integration step stays blocked until the operator picks a lane-clearance policy.",
       "depends_on": [
-        "task-supersession-authority-locator-shadow-store"
+        "supersession-pr294-prerelease-dirty-classification"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T13:30:00Z"
+      "updated_at": "2026-04-18T08:30:00Z"
     },
     {
-      "id": "task-supersession-active-planning-queue-claims",
-      "direction_id": "supersession-active-planning-mutation-and-queue-claims",
-      "direction_relation_note": "After draft and active planning state are store-backed, hidden planner refresh and supersession claim ownership must move into the same authority domain to close split-brain and cross-process duplication risks.",
-      "title": "Commit active planning refresh and queue claims in one authority domain",
-      "description": "Route hidden planning refresh, queue projection rebuild, official refresh reservation, and distributor queue-head claim through one repo-scoped authority transaction model with distinct planning revision and runtime event sequencing.",
-      "status": "proposed",
-      "base_priority": 84,
+      "id": "supersession-pr294-prerelease-fast-forward",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "The latest answer keeps linear integration of PR #294 as queued work, but only after the dirty-lane decision is resolved.",
+      "title": "Fast-forward PR #294 into prerelease after lane clearance",
+      "description": "Once the dirty `prerelease` checkout policy is chosen and applied, integrate PR #294 into `prerelease` with a linear fast-forward path that preserves the selected local-work handling strategy.",
+      "status": "blocked",
+      "base_priority": 94,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The store does not become real supersession authority until active planning mutation and queue claims share one transactional boundary.",
+      "priority_reason": "The latest answer explicitly lists this as blocked behind the lane-clearance decision, so it should remain queued but not promoted to ready.",
       "depends_on": [
-        "task-supersession-store-backed-drafts-promote"
+        "supersession-pr294-prerelease-lane-clearance"
+      ],
+      "blocked_by": [
+        "supersession-pr294-prerelease-lane-clearance"
+      ],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-18T08:30:00Z"
+    },
+    {
+      "id": "supersession-pr294-postmerge-closeout",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "The latest answer names closeout as remaining queued work after integration, covering PR completion and cleanup once PR #294 lands on `prerelease`.",
+      "title": "Close out PR #294 integration and clean up worktrees",
+      "description": "After PR #294 is linearly integrated into `prerelease`, finish the remaining closeout work by reconciling the PR state and cleaning up the associated worktree or lane artifacts.",
+      "status": "blocked",
+      "base_priority": 92,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "This follow-up cannot start until the actual `prerelease` integration finishes, so it remains blocked behind the fast-forward task.",
+      "depends_on": [
+        "supersession-pr294-prerelease-fast-forward"
+      ],
+      "blocked_by": [
+        "supersession-pr294-prerelease-fast-forward"
+      ],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-18T08:30:00Z"
+    },
+    {
+      "id": "supersession-pr294-lane-option-split-dirty-work",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "The latest answer lists this as one of the concrete operator-facing variants for resolving the lane-clearance decision.",
+      "title": "Preserve real planning/runtime changes in a separate lane",
+      "description": "If the operator chooses to retain the meaningful local planning/runtime edits found during dirty-checkout classification, split that work into a separate lane before restoring a clean integration path for PR #294.",
+      "status": "proposed",
+      "base_priority": 88,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "This is a concrete implementation variant of the awaiting-user lane-clearance decision, but it should remain proposed until the operator selects it.",
+      "depends_on": [
+        "supersession-pr294-prerelease-lane-clearance"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T13:30:00Z"
+      "updated_at": "2026-04-18T08:30:00Z"
     },
     {
-      "id": "task-supersession-runtime-projections-recovery",
-      "direction_id": "supersession-runtime-projections-and-recovery",
-      "direction_relation_note": "Once claims and active planning mutation are store-backed, the remaining hardening work is durable runtime projection plus restart recovery that reconciles external Git and GitHub truth.",
-      "title": "Move runtime projections and recovery into the authority domain",
-      "description": "Persist slot, session, queue, and distributor delivery projections in the repo-shared authority store, append runtime-domain events, and add restart recovery that rechecks Git, GitHub, and worktree truth before reclassifying in-flight work.",
+      "id": "supersession-pr294-lane-option-discard-generated-churn",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "The latest answer lists this as the other concrete operator-facing variant for clearing the integration lane after classification.",
+      "title": "Discard generated or churn-only changes to restore the integration lane",
+      "description": "If the operator decides the remaining dirty `prerelease` state is only generated noise or acceptable churn, drop that churn so the integration lane can be restored and PR #294 can fast-forward cleanly.",
       "status": "proposed",
-      "base_priority": 82,
+      "base_priority": 87,
       "dynamic_priority_delta": 0,
-      "priority_reason": "Cross-process claims are not sufficient without durable runtime projections and recovery that can survive restart and external side effects.",
+      "priority_reason": "This is the alternate lane-clearance variant from the latest answer, and it should remain a proposal until the operator explicitly chooses it.",
       "depends_on": [
-        "task-supersession-active-planning-queue-claims"
+        "supersession-pr294-prerelease-lane-clearance"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T13:30:00Z"
-    },
-    {
-      "id": "task-supersession-store-primary-cutover",
-      "direction_id": "supersession-store-primary-cutover",
-      "direction_relation_note": "The final remaining supersession architecture step is to make the repo-shared authority store the runtime source of truth and demote tracked planning files to revision-stamped export and explicit import artifacts.",
-      "title": "Cut supersession planning over to store-primary authority",
-      "description": "Switch active and draft planning reads and writes to the repo-shared authority store, keep tracked planning files as revision-stamped exports, and require explicit operator import with base revision checks instead of implicit dual authority.",
-      "status": "proposed",
-      "base_priority": 80,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "Store-primary is the final cutover after shadow-store parity, draft semantics, claims, and recovery have all been proven.",
-      "depends_on": [
-        "task-supersession-runtime-projections-recovery"
-      ],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-18T13:30:00Z"
+      "updated_at": "2026-04-18T08:30:00Z"
     }
   ]
 }
