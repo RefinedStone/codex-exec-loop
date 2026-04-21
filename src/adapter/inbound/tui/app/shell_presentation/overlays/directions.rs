@@ -2,8 +2,15 @@ use super::super::{
     Color, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, Line, Modifier, NativeTuiApp,
     QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, Span, Style, compact_whitespace_detail,
 };
-use super::DirectionsMaintenanceOverlayView;
 use super::popup::planning_init_option_line;
+
+pub(crate) struct DirectionsMaintenanceOverlayView {
+    pub(crate) header_lines: Vec<Line<'static>>,
+    pub(crate) summary_lines: Vec<Line<'static>>,
+    pub(crate) option_lines: Vec<Line<'static>>,
+    pub(crate) status_lines: Vec<Line<'static>>,
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
 
 pub(crate) fn build_directions_maintenance_overlay_view(
     app: &NativeTuiApp,
