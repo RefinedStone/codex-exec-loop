@@ -1,6 +1,6 @@
 use super::super::super::super::NativeTuiApp;
 use super::super::PlanningDraftEditorOverlayView;
-use super::copy::{
+use super::editor_copy::{
     build_planning_draft_editor_header_lines, build_planning_draft_editor_key_lines,
     build_planning_draft_editor_status_lines,
 };
