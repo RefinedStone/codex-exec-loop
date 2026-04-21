@@ -2,7 +2,7 @@ use super::super::{
     Color, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, Line, Modifier, NativeTuiApp,
     QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, Span, Style, compact_whitespace_detail,
 };
-use super::popup::planning_init_option_line;
+use super::option_lines::overlay_option_line;
 
 pub(crate) struct DirectionsMaintenanceOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
@@ -62,21 +62,21 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                     ),
                 ],
                 option_lines: vec![
-                    planning_init_option_line(
+                    overlay_option_line(
                         "Enter",
                         "edit directions",
                         "open directions.toml and any existing queue-idle prompt in the staged editor",
                         false,
                         false,
                     ),
-                    planning_init_option_line(
+                    overlay_option_line(
                         "D",
                         "repair detail docs",
                         "choose one direction with a missing or broken doc mapping and stage a markdown file",
                         false,
                         parse_error.is_some() || (missing_doc_count == 0 && broken_doc_count == 0),
                     ),
-                    planning_init_option_line(
+                    overlay_option_line(
                         "P",
                         "edit queue-idle prompt",
                         "stage the queue-idle review prompt markdown and create or repair prompt_path if needed",
@@ -220,7 +220,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                     )),
                 ],
                 option_lines: vec![
-                    planning_init_option_line(
+                    overlay_option_line(
                         "1",
                         "yes",
                         "stage a markdown file and open it with directions.toml for creation or repair",
@@ -229,7 +229,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                             == DetailDocConfirmChoice::Yes,
                         false,
                     ),
-                    planning_init_option_line(
+                    overlay_option_line(
                         "2",
                         "no",
                         "return without changing the active or staged planning files",

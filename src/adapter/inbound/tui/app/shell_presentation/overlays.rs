@@ -7,6 +7,9 @@ mod directions;
 #[path = "overlays/list_projection.rs"]
 mod list_projection;
 
+#[path = "overlays/option_lines.rs"]
+mod option_lines;
+
 #[path = "overlays/popup.rs"]
 mod popup;
 

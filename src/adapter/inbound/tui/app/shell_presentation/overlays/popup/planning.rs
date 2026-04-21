@@ -5,6 +5,7 @@ use super::super::super::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningValidationSeverity, Span, Style, compact_inline_detail,
 };
+use super::super::option_lines::overlay_option_line;
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
@@ -111,7 +112,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 ),
             ],
             option_lines: vec![
-                planning_init_option_line(
+                overlay_option_line(
                     "A",
                     "simple mode",
                     "stage one generic direction and an empty task ledger",
@@ -119,7 +120,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         == PlanningInitModeSelection::Simple,
                     false,
                 ),
-                planning_init_option_line(
+                overlay_option_line(
                     "B",
                     "detail mode",
                     "branch into manual or future llm-assisted authoring",
@@ -161,7 +162,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                 Line::from("LLM-assisted remains visible for the target UX but is still disabled."),
             ],
             option_lines: vec![
-                planning_init_option_line(
+                overlay_option_line(
                     "A",
                     "manual",
                     "stage the detail scaffold and keep editing inside the shell",
@@ -169,7 +170,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                         == PlanningInitDetailSelection::Manual,
                     false,
                 ),
-                planning_init_option_line(
+                overlay_option_line(
                     "B",
                     "llm-assisted",
                     "future guided drafting flow (not supported yet)",
@@ -559,27 +560,4 @@ fn planning_draft_editor_close_key_line(
     }
 
     Line::from("controls: Esc/Ctrl+C closes this surface")
-}
-
-pub(crate) fn planning_init_option_line(
-    shortcut: &str,
-    label: &str,
-    detail: &str,
-    selected: bool,
-    disabled: bool,
-) -> Line<'static> {
-    let style = if disabled {
-        Style::default().fg(Color::DarkGray)
-    } else if selected {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    let marker = if selected { ">>" } else { "  " };
-
-    Line::from(vec![
-        Span::styled(format!("{marker} {shortcut}. "), style),
-        Span::styled(label.to_string(), style.add_modifier(Modifier::BOLD)),
-        Span::styled(format!("  {detail}"), style),
-    ])
 }
