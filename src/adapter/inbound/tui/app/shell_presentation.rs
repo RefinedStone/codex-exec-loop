@@ -35,8 +35,6 @@ const QUEUE_INSPECTION_TASK_LIMIT: usize = 2;
 const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
 const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
 const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
-const PROMPT_PRIMARY_PREFIX: &str = "> ";
-const PROMPT_CONTINUATION_PREFIX: &str = "  ";
 const STARTUP_ASCII_ART_DEFAULT: &str = r#"
 .::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
 
@@ -99,12 +97,6 @@ pub(super) struct TranscriptPanelView {
     pub(super) title: Line<'static>,
     pub(super) lines: Vec<Line<'static>>,
     pub(super) scroll_offset: u16,
-}
-
-struct PromptBufferView {
-    lines: Vec<Line<'static>>,
-    cursor_line_index: usize,
-    cursor_column: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -170,8 +162,13 @@ impl<'a> ShellCorePresentationContext<'a> {
 
 #[path = "shell_presentation/overlays.rs"]
 mod overlays;
+#[path = "shell_presentation/prompt_composer.rs"]
+mod prompt_composer;
 #[path = "shell_presentation/session_browser.rs"]
 mod session_browser;
+#[cfg(test)]
+#[path = "shell_presentation/shell_copy.rs"]
+mod shell_copy;
 #[path = "shell_presentation/status_panels.rs"]
 mod status_panels;
 
@@ -189,6 +186,10 @@ pub(super) use overlays::{
 pub(super) use overlays::{
     build_conversation_shell_frame_view, build_conversation_shell_view, build_transcript_panel_view,
 };
+#[cfg(test)]
+pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
+#[cfg(test)]
+pub(super) use shell_copy::build_status_title;
 pub(super) use status_panels::InlineTailView;
 
 #[cfg(test)]
@@ -339,276 +340,6 @@ pub(super) fn format_conversation_lines_with_debug(
     lines
 }
 
-#[cfg(test)]
-fn build_input_lines_with_context(
-    context: &ShellCorePresentationContext<'_>,
-) -> Vec<Line<'static>> {
-    match context.conversation_state {
-        ShellConversationState::Loading => vec![
-            Line::from("Thread is still loading."),
-            Line::from("Input becomes available when the shell reaches ready state."),
-        ],
-        ShellConversationState::Failed(message) => vec![Line::from(message.to_string())],
-        ShellConversationState::Ready(conversation) => {
-            build_ready_input_lines(conversation, context.shell_action_availability)
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn build_ready_input_lines(
-    conversation: &ConversationViewModel,
-    shell_action_availability: ShellActionAvailability,
-) -> Vec<Line<'static>> {
-    let prompt_buffer = build_prompt_buffer_view(conversation);
-    let mut lines = prompt_buffer.lines;
-
-    if conversation.input_buffer.is_empty() {
-        if let Some(status_lines) = auto_follow_prompt_lines(conversation) {
-            lines.extend(status_lines);
-            lines.push(Line::from(InlineShellCommand::command_list_line()));
-            return lines;
-        }
-        match (conversation.input_state, shell_action_availability) {
-            (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
-                lines.push(Line::from("Startup checks are still running."));
-                lines.push(Line::from(
-                    "Type now if you want, then send once diagnostics turn ready.",
-                ));
-            }
-            (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
-                lines.push(Line::from("Startup diagnostics need attention."));
-                lines.push(Line::from(
-                    "Open Ctrl+d, resolve the warning, then send the prompt.",
-                ));
-            }
-            (ConversationInputState::DraftReady, _) => {
-                lines.push(Line::from("Ready to start a new thread."));
-                lines.push(Line::from(
-                    "Type the first prompt, Ctrl+j for newline, Enter to send.",
-                ));
-            }
-            (ConversationInputState::ReadyToContinue, _) => {
-                lines.push(Line::from("Ready to continue this session."));
-                lines.push(Line::from(
-                    "Type the next prompt, Ctrl+j for newline, Enter to send.",
-                ));
-            }
-            (ConversationInputState::SubmittingTurn, _) => {
-                lines.push(Line::from("Sending prompt to Codex..."));
-                lines.push(Line::from(
-                    "Wait for the turn to open before sending again.",
-                ));
-            }
-            (ConversationInputState::StreamingTurn, _) => {
-                lines.push(Line::from("Codex is still working on the current turn."));
-                lines.push(Line::from(
-                    "Type now; press Enter after the turn completes.",
-                ));
-            }
-        }
-
-        lines.push(Line::from(InlineShellCommand::command_list_line()));
-        return lines;
-    }
-
-    if conversation.inline_shell_command_palette_state.is_active() {
-        lines.extend(build_shell_command_palette_lines(conversation));
-        return lines;
-    }
-
-    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
-        lines.push(Line::from(command.buffered_hint()));
-        return lines;
-    }
-
-    if conversation.auto_follow_state.has_live_activity()
-        && conversation.input_state.can_submit_now()
-    {
-        lines.push(Line::from(
-            "Prompt buffered. Ctrl+j inserts a new line. Press Enter when auto follow-up finishes.",
-        ));
-        return lines;
-    }
-
-    match (conversation.input_state, shell_action_availability) {
-        (
-            ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
-            ShellActionAvailability::Pending,
-        ) if conversation.startup_submit_armed => {
-            lines.push(Line::from("Prompt queued until startup checks finish."));
-            lines.push(Line::from(
-                "Ctrl+j inserts a new line. Editing cancels the queued send.",
-            ));
-        }
-        (ConversationInputState::DraftReady, ShellActionAvailability::Ready) => {
-            lines.push(Line::from(
-                "Press Enter to create thread and send. Ctrl+j inserts a new line.",
-            ));
-        }
-        (ConversationInputState::ReadyToContinue, ShellActionAvailability::Ready) => {
-            lines.push(Line::from(
-                "Press Enter to send this prompt. Ctrl+j inserts a new line.",
-            ));
-        }
-        (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
-            lines.push(Line::from(
-                "Prompt buffered. Ctrl+j inserts a new line. Press Enter after startup diagnostics turn ready.",
-            ));
-        }
-        (ConversationInputState::SubmittingTurn, _)
-        | (ConversationInputState::StreamingTurn, _) => {
-            lines.push(Line::from(
-                "Prompt buffered. Ctrl+j inserts a new line. Press Enter when turn ends.",
-            ));
-        }
-    }
-
-    lines
-}
-
-fn build_shell_command_palette_lines(conversation: &ConversationViewModel) -> Vec<Line<'static>> {
-    let palette_state = &conversation.inline_shell_command_palette_state;
-    if !palette_state.is_active() {
-        return Vec::new();
-    }
-
-    let Some(prefix) = InlineShellCommand::suggestion_prefix(&conversation.input_buffer) else {
-        return Vec::new();
-    };
-    if palette_state.suggestions().is_empty() {
-        return vec![Line::from(format!("  no shell commands match `{prefix}`"))];
-    }
-
-    let selected_index = palette_state.selected_index().unwrap_or(0);
-    let suggestions = palette_state.suggestions();
-    let (window_start, window_end) =
-        build_shell_command_palette_window(suggestions.len(), selected_index);
-
-    suggestions[window_start..window_end]
-        .iter()
-        .enumerate()
-        .map(|(offset, command)| {
-            let is_selected = selected_index == window_start + offset;
-            let selector = if is_selected { "> " } else { "  " };
-            let detail = if command.requires_argument() {
-                format!("{} / add value", command.suggestion_detail())
-            } else {
-                command.suggestion_detail().to_string()
-            };
-            let label_style = if is_selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let detail_style = if is_selected {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            Line::from(vec![
-                Span::raw(selector),
-                Span::styled(command.command_name().to_string(), label_style),
-                Span::raw("  "),
-                Span::styled(detail, detail_style),
-            ])
-        })
-        .collect()
-}
-
-fn build_shell_command_palette_window(
-    suggestion_count: usize,
-    selected_index: usize,
-) -> (usize, usize) {
-    if suggestion_count <= INLINE_COMMAND_PALETTE_VISIBLE_LIMIT {
-        return (0, suggestion_count);
-    }
-
-    let max_window_start = suggestion_count - INLINE_COMMAND_PALETTE_VISIBLE_LIMIT;
-    let window_start = selected_index
-        .saturating_sub(INLINE_COMMAND_PALETTE_VISIBLE_LIMIT / 2)
-        .min(max_window_start);
-    (
-        window_start,
-        window_start + INLINE_COMMAND_PALETTE_VISIBLE_LIMIT,
-    )
-}
-
-#[cfg(test)]
-pub(super) fn build_input_prompt_cursor_offset(
-    app: &NativeTuiApp,
-    content_width: u16,
-) -> Option<(u16, u16)> {
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
-        return None;
-    };
-
-    build_prompt_cursor_offset(conversation, content_width)
-}
-
-fn build_prompt_cursor_offset(
-    conversation: &ConversationViewModel,
-    content_width: u16,
-) -> Option<(u16, u16)> {
-    if content_width == 0 {
-        return None;
-    }
-
-    let prompt_buffer = build_prompt_buffer_view(conversation);
-    let wrapped_rows_before_cursor = prompt_buffer.lines[..prompt_buffer.cursor_line_index]
-        .iter()
-        .map(|line| wrapped_row_count(line.width(), content_width))
-        .sum::<usize>();
-    let cursor_row_in_line = prompt_buffer.cursor_column / content_width as usize;
-    let cursor_column = (prompt_buffer.cursor_column % content_width as usize) as u16;
-    let cursor_row = wrapped_rows_before_cursor
-        .saturating_add(cursor_row_in_line)
-        .min(u16::MAX as usize) as u16;
-
-    Some((cursor_column, cursor_row))
-}
-
-fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> PromptBufferView {
-    let buffer_lines = conversation.input_buffer.split('\n').collect::<Vec<_>>();
-    let mut lines = Vec::with_capacity(buffer_lines.len().max(1));
-    let mut cursor_line_index = 0;
-    let mut cursor_column = 0;
-
-    for (index, buffer_line) in buffer_lines.iter().enumerate() {
-        let prefix = if index == 0 {
-            PROMPT_PRIMARY_PREFIX
-        } else {
-            PROMPT_CONTINUATION_PREFIX
-        };
-        let rendered_line = format!("{prefix}{buffer_line}");
-        if index + 1 == buffer_lines.len() {
-            cursor_line_index = index;
-            cursor_column = Line::from(rendered_line.clone()).width();
-        }
-        lines.push(Line::from(rendered_line));
-    }
-
-    PromptBufferView {
-        lines,
-        cursor_line_index,
-        cursor_column,
-    }
-}
-
-fn wrapped_row_count(line_width: usize, content_width: u16) -> usize {
-    if content_width == 0 {
-        return 0;
-    }
-    if line_width == 0 {
-        return 1;
-    }
-
-    line_width.div_ceil(content_width as usize)
-}
-
 fn compact_inline_detail(text: &str, max_len: usize) -> String {
     compact_whitespace_detail(text, max_len)
 }
@@ -638,133 +369,6 @@ pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static
         Line::from("Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Ctrl+b: planner detail"),
         Line::from("Enter/Esc/Ctrl+C: close"),
     ]
-}
-
-#[cfg(test)]
-fn build_shell_header_lines_with_context(
-    context: &ShellCorePresentationContext<'_>,
-) -> Vec<Line<'static>> {
-    match context.conversation_state {
-        ShellConversationState::Loading => vec![
-            Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-                Span::raw(" / loading thread"),
-            ]),
-            Line::from("Reading thread history from codex app-server."),
-        ],
-        ShellConversationState::Ready(conversation) => vec![
-            Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-                Span::raw(format!(" / {}", conversation.title)),
-            ]),
-            Line::from(vec![
-                Span::raw(format!(
-                    "thread: {}  |  input: ",
-                    if conversation.has_active_thread() {
-                        conversation.thread_id.as_str()
-                    } else {
-                        "not started yet"
-                    }
-                )),
-                Span::styled(
-                    conversation.input_state.label(),
-                    input_state_style(conversation.input_state),
-                ),
-                Span::raw("  |  startup: "),
-                Span::styled(
-                    context.shell_action_availability.status_text(),
-                    startup_state_style_for_availability(context.shell_action_availability),
-                ),
-            ]),
-        ],
-        ShellConversationState::Failed(message) => vec![
-            Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
-                Span::raw(" / failed"),
-            ]),
-            Line::from(message.to_string()),
-        ],
-    }
-}
-
-#[cfg(test)]
-fn build_shell_title() -> Line<'static> {
-    Line::from("Shell / Ctrl+t new draft / Ctrl+C back / Ctrl+q quit")
-}
-
-#[cfg(test)]
-fn build_transcript_title_with_context(
-    _context: &ShellCorePresentationContext<'_>,
-) -> Line<'static> {
-    Line::from("Transcript / live scrollback")
-}
-
-#[cfg(test)]
-pub(super) fn build_status_title() -> Line<'static> {
-    Line::from("Controls / shell shortcuts and live status")
-}
-
-#[cfg(test)]
-fn build_input_title_with_context(context: &ShellCorePresentationContext<'_>) -> Line<'static> {
-    match context.conversation_state {
-        ShellConversationState::Loading => {
-            Line::from(vec![Span::raw("Prompt"), Span::raw(" / loading")])
-        }
-        ShellConversationState::Failed(_) => {
-            Line::from(vec![Span::raw("Prompt"), Span::raw(" / unavailable")])
-        }
-        ShellConversationState::Ready(conversation) => {
-            let submit_hint = build_primary_submit_hint_with_context(context);
-            Line::from(vec![
-                Span::raw("Prompt"),
-                Span::raw(" / "),
-                Span::styled(
-                    conversation.input_state.label().to_string(),
-                    input_state_style(conversation.input_state),
-                ),
-                Span::raw(" / "),
-                Span::raw(submit_hint),
-                Span::raw(" / Ctrl+j newline"),
-            ])
-        }
-    }
-}
-
-#[cfg(test)]
-fn build_frontend_summary_line() -> Line<'static> {
-    Line::from(
-        "frontend: inline main buffer  |  history: host terminal scrollback  |  tail: prompt anchored",
-    )
-}
-
-#[cfg(test)]
-fn build_primary_submit_hint_with_context(
-    context: &ShellCorePresentationContext<'_>,
-) -> &'static str {
-    match context.conversation_state {
-        ShellConversationState::Ready(conversation) if conversation.startup_submit_armed => {
-            "queued until ready"
-        }
-        ShellConversationState::Ready(conversation) if conversation.has_running_turn() => {
-            "Enter send when idle"
-        }
-        ShellConversationState::Ready(_) if !context.shell_action_availability.allows_actions() => {
-            "Enter send when ready"
-        }
-        ShellConversationState::Ready(_) => "Enter send",
-        _ => "",
-    }
-}
-
-#[cfg(test)]
-fn startup_state_style_for_availability(
-    shell_action_availability: ShellActionAvailability,
-) -> Style {
-    match shell_action_availability {
-        ShellActionAvailability::Ready => Style::default().fg(Color::Green),
-        ShellActionAvailability::Pending => Style::default().fg(Color::Yellow),
-        ShellActionAvailability::Blocked => Style::default().fg(Color::Red),
-    }
 }
 
 fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

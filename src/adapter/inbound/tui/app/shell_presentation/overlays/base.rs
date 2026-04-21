@@ -3,6 +3,17 @@ use super::super::super::planning::build_planner_panel_lines;
 #[cfg(test)]
 use super::super::super::planning::status_projection::build_planning_status_surface_projection;
 #[cfg(test)]
+use super::super::prompt_composer::build_input_lines_with_context;
+use super::super::session_browser::{
+    build_session_key_lines, build_session_overlay_content, build_session_warning_lines,
+};
+#[cfg(test)]
+use super::super::shell_copy::{
+    build_frontend_summary_line, build_input_title_with_context,
+    build_shell_header_lines_with_context, build_shell_title, build_status_title,
+    build_transcript_title_with_context,
+};
+#[cfg(test)]
 use super::super::status_panels;
 #[cfg(test)]
 use super::super::{
@@ -11,18 +22,12 @@ use super::super::{
     MIN_SHELL_HEADER_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, Rect, SHELL_FRAME_MARGIN,
     ShellFrontendMode, TranscriptPanelView, block_height_for_lines,
     build_conversation_lines_with_context, build_conversation_scroll_offset,
-    build_frontend_summary_line, build_input_block_height, build_input_lines_with_context,
-    build_input_title_with_context, build_shell_footer_height,
-    build_shell_footer_lines_with_context, build_shell_header_lines_with_context,
-    build_shell_title, build_status_title, build_transcript_title_with_context,
+    build_input_block_height, build_shell_footer_height, build_shell_footer_lines_with_context,
     current_live_agent_lines, current_plan_mode_indicator,
 };
 use super::super::{
     Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, StartupState, Style,
     build_startup_check_lines, build_startup_warning_lines, startup_ascii_art_lines,
-};
-use super::super::session_browser::{
-    build_session_key_lines, build_session_overlay_content, build_session_warning_lines,
 };
 use super::{SessionOverlayView, StartupOverlayView};
 
