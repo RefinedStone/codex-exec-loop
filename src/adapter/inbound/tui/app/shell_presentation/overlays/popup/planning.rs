@@ -4,6 +4,8 @@ mod copy;
 mod inputs;
 #[path = "planning_projection.rs"]
 mod projection;
+#[path = "planning_runtime.rs"]
+mod runtime;
 
 use super::super::super::{ConversationState, NativeTuiApp, PlanningInitOverlayStep};
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
@@ -18,6 +20,7 @@ use inputs::{
     build_simple_review_copy,
 };
 use projection::build_planning_draft_editor_projection;
+use runtime::interpret_planning_draft_editor_runtime_state;
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
@@ -58,15 +61,8 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
     let selected_buffer = app.planning_draft_editor_ui_state.selected_buffer()?;
     let dirty_labels = app.planning_draft_editor_ui_state.dirty_file_labels();
     let validation_report = app.planning_draft_editor_ui_state.validation_report()?;
-    let pending_close_risk = app.planning_draft_editor_ui_state.pending_close_risk();
-    let close_risk = pending_close_risk.or_else(|| app.planning_draft_editor_ui_state.close_risk());
-    let next_action = if !dirty_labels.is_empty() {
-        "next action: Ctrl+S re-runs validation, or Ctrl+P saves current edits and promotes if valid"
-    } else if validation_report.is_valid() {
-        "next action: Ctrl+P promotes this draft into active planning files"
-    } else {
-        "next action: fix validation errors before promoting this draft"
-    };
+    let runtime_state =
+        interpret_planning_draft_editor_runtime_state(app, &dirty_labels, validation_report);
     let projection = build_planning_draft_editor_projection(
         buffers,
         selected_index,
@@ -84,9 +80,9 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
             validation_report,
             selected_buffer.staged_path(),
             &dirty_labels,
-            next_action,
-            close_risk,
-            pending_close_risk.is_some(),
+            runtime_state.next_action,
+            runtime_state.close_risk,
+            runtime_state.confirmation_pending,
         ));
 
     Some(PlanningDraftEditorOverlayView {
@@ -101,6 +97,9 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
         editor_scroll: projection.editor_scroll,
         editor_cursor_offset: projection.editor_cursor_offset,
         status_lines,
-        key_lines: build_planning_draft_editor_key_lines(close_risk, pending_close_risk.is_some()),
+        key_lines: build_planning_draft_editor_key_lines(
+            runtime_state.close_risk,
+            runtime_state.confirmation_pending,
+        ),
     })
 }
