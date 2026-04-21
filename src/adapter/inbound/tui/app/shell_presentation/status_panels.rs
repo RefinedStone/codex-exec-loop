@@ -3,6 +3,10 @@ use ratatui::text::{Line, Span};
 
 use super::super::planning::build_planner_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
+use super::prompt_composer::{
+    build_prompt_buffer_view, build_prompt_cursor_offset, build_shell_command_palette_lines,
+    wrapped_row_count,
+};
 use super::{
     ConversationInputState, ConversationState, ConversationViewModel,
     INLINE_LIVE_AGENT_DETAIL_LIMIT, INLINE_LIVE_AGENT_MAX_CONTENT_LINES,
@@ -11,8 +15,8 @@ use super::{
     INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_THREAD_LABEL_LIMIT,
     INLINE_TAIL_WARNING_DETAIL_LIMIT, NativeTuiApp, ShellActionAvailability,
     ShellConversationState, ShellCorePresentationContext, StartupState,
-    auto_follow_prompt_status_line, build_prompt_cursor_offset, build_working_line,
-    compact_inline_detail, inline_input_state_label, turn_status_label, wrapped_row_count,
+    auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
+    inline_input_state_label, turn_status_label,
 };
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
 use crate::application::service::planning::{
@@ -503,7 +507,7 @@ fn build_inline_ready_prompt_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
 ) -> Vec<Line<'static>> {
-    let prompt_buffer = super::build_prompt_buffer_view(conversation);
+    let prompt_buffer = build_prompt_buffer_view(conversation);
     let mut lines = prompt_buffer.lines;
 
     if conversation.input_buffer.is_empty() {
@@ -536,7 +540,7 @@ fn build_inline_ready_prompt_lines(
     }
 
     if conversation.inline_shell_command_palette_state.is_active() {
-        lines.extend(super::build_shell_command_palette_lines(conversation));
+        lines.extend(build_shell_command_palette_lines(conversation));
         return lines;
     }
 
