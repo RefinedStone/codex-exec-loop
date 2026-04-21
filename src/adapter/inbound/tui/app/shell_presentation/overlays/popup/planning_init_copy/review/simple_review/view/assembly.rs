@@ -1,5 +1,5 @@
 use crate::adapter::inbound::tui::app::shell_presentation::overlays::PlanningInitOverlayView;
-use super::sections::PlanningSimpleReviewOverlaySections;
+use super::sections::composition::PlanningSimpleReviewOverlaySections;
 
 pub(super) fn assemble_simple_review_overlay_view(
     sections: PlanningSimpleReviewOverlaySections,
