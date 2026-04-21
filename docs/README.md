@@ -1,6 +1,6 @@
 # Docs Map
 
-Use one source of truth per question.
+Use this map to answer three questions quickly: what ships now, what the active roadmap is, and which docs are history only.
 
 ## Architecture Principles
 
@@ -19,7 +19,7 @@ Use one source of truth per question.
 
 - [plan/20-context-first-architecture-and-doc-coherence.md](plan/20-context-first-architecture-and-doc-coherence.md): current short and mid-term plan for boundary cleanup, vocabulary alignment, and LLM-friendly structure
 - [plan/21-terminal-agent-bridge-research-and-capability-boundary.md](plan/21-terminal-agent-bridge-research-and-capability-boundary.md): current short and mid-term plan for Claude Code class terminal-agent research
-- [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): supporting hotspot map and refactor ordering input
+- [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): supporting hotspot map, current hotspot order, and refactor ordering input
 
 ## Release Delta
 
@@ -55,5 +55,6 @@ Use one source of truth per question.
 - `docs/plan/20-*` and `docs/plan/21-*` hold the active roadmap for the current cycle.
 - `docs/supersession/` holds merged history and follow-through context, not the active roadmap.
 - `docs/plan/` holds runbooks, active roadmap, and historical design audits.
+- Use `docs/plan/20-*` with `docs/plan/17-*` when a task touches a named hotspot; the roadmap explains why and the debt map fixes the current order.
 - Prefer links to current truth over repeating the same contract in multiple places.
 - Prefer flow-local documents over repo-spanning narrative; one question should usually require one primary doc plus at most one supporting link.

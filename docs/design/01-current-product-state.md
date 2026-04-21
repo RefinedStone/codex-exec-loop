@@ -15,10 +15,10 @@ This file tracks the current branch product state. `origin/prerelease` already s
 - Startup diagnostics begin immediately and the shell can render before all checks finish.
 - Manual submit can queue while startup is pending, then auto-submit once the shell is ready.
 - The client can start a new draft, resume a thread, load snapshots, and stream turns through the shared app-server boundary.
-- Shell overlays cover diagnostics, recent sessions, queue state, automation controls, planning workspace controls, and directions maintenance.
+- Shell overlays cover diagnostics, recent sessions, queue-task and proposed-task inspection, automation controls, planning workspace controls, and direction-side authoring support.
 - Recent sessions support search, paging, and current-workspace filtering.
 - Auto follow-up is planning-queue-driven and no longer loads workspace-defined prompt files.
-- Planning is live: `:planning` stages drafts, opens the embedded editor, promotes accepted files, and exposes queue and proposal state.
+- Planning is live: `:planning` stages drafts, opens the embedded editor, promotes accepted files, and exposes the current queue task and proposed tasks.
 - Shared planning lifecycle commands are live: `akra doctor`, `akra init`, `akra reset`, `:doctor`, `:init`, and `:reset` all use the same validation, bootstrap, and reset rules.
 - Invalid planning writes are rolled back and may trigger a bounded repair flow.
 - Runtime warnings, approval-review state, tool activity, and optional GitHub review polling are visible in normal shell flow.
@@ -30,9 +30,9 @@ This file tracks the current branch product state. `origin/prerelease` already s
 - Session model:
   The operator either starts from a blank draft or resumes an existing thread through the session browser.
 - Planning model:
-  The operator owns `.codex-exec-loop/planning/` files through staged drafts and explicit promotion.
+  The operator owns accepted planning through staged drafts and explicit promotion.
 - Automation model:
-  Post-turn automation only acts on accepted planning state, queue head availability, and explicit stop rules.
+  Post-turn automation only acts on accepted planning, current queue task availability, and explicit stop rules.
 - Recovery model:
   Invalid planning changes are restored, archived, and surfaced back to the operator instead of being silently accepted.
 
@@ -54,8 +54,8 @@ This file tracks the current branch product state. `origin/prerelease` already s
 
 ## Current Product Risks
 
-- The operator mental model spans startup state, shell state, planning state, queue state, proposal state, repair state, and auto-follow state at once.
-- Planning is powerful but still expensive to author for a casual workspace because draft, promote, queue-idle, and directions concepts arrive early.
+- The operator mental model spans startup state, shell state, accepted planning, the current queue task, proposed tasks, repair state, and auto-follow state at once.
+- Planning is powerful but still expensive to author for a casual workspace because staged drafts, promotion, queue-idle policy, and direction-side authoring concepts arrive early.
 - Auto follow-up pause reasons are technically accurate but still read like system state rather than operator guidance.
 - Overlay coverage is broad, but the current surface does not always make it obvious what the next recoverable action is.
 - Approval review is visible but still requires out-of-band action.

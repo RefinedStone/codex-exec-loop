@@ -12,14 +12,25 @@ Small-context readability is part of that product cost. If a flow requires openi
 plus unrelated infrastructure adapters before the behavior becomes legible, the structure is already
 hurting both implementation safety and review quality.
 
+## Current Hotspot Order
+
+Use this order for the current cycle when choosing a refactor slice:
+
+1. shell presentation: `src/adapter/inbound/tui/app/shell_presentation.rs` and nearby rendering or projection files
+2. conversation runtime: `src/adapter/inbound/tui/app/conversation_runtime.rs`
+3. planning controller: `src/adapter/inbound/tui/app/planning/controller.rs` and nearby authoring UI
+4. parallel mode service: `src/application/service/parallel_mode_service.rs`
+
+If a change starts with a later hotspot, record why an earlier hotspot was skipped.
+
 ## Debt Map
 
 | Area | Current hotspot | Operator-facing cost | Target boundary |
 | --- | --- | --- | --- |
 | shell presentation | `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels.rs` | status meaning is spread across rendering and presentation code, making UX iteration harder | separate state wording, layout policy, and overlay projection |
 | conversation runtime | `src/adapter/inbound/tui/app/conversation_runtime.rs`, `conversation_model.rs`, `conversation_model/view_model.rs` | turn lifecycle, auto-follow state, and shell status compete in one runtime surface | separate conversation lifecycle from automation lifecycle and surface projection |
-| parallel mode core | `src/application/service/parallel_mode_service.rs` | storage, recovery, queue, slot, and snapshot concerns compete in one hotspot, so safe edits require too much context | split into readiness, slots, distributor, recovery, snapshot, and completion boundaries |
-| planning authoring flow | `src/adapter/inbound/tui/app/planning/controller.rs`, `planning_draft_editor_ui.rs` | planning setup, editor safety, and directions maintenance feel coupled | separate planning setup flow, authoring flow, and close-risk handling |
+| planning controller | `src/adapter/inbound/tui/app/planning/controller.rs`, `planning_draft_editor_ui.rs` | planning setup, editor safety, and direction-side authoring feel coupled | separate planning setup flow, authoring flow, and close-risk handling |
+| parallel mode service | `src/application/service/parallel_mode_service.rs` | storage, recovery, queue, slot, and snapshot concerns compete in one hotspot, so safe edits require too much context | split into readiness, slots, distributor, recovery, snapshot, and completion boundaries |
 | planning runtime services | `src/application/service/planning_directions_service.rs`, `src/application/service/planning_validation_service.rs`, `src/application/service/planning_reconciliation_service.rs`, `src/application/service/planning_prompt_service.rs` | planning concepts are powerful but spread across many services with overlapping product language | distinguish authoring, validation, runtime projection, and recovery more sharply |
 | automation policy and queue behavior | `src/application/service/planning_runtime_policy_service.rs`, `src/application/service/planning_runtime_facade_service.rs`, `src/application/service/planning_worker_orchestration_service.rs` | queue-driven continuation is hard to explain because policy, prompting, and recovery are separated differently than the operator sees them | align automation policy surface with operator concepts such as next task, pause reason, and resume path |
 | outbound infrastructure layout | `src/adapter/outbound/` as one flat directory | DB, GitHub, filesystem, and app-server details are harder to skip when tracing feature logic | group outbound adapters by infrastructure boundary and keep composition near entrypoints |
@@ -62,7 +73,7 @@ Owns:
 - editing
 - promoting
 - close-risk and dirty-buffer semantics
-- directions and queue-idle supporting files
+- direction and queue-idle supporting files
 
 Should not own:
 
@@ -75,7 +86,7 @@ Owns:
 
 - accepted planning snapshot
 - queue derivation
-- proposal semantics
+- proposed-task semantics
 - runtime readiness states
 
 Should not own:
@@ -102,6 +113,7 @@ Should expose:
 ### Stream A: Product Language First
 
 Before deep refactors, normalize operator vocabulary in docs and presentation surfaces so later code moves have a stable target.
+Use shared terms such as direction, queue task, proposed task, accepted planning, queue-idle policy, and repair before moving files around.
 
 ### Stream B: Presentation And Status Extraction
 

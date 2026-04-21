@@ -3,15 +3,16 @@
 Akra is the native Rust terminal client in this repository for `codex app-server`.
 The repository name remains `codex-exec-loop`; the operator-facing command is `akra`.
 
-It is built for long-lived solo work: startup diagnostics, session resume, accepted planning state,
-queue inspection, and post-turn automation all stay inside one inline shell.
+It is built for long-lived solo work: startup diagnostics, session resume, accepted planning,
+the current queue task, proposed tasks, and post-turn automation all stay inside one inline shell.
 
 ## Why this repo exists
 
 - Inline shell is the only frontend. The host terminal scrollback is the durable transcript view.
 - Startup checks run immediately and the shell can accept buffered input before diagnostics fully settle.
 - Session resume is a first-class workflow, not an afterthought.
-- Planning is part of the main operator loop, with accepted queue state shaping automation and next-task behavior.
+- Planning is part of the main operator loop, with accepted planning shaping the current queue task,
+  proposed tasks, and next-task behavior.
 - The project ships native packaging, validation capture helpers, and release automation rather than relying on ad hoc local setup.
 
 ## Status
@@ -21,6 +22,7 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 - Architecture and boundary rules: [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md)
 - Active context-first roadmap: [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md)
 - Active terminal-agent bridge research: [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md)
+- Docs map and source-of-truth index: [docs/README.md](docs/README.md)
 - Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
 - Supersession history and follow-through archive: [docs/supersession/README.md](docs/supersession/README.md)
 
@@ -32,7 +34,7 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 - Large files are a boundary smell. Split mixed-responsibility files by subsystem before they become the only safe place to edit.
 
 The design baseline lives in [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md).
-Current structural debt and refactor targets live in [docs/plan/17-structure-and-architecture-debt-map.md](docs/plan/17-structure-and-architecture-debt-map.md).
+Current structural debt, hotspot order, and refactor targets live in [docs/plan/17-structure-and-architecture-debt-map.md](docs/plan/17-structure-and-architecture-debt-map.md).
 The active roadmap for the next cycle lives in [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md) and [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md).
 
 ## Install
@@ -85,7 +87,7 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 3. Launch `akra`.
 4. Use `Ctrl+o` or `:sessions` to resume an existing thread, or start typing into a fresh draft.
 5. Use `:doctor` to inspect planning state, or `:init` to create the default planning scaffold.
-6. Use `Ctrl+f` or `:auto` to inspect post-turn automation and `:queue` to inspect accepted queue state.
+6. Use `Ctrl+f` or `:auto` to inspect post-turn automation and `:queue` to inspect the current queue task and proposed tasks.
 
 ## Core Surfaces
 
@@ -111,7 +113,7 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | `:diag` | show startup diagnostics |
 | `:sessions` | browse recent sessions |
 | `:auto` | open automation controls |
-| `:queue` | inspect queue head, proposals, and skipped work |
+| `:queue` | inspect the current queue task, proposed tasks, and skipped work |
 | `:planning` | open planning controls |
 | `:directions` | manage direction-side planning artifacts |
 | `:doctor` | inspect planning health inside the shell |
@@ -133,12 +135,12 @@ Supported aliases remain available for common commands such as `:q`, `:diagnosti
 
 ## Planning And Automation
 
-Accepted planning state lives under `.codex-exec-loop/planning/`.
+Planning and automation are organized around accepted planning rather than ad hoc prompt files.
 
 - The operator owns staged drafts and explicit promotion.
-- Runtime owns queue snapshots and rejected-write archives.
-- Builtin next-task logic only acts on accepted queue state.
-- Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
+- Runtime derives the current queue task and proposed tasks from accepted planning.
+- Builtin next-task logic only acts on the current queue task.
+- Queue-idle behavior follows the accepted planning policy.
 
 Full planning behavior lives in [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md).
 

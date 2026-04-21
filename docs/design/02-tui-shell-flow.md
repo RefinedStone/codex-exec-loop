@@ -18,7 +18,7 @@ This file defines operator-visible shell behavior on `prerelease`. It describes 
 | Diagnostics | checking startup readiness and failures | `Ctrl+d`, `:diag` | `Esc`, `Ctrl+c`, or toggle again |
 | Sessions | searching and reopening previous threads | `Ctrl+o`, `:sessions` | open a session, start a draft, or close |
 | Automation | editing post-turn automation policy and preview | `Ctrl+f`, `:auto` | close overlay |
-| Queue Inspection | reading executable queue head, proposals, and skip summary | `:queue`, `:q` | close overlay |
+| Queue Inspection | reading the current queue task, proposed tasks, and skip summary | `:queue`, `:q` | close overlay |
 | Planning Controls | staging or reopening planning workspace flows | `:planning` | close overlay or enter editor/review flow |
 | Directions Maintenance | editing supporting direction and queue-idle artifacts | `:directions` | close overlay or enter staged editor flow |
 
@@ -43,23 +43,23 @@ This file defines operator-visible shell behavior on `prerelease`. It describes 
 ## Planning And Automation Flow
 
 - Automation controls own stop rules, max-turn policy, preview rendering, and planner debug visibility.
-- Builtin `next-task` uses accepted planning state only.
+- Builtin `next-task` uses the current queue task derived from accepted planning.
 - `:planning` and `:directions` both route through staged planning drafts and explicit promotion.
-- Planning state is reflected in the footer, automation overlay, queue overlay, and post-turn automation.
-- When the queue is actionable, automation targets the accepted queue head.
-- When the queue is valid but idle, behavior follows `queue_idle.policy`.
+- Accepted planning, the current queue task, proposed tasks, and repair status are reflected in the footer, automation overlay, queue overlay, and post-turn automation.
+- When the queue is actionable, automation targets the current queue task.
+- When the queue is valid but idle, behavior follows the queue-idle policy.
 
 ## Pause And Recovery States
 
 - Startup blocked:
   the shell can render, but submit and session actions may remain gated.
 - Planning invalid:
-  post-turn automation pauses until planning files validate again.
+  post-turn automation pauses until accepted planning validates again.
 - Queue idle with `stop`:
   automation ends after the current turn.
-- Queue idle with `review_and_enqueue`:
+- Queue idle with the `review_and_enqueue` policy:
   a hidden planning worker may derive justified follow-up work.
-- Repeated queue head:
+- Repeated queue task:
   queue-driven automation pauses until the planning queue advances beyond the previously handed-off task.
 - Manual approval review:
   approval state is surfaced, but the shell still lacks interactive approve or deny actions.
