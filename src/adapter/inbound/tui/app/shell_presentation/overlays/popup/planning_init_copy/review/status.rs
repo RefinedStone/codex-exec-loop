@@ -2,16 +2,19 @@
 mod key_lines;
 #[path = "status/lines.rs"]
 mod lines;
+#[path = "status/view.rs"]
+mod view;
 
 use super::super::super::super::super::super::Line;
 use super::super::super::copy::PlanningSimpleReviewCopy;
 
-pub(super) fn build_simple_review_status_lines(
-    copy: &PlanningSimpleReviewCopy,
-) -> Vec<Line<'static>> {
-    lines::build_simple_review_status_lines(copy)
+pub(super) struct PlanningSimpleReviewStatusView {
+    pub(super) status_lines: Vec<Line<'static>>,
+    pub(super) key_lines: Vec<Line<'static>>,
 }
 
-pub(super) fn build_simple_review_key_lines(is_turn_budget_editing: bool) -> Vec<Line<'static>> {
-    key_lines::build_simple_review_key_lines(is_turn_budget_editing)
+pub(super) fn build_simple_review_status_view(
+    copy: &PlanningSimpleReviewCopy,
+) -> PlanningSimpleReviewStatusView {
+    view::build_simple_review_status_view(copy)
 }
