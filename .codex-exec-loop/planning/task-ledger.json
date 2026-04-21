@@ -4,49 +4,30 @@
     {
       "id": "context-first-hotspot-and-vocabulary-audit",
       "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "This is the first executable slice for the new roadmap because it turns the context-first direction into an ordered, reviewable audit before deeper refactors or provider-boundary work starts.",
-      "title": "Freeze hotspot split order and vocabulary gaps",
-      "description": "Turn the architecture debt map and the active roadmap into one actionable audit: confirm the split order for shell presentation, conversation runtime, planning controller, and parallel mode service, and record the vocabulary mismatches still visible across docs and operator-facing copy.",
-      "status": "ready",
+      "direction_relation_note": "This audit locked the first context-first split order and normalized the planning vocabulary that later shell-presentation slices now follow.",
+      "title": "Normalize entry docs, hotspot order, and vocabulary gaps",
+      "description": "Consolidate the architecture debt map and roadmap into one reviewable audit that freezes hotspot sequencing for shell presentation, conversation runtime, planning controller, and parallel mode service while naming vocabulary mismatches across docs and operator-facing copy.",
+      "status": "done",
       "base_priority": 95,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The roadmap is only useful if the first follow-up converts it into concrete hotspot order and vocabulary cleanup targets without touching shipped truth prematurely.",
+      "priority_reason": "The roadmap only became actionable after the hotspot order and vocabulary debt were captured as one explicit audit.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-21T00:00:00Z"
-    },
-    {
-      "id": "context-first-codex-capability-boundary-audit",
-      "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "The new roadmap requires an explicit Codex-only assumption audit before external terminal agents can be discussed as clean product boundaries.",
-      "title": "Map Codex-only assumptions into capability targets",
-      "description": "Audit where `codex app-server`, Codex-specific session semantics, and Codex-flavored approval or resume assumptions are embedded today, then restate those spots as target capability notes around `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and `TerminalBridgeAttachment`.",
-      "status": "blocked",
-      "base_priority": 92,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "External-agent research should not drift into vague abstraction until the current Codex coupling points are named precisely.",
-      "depends_on": [
-        "context-first-hotspot-and-vocabulary-audit"
-      ],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-21T00:00:00Z"
+      "updated_at": "2026-04-22T00:00:00Z"
     },
     {
       "id": "context-first-shell-presentation-boundary-slice",
       "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "Shell presentation is the first hotspot named in the roadmap and should become the first concrete refactor slice after the audit firms up the split order.",
-      "title": "Prepare the first shell-presentation boundary slice",
-      "description": "Use the audit output to define a small refactor slice that separates shell wording and projection responsibilities from layout or rendering mechanics in the shell presentation cluster.",
-      "status": "proposed",
+      "direction_relation_note": "This shipped the first concrete shell-presentation split after the audit and established the projection-first slicing style for later follow-ups.",
+      "title": "Split the first shell-presentation projection slice",
+      "description": "Separate the first shell-presentation projection responsibilities away from broader rendering mechanics so later wording, prompt, and live-status extractions can land as smaller follow-up slices.",
+      "status": "done",
       "base_priority": 88,
       "dynamic_priority_delta": 0,
-      "priority_reason": "This is a likely next implementation slice, but the exact cut should stay proposed until the hotspot audit locks the order and surface area.",
+      "priority_reason": "The initial boundary cut was necessary before the remaining shell-presentation copy and layout responsibilities could be split cleanly.",
       "depends_on": [
         "context-first-hotspot-and-vocabulary-audit"
       ],
@@ -54,18 +35,396 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-21T00:00:00Z"
+      "updated_at": "2026-04-22T00:00:00Z"
+    },
+    {
+      "id": "context-first-shell-presentation-wording-and-prompt-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This follow-up continued the shell-presentation breakup by isolating wording and prompt composition from the broader shell rendering path.",
+      "title": "Split shell-presentation wording and prompt composition",
+      "description": "Move shell wording helpers and prompt composition into narrower presentation helpers so the remaining status-panel and inline-inspection work can focus on layout and projection boundaries instead of mixed copy responsibilities.",
+      "status": "done",
+      "base_priority": 90,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Prompt composition needed its own shipped slice before the status-panel and inline inspection surfaces could be reduced further.",
+      "depends_on": [
+        "context-first-shell-presentation-boundary-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T00:00:00Z"
+    },
+    {
+      "id": "context-first-status-panels-tail-and-live-status-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice narrowed status-panels into a coordinator while moving inline tail copy and live-status layout into dedicated helpers.",
+      "title": "Split status-panels tail copy and live-status layout",
+      "description": "Keep `status_panels.rs` as a thin coordinator, move inline tail wording and startup or prompt notices into `tail_copy.rs`, and centralize inline tail assembly plus prompt cursor layout in `live_status_layout.rs` so the remaining shell rendering work has clearer seams.",
+      "status": "done",
+      "base_priority": 94,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "This was the active queue head and is now complete, with follow-up work narrowed to the remaining inline inspection and footer or indicator seams.",
+      "depends_on": [
+        "context-first-shell-presentation-wording-and-prompt-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T00:00:00Z"
+    },
+    {
+      "id": "context-first-inline-inspection-and-overlay-projection-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #307, moving inline inspection layout and projection helpers out of `shell_rendering.rs` and narrowing the remaining shell-presentation hotspot to popup overlay rendering.",
+      "title": "Split inline inspection layout and overlay projection helpers",
+      "description": "Pull the inline inspection layout responsibility out of `shell_rendering.rs` into a narrower shell-presentation helper, and reduce any shared overlay or live-status projection glue that still forces shell rendering to understand status-panel internals after PR #306. This landed as commit `ac73115` and stacked PR #307.",
+      "status": "done",
+      "base_priority": 93,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The inline inspection extraction is complete and validated, so queueing should move to the popup overlay seam that the latest reply called out explicitly as the next natural shell-presentation cut.",
+      "depends_on": [
+        "context-first-status-panels-tail-and-live-status-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T15:20:00Z"
+    },
+    {
+      "id": "context-first-popup-overlay-frame-helper-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #308, reducing `shell_rendering.rs` to a popup coordinator while moving overlay frame and helper rendering into dedicated modules.",
+      "title": "Split popup overlay frame and helper rendering",
+      "description": "Extract the popup overlay renderers that still sit below `shell_rendering.rs` into narrower shell-presentation helpers so popup frame math, centered rect handling, and overlay-specific draw paths stop sharing the same top-level rendering file as the main shell orchestration. This landed as commit `2826446` and stacked PR #308, with `shell_rendering` tests passing after the split.",
+      "status": "done",
+      "base_priority": 94,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The popup frame/helper extraction is complete, so queue progression should move to the remaining overlay content projection seam that the latest reply called out explicitly under `shell_presentation/overlays`.",
+      "depends_on": [
+        "context-first-inline-inspection-and-overlay-projection-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T15:45:00Z"
+    },
+    {
+      "id": "context-first-popup-overlay-content-projection-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #309, moving popup content projection builders under `shell_presentation/overlays/popup` and reducing the base overlay module to shell frame, transcript, and startup banner projection.",
+      "title": "Split popup overlay content projection builders",
+      "description": "Reduce the remaining popup responsibility in `shell_presentation/overlays.rs` by extracting overlay-specific content projection and builder logic into narrower modules so shell presentation stops mixing overlay content assembly with the already-separated popup frame and helper rendering surfaces. This landed as commit `fcac9d7` and stacked PR #309, with popup builder modules split into `popup/base.rs`, `popup/queue.rs`, `popup/planning.rs`, and `popup/supersession.rs`.",
+      "status": "done",
+      "base_priority": 95,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The popup content projection split is complete, so queue progression should move to the remaining popup overlay seams still called out in the latest main-session reply.",
+      "depends_on": [
+        "context-first-popup-overlay-frame-helper-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T16:05:00Z"
+    },
+    {
+      "id": "context-first-popup-overlay-view-struct-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #310, moving popup overlay view structs into the popup subtree and leaving `overlays.rs` with only the shared list and directions maintenance surfaces.",
+      "title": "Split popup overlay view structs from overlays.rs",
+      "description": "Extract the popup overlay view struct definitions that still live in `shell_presentation/overlays.rs` into narrower popup-focused modules so the top-level overlays entry becomes a thinner coordinator over popup subtree exports instead of still owning overlay view shape details after PR #309. This landed as commit `2570e06` and stacked PR #310.",
+      "status": "done",
+      "base_priority": 96,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The popup view-struct split is complete, so builtin next-task progression should now move to the two residual `overlays.rs` seams called out explicitly in the latest reply: the shared list projection and the directions maintenance surface.",
+      "depends_on": [
+        "context-first-popup-overlay-content-projection-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T16:20:00Z"
+    },
+    {
+      "id": "context-first-popup-directions-projection-independence-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #311, moving the shared overlay list projection and directions maintenance surface into dedicated modules so `overlays.rs` is reduced to re-exports and coordination.",
+      "title": "Split shared overlay list projection and directions surface",
+      "description": "Extract `OverlayListEntryView`, `OverlayListView`, and `DirectionsMaintenanceOverlayView` out of `shell_presentation/overlays.rs` so the top-level overlays module becomes a thin export surface over popup, shared-list, and directions-specific submodules before moving on to conversation runtime or planning controller work. This landed as commit `234b16f` and stacked PR #311.",
+      "status": "done",
+      "base_priority": 97,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The shared list projection and directions surface split is complete, so builtin next-task progression should advance to the smaller residual seam the latest reply called out: decoupling directions from the popup planning option-line helper.",
+      "depends_on": [
+        "context-first-popup-overlay-view-struct-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T16:40:00Z"
+    },
+    {
+      "id": "context-first-directions-popup-helper-independence-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #312, moving the shared option-line formatter into a common overlay helper so directions and popup planning no longer depend on each other's internal helper ownership.",
+      "title": "Decouple directions surface from popup planning helper",
+      "description": "Extract or duplicate the popup planning option-line helper that `shell_presentation/overlays/directions.rs` still depends on so directions-specific rendering owns its own helper surface, popup planning keeps its own narrower helper, and the remaining shell-presentation overlay modules stop sharing that cross-cutting builder. This landed as commit `7f42395` and stacked PR #312 via the new shared `option_lines.rs` helper.",
+      "status": "done",
+      "base_priority": 96,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The helper decoupling is complete, so builtin next-task progression should move to the remaining wording and copy-builder duplication explicitly called out in the latest reply.",
+      "depends_on": [
+        "context-first-popup-directions-projection-independence-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T16:55:00Z"
+    },
+    {
+      "id": "context-first-directions-popup-copy-builder-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #313, moving directions and popup planning wording assembly into dedicated copy modules while leaving one smaller projection-helper seam behind those copy builders.",
+      "title": "Split directions and popup planning copy builders",
+      "description": "Extract the remaining option and status wording assembly that is still duplicated between `shell_presentation/overlays/directions.rs` and `shell_presentation/overlays/popup/planning.rs` into narrower copy-builder helpers so the new shared option-line formatter is backed by equally independent copy composition surfaces. This landed as commit `f5524f1` and stacked PR #313, with `directions_copy.rs` and `popup/planning_copy.rs` taking over header, summary, status, and key wording assembly.",
+      "status": "done",
+      "base_priority": 95,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The copy-builder split is complete and validated, so builtin next-task progression should now move to the residual projection-helper seam the latest reply called out explicitly inside `directions.rs` and `popup/planning.rs`.",
+      "depends_on": [
+        "context-first-directions-popup-helper-independence-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T17:10:00Z"
+    },
+    {
+      "id": "context-first-directions-popup-projection-helper-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #314, moving directions and popup planning projection into dedicated helpers so the next residual seam is the planning-specific snapshot and status-input assembly that still lives in the main builder.",
+      "title": "Split directions and popup planning projection helpers",
+      "description": "Extract the remaining detail-doc selection list projection from `shell_presentation/overlays/directions.rs` and the planning draft-editor file-list projection from `shell_presentation/overlays/popup/planning.rs` into narrower projection helpers so those modules become thin coordinators over step routing, state interpretation, and copy-builder calls instead of still owning step-specific data extraction. This landed as commit `29a3c6b` and stacked PR #314, with `directions_projection.rs` and `popup/planning_projection.rs` taking over those projection surfaces.",
+      "status": "done",
+      "base_priority": 96,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The projection-helper split is complete and validated, so builtin next-task progression should advance to the remaining planning-builder seam called out explicitly in the latest reply.",
+      "depends_on": [
+        "context-first-directions-popup-copy-builder-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T17:25:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-snapshot-status-input-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #315, moving existing-workspace snapshot compression and draft-editor status input builders out of `popup/planning.rs` so the remaining seam narrows to the simple-review path and runtime-state interpretation helpers.",
+      "title": "Split popup planning snapshot and status-input builders",
+      "description": "Extract the remaining planning-builder responsibility that still interprets step-specific runtime snapshots and assembles status-view inputs inside `shell_presentation/overlays/popup/planning.rs`, with priority on existing-workspace snapshot-to-view input mapping and draft-editor status input construction so the main builder becomes a thinner coordinator over copy and projection helpers. This landed as commit `8d8da9d` and stacked PR #315 via `planning_inputs.rs` plus the owned-copy handoff in `planning_copy.rs`.",
+      "status": "done",
+      "base_priority": 97,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The snapshot and status-input split is complete and validated, so builtin next-task progression should move to the residual simple-review and runtime-state interpretation seams still called out in the latest main-session reply.",
+      "depends_on": [
+        "context-first-directions-popup-projection-helper-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T17:40:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-simple-review-input-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #316, moving simple-review input assembly into `planning_inputs.rs` and leaving one smaller runtime-state interpretation seam behind the popup planning coordinator.",
+      "title": "Split popup planning simple-review input builder",
+      "description": "Extract the remaining simple-review input assembly out of `shell_presentation/overlays/popup/planning.rs` into a dedicated helper so the popup planning builder stops mixing draft-editor routing with simple-review state shaping after the snapshot and status-input split in PR #315. This landed as commit `e8b1e0c` and stacked PR #316 via `planning_inputs.rs`, plus the owned-copy handoff update in `planning_copy.rs`.",
+      "status": "done",
+      "base_priority": 98,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The simple-review input split is complete and validated, so builtin next-task progression should move to the remaining runtime-state interpretation helper seam still called out in the latest main-session reply.",
+      "depends_on": [
+        "context-first-popup-planning-snapshot-status-input-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T18:05:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-runtime-state-interpretation-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #317, moving draft-editor runtime-state interpretation into `popup/planning_runtime.rs` so the popup planning coordinator is left with session wiring and existing-workspace routing seams.",
+      "title": "Split popup planning runtime-state interpretation helpers",
+      "description": "Move the remaining draft-editor runtime-state interpretation out of `shell_presentation/overlays/popup/planning.rs`, especially `next_action`, close-risk selection, and any step-specific snapshot or branch routing, so the popup planning coordinator mainly wires copy, projection, and input helpers together instead of still branching on runtime state after PR #316. This landed as commit `4310ff7` and stacked PR #317 via the new `popup/planning_runtime.rs` helper plus direct branch tests for dirty, valid, and invalid draft-editor cases.",
+      "status": "done",
+      "base_priority": 98,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The runtime-state interpretation split is complete and validated, so builtin next-task progression should move to the remaining popup-planning coordinator seams called out explicitly in the latest main-session reply.",
+      "depends_on": [
+        "context-first-popup-planning-simple-review-input-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T18:30:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-draft-editor-session-wiring-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #318, moving draft-editor session extraction into `popup/planning_session.rs` so the popup planning coordinator is left with existing-workspace snapshot selection and step routing seams.",
+      "title": "Split popup planning draft-editor session wiring",
+      "description": "Extract the remaining draft-editor session wiring from `shell_presentation/overlays/popup/planning.rs`, especially `buffers`, `selected_index`, `selected_buffer`, `dirty_labels`, and `validation_report` collection, so the main builder stops unpacking draft-editor session state inline and becomes a thinner coordinator over projection, input, and runtime helpers. This landed as commit `7e8441a` and stacked PR #318 via the new `popup/planning_session.rs` helper plus direct tests for missing sessions, current session snapshots, and dirty label collection.",
+      "status": "done",
+      "base_priority": 98,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The draft-editor session wiring split is complete and validated, so builtin next-task progression should move to the next explicit popup-planning coordinator seam from the latest main-session reply.",
+      "depends_on": [
+        "context-first-popup-planning-runtime-state-interpretation-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T18:45:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-existing-workspace-routing-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This slice is now shipped via PR #319, moving existing-workspace snapshot reuse and runtime fallback into `popup/planning_existing_workspace.rs` so the popup planning coordinator is left with init-step dispatch and final composition seams.",
+      "title": "Split popup planning existing-workspace routing helpers",
+      "description": "Extract the existing-workspace snapshot source selection and overlay routing that still lived in `shell_presentation/overlays/popup/planning.rs` so the popup planning coordinator no longer mixed existing-workspace branch routing with the separated draft-editor runtime and session wiring helpers. This landed as commit `963c7ad` and PR #319 via the new `popup/planning_existing_workspace.rs` helper plus direct tests for ready-state snapshot reuse and loading-state runtime fallback.",
+      "status": "done",
+      "base_priority": 94,
+      "dynamic_priority_delta": 3,
+      "priority_reason": "The existing-workspace routing split is complete and validated, so builtin next-task progression should move to the init-step dispatch seam that the latest main-session reply now names as the next direct popup-planning cut.",
+      "depends_on": [
+        "context-first-popup-planning-draft-editor-session-wiring-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T19:05:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-step-router-surface-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "After PR #319, the latest main-session reply leaves planning init-step dispatch as the most immediate popup-planning seam still living in `planning.rs`, with final composition explicitly called out as the follow-up behind it.",
+      "title": "Split popup planning init-step router surface",
+      "description": "Extract the planning init-step and step-level dispatch surface that still lives in `shell_presentation/overlays/popup/planning.rs` into a dedicated helper so the popup planning coordinator stops branching across existing-workspace, simple-review, and draft-editor selection now that existing-workspace routing is already isolated in `popup/planning_existing_workspace.rs`.",
+      "status": "ready",
+      "base_priority": 92,
+      "dynamic_priority_delta": 4,
+      "priority_reason": "Builtin next-task progression still needs one immediately executable queue head, and the latest main-session reply explicitly names planning init-step dispatch as the next direct popup-planning split after PR #319.",
+      "depends_on": [
+        "context-first-popup-planning-existing-workspace-routing-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T19:05:00Z"
+    },
+    {
+      "id": "context-first-popup-planning-final-composition-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The latest main-session reply now names final composition as the last larger popup-planning responsibility behind the more immediate init-step dispatch cut.",
+      "title": "Split popup planning final composition surface",
+      "description": "Extract the final existing-workspace, simple-review, and draft-editor overlay composition that still lives in `shell_presentation/overlays/popup/planning.rs` after the step router split so the module reduces to a thin coordinator over routing, copy, projection, runtime, session, and existing-workspace helpers.",
+      "status": "proposed",
+      "base_priority": 90,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "This is a direct follow-up from the latest main-session reply, but the queue should first clear the more immediate init-step dispatch seam still called out inside `planning.rs`.",
+      "depends_on": [
+        "context-first-popup-planning-step-router-surface-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T19:05:00Z"
+    },
+    {
+      "id": "context-first-status-panels-indicator-and-footer-copy-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The latest reply also exposed a smaller follow-up inside the status-panels cluster, but it is a secondary cut behind the larger shell-rendering hotspot.",
+      "title": "Finish plan indicator and footer-tail copy split",
+      "description": "Reduce the remaining responsibility in `status_panels.rs` by moving plan-mode indicator calculation and re-export wiring into a narrower surface, and consider splitting framed footer copy from inline tail copy inside `tail_copy.rs` if the status-panels cluster needs one more dedicated extraction after the inline inspection slice.",
+      "status": "proposed",
+      "base_priority": 84,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "This is a concrete follow-up from the latest implementation notes, but the queue should favor the larger `shell_rendering.rs` hotspot first.",
+      "depends_on": [
+        "context-first-status-panels-tail-and-live-status-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T00:00:00Z"
+    },
+    {
+      "id": "cleanup-app-tests-unused-import-warning",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The latest verification still reported three pre-existing warnings, but they remain cleanup work rather than the main architecture slice.",
+      "title": "Clear the lingering app_tests unused import warning",
+      "description": "Remove or justify the remaining unused imports in `app_tests.rs` so focused shell-presentation slices can run without carrying forward known warning noise.",
+      "status": "proposed",
+      "base_priority": 72,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The warning is still present in the latest verification, but it remains cleanup work behind the popup-planning coordinator slices called out directly in the main-session reply.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T18:35:00Z"
+    },
+    {
+      "id": "context-first-codex-capability-boundary-audit",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The capability audit should still wait until the residual popup-planning coordinator seams settle, which now means the init-step router and final composition follow-ups after PR #319.",
+      "title": "Map Codex-only assumptions into capability targets",
+      "description": "Audit where `codex app-server`, Codex-specific session semantics, and Codex-flavored approval or resume assumptions are embedded today, then restate those spots as capability targets around `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and `TerminalBridgeAttachment` after the remaining popup-planning init-step router and final composition slices, plus any final status-panel boundary slices, settle.",
+      "status": "blocked",
+      "base_priority": 92,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "External-agent boundary work should not outrun the remaining context-first popup-planning cleanup, because the latest main-session reply still leaves init-step dispatch and final composition inside `popup/planning.rs` after PR #319.",
+      "depends_on": [
+        "context-first-popup-planning-final-composition-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T19:05:00Z"
     },
     {
       "id": "terminal-bridge-research-matrix",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The research direction starts with a comparison matrix only after the Codex-only boundary audit makes the required capabilities explicit.",
+      "direction_relation_note": "The research direction still starts with a comparison matrix, but only after the Codex capability audit names the stable target boundary.",
       "title": "Compare local attach, wrapper, tunnel, and proxy bridge paths",
       "description": "Write the research matrix that compares pre-opened local terminal attach, controlled local wrappers, SSH or tunnel approaches, and proxy or vibeproxy-style mediation across UX, streaming fidelity, interrupt handling, approval handling, recovery, security, portability, and architecture fit.",
       "status": "blocked",
       "base_priority": 90,
       "dynamic_priority_delta": 0,
-      "priority_reason": "Research should begin only after the capability vocabulary is explicit enough to compare paths on product terms instead of transport trivia.",
+      "priority_reason": "The bridge matrix should wait for the capability vocabulary refresh so the comparison stays grounded in product seams rather than transport trivia.",
       "depends_on": [
         "context-first-codex-capability-boundary-audit"
       ],
@@ -73,18 +432,18 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-21T00:00:00Z"
+      "updated_at": "2026-04-22T00:00:00Z"
     },
     {
       "id": "terminal-bridge-primary-path-decision-note",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The roadmap requires one primary bridge path and one fallback before any provider-specific spike can be treated as intentional product work.",
+      "direction_relation_note": "The decision note remains the expected follow-up once the bridge matrix exists, but it is still a proposal rather than an immediately executable queue item.",
       "title": "Choose the primary and fallback terminal bridge paths",
       "description": "Turn the completed research matrix into one decision note that names the primary bridge path, the fallback path, and the reasons for deferring the remaining transport options for now.",
       "status": "proposed",
       "base_priority": 86,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The decision note is a real deliverable for the roadmap, but it should stay proposed until the comparison matrix exists.",
+      "priority_reason": "This stays as the likely post-research deliverable, but it cannot advance until the matrix is written.",
       "depends_on": [
         "terminal-bridge-research-matrix"
       ],
@@ -92,7 +451,7 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-21T00:00:00Z"
+      "updated_at": "2026-04-22T00:00:00Z"
     }
   ]
 }
