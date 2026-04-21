@@ -48,6 +48,11 @@ Use this map to answer three questions quickly: what ships now, what the active 
 - [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md)
 - [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md)
 
+## Training Material
+
+- [training/README.md](training/README.md): Spring Boot/Kotlin server developers를 위한 Rust 교본 인덱스
+- [training/quality-baseline.md](training/quality-baseline.md): 강의 시작 전에 다시 측정할 품질 기준선
+
 ## Rules
 
 - `docs/design/` holds current contracts.
@@ -56,5 +61,6 @@ Use this map to answer three questions quickly: what ships now, what the active 
 - `docs/supersession/` holds merged history and follow-through context, not the active roadmap.
 - `docs/plan/` holds runbooks, active roadmap, and historical design audits.
 - Use `docs/plan/20-*` with `docs/plan/17-*` when a task touches a named hotspot; the roadmap explains why and the debt map fixes the current order.
+- `docs/training/` holds lecture and curriculum material that uses the repo as a textbook.
 - Prefer links to current truth over repeating the same contract in multiple places.
 - Prefer flow-local documents over repo-spanning narrative; one question should usually require one primary doc plus at most one supporting link.
