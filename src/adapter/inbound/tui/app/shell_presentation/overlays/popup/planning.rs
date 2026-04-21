@@ -1,5 +1,7 @@
 #[path = "planning_copy.rs"]
 mod copy;
+#[path = "planning_existing_workspace.rs"]
+mod existing_workspace;
 #[path = "planning_inputs.rs"]
 mod inputs;
 #[path = "planning_projection.rs"]
@@ -9,18 +11,16 @@ mod runtime;
 #[path = "planning_session.rs"]
 mod session;
 
-use super::super::super::{ConversationState, NativeTuiApp, PlanningInitOverlayStep};
+use super::super::super::{NativeTuiApp, PlanningInitOverlayStep};
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 use copy::{
-    build_detail_selection_overlay_view, build_existing_workspace_overlay_view,
-    build_manual_editor_overlay_view, build_mode_selection_overlay_view,
-    build_planning_draft_editor_header_lines, build_planning_draft_editor_key_lines,
-    build_planning_draft_editor_status_lines, build_simple_review_overlay_view,
+    build_detail_selection_overlay_view, build_manual_editor_overlay_view,
+    build_mode_selection_overlay_view, build_planning_draft_editor_header_lines,
+    build_planning_draft_editor_key_lines, build_planning_draft_editor_status_lines,
+    build_simple_review_overlay_view,
 };
-use inputs::{
-    build_existing_workspace_copy, build_planning_draft_editor_status_copy,
-    build_simple_review_copy,
-};
+use existing_workspace::build_existing_workspace_overlay_view_for_app;
+use inputs::{build_planning_draft_editor_status_copy, build_simple_review_copy};
 use projection::build_planning_draft_editor_projection;
 use runtime::interpret_planning_draft_editor_runtime_state;
 use session::collect_planning_draft_editor_session_view;
@@ -28,19 +28,7 @@ use session::collect_planning_draft_editor_session_view;
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
         PlanningInitOverlayStep::ExistingWorkspace => {
-            let workspace_directory = app.planning_workspace_directory();
-            let snapshot = match &app.conversation_state {
-                ConversationState::Ready(conversation) => {
-                    conversation.planning_runtime_snapshot.clone()
-                }
-                ConversationState::Loading | ConversationState::Failed(_) => {
-                    app.load_planning_runtime_snapshot(&workspace_directory)
-                }
-            };
-            build_existing_workspace_overlay_view(build_existing_workspace_copy(
-                &workspace_directory,
-                &snapshot,
-            ))
+            build_existing_workspace_overlay_view_for_app(app)
         }
         PlanningInitOverlayStep::ModeSelection => {
             build_mode_selection_overlay_view(app.planning_init_overlay_ui_state.selected_mode())
