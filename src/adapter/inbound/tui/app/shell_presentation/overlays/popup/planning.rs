@@ -5,19 +5,18 @@ mod inputs;
 #[path = "planning_projection.rs"]
 mod projection;
 
-use super::super::super::{
-    ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, NativeTuiApp, PlanningInitOverlayStep,
-    compact_inline_detail,
-};
+use super::super::super::{ConversationState, NativeTuiApp, PlanningInitOverlayStep};
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 use copy::{
-    PlanningSimpleReviewCopy, build_detail_selection_overlay_view,
-    build_existing_workspace_overlay_view, build_manual_editor_overlay_view,
-    build_mode_selection_overlay_view, build_planning_draft_editor_header_lines,
-    build_planning_draft_editor_key_lines, build_planning_draft_editor_status_lines,
-    build_simple_review_overlay_view,
+    build_detail_selection_overlay_view, build_existing_workspace_overlay_view,
+    build_manual_editor_overlay_view, build_mode_selection_overlay_view,
+    build_planning_draft_editor_header_lines, build_planning_draft_editor_key_lines,
+    build_planning_draft_editor_status_lines, build_simple_review_overlay_view,
 };
-use inputs::{build_existing_workspace_copy, build_planning_draft_editor_status_copy};
+use inputs::{
+    build_existing_workspace_copy, build_planning_draft_editor_status_copy,
+    build_simple_review_copy,
+};
 use projection::build_planning_draft_editor_projection;
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
@@ -44,31 +43,7 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
             app.planning_init_overlay_ui_state.selected_detail(),
         ),
         PlanningInitOverlayStep::SimpleReview => {
-            let simple_review = app.planning_init_overlay_ui_state.simple_review();
-            let draft_name = simple_review
-                .map(|review| review.draft_name().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let staged_file_count = simple_review
-                .map(|review| review.staged_file_count())
-                .unwrap_or_default();
-            let validation_report = simple_review.map(|review| review.validation_report());
-            let validation_ok = validation_report.is_none_or(|report| report.is_valid());
-            let first_error = validation_report
-                .and_then(|report| report.errors().into_iter().next())
-                .map(|issue| {
-                    compact_inline_detail(issue.message.as_str(), FOOTER_NOTICE_DETAIL_LIMIT)
-                });
-            let max_auto_turns_label = app.current_max_auto_turns_label();
-
-            build_simple_review_overlay_view(PlanningSimpleReviewCopy {
-                draft_name: &draft_name,
-                staged_file_count,
-                validation_ok,
-                first_error: first_error.as_deref(),
-                max_auto_turns_label: &max_auto_turns_label,
-                is_turn_budget_editing: app.is_max_auto_turns_editing(),
-                turn_budget_buffer: &app.followup_overlay_ui_state.max_auto_turns_editor.buffer,
-            })
+            build_simple_review_overlay_view(build_simple_review_copy(app))
         }
         PlanningInitOverlayStep::ManualEditor => build_manual_editor_overlay_view(),
     }

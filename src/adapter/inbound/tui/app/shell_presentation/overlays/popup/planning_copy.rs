@@ -15,14 +15,14 @@ pub(super) struct PlanningExistingWorkspaceCopy {
     pub(super) plan_enabled: bool,
 }
 
-pub(super) struct PlanningSimpleReviewCopy<'a> {
-    pub(super) draft_name: &'a str,
+pub(super) struct PlanningSimpleReviewCopy {
+    pub(super) draft_name: String,
     pub(super) staged_file_count: usize,
     pub(super) validation_ok: bool,
-    pub(super) first_error: Option<&'a str>,
-    pub(super) max_auto_turns_label: &'a str,
+    pub(super) first_error: Option<String>,
+    pub(super) max_auto_turns_label: String,
     pub(super) is_turn_budget_editing: bool,
-    pub(super) turn_budget_buffer: &'a str,
+    pub(super) turn_budget_buffer: String,
 }
 
 pub(super) struct PlanningDraftEditorIssueCopy {
@@ -212,7 +212,7 @@ pub(super) fn build_detail_selection_overlay_view(
 }
 
 pub(super) fn build_simple_review_overlay_view(
-    copy: PlanningSimpleReviewCopy<'_>,
+    copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
     let mut status_lines = vec![
         Line::from(format!(
@@ -241,7 +241,7 @@ pub(super) fn build_simple_review_overlay_view(
             "advanced action: D opens detail-mode authoring without promoting the simple scaffold.",
         ));
     }
-    if let Some(first_error) = copy.first_error {
+    if let Some(first_error) = copy.first_error.as_deref() {
         status_lines.push(Line::from(format!("first validation error: {first_error}")));
     }
 
