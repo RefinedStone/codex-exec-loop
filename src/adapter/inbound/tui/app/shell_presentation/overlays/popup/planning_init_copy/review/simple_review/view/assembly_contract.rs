@@ -1,5 +1,9 @@
+#[path = "assembly_contract/builder.rs"]
+mod builder;
+
 use super::sections::composition::PlanningSimpleReviewOverlaySections;
 use crate::adapter::inbound::tui::app::Line;
+use builder::build_simple_review_assembly_contract_from_sections;
 
 pub(super) struct PlanningSimpleReviewAssemblyContract {
     pub(super) header_lines: Vec<Line<'static>>,
@@ -12,11 +16,5 @@ pub(super) struct PlanningSimpleReviewAssemblyContract {
 pub(super) fn build_simple_review_assembly_contract(
     sections: PlanningSimpleReviewOverlaySections,
 ) -> PlanningSimpleReviewAssemblyContract {
-    PlanningSimpleReviewAssemblyContract {
-        header_lines: sections.header_lines,
-        summary_lines: sections.summary_lines,
-        option_lines: sections.option_lines,
-        status_lines: sections.status_view.status_lines,
-        key_lines: sections.status_view.key_lines,
-    }
+    build_simple_review_assembly_contract_from_sections(sections)
 }
