@@ -1,5 +1,6 @@
 use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorBufferState;
-use super::super::super::super::{Color, Line, Modifier, Span, Style};
+use super::super::super::super::Line;
+use super::projection_lines::build_planning_draft_editor_file_lines;
 
 pub(super) struct PlanningDraftEditorProjection {
     pub(super) file_lines: Vec<Line<'static>>,
@@ -15,27 +16,7 @@ pub(super) fn build_planning_draft_editor_projection(
     selected_buffer: &PlanningDraftEditorBufferState,
     editor_height: u16,
 ) -> PlanningDraftEditorProjection {
-    let file_lines = buffers
-        .iter()
-        .enumerate()
-        .map(|(index, buffer)| {
-            let selected = index == selected_index;
-            let dirty_suffix = if buffer.is_dirty() { " *dirty" } else { "" };
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else if buffer.is_dirty() {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let marker = if selected { ">>" } else { "  " };
-            Line::from(vec![
-                Span::styled(format!("{marker} "), style),
-                Span::styled(buffer.file_label(), style.add_modifier(Modifier::BOLD)),
-                Span::styled(dirty_suffix.to_string(), style),
-            ])
-        })
-        .collect::<Vec<_>>();
+    let file_lines = build_planning_draft_editor_file_lines(buffers, selected_index);
 
     let editor_lines = selected_buffer
         .lines()
