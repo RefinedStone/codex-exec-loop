@@ -5,7 +5,7 @@ use super::super::super::{
     build_automation_key_lines, build_automation_list_view, build_automation_preview_lines,
     build_automation_status_lines, compact_whitespace_detail,
 };
-use super::super::{AutomationOverlayView, QueueOverlayView};
+use super::{AutomationOverlayView, QueueOverlayView};
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     let header_lines = vec![

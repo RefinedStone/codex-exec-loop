@@ -5,7 +5,7 @@ use super::super::super::{
     Color, Line, Modifier, NativeTuiApp, Span, StartupState, Style, build_startup_check_lines,
     build_startup_warning_lines,
 };
-use super::super::{SessionOverlayView, StartupOverlayView};
+use super::{SessionOverlayView, StartupOverlayView};
 
 pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayView {
     let ctrl_o_label = if app.parallel_mode_enabled() {

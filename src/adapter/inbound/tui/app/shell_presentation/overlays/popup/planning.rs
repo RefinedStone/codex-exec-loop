@@ -5,7 +5,7 @@ use super::super::super::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningValidationSeverity, Span, Style, compact_inline_detail,
 };
-use super::super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
+use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
