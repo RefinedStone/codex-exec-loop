@@ -19,8 +19,10 @@ use super::super::{
 };
 use super::super::{
     Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, StartupState, Style,
-    build_session_key_lines, build_session_overlay_content, build_session_warning_lines,
     build_startup_check_lines, build_startup_warning_lines, startup_ascii_art_lines,
+};
+use super::super::session_browser::{
+    build_session_key_lines, build_session_overlay_content, build_session_warning_lines,
 };
 use super::{SessionOverlayView, StartupOverlayView};
 
