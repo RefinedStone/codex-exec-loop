@@ -1,3 +1,6 @@
+mod editing;
+mod non_editing;
+
 use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::app::shell_presentation::overlays::popup::planning::copy::PlanningSimpleReviewCopy;
@@ -17,20 +20,11 @@ pub(super) fn build_simple_review_status_lines(
         Line::from(format!("turn budget: {}", copy.max_auto_turns_label)),
     ];
     if copy.is_turn_budget_editing {
-        status_lines.push(Line::from(format!(
-            "current state: editing turn budget / value: {} / controls: Enter saves, Esc/Ctrl+C cancels",
-            copy.turn_budget_buffer
-        )));
+        status_lines.extend(editing::build_simple_review_editing_status_lines(
+            copy.turn_budget_buffer.as_str(),
+        ));
     } else {
-        status_lines.push(Line::from(
-            "next action: Enter or Ctrl+P promotes the staged simple scaffold.",
-        ));
-        status_lines.push(Line::from(
-            "alternate action: Esc closes this review and leaves the staged draft on disk.",
-        ));
-        status_lines.push(Line::from(
-            "advanced action: D opens detail-mode authoring without promoting the simple scaffold.",
-        ));
+        status_lines.extend(non_editing::build_simple_review_non_editing_status_lines());
     }
     if let Some(first_error) = copy.first_error.as_deref() {
         status_lines.push(Line::from(format!("first validation error: {first_error}")));
