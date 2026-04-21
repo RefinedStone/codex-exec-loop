@@ -1,14 +1,14 @@
 use crate::adapter::inbound::tui::app::shell_presentation::overlays::PlanningInitOverlayView;
-use super::sections::composition::PlanningSimpleReviewOverlaySections;
+use super::assembly_contract::PlanningSimpleReviewAssemblyContract;
 
 pub(super) fn assemble_simple_review_overlay_view(
-    sections: PlanningSimpleReviewOverlaySections,
+    contract: PlanningSimpleReviewAssemblyContract,
 ) -> PlanningInitOverlayView {
     PlanningInitOverlayView {
-        header_lines: sections.header_lines,
-        summary_lines: sections.summary_lines,
-        option_lines: sections.option_lines,
-        status_lines: sections.status_view.status_lines,
-        key_lines: sections.status_view.key_lines,
+        header_lines: contract.header_lines,
+        summary_lines: contract.summary_lines,
+        option_lines: contract.option_lines,
+        status_lines: contract.status_lines,
+        key_lines: contract.key_lines,
     }
 }
