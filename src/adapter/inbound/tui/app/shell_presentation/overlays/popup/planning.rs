@@ -6,6 +6,8 @@ mod inputs;
 mod projection;
 #[path = "planning_runtime.rs"]
 mod runtime;
+#[path = "planning_session.rs"]
+mod session;
 
 use super::super::super::{ConversationState, NativeTuiApp, PlanningInitOverlayStep};
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
@@ -21,6 +23,7 @@ use inputs::{
 };
 use projection::build_planning_draft_editor_projection;
 use runtime::interpret_planning_draft_editor_runtime_state;
+use session::collect_planning_draft_editor_session_view;
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
@@ -56,44 +59,34 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
     app: &NativeTuiApp,
     editor_height: u16,
 ) -> Option<PlanningDraftEditorOverlayView> {
-    let buffers = app.planning_draft_editor_ui_state.buffers()?;
-    let selected_index = app.planning_draft_editor_ui_state.selected_file_index()?;
-    let selected_buffer = app.planning_draft_editor_ui_state.selected_buffer()?;
-    let dirty_labels = app.planning_draft_editor_ui_state.dirty_file_labels();
-    let validation_report = app.planning_draft_editor_ui_state.validation_report()?;
+    let session = collect_planning_draft_editor_session_view(&app.planning_draft_editor_ui_state)?;
     let runtime_state = interpret_planning_draft_editor_runtime_state(
         &app.planning_draft_editor_ui_state,
-        &dirty_labels,
-        validation_report,
+        &session.dirty_labels,
+        session.validation_report,
     );
     let projection = build_planning_draft_editor_projection(
-        buffers,
-        selected_index,
-        selected_buffer,
+        session.buffers,
+        session.selected_index,
+        session.selected_buffer,
         editor_height,
     );
     let status_lines =
         build_planning_draft_editor_status_lines(build_planning_draft_editor_status_copy(
-            app.planning_draft_editor_ui_state
-                .draft_name()
-                .unwrap_or("unknown"),
-            selected_buffer.active_path(),
-            selected_index + 1,
-            buffers.len(),
-            validation_report,
-            selected_buffer.staged_path(),
-            &dirty_labels,
+            session.draft_name,
+            session.selected_buffer.active_path(),
+            session.selected_index + 1,
+            session.buffers.len(),
+            session.validation_report,
+            session.selected_buffer.staged_path(),
+            &session.dirty_labels,
             runtime_state.next_action,
             runtime_state.close_risk,
             runtime_state.confirmation_pending,
         ));
 
     Some(PlanningDraftEditorOverlayView {
-        header_lines: build_planning_draft_editor_header_lines(
-            app.planning_draft_editor_ui_state
-                .draft_directory()
-                .unwrap_or("unknown"),
-        ),
+        header_lines: build_planning_draft_editor_header_lines(session.draft_directory),
         file_lines: projection.file_lines,
         editor_title: projection.editor_title,
         editor_lines: projection.editor_lines,
