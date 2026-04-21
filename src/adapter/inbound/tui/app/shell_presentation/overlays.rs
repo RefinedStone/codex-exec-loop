@@ -84,27 +84,20 @@ pub(crate) struct PlanningDraftEditorOverlayView {
 #[path = "overlays/base.rs"]
 mod base;
 
-#[path = "overlays/queue.rs"]
-mod queue;
-
 #[path = "overlays/directions.rs"]
 mod directions;
 
-#[path = "overlays/planning.rs"]
-mod planning;
-#[path = "overlays/supersession.rs"]
-mod supersession;
+#[path = "overlays/popup.rs"]
+mod popup;
 
+pub(crate) use base::build_startup_banner_lines;
 #[cfg(test)]
 pub(crate) use base::{
     build_conversation_shell_frame_view, build_conversation_shell_view, build_transcript_panel_view,
 };
-pub(crate) use base::{
-    build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
-};
 pub(crate) use directions::build_directions_maintenance_overlay_view;
-pub(crate) use planning::{
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+pub(crate) use popup::{
+    build_automation_overlay_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view, build_supersession_overlay_view,
 };
-pub(crate) use queue::{build_automation_overlay_view, build_queue_overlay_view};
-pub(crate) use supersession::build_supersession_overlay_view;

@@ -5,8 +5,8 @@ use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
 };
 
-use super::super::super::NativeTuiApp;
-use super::SupersessionOverlayView;
+use super::super::super::super::NativeTuiApp;
+use super::super::SupersessionOverlayView;
 
 pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> SupersessionOverlayView {
     let mode_label = if app.parallel_mode_enabled() {

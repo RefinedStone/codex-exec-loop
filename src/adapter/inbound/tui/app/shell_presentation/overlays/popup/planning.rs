@@ -1,11 +1,11 @@
-use super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
-use super::super::status_panels::plan_runtime_substate_label;
-use super::super::{
+use super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
+use super::super::super::status_panels::plan_runtime_substate_label;
+use super::super::super::{
     Color, ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, Line, Modifier, NativeTuiApp,
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningValidationSeverity, Span, Style, compact_inline_detail,
 };
-use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
+use super::super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
@@ -561,7 +561,7 @@ fn planning_draft_editor_close_key_line(
     Line::from("controls: Esc/Ctrl+C closes this surface")
 }
 
-pub(super) fn planning_init_option_line(
+pub(crate) fn planning_init_option_line(
     shortcut: &str,
     label: &str,
     detail: &str,
