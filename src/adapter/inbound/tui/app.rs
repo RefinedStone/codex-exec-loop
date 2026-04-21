@@ -2,10 +2,10 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::adapter::inbound::tui::shell_chrome::{
     ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
