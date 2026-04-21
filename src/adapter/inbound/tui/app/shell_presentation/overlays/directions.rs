@@ -3,7 +3,7 @@ use super::super::{
     QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, Span, Style, compact_whitespace_detail,
 };
 use super::DirectionsMaintenanceOverlayView;
-use super::planning::planning_init_option_line;
+use super::popup::planning_init_option_line;
 
 pub(crate) fn build_directions_maintenance_overlay_view(
     app: &NativeTuiApp,
