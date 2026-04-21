@@ -2,6 +2,8 @@
 mod copy;
 #[path = "planning_existing_workspace.rs"]
 mod existing_workspace;
+#[path = "planning_init_router.rs"]
+mod init_router;
 #[path = "planning_inputs.rs"]
 mod inputs;
 #[path = "planning_projection.rs"]
@@ -11,36 +13,20 @@ mod runtime;
 #[path = "planning_session.rs"]
 mod session;
 
-use super::super::super::{NativeTuiApp, PlanningInitOverlayStep};
+use super::super::super::NativeTuiApp;
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 use copy::{
-    build_detail_selection_overlay_view, build_manual_editor_overlay_view,
-    build_mode_selection_overlay_view, build_planning_draft_editor_header_lines,
-    build_planning_draft_editor_key_lines, build_planning_draft_editor_status_lines,
-    build_simple_review_overlay_view,
+    build_planning_draft_editor_header_lines, build_planning_draft_editor_key_lines,
+    build_planning_draft_editor_status_lines,
 };
-use existing_workspace::build_existing_workspace_overlay_view_for_app;
-use inputs::{build_planning_draft_editor_status_copy, build_simple_review_copy};
+use init_router::build_planning_init_overlay_view_for_app;
+use inputs::build_planning_draft_editor_status_copy;
 use projection::build_planning_draft_editor_projection;
 use runtime::interpret_planning_draft_editor_runtime_state;
 use session::collect_planning_draft_editor_session_view;
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
-    match app.planning_init_overlay_ui_state.step() {
-        PlanningInitOverlayStep::ExistingWorkspace => {
-            build_existing_workspace_overlay_view_for_app(app)
-        }
-        PlanningInitOverlayStep::ModeSelection => {
-            build_mode_selection_overlay_view(app.planning_init_overlay_ui_state.selected_mode())
-        }
-        PlanningInitOverlayStep::DetailSelection => build_detail_selection_overlay_view(
-            app.planning_init_overlay_ui_state.selected_detail(),
-        ),
-        PlanningInitOverlayStep::SimpleReview => {
-            build_simple_review_overlay_view(build_simple_review_copy(app))
-        }
-        PlanningInitOverlayStep::ManualEditor => build_manual_editor_overlay_view(),
-    }
+    build_planning_init_overlay_view_for_app(app)
 }
 
 pub(crate) fn build_planning_draft_editor_overlay_view(
