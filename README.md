@@ -19,8 +19,10 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 - Current product contract: [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
 - Planning contract: [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
 - Architecture and boundary rules: [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md)
+- Active context-first roadmap: [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md)
+- Active terminal-agent bridge research: [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md)
 - Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
-- Remaining supersession follow-through and open questions: [docs/supersession/README.md](docs/supersession/README.md)
+- Supersession history and follow-through archive: [docs/supersession/README.md](docs/supersession/README.md)
 
 ## Architecture Principles
 
@@ -31,6 +33,7 @@ queue inspection, and post-turn automation all stay inside one inline shell.
 
 The design baseline lives in [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md).
 Current structural debt and refactor targets live in [docs/plan/17-structure-and-architecture-debt-map.md](docs/plan/17-structure-and-architecture-debt-map.md).
+The active roadmap for the next cycle lives in [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md) and [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md).
 
 ## Install
 

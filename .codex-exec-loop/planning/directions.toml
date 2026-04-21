@@ -5,171 +5,35 @@ policy = "review_and_enqueue"
 prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 
 [[directions]]
-id = "supersession-mode-entry-and-readiness"
-title = "Supersession mode entry and readiness"
-summary = "Turn parallel mode into a supervisor-first shell state that can explain git, planning, push, and GitHub readiness before any agent launches."
+id = "context-first-architecture-and-doc-coherence"
+title = "Context-first architecture and doc coherence"
+summary = "Refine architecture boundaries, documentation entrypoints, and operator vocabulary so one flow can be understood with minimal local context."
 success_criteria = [
-    "The operator can enable parallel mode and immediately see whether supersession is ready, degraded, blocked, or repairing in the current workspace.",
-    "Shell entry surfaces and `:sessions` route to supersession only when parallel mode is on, while normal-mode session browsing stays intact otherwise.",
-    "Capability failures name the cause and next action instead of surfacing as fatal startup ambiguity.",
+    "A single operator flow can be traced from one roadmap doc into a small code cluster without scanning unrelated infrastructure or historical notes.",
+    "README, docs/README, queue-idle review guidance, and planning vocabulary all use the same terms for directions, queue tasks, proposals, accepted planning, and repair.",
+    "Mixed-responsibility hotspots have an agreed split order and capability-boundary target before deeper refactor work starts.",
 ]
 scope_hints = [
-    "Start with capability snapshots, mode toggles, and shell routing before agent launch.",
-    "Prefer durable readiness projection over one-off command checks or notices.",
-    "Keep degraded-state copy explicit and recoverable from the first slice.",
+    "Start with repo entrypoints, vocabulary alignment, and explicit hotspot ordering before large code movement.",
+    "Prefer smaller, capability-shaped boundaries over provider-wide abstractions or aesthetic-only reshuffles.",
+    "Keep docs/design as shipped truth; put future refactor intent and research in docs/plan until behavior actually changes.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-mode-entry-and-readiness.md"
-state = "done"
+detail_doc_path = ".codex-exec-loop/planning/directions/context-first-architecture-and-doc-coherence.md"
+state = "active"
 
 [[directions]]
-id = "supersession-agent-control-tower"
-title = "Supersession agent control tower"
-summary = "Replace the single-main-session mental model with a control-tower surface that tracks multiple main-grade agent sessions, their assignments, durations, and completion milestones."
+id = "terminal-agent-bridge-research-and-capability-boundary"
+title = "Terminal agent bridge research and capability boundary"
+summary = "Research elegant ways to attach Akra to non-Codex terminal agents and define the capability boundary before any provider-specific adapter lands."
 success_criteria = [
-    "The supersession surface shows active agents, selected-agent detail, and a completion feed with explicit lifecycle states.",
-    "Each agent exposes task ownership, slot identity, running duration, and latest summary without opening raw runtime debug state.",
-    "Reported completion is visibly distinct from official completion and merge-queue state.",
+    "Local pre-opened terminal attach, local wrapper, SSH or tunnel, and proxy-style mediation paths are compared with the same rubric.",
+    "The roadmap names one primary path and one fallback path for Claude Code class integrations, with explicit reasons for deferring the rest.",
+    "Codex-specific assumptions are translated into capability targets such as InteractiveTurnRuntime, StartupProbe, SessionCatalog, and TerminalBridgeAttachment.",
 ]
 scope_hints = [
-    "Start with the lifecycle model and one readable control-tower board before richer interactions.",
-    "Prefer operator-visible projections over direct reuse of single-session view models.",
-    "Keep the supervisor operational and non-conversational in every slice.",
+    "Treat this direction as research-first until the boundary and operator model are credible enough to spike safely.",
+    "Do not assume Claude or other terminal agents expose the same session or thread API as codex app-server.",
+    "Prefer local terminal attachment paths before remote transport or proxy infrastructure unless research proves otherwise.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-agent-control-tower.md"
-state = "done"
-
-[[directions]]
-id = "supersession-ledger-feedback-loop"
-title = "Supersession ledger feedback loop"
-summary = "Keep active planning authority serialized by routing agent completion through hidden planning worker refresh before any new official assignment or follow-up is derived."
-success_criteria = [
-    "Agent sessions never update active planning authority directly; hidden planning worker refresh remains the only path to official task-state change.",
-    "Completion payloads carry enough provenance for hidden planning worker to refresh official queue state without repeating the same unchanged queue head.",
-    "Supervisor state blocks new official assignment until active planning refresh finishes or fails explicitly.",
-]
-scope_hints = [
-    "Start with serialized completion refresh and provenance shape before broader follow-up derivation.",
-    "Treat planning invalidity as a supersession blocker, not a hidden background detail.",
-    "Prefer explicit reported-versus-official state over inferred completion.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-ledger-feedback-loop.md"
-state = "done"
-
-[[directions]]
-id = "supersession-git-worktree-pool"
-title = "Supersession git worktree pool"
-summary = "Manage `akra pool` as a collision-resistant set of git worktree slots that can be leased to agent sessions and returned only after clean `akra` reconcile."
-success_criteria = [
-    "The pool reconciles a default of three slots with explicit idle, leased, running, awaiting cleanup, blocked, or missing states.",
-    "Default pool roots avoid collisions between same-name sibling clones by incorporating stable repo-root identity.",
-    "No new agent is launched when capacity is exhausted or a slot has not returned to clean `akra` state.",
-]
-scope_hints = [
-    "Start with slot reconcile, lease bookkeeping, and cleanliness checks before more dynamic pool behavior.",
-    "Treat blocked-slot recovery and cleanup verification as first-class state, not polish.",
-    "Keep slot identity and worktree-root naming deterministic from the first slice.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-git-worktree-pool.md"
-state = "done"
-
-[[directions]]
-id = "supersession-distributor-merge-queue"
-title = "Supersession distributor merge queue"
-summary = "Move commit-ready agent results through one serial distributor that rebases stale branches, pushes, opens or updates PRs, merges into `akra`, and returns cleaned slots to the pool."
-success_criteria = [
-    "Only commit-ready results enter the merge queue and only one queue head is processed at a time.",
-    "The distributor keeps `akra` linear by rebasing stale source branches, updating provenance, and surfacing rebase conflicts as blocked queue-head state.",
-    "Slot return depends on cleanup success rather than merge success alone, and degraded push or GitHub capability states remain operator-readable.",
-]
-scope_hints = [
-    "Start with queue-head state, local integration sequencing, and rebase strategy before widening GitHub automation depth.",
-    "Prefer explicit blocked and failed queue-head recovery over throughput optimization.",
-    "Keep slot cleanup tied to distributor ownership and state transitions.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-distributor-merge-queue.md"
-state = "done"
-
-[[directions]]
-id = "supersession-authority-locator-and-shadow-store"
-title = "Supersession authority locator and shadow store"
-summary = "Replace worktree-local planning roots with a canonical repo-scoped authority locator and a store mirror that can prove parity before runtime authority moves."
-success_criteria = [
-    "Any worktree in the same repo family resolves to one canonical authority root and runtime directory.",
-    "A repo-shared store can mirror directions, detail docs, tasks, and queue projection from tracked planning files without changing runtime authority yet.",
-    "Parity diagnostics make store-versus-file divergence operator-visible before store-backed runtime mutations are enabled.",
-]
-scope_hints = [
-    "Start with canonical authority location and read-only mirroring before active planning mutations move.",
-    "Keep tracked planning files authoritative in this slice while proving repo-shared parity across worktrees.",
-    "Prefer worktree-family consistency checks over early mutation features.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-authority-locator-and-shadow-store.md"
-state = "done"
-
-[[directions]]
-id = "supersession-store-backed-drafts-and-promote"
-title = "Supersession store-backed drafts and promote"
-summary = "Move draft storage, validation, rejection resume data, and promote semantics into the repo-shared authority domain while keeping active planning immutable until promote succeeds."
-success_criteria = [
-    "Draft planning state lives in the repo-shared authority domain instead of worktree-local authority files.",
-    "The existing `draft -> validate -> promote` operator model stays intact, including rejection archive and resume behavior.",
-    "Active planning state and queue projection remain unchanged until promote commits successfully.",
-]
-scope_hints = [
-    "Start with draft data model parity and validation behavior before broad authoring ergonomics.",
-    "Keep structured change requests targeting draft state by default instead of mutating active authority directly.",
-    "Treat rejected promote attempts as resume-able draft state, not discarded temporary edits.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-store-backed-drafts-and-promote.md"
-state = "done"
-
-[[directions]]
-id = "supersession-active-planning-mutation-and-queue-claims"
-title = "Supersession active planning mutation and queue claims"
-summary = "Commit hidden planner refresh, queue projection rebuild, and supersession claim ownership through one repo-scoped authority domain instead of separate file and runtime updates."
-success_criteria = [
-    "Hidden planning refresh writes active planning state and queue projection in one transaction.",
-    "Official refresh claims and distributor queue-head claims are unique across processes and tied to explicit planning revisions.",
-    "Planning revision remains distinct from runtime event sequencing so runtime churn does not redefine planning history.",
-]
-scope_hints = [
-    "Start with hidden refresh commits and queue-head claim semantics before widening runtime event coverage.",
-    "Prefer cross-process claim uniqueness and repeated queue-head regression coverage over feature breadth.",
-    "Keep runtime events linked to observed planning revision without inflating planning revision on every event.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-active-planning-mutation-and-queue-claims.md"
-state = "done"
-
-[[directions]]
-id = "supersession-runtime-projections-and-recovery"
-title = "Supersession runtime projections and recovery"
-summary = "Move slot, session, distributor, and recovery projections into the repo-shared authority domain and recover in-flight work by reconciling committed state with Git and GitHub truth."
-success_criteria = [
-    "Slot, session, queue, and distributor delivery projections are durable inside the repo-shared authority domain.",
-    "Restart recovery rechecks Git, GitHub, and worktree truth before reclassifying in-flight refresh, push, PR, integration, or cleanup work.",
-    "Timed-out or orphaned claims surface explicit recovered, blocked, failed, or already-complete states instead of silent divergence.",
-]
-scope_hints = [
-    "Start with projection persistence and recovery classification before throughput or UX optimization.",
-    "Treat external truth rechecks as mandatory for push, PR, integration, and cleanup recovery decisions.",
-    "Keep recovery states explicit and operator-readable from the first slice.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-runtime-projections-and-recovery.md"
-state = "done"
-
-[[directions]]
-id = "supersession-store-primary-cutover"
-title = "Supersession store-primary cutover"
-summary = "Make the repo-shared authority store the default active and draft planning authority, while tracked planning files become revision-stamped exports and explicit imports only."
-success_criteria = [
-    "Store-primary runtime reads and writes use the repo-shared authority domain for both active and draft planning state.",
-    "Tracked planning files are revision-stamped export artifacts instead of implicit runtime authority.",
-    "Tracked-file import is allowed only through explicit operator flow with base revision checks and no automatic two-way sync.",
-]
-scope_hints = [
-    "Start with mode gating and export labeling before wider review-surface polish.",
-    "Prefer one-way mirror rules over convenience sync that would reintroduce dual authority.",
-    "Keep operator review and portability ergonomics explicit even after file authority ends.",
-]
-detail_doc_path = ".codex-exec-loop/planning/directions/supersession-store-primary-cutover.md"
-state = "done"
+detail_doc_path = ".codex-exec-loop/planning/directions/terminal-agent-bridge-research-and-capability-boundary.md"
+state = "active"

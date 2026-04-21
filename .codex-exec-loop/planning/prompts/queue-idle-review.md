@@ -2,14 +2,16 @@
 
 Use this prompt only when the executable queue is empty.
 
-- Treat `docs/design/01-current-product-state.md`, `docs/design/06-planning-runtime-and-draft-editor.md`, `docs/supersession/README.md`, `docs/supersession/implemented-summary.md`, `docs/supersession/10-implementation-slices.md`, `docs/supersession/11-open-questions-and-non-goals.md`, and the current direction detail docs as the roadmap context for this workspace.
-- Treat `directions.toml` as the durable strategy map. Long-term intent belongs there; immediate execution slices belong in `task-ledger.json`.
-- Assume this workspace is meant to sustain many hours of queue-driven improvement. Keep the long-term roadmap encoded in directions, but keep the executable queue limited to small, reviewable slices.
-- Treat completed supersession authority-store slices as historical context, not as a cue to recreate already-finished architecture tasks.
-- Prefer follow-up work only when current code or validation still shows a concrete gap in validation coverage, docs alignment, operator copy, or remaining open questions.
-- Derive at most one `ready` or `in_progress` task when the next slice is concrete, reviewable on its own, and clearly moves the product toward the blueprint.
+- Treat `docs/design/01-current-product-state.md`, `docs/design/04-hexagonal-runtime-architecture.md`, `docs/design/06-planning-runtime-and-draft-editor.md`, `docs/plan/20-context-first-architecture-and-doc-coherence.md`, `docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md`, and the current direction detail docs as the roadmap context for this workspace.
+- Treat `docs/plan/17-structure-and-architecture-debt-map.md` as the supporting hotspot map for context-first refactor ordering.
+- Treat `docs/supersession/README.md` and the rest of `docs/supersession/` as historical context only unless a live validation or operator-facing gap explicitly points back there.
+- Treat `directions.toml` as the durable strategy map. Long-lived objectives belong there; immediate execution slices belong in `task-ledger.json`.
+- Keep the queue narrow. When the next slice is concrete, derive at most one `ready` or `in_progress` task.
+- Prefer follow-up work that reduces context fan-in, normalizes operator vocabulary, clarifies Codex-only coupling, or advances the terminal-agent research matrix with a concrete artifact.
+- Prefer capability-boundary notes and small, reviewable audits before broad provider abstractions or speculative adapter scaffolding.
+- Do not create product-implementation tasks for Claude or other external terminal agents until the research path names a primary route and fallback route explicitly.
 - Keep alternate or broader follow-up work as `proposed`.
-- When all supersession directions are already `done`, prefer validation, docs, or operator-surface polish tasks over faux architecture revival.
+- Do not recreate completed supersession directions or revive already-shipped authority-store work as faux roadmap churn.
 - Do not create queue work that only edits planning files unless planning maintenance itself is the explicit goal.
 - If a refactor is justified, tie it to one operator-visible benefit in `direction_relation_note` and `description`.
 - If no justified implementation slice exists, keep the queue empty and briefly explain why.

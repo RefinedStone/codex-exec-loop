@@ -2,120 +2,97 @@
   "version": 1,
   "tasks": [
     {
-      "id": "supersession-pr294-prerelease-dirty-classification",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "Derived from the latest operator request to turn the previous answer's executable work into queue items and complete only the queue head before reorganizing the remainder.",
-      "title": "Classify dirty prerelease checkout before PR #294 integration",
-      "description": "Re-evaluate the dirty `prerelease` checkout with `--ignore-cr-at-eol`, separate line-ending churn from real content changes, and confirm whether PR #294's supersession branch-policy work materially overlaps with meaningful local diffs.",
-      "status": "done",
-      "base_priority": 97,
+      "id": "context-first-hotspot-and-vocabulary-audit",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This is the first executable slice for the new roadmap because it turns the context-first direction into an ordered, reviewable audit before deeper refactors or provider-boundary work starts.",
+      "title": "Freeze hotspot split order and vocabulary gaps",
+      "description": "Turn the architecture debt map and the active roadmap into one actionable audit: confirm the split order for shell presentation, conversation runtime, planning controller, and parallel mode service, and record the vocabulary mismatches still visible across docs and operator-facing copy.",
+      "status": "ready",
+      "base_priority": 95,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest main-session reply states this was the queue-head task actually executed in the previous turn, narrowing 65 raw diffs to a small set of planning/runtime files and finding no meaningful overlap with PR #294.",
+      "priority_reason": "The roadmap is only useful if the first follow-up converts it into concrete hotspot order and vocabulary cleanup targets without touching shipped truth prematurely.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T08:30:00Z"
+      "updated_at": "2026-04-21T00:00:00Z"
     },
     {
-      "id": "supersession-pr294-prerelease-lane-clearance",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "The latest main-session reply identifies this as the immediate next gate after dirty-checkout classification: choose how to preserve or clear the remaining local planning/runtime work before attempting integration.",
-      "title": "Decide how to clear the dirty prerelease lane for PR #294",
-      "description": "Choose whether the remaining local planning/runtime changes in the dirty `prerelease` checkout should be preserved into a separate lane or whether only generated/churn changes should be discarded so the integration lane can be restored.",
-      "status": "awaiting_user",
-      "base_priority": 96,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "This is the first unresolved follow-up named in the latest answer, and every executable integration step stays blocked until the operator picks a lane-clearance policy.",
-      "depends_on": [
-        "supersession-pr294-prerelease-dirty-classification"
-      ],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-18T08:30:00Z"
-    },
-    {
-      "id": "supersession-pr294-prerelease-fast-forward",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "The latest answer keeps linear integration of PR #294 as queued work, but only after the dirty-lane decision is resolved.",
-      "title": "Fast-forward PR #294 into prerelease after lane clearance",
-      "description": "Once the dirty `prerelease` checkout policy is chosen and applied, integrate PR #294 into `prerelease` with a linear fast-forward path that preserves the selected local-work handling strategy.",
-      "status": "blocked",
-      "base_priority": 94,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "The latest answer explicitly lists this as blocked behind the lane-clearance decision, so it should remain queued but not promoted to ready.",
-      "depends_on": [
-        "supersession-pr294-prerelease-lane-clearance"
-      ],
-      "blocked_by": [
-        "supersession-pr294-prerelease-lane-clearance"
-      ],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-18T08:30:00Z"
-    },
-    {
-      "id": "supersession-pr294-postmerge-closeout",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "The latest answer names closeout as remaining queued work after integration, covering PR completion and cleanup once PR #294 lands on `prerelease`.",
-      "title": "Close out PR #294 integration and clean up worktrees",
-      "description": "After PR #294 is linearly integrated into `prerelease`, finish the remaining closeout work by reconciling the PR state and cleaning up the associated worktree or lane artifacts.",
+      "id": "context-first-codex-capability-boundary-audit",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The new roadmap requires an explicit Codex-only assumption audit before external terminal agents can be discussed as clean product boundaries.",
+      "title": "Map Codex-only assumptions into capability targets",
+      "description": "Audit where `codex app-server`, Codex-specific session semantics, and Codex-flavored approval or resume assumptions are embedded today, then restate those spots as target capability notes around `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and `TerminalBridgeAttachment`.",
       "status": "blocked",
       "base_priority": 92,
       "dynamic_priority_delta": 0,
-      "priority_reason": "This follow-up cannot start until the actual `prerelease` integration finishes, so it remains blocked behind the fast-forward task.",
+      "priority_reason": "External-agent research should not drift into vague abstraction until the current Codex coupling points are named precisely.",
       "depends_on": [
-        "supersession-pr294-prerelease-fast-forward"
+        "context-first-hotspot-and-vocabulary-audit"
       ],
-      "blocked_by": [
-        "supersession-pr294-prerelease-fast-forward"
-      ],
+      "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T08:30:00Z"
+      "updated_at": "2026-04-21T00:00:00Z"
     },
     {
-      "id": "supersession-pr294-lane-option-split-dirty-work",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "The latest answer lists this as one of the concrete operator-facing variants for resolving the lane-clearance decision.",
-      "title": "Preserve real planning/runtime changes in a separate lane",
-      "description": "If the operator chooses to retain the meaningful local planning/runtime edits found during dirty-checkout classification, split that work into a separate lane before restoring a clean integration path for PR #294.",
+      "id": "context-first-shell-presentation-boundary-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "Shell presentation is the first hotspot named in the roadmap and should become the first concrete refactor slice after the audit firms up the split order.",
+      "title": "Prepare the first shell-presentation boundary slice",
+      "description": "Use the audit output to define a small refactor slice that separates shell wording and projection responsibilities from layout or rendering mechanics in the shell presentation cluster.",
       "status": "proposed",
       "base_priority": 88,
       "dynamic_priority_delta": 0,
-      "priority_reason": "This is a concrete implementation variant of the awaiting-user lane-clearance decision, but it should remain proposed until the operator selects it.",
+      "priority_reason": "This is a likely next implementation slice, but the exact cut should stay proposed until the hotspot audit locks the order and surface area.",
       "depends_on": [
-        "supersession-pr294-prerelease-lane-clearance"
+        "context-first-hotspot-and-vocabulary-audit"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T08:30:00Z"
+      "updated_at": "2026-04-21T00:00:00Z"
     },
     {
-      "id": "supersession-pr294-lane-option-discard-generated-churn",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "The latest answer lists this as the other concrete operator-facing variant for clearing the integration lane after classification.",
-      "title": "Discard generated or churn-only changes to restore the integration lane",
-      "description": "If the operator decides the remaining dirty `prerelease` state is only generated noise or acceptable churn, drop that churn so the integration lane can be restored and PR #294 can fast-forward cleanly.",
-      "status": "proposed",
-      "base_priority": 87,
+      "id": "terminal-bridge-research-matrix",
+      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+      "direction_relation_note": "The research direction starts with a comparison matrix only after the Codex-only boundary audit makes the required capabilities explicit.",
+      "title": "Compare local attach, wrapper, tunnel, and proxy bridge paths",
+      "description": "Write the research matrix that compares pre-opened local terminal attach, controlled local wrappers, SSH or tunnel approaches, and proxy or vibeproxy-style mediation across UX, streaming fidelity, interrupt handling, approval handling, recovery, security, portability, and architecture fit.",
+      "status": "blocked",
+      "base_priority": 90,
       "dynamic_priority_delta": 0,
-      "priority_reason": "This is the alternate lane-clearance variant from the latest answer, and it should remain a proposal until the operator explicitly chooses it.",
+      "priority_reason": "Research should begin only after the capability vocabulary is explicit enough to compare paths on product terms instead of transport trivia.",
       "depends_on": [
-        "supersession-pr294-prerelease-lane-clearance"
+        "context-first-codex-capability-boundary-audit"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-18T08:30:00Z"
+      "updated_at": "2026-04-21T00:00:00Z"
+    },
+    {
+      "id": "terminal-bridge-primary-path-decision-note",
+      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+      "direction_relation_note": "The roadmap requires one primary bridge path and one fallback before any provider-specific spike can be treated as intentional product work.",
+      "title": "Choose the primary and fallback terminal bridge paths",
+      "description": "Turn the completed research matrix into one decision note that names the primary bridge path, the fallback path, and the reasons for deferring the remaining transport options for now.",
+      "status": "proposed",
+      "base_priority": 86,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The decision note is a real deliverable for the roadmap, but it should stay proposed until the comparison matrix exists.",
+      "depends_on": [
+        "terminal-bridge-research-matrix"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-21T00:00:00Z"
     }
   ]
 }

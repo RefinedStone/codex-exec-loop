@@ -15,16 +15,22 @@ Use one source of truth per question.
 - [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): operator-visible shell flow
 - [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md): current planning contract
 
+## Active Roadmap
+
+- [plan/20-context-first-architecture-and-doc-coherence.md](plan/20-context-first-architecture-and-doc-coherence.md): current short and mid-term plan for boundary cleanup, vocabulary alignment, and LLM-friendly structure
+- [plan/21-terminal-agent-bridge-research-and-capability-boundary.md](plan/21-terminal-agent-bridge-research-and-capability-boundary.md): current short and mid-term plan for Claude Code class terminal-agent research
+- [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): supporting hotspot map and refactor ordering input
+
 ## Release Delta
 
 - [releases/v1.2.9-to-prerelease.md](releases/v1.2.9-to-prerelease.md): what `origin/prerelease` ships beyond `v1.2.9`
 
-## Remaining Supersession Work
+## Historical Context
 
 - [supersession/README.md](supersession/README.md): supersession docs index
-- [supersession/implemented-summary.md](supersession/implemented-summary.md): merged summary of implemented supersession contracts
-- [supersession/10-implementation-slices.md](supersession/10-implementation-slices.md): remaining validation, docs, and polish work
-- [supersession/11-open-questions-and-non-goals.md](supersession/11-open-questions-and-non-goals.md): live open questions and explicit non-goals
+- [supersession/implemented-summary.md](supersession/implemented-summary.md): merged summary of shipped supersession contracts
+- [supersession/10-implementation-slices.md](supersession/10-implementation-slices.md): remaining supersession follow-through notes
+- [supersession/11-open-questions-and-non-goals.md](supersession/11-open-questions-and-non-goals.md): supersession-era open questions and non-goals
 
 ## Runbooks And Validation
 
@@ -34,20 +40,20 @@ Use one source of truth per question.
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md)
 - [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md)
 
-## Historical And Roadmap References
+## Background References
 
-- [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md)
-- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md)
 - [plan/14-product-elevation-blueprint.md](plan/14-product-elevation-blueprint.md)
 - [plan/15-ux-flow-rearchitecture.md](plan/15-ux-flow-rearchitecture.md)
 - [plan/16-planning-and-automation-evolution.md](plan/16-planning-and-automation-evolution.md)
-- [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md)
+- [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md)
+- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md)
 
 ## Rules
 
 - `docs/design/` holds current contracts.
 - `docs/releases/` holds tagged or branch release deltas only.
-- `docs/supersession/` holds remaining work plus merged historical context, not the primary current truth.
-- `docs/plan/` holds runbooks, roadmap, and historical design audits.
+- `docs/plan/20-*` and `docs/plan/21-*` hold the active roadmap for the current cycle.
+- `docs/supersession/` holds merged history and follow-through context, not the active roadmap.
+- `docs/plan/` holds runbooks, active roadmap, and historical design audits.
 - Prefer links to current truth over repeating the same contract in multiple places.
 - Prefer flow-local documents over repo-spanning narrative; one question should usually require one primary doc plus at most one supporting link.
