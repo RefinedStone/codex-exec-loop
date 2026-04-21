@@ -1,10 +1,12 @@
 #[path = "planning_copy.rs"]
 mod copy;
+#[path = "planning_projection.rs"]
+mod projection;
 
 use super::super::super::status_panels::plan_runtime_substate_label;
 use super::super::super::{
-    Color, ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, Line, Modifier, NativeTuiApp,
-    PlanningInitOverlayStep, Span, Style, compact_inline_detail,
+    ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, NativeTuiApp, PlanningInitOverlayStep,
+    compact_inline_detail,
 };
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 use copy::{
@@ -15,6 +17,7 @@ use copy::{
     build_planning_draft_editor_key_lines, build_planning_draft_editor_status_lines,
     build_simple_review_overlay_view,
 };
+use projection::build_planning_draft_editor_projection;
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     match app.planning_init_overlay_ui_state.step() {
@@ -104,48 +107,12 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
     } else {
         "next action: fix validation errors before promoting this draft"
     };
-
-    let file_lines = buffers
-        .iter()
-        .enumerate()
-        .map(|(index, buffer)| {
-            let selected = index == selected_index;
-            let dirty_suffix = if buffer.is_dirty() { " *dirty" } else { "" };
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else if buffer.is_dirty() {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let marker = if selected { ">>" } else { "  " };
-            Line::from(vec![
-                Span::styled(format!("{marker} "), style),
-                Span::styled(buffer.file_label(), style.add_modifier(Modifier::BOLD)),
-                Span::styled(dirty_suffix, style),
-            ])
-        })
-        .collect::<Vec<_>>();
-
-    let editor_lines = selected_buffer
-        .lines()
-        .iter()
-        .map(|line| Line::from(line.clone()))
-        .collect::<Vec<_>>();
-    let editor_height = editor_height.max(1) as usize;
-    let max_editor_scroll = selected_buffer
-        .lines()
-        .len()
-        .saturating_sub(editor_height)
-        .min(u16::MAX as usize) as u16;
-    let editor_scroll = selected_buffer.editor_scroll().min(max_editor_scroll);
-    let editor_cursor_offset = Some((
-        selected_buffer.cursor_column().min(u16::MAX as usize) as u16,
-        selected_buffer
-            .cursor_line_index()
-            .saturating_sub(editor_scroll as usize)
-            .min(u16::MAX as usize) as u16,
-    ));
+    let projection = build_planning_draft_editor_projection(
+        buffers,
+        selected_index,
+        selected_buffer,
+        editor_height,
+    );
 
     let status_lines = build_planning_draft_editor_status_lines(PlanningDraftEditorStatusCopy {
         draft_name: app
@@ -184,11 +151,11 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
                 .draft_directory()
                 .unwrap_or("unknown"),
         ),
-        file_lines,
-        editor_title: selected_buffer.file_label(),
-        editor_lines,
-        editor_scroll,
-        editor_cursor_offset,
+        file_lines: projection.file_lines,
+        editor_title: projection.editor_title,
+        editor_lines: projection.editor_lines,
+        editor_scroll: projection.editor_scroll,
+        editor_cursor_offset: projection.editor_cursor_offset,
         status_lines,
         key_lines: build_planning_draft_editor_key_lines(close_risk, pending_close_risk.is_some()),
     })

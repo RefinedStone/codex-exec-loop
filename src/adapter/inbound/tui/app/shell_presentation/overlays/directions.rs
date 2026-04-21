@@ -1,14 +1,17 @@
 #[path = "directions_copy.rs"]
 mod copy;
+#[path = "directions_projection.rs"]
+mod projection;
 
 use super::super::{
-    Color, DirectionsMaintenanceOverlayStep, Line, Modifier, NativeTuiApp,
-    QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, Span, Style, compact_whitespace_detail,
+    DirectionsMaintenanceOverlayStep, Line, NativeTuiApp, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
+    compact_whitespace_detail,
 };
 use copy::{
     build_detail_doc_confirm_overlay_view, build_detail_doc_selection_overlay_view,
     build_manual_editor_overlay_view, build_overview_overlay_view,
 };
+use projection::build_detail_doc_selection_projection;
 
 pub(crate) struct DirectionsMaintenanceOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
@@ -63,46 +66,14 @@ pub(crate) fn build_directions_maintenance_overlay_view(
             let selected_direction = app
                 .directions_maintenance_overlay_ui_state
                 .selected_actionable_detail_doc_direction();
-            let option_lines = if actionable_directions.is_empty() {
-                vec![Line::from(
-                    "Every direction already has a healthy detail-doc mapping.",
-                )]
-            } else {
-                actionable_directions
-                    .iter()
-                    .map(|direction| {
-                        let selected = selected_direction.is_some_and(|selected_direction| {
-                            selected_direction.id == direction.id
-                        });
-                        let style = if selected {
-                            Style::default().fg(Color::Black).bg(Color::Cyan)
-                        } else {
-                            Style::default().fg(Color::White)
-                        };
-                        let marker = if selected { ">>" } else { "  " };
-                        Line::from(vec![
-                            Span::styled(format!("{marker} "), style),
-                            Span::styled(
-                                direction.title.clone(),
-                                style.add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled(
-                                format!(
-                                    "  id={} / status={} / path={}",
-                                    direction.id,
-                                    direction.detail_doc_status.label(),
-                                    direction.detail_doc_path.as_deref().unwrap_or("<unset>")
-                                ),
-                                style,
-                            ),
-                        ])
-                    })
-                    .collect()
-            };
+            let projection = build_detail_doc_selection_projection(
+                actionable_directions.as_slice(),
+                selected_direction.map(|direction| direction.id.as_str()),
+            );
 
             build_detail_doc_selection_overlay_view(
-                option_lines,
-                selected_direction.map(|direction| direction.title.as_str()),
+                projection.option_lines,
+                projection.selected_direction_title.as_deref(),
             )
         }
         DirectionsMaintenanceOverlayStep::DetailDocConfirm => {
