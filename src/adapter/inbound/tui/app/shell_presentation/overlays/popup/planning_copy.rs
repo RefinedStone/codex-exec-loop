@@ -6,12 +6,12 @@ use super::super::super::super::{
 use super::super::super::option_lines::overlay_option_line;
 use super::PlanningInitOverlayView;
 
-pub(super) struct PlanningExistingWorkspaceCopy<'a> {
-    pub(super) workspace_directory: &'a str,
-    pub(super) plan_state_label: &'a str,
-    pub(super) queue_summary: &'a str,
-    pub(super) queue_idle_policy: &'a str,
-    pub(super) failure_summary: Option<&'a str>,
+pub(super) struct PlanningExistingWorkspaceCopy {
+    pub(super) workspace_directory: String,
+    pub(super) plan_state_label: String,
+    pub(super) queue_summary: String,
+    pub(super) queue_idle_policy: String,
+    pub(super) failure_summary: Option<String>,
     pub(super) plan_enabled: bool,
 }
 
@@ -70,7 +70,7 @@ fn planning_draft_title_line(suffix: &'static str) -> Line<'static> {
 }
 
 pub(super) fn build_existing_workspace_overlay_view(
-    copy: PlanningExistingWorkspaceCopy<'_>,
+    copy: PlanningExistingWorkspaceCopy,
 ) -> PlanningInitOverlayView {
     let mut status_lines = if copy.plan_enabled {
         vec![
@@ -83,7 +83,7 @@ pub(super) fn build_existing_workspace_overlay_view(
             Line::from("Directions maintenance stays blocked while Plan off."),
         ]
     };
-    if let Some(failure_summary) = copy.failure_summary {
+    if let Some(failure_summary) = copy.failure_summary.as_deref() {
         status_lines.push(Line::from(format!("planning failure: {failure_summary}")));
     }
 

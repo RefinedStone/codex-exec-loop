@@ -1,22 +1,23 @@
 #[path = "planning_copy.rs"]
 mod copy;
+#[path = "planning_inputs.rs"]
+mod inputs;
 #[path = "planning_projection.rs"]
 mod projection;
 
-use super::super::super::status_panels::plan_runtime_substate_label;
 use super::super::super::{
     ConversationState, FOOTER_NOTICE_DETAIL_LIMIT, NativeTuiApp, PlanningInitOverlayStep,
     compact_inline_detail,
 };
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
 use copy::{
-    PlanningDraftEditorIssueCopy, PlanningDraftEditorStatusCopy, PlanningExistingWorkspaceCopy,
     PlanningSimpleReviewCopy, build_detail_selection_overlay_view,
     build_existing_workspace_overlay_view, build_manual_editor_overlay_view,
     build_mode_selection_overlay_view, build_planning_draft_editor_header_lines,
     build_planning_draft_editor_key_lines, build_planning_draft_editor_status_lines,
     build_simple_review_overlay_view,
 };
+use inputs::{build_existing_workspace_copy, build_planning_draft_editor_status_copy};
 use projection::build_planning_draft_editor_projection;
 
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
@@ -31,26 +32,10 @@ pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningIn
                     app.load_planning_runtime_snapshot(&workspace_directory)
                 }
             };
-            let plan_state_label = if snapshot.plan_enabled() {
-                format!("Plan on / {}", plan_runtime_substate_label(&snapshot))
-            } else {
-                "Plan off".to_string()
-            };
-            let queue_summary = snapshot
-                .queue_summary()
-                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
-                .unwrap_or_else(|| "queue state unavailable".to_string());
-            let failure_summary = snapshot
-                .failure_reason()
-                .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
-            build_existing_workspace_overlay_view(PlanningExistingWorkspaceCopy {
-                workspace_directory: &workspace_directory,
-                plan_state_label: &plan_state_label,
-                queue_summary: &queue_summary,
-                queue_idle_policy: snapshot.queue_idle_policy().label(),
-                failure_summary: failure_summary.as_deref(),
-                plan_enabled: snapshot.plan_enabled(),
-            })
+            build_existing_workspace_overlay_view(build_existing_workspace_copy(
+                &workspace_directory,
+                &snapshot,
+            ))
         }
         PlanningInitOverlayStep::ModeSelection => {
             build_mode_selection_overlay_view(app.planning_init_overlay_ui_state.selected_mode())
@@ -113,37 +98,21 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
         selected_buffer,
         editor_height,
     );
-
-    let status_lines = build_planning_draft_editor_status_lines(PlanningDraftEditorStatusCopy {
-        draft_name: app
-            .planning_draft_editor_ui_state
-            .draft_name()
-            .unwrap_or("unknown"),
-        active_path: selected_buffer.active_path(),
-        selected_file_position: selected_index + 1,
-        file_count: buffers.len(),
-        validation_ok: validation_report.is_valid(),
-        first_issue: validation_report
-            .issues
-            .first()
-            .map(|issue| PlanningDraftEditorIssueCopy {
-                severity: issue.severity,
-                detail: compact_inline_detail(&issue.message, FOOTER_NOTICE_DETAIL_LIMIT),
-            }),
-        staged_path_summary: compact_inline_detail(
+    let status_lines =
+        build_planning_draft_editor_status_lines(build_planning_draft_editor_status_copy(
+            app.planning_draft_editor_ui_state
+                .draft_name()
+                .unwrap_or("unknown"),
+            selected_buffer.active_path(),
+            selected_index + 1,
+            buffers.len(),
+            validation_report,
             selected_buffer.staged_path(),
-            FOOTER_NOTICE_DETAIL_LIMIT,
-        ),
-        dirty_label_summary: if dirty_labels.is_empty() {
-            "none".to_string()
-        } else {
-            compact_inline_detail(&dirty_labels.join(", "), FOOTER_NOTICE_DETAIL_LIMIT)
-        },
-        has_dirty_labels: !dirty_labels.is_empty(),
-        next_action,
-        close_risk,
-        confirmation_pending: pending_close_risk.is_some(),
-    });
+            &dirty_labels,
+            next_action,
+            close_risk,
+            pending_close_risk.is_some(),
+        ));
 
     Some(PlanningDraftEditorOverlayView {
         header_lines: build_planning_draft_editor_header_lines(
