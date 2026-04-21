@@ -15,22 +15,24 @@ use super::super::shell_copy::{
 };
 #[cfg(test)]
 use super::super::status_panels;
+use super::super::{
+    Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, StartupState, Style,
+    build_startup_check_lines, build_startup_warning_lines, startup_ascii_art_lines,
+};
 #[cfg(test)]
 use super::super::{
-    Block, Borders, ConversationShellFrameView, ConversationShellView, FOOTER_NOTICE_DETAIL_LIMIT,
+    ConversationShellFrameView, ConversationShellView, FOOTER_NOTICE_DETAIL_LIMIT,
     FOOTER_PLANNING_DETAIL_LIMIT, MAX_SHELL_HEADER_HEIGHT, MIN_SHELL_HEADER_HEIGHT,
     MIN_TRANSCRIPT_PANEL_HEIGHT, Rect, SHELL_FRAME_MARGIN, ShellFrontendMode, TranscriptPanelView,
     block_height_for_lines, build_conversation_lines_with_context,
     build_conversation_scroll_offset, build_input_block_height, build_shell_footer_height,
     build_shell_footer_lines_with_context, current_live_agent_lines, current_plan_mode_indicator,
 };
-use super::super::{
-    Color, Line, Modifier, NativeTuiApp, ShellCorePresentationContext, Span, StartupState, Style,
-    build_startup_check_lines, build_startup_warning_lines, startup_ascii_art_lines,
-};
 use super::{SessionOverlayView, StartupOverlayView};
 #[cfg(test)]
 use ratatui::layout::{Constraint, Direction, Layout};
+#[cfg(test)]
+use ratatui::widgets::{Block, Borders};
 
 pub(crate) fn build_startup_banner_lines(
     app: &NativeTuiApp,
