@@ -1,5 +1,8 @@
 # Supersession Runtime Risk Audit
 
+Historical reference: use [../supersession/current-contract.md](../supersession/current-contract.md)
+for the current supersession and planning contract. This file is pre-store failure analysis only.
+
 This document recorded the main structural risks in the pre-store-primary supersession and
 planning runtime.
 

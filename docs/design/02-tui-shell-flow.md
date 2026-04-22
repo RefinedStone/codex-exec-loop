@@ -1,6 +1,10 @@
 # TUI Shell Flow
 
-This file defines operator-visible shell behavior on `prerelease`. It describes the current flow, not the future redesign plan.
+This file defines operator-visible shell behavior on `prerelease`.
+
+The canonical planning, directions, and supersession contract lives in
+[../supersession/current-contract.md](../supersession/current-contract.md). This file focuses on
+interaction flow and surface roles.
 
 ## Primary Loop
 
@@ -44,7 +48,8 @@ This file defines operator-visible shell behavior on `prerelease`. It describes 
 
 - Automation controls own stop rules, max-turn policy, preview rendering, and planner debug visibility.
 - Builtin `next-task` uses the current queue task derived from accepted planning.
-- `:planning` and `:directions` both route through staged planning drafts and explicit promotion.
+- Detailed `:planning`, `:directions`, and lifecycle command semantics live in
+  `docs/supersession/current-contract.md`.
 - Accepted planning, the current queue task, proposed tasks, and repair status are reflected in the footer, automation overlay, queue overlay, and post-turn automation.
 - When the queue is actionable, automation targets the current queue task.
 - When the queue is valid but idle, behavior follows the queue-idle policy.

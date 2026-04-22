@@ -17,14 +17,17 @@ the current queue task, proposed tasks, and post-turn automation all stay inside
 
 ## Status
 
-- Current product contract: [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
-- Planning contract: [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
+- Current supersession, planning, and directions contract: [docs/supersession/current-contract.md](docs/supersession/current-contract.md)
+- Remaining supersession and planning follow-through: [docs/supersession/remaining-work.md](docs/supersession/remaining-work.md)
 - Architecture and boundary rules: [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md)
+- Product identity and surface map: [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
+- TUI shell flow deep dive: [docs/design/02-tui-shell-flow.md](docs/design/02-tui-shell-flow.md)
+- Planning/runtime technical deep dive: [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
 - Active context-first roadmap: [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md)
 - Active terminal-agent bridge research: [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md)
 - Docs map and source-of-truth index: [docs/README.md](docs/README.md)
 - Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
-- Supersession history and follow-through archive: [docs/supersession/README.md](docs/supersession/README.md)
+- Supersession docs hub: [docs/supersession/README.md](docs/supersession/README.md)
 
 ## Architecture Principles
 
@@ -142,7 +145,7 @@ Planning and automation are organized around accepted planning rather than ad ho
 - Builtin next-task logic only acts on the current queue task.
 - Queue-idle behavior follows the accepted planning policy.
 
-Full planning behavior lives in [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md).
+The canonical planning and supersession contract lives in [docs/supersession/current-contract.md](docs/supersession/current-contract.md).
 
 ## Packaging And Validation
 
@@ -165,6 +168,8 @@ cargo clippy --all-targets --all-features -D warnings
 
 ## Docs
 
+- [docs/supersession/current-contract.md](docs/supersession/current-contract.md)
+- [docs/supersession/remaining-work.md](docs/supersession/remaining-work.md)
 - [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
 - [docs/design/02-tui-shell-flow.md](docs/design/02-tui-shell-flow.md)
 - [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)

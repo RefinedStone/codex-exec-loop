@@ -1,32 +1,27 @@
 # Supersession Docs
 
-Use this folder for two things only:
+This folder is the canonical entry for the current supersession, planning, and directions contract.
 
-- remaining supersession follow-through that is not fully validated or polished yet
-- merged historical notes for implemented supersession contracts
+Read in this order:
 
-Current behavior should be read from `docs/design/` first.
+1. [current-contract.md](current-contract.md): shipped operator-facing contract
+2. [remaining-work.md](remaining-work.md): unfinished implementation, validation, polish, open questions, and non-goals
 
-## Current Truth
+## Supporting Deep Dives
 
-- [../design/01-current-product-state.md](../design/01-current-product-state.md)
-- [../design/02-tui-shell-flow.md](../design/02-tui-shell-flow.md)
-- [../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md)
-- [../releases/v1.2.9-to-prerelease.md](../releases/v1.2.9-to-prerelease.md)
+- [../design/01-current-product-state.md](../design/01-current-product-state.md): product identity and surface map
+- [../design/02-tui-shell-flow.md](../design/02-tui-shell-flow.md): shell interaction flow
+- [../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md): planning/runtime implementation detail
+- [../releases/v1.2.9-to-prerelease.md](../releases/v1.2.9-to-prerelease.md): release delta from `v1.2.9`
 
-## In This Folder
+## Historical References
 
-- [implemented-summary.md](implemented-summary.md): merged summary of supersession areas that are already implemented on the current branch
-- [10-implementation-slices.md](10-implementation-slices.md): remaining validation, docs alignment, and surface polish work
-- [11-open-questions-and-non-goals.md](11-open-questions-and-non-goals.md): still-open questions and explicit non-goals
+- [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md): authority-store redesign record that guided the implemented cutover
+- [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md): pre-store failure analysis and risk audit
 
-## Current Status
+## Working Rules
 
-- `origin/prerelease` already ships the first operator-facing supersession loop.
-- The current branch also includes the repo-scoped planning authority follow-through.
-- Most earlier supersession design notes have been merged into [implemented-summary.md](implemented-summary.md) to avoid repeating shipped contracts across many files.
-
-## Working Rule
-
-- Keep implemented behavior compact here and detailed in `docs/design/`.
-- Keep only genuinely unfinished or still-open supersession material detailed here.
+- Keep implemented behavior compact in [current-contract.md](current-contract.md).
+- Keep only unfinished or lightly validated work detailed in [remaining-work.md](remaining-work.md).
+- Do not repeat the same current contract across `README`, `docs/README`, `docs/design`, and `docs/plan`.
+- Use `docs/design/` for technical depth, not for a competing current-truth summary.
