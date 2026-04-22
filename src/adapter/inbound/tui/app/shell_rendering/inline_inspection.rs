@@ -417,59 +417,14 @@ fn draw_inline_planning_draft_editor_inspection(
     area: Rect,
     app: &NativeTuiApp,
 ) {
-    let editor_height = area.height.saturating_sub(14).max(6);
-    let editor_content_height = editor_height.saturating_sub(1).max(1);
-    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_content_height)
-    else {
-        return;
-    };
-    let PlanningDraftEditorOverlayView {
-        header_lines,
-        file_lines,
-        editor_title,
-        editor_lines,
-        editor_scroll,
-        editor_cursor_offset,
-        status_lines,
-        key_lines,
-    } = overlay_view;
-    let body_lines = take_panel_body_lines(header_lines);
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&file_lines, 5)),
-            Constraint::Min(editor_height),
-            Constraint::Length(inline_section_height(&status_lines, 6)),
-            Constraint::Length(inline_section_height(&key_lines, 5)),
-        ])
-        .split(area);
-
-    render_inline_section(
-        frame,
-        layout[0],
-        Line::from("Planning Draft / inline inspection"),
-        body_lines,
-        true,
-    );
-    render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
-    render_inline_scrolled_section(
-        frame,
-        layout[2],
-        Line::from(editor_title),
-        editor_lines,
-        editor_scroll,
-    );
-    let editor_content_area = split_inline_section(layout[2])[1];
-    set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    draw_inline_draft_editor_inspection(frame, area, app, "Planning Draft / inline inspection");
 }
 
-fn draw_inline_directions_draft_editor_inspection(
+fn draw_inline_draft_editor_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &NativeTuiApp,
+    title: &'static str,
 ) {
     let editor_height = area.height.saturating_sub(14).max(6);
     let editor_content_height = editor_height.saturating_sub(1).max(1);
@@ -499,13 +454,7 @@ fn draw_inline_directions_draft_editor_inspection(
         ])
         .split(area);
 
-    render_inline_section(
-        frame,
-        layout[0],
-        Line::from("Directions Draft / inline inspection"),
-        body_lines,
-        true,
-    );
+    render_inline_section(frame, layout[0], Line::from(title), body_lines, true);
     render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
     render_inline_scrolled_section(
         frame,
@@ -518,6 +467,14 @@ fn draw_inline_directions_draft_editor_inspection(
     set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
     render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
     render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_directions_draft_editor_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+) {
+    draw_inline_draft_editor_inspection(frame, area, app, "Directions Draft / inline inspection");
 }
 
 fn draw_inline_session_list_panel(
