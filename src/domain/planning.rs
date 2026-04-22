@@ -453,6 +453,13 @@ impl TaskDefinition {
     pub fn combined_priority(&self) -> i32 {
         self.base_priority + self.dynamic_priority_delta
     }
+
+    pub fn normalized(&self) -> Self {
+        let mut normalized = self.clone();
+        normalized.depends_on.sort();
+        normalized.blocked_by.sort();
+        normalized
+    }
 }
 
 #[derive(Debug, Clone)]

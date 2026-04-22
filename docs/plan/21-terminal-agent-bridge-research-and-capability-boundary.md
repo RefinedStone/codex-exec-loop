@@ -83,7 +83,7 @@ Read the bridge work in this order:
 | Scope | Status | Reason |
 | --- | --- | --- |
 | research and planning set | feasible now | the document set already covers the hub, comparison rubric, capability boundary, and experiment checklist |
-| tmux-oriented local attach spike | conditionally feasible | proceed only after the Codex capability audit and local evidence confirm relay fidelity, interrupt behavior, approval handling, and recovery anchors |
+| tmux-oriented local attach spike | conditionally feasible | proceed only after the Codex capability audit and local evidence confirm relay fidelity, interrupt behavior, approval handling, recovery anchors, and operator setup costs |
 | managed local wrapper fallback | conditionally feasible | lifecycle control is strong, but realism costs must stay explicit |
 | SSH or tunnel attach | deferred | remote auth, recovery, and portability costs are not yet justified by evidence |
 | proxy or vibeProxy-style mediation | deferred | extra protocol and trust surface are not justified without a concrete local gap |

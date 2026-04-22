@@ -243,6 +243,18 @@ impl PlanningRuntimeSnapshot {
         snapshot
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_test_signatures(
+        &self,
+        task_ledger_signature: Option<u64>,
+        queue_head_task_signature: Option<u64>,
+    ) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.task_ledger_signature = task_ledger_signature;
+        snapshot.queue_head_task_signature = queue_head_task_signature;
+        snapshot
+    }
+
     pub fn preview_status_label(&self) -> &'static str {
         if !self.plan_enabled {
             return "inactive";
@@ -426,10 +438,7 @@ fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> u64 {
 }
 
 fn normalized_task_signature(task: &TaskDefinition) -> u64 {
-    let mut normalized_task = task.clone();
-    normalized_task.depends_on.sort();
-    normalized_task.blocked_by.sort();
-    normalized_json_signature(&normalized_task)
+    normalized_json_signature(&task.normalized())
 }
 
 fn normalized_json_signature<T>(value: &T) -> u64

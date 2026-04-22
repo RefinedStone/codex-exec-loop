@@ -107,10 +107,14 @@ apply_cleanup() {
 
   printf 'removing worktree %s (%s)\n' "${path}" "${branch_name}"
   if [[ "${force_remove_path}" == "true" || ("${explicit_target}" == "true" && "${force_dirty}" == "true") ]]; then
-    git worktree remove --force "${path}"
+    if [[ -d "${path}" ]]; then
+      git worktree remove --force "${path}"
+    fi
     git branch -D "${branch_name}"
   else
-    git worktree remove "${path}"
+    if [[ -d "${path}" ]]; then
+      git worktree remove "${path}"
+    fi
     if [[ "${explicit_target}" == "true" ]]; then
       git branch -D "${branch_name}"
     else
@@ -118,7 +122,7 @@ apply_cleanup() {
     fi
   fi
   if remote_branch_exists "${branch_name}"; then
-    git push "${remote_name}" --delete "${branch_name}"
+    git push "${remote_name}" --delete "${branch_name}" || true
   fi
 }
 

@@ -729,10 +729,7 @@ fn changed_task_ids(
 }
 
 fn normalized_task_definition(task: &TaskDefinition) -> TaskDefinition {
-    let mut normalized_task = task.clone();
-    normalized_task.depends_on.sort();
-    normalized_task.blocked_by.sort();
-    normalized_task
+    task.normalized()
 }
 
 fn expand_related_task_ids(focus_ids: &mut BTreeSet<String>, task_ledger: &TaskLedgerDocument) {

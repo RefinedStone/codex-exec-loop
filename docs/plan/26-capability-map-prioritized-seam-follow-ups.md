@@ -7,6 +7,12 @@ It is not a transport experiment plan.
 It is the prioritized follow-up list that should shape refactor slices before terminal-agent bridge
 work tries to jump into adapter implementation.
 
+This sequence intentionally keeps the first three slices on shell, outbound-capability ownership,
+and optional session catalog work even though older hotspot order also called out conversation
+runtime. The capability audit showed those three seams must narrow first so later approval,
+interrupt, and attachment truth work can land without inheriting the old app-server-shaped wording
+and port boundary.
+
 ## Prioritization Rules
 
 - respect the hotspot order in [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)
@@ -20,7 +26,7 @@ work tries to jump into adapter implementation.
 
 | Priority | Seam follow-up | Capability target | Primary files or modules | Why now | Exit signal |
 | --- | --- | --- | --- | --- | --- |
-| 1 | shell capability wording and projection split | `StartupProbe`, `InteractiveTurnRuntime`, `SessionCatalog`, `TerminalBridgeAttachment` | `src/adapter/inbound/tui/app/shell_presentation.rs`, `shell_presentation/shell_copy.rs`, `shell_presentation/session_browser.rs`, `shell_presentation/status_panels/*`, `shell_presentation/overlays/popup/base.rs` | current hotspot order already puts shell presentation first, and current copy still hard-codes `codex shell`, `codex binary`, and `codex app-server` where future capability-first wording should live | shell wording is projected from capability-shaped helpers and only names Codex where the surface is intentionally Codex-specific |
+| 1 | shell capability wording and projection split | `StartupProbe`, `InteractiveTurnRuntime`, `SessionCatalog`, `TerminalBridgeAttachment` | `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_presentation/shell_copy.rs`, `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels/*`, `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/base.rs` | current hotspot order already puts shell presentation first, and current copy still hard-codes `codex shell`, `codex binary`, and `codex app-server` where future capability-first wording should live | shell wording is projected from capability-shaped helpers and only names Codex where the surface is intentionally Codex-specific |
 | 2 | outbound capability ownership split | `StartupProbe`, `InteractiveTurnRuntime`, optional `SessionCatalog` | `src/application/port/outbound/codex_app_server_port.rs`, `src/application/service/startup_service.rs`, `src/application/service/session_service.rs`, `src/application/service/conversation_service.rs`, `src/adapter/outbound/app_server/mod.rs` | the audit is currently trapped behind one app-server-shaped port, so future bridge work would otherwise inherit a fake universal provider seam | application services depend on smaller capability-owned ports while the current Codex adapter can still implement all of them together |
 | 3 | optional session catalog and session-tier surface | optional `SessionCatalog` | `src/application/service/session_service.rs`, `src/adapter/inbound/tui/app/shell_runtime.rs`, `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`, `src/domain/recent_sessions.rs`, `src/domain/session_summary.rs` | attach-only and handle-based reattach paths should not look broken just because provider-backed session listing is absent | the shell can truthfully render unsupported, partial, handle-based, or provider-backed session catalog states |
 | 4 | approval and interrupt truth surface | `InteractiveTurnRuntime`, `TerminalBridgeAttachment` | `src/adapter/inbound/tui/conversation_text.rs`, `src/adapter/inbound/tui/app/conversation_runtime.rs`, `src/adapter/inbound/tui/app/conversation_model/view_model.rs`, `src/adapter/outbound/app_server/mod.rs` | current approval wording is inherited from app-server protocol limits, and interrupt support is implied rather than modeled as a capability truth | the shell can state runtime-native, manual-handoff, or unsupported behavior for approval and interrupt without pretending all bridges behave like Codex |
