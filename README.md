@@ -24,7 +24,7 @@ the current queue task, proposed tasks, and post-turn automation all stay inside
 - TUI shell flow deep dive: [docs/design/02-tui-shell-flow.md](docs/design/02-tui-shell-flow.md)
 - Planning/runtime technical deep dive: [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)
 - Active context-first roadmap: [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md)
-- Active terminal-agent bridge research: [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md)
+- Active terminal-agent bridge research hub: [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md)
 - Docs map and source-of-truth index: [docs/README.md](docs/README.md)
 - Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
 - Supersession docs hub: [docs/supersession/README.md](docs/supersession/README.md)
@@ -38,7 +38,7 @@ the current queue task, proposed tasks, and post-turn automation all stay inside
 
 The design baseline lives in [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md).
 Current structural debt, hotspot order, and refactor targets live in [docs/plan/17-structure-and-architecture-debt-map.md](docs/plan/17-structure-and-architecture-debt-map.md).
-The active roadmap for the next cycle lives in [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md) and [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md).
+The active roadmap for the next cycle lives in [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md) and the terminal-agent bridge research set rooted at [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md).
 
 ## Install
 

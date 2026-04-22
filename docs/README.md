@@ -25,7 +25,10 @@ docs are deep dives, and which docs are history only.
 ## Active Roadmap
 
 - [plan/20-context-first-architecture-and-doc-coherence.md](plan/20-context-first-architecture-and-doc-coherence.md): current short and mid-term plan for boundary cleanup, vocabulary alignment, and LLM-friendly structure
-- [plan/21-terminal-agent-bridge-research-and-capability-boundary.md](plan/21-terminal-agent-bridge-research-and-capability-boundary.md): current short and mid-term plan for Claude Code class terminal-agent research
+- [plan/21-terminal-agent-bridge-research-and-capability-boundary.md](plan/21-terminal-agent-bridge-research-and-capability-boundary.md): hub and decision note for Claude Code class terminal-agent research
+- [plan/22-terminal-agent-transport-and-attachment-matrix.md](plan/22-terminal-agent-transport-and-attachment-matrix.md): tmux, PTY, wrapper, SSH, and proxy or vibeProxy-style transport comparison
+- [plan/23-terminal-agent-capability-boundary-and-session-contract.md](plan/23-terminal-agent-capability-boundary-and-session-contract.md): capability seams and session expectations for terminal-agent work
+- [plan/24-terminal-agent-bridge-experiment-matrix.md](plan/24-terminal-agent-bridge-experiment-matrix.md): local attach and wrapper experiment design plus deferred-path evidence gaps
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): supporting hotspot map, current hotspot order, and refactor ordering input
 
 ## Release Delta
@@ -61,7 +64,8 @@ docs are deep dives, and which docs are history only.
   deferred work.
 - `docs/design/` holds deep technical explanation and boundary rules.
 - `docs/releases/` holds tagged or branch release deltas only.
-- `docs/plan/20-*` and `docs/plan/21-*` hold the active roadmap for the current cycle.
+- `docs/plan/20-*` holds the context-first roadmap for the current cycle.
+- `docs/plan/21-*`, `docs/plan/22-*`, `docs/plan/23-*`, and `docs/plan/24-*` hold the active terminal-agent bridge research set.
 - `docs/supersession/` is the current-contract hub, not a historical side archive.
 - `docs/plan/` holds runbooks, active roadmap, and historical design audits.
 - Use `docs/plan/20-*` with `docs/plan/17-*` when a task touches a named hotspot; the roadmap explains why and the debt map fixes the current order.
