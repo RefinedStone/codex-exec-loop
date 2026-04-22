@@ -36,9 +36,9 @@ pub(super) fn build_existing_workspace_copy(
     }
 }
 
-pub(super) fn build_planning_draft_editor_status_copy(
-    draft_name: &str,
-    active_path: &str,
+pub(super) fn build_planning_draft_editor_status_copy<'a>(
+    draft_name: &'a str,
+    active_path: &'a str,
     selected_file_position: usize,
     file_count: usize,
     validation_report: &PlanningValidationReport,
@@ -47,7 +47,7 @@ pub(super) fn build_planning_draft_editor_status_copy(
     next_action: &'static str,
     close_risk: Option<PlanningDraftEditorCloseRisk>,
     confirmation_pending: bool,
-) -> PlanningDraftEditorStatusCopy<'_> {
+) -> PlanningDraftEditorStatusCopy<'a> {
     PlanningDraftEditorStatusCopy {
         draft_name,
         active_path,
