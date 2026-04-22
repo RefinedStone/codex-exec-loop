@@ -2,6 +2,7 @@ use ratatui::text::Line;
 
 use crate::domain::recent_sessions::SessionCatalogTier;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 pub(super) fn thread_history_loading_header_line() -> &'static str {
     "Reading thread history from codex app-server."
@@ -45,6 +46,18 @@ pub(super) fn startup_diagnostics_summary_line(diagnostics: &StartupDiagnostics)
         inline_diagnostic_status(diagnostics.codex_binary_ok, "ok", "check"),
         inline_diagnostic_status(diagnostics.initialize_ok, "ok", "check"),
         inline_diagnostic_status(diagnostics.account_ok, "ok", "attention"),
+    )
+}
+
+pub(super) fn startup_attachment_summary_line(diagnostics: &StartupDiagnostics) -> String {
+    attachment_profile_summary_line(diagnostics.attachment_profile)
+}
+
+pub(super) fn attachment_profile_summary_line(profile: TerminalBridgeAttachmentProfile) -> String {
+    format!(
+        "attachment: {}  |  recovery: {}",
+        profile.mode.label(),
+        profile.recovery_anchor.label()
     )
 }
 

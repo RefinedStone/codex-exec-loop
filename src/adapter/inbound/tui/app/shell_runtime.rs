@@ -299,6 +299,7 @@ mod tests {
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
     use crate::domain::startup_diagnostics::StartupDiagnostics;
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[derive(Default)]
     struct FakeCodexAppServerPort;
@@ -306,6 +307,7 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
                 initialize_detail: "ok".to_string(),
                 account_detail: "ok".to_string(),
                 account_ok: true,
@@ -392,6 +394,7 @@ mod tests {
             workspace_ok: true,
             workspace_path: workspace_path.to_string(),
             workspace_detail: "ok".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
             initialize_ok: true,
             initialize_detail: "ok".to_string(),
             account_ok: true,

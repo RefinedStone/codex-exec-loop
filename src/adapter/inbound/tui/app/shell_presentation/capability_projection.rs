@@ -2,8 +2,8 @@ use crate::adapter::inbound::tui::shell_chrome::SessionState;
 use crate::domain::recent_sessions::SessionCatalog;
 
 use super::capability_copy::{
-    recent_session_status_blocked_by_startup, recent_session_status_load_failed,
-    recent_session_status_loaded, recent_session_status_loading,
+    attachment_profile_summary_line, recent_session_status_blocked_by_startup,
+    recent_session_status_load_failed, recent_session_status_loaded, recent_session_status_loading,
     recent_session_status_not_requested, recent_session_status_partial,
     recent_session_status_ready_to_load, recent_session_status_unsupported,
     recent_session_status_waiting_for_startup, startup_check_loading_lines,
@@ -42,6 +42,9 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
                 ),
             ]),
             Line::from(format!("cwd: {}", diagnostics.cwd)),
+            Line::from(attachment_profile_summary_line(
+                diagnostics.attachment_profile,
+            )),
         ],
         StartupState::Failed(message) => vec![
             Line::from(vec![
@@ -78,6 +81,16 @@ pub(super) fn build_startup_check_lines_from_state(
                 "app-server initialize",
                 diagnostics.initialize_ok,
                 &diagnostics.initialize_detail,
+            ),
+            diagnostic_item(
+                "attachment mode",
+                true,
+                diagnostics.attachment_profile.mode.label(),
+            ),
+            diagnostic_item(
+                "recovery anchor",
+                true,
+                diagnostics.attachment_profile.recovery_anchor.label(),
             ),
             diagnostic_item(
                 "account/read",

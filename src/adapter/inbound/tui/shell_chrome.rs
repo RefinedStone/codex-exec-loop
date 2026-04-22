@@ -287,6 +287,7 @@ mod tests {
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[test]
     fn startup_loaded_auto_requests_sessions_when_ready() {
@@ -492,6 +493,7 @@ mod tests {
             workspace_ok: true,
             workspace_path: "/tmp/root".to_string(),
             workspace_detail: "git repo: /tmp/root".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
             initialize_ok: true,
             initialize_detail: "darwin / unix / codex".to_string(),
             account_ok: true,

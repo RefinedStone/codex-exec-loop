@@ -1,3 +1,5 @@
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+
 const BUNDLED_SCHEMA_SNAPSHOT_PATH: &str = "schema/codex_app_server_protocol.v2.schemas.json";
 const BUNDLED_SCHEMA_SNAPSHOT_CONTENTS: &str =
     include_str!("../../schema/codex_app_server_protocol.v2.schemas.json");
@@ -10,6 +12,7 @@ pub struct StartupDiagnostics {
     pub workspace_ok: bool,
     pub workspace_path: String,
     pub workspace_detail: String,
+    pub attachment_profile: TerminalBridgeAttachmentProfile,
     pub initialize_ok: bool,
     pub initialize_detail: String,
     pub account_ok: bool,

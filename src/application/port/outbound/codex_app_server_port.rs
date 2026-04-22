@@ -95,6 +95,7 @@ mod tests {
         ConversationControlSupport, ConversationRuntimeControlTruth, ConversationSnapshot,
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[derive(Default)]
     struct FakeCodexAppServerPort {
@@ -106,6 +107,7 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> anyhow::Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
                 initialize_detail: "init".to_string(),
                 account_detail: "account".to_string(),
                 account_ok: true,
@@ -187,6 +189,10 @@ mod tests {
             .expect("startup probe should load");
 
         assert_eq!(context.initialize_detail, "init");
+        assert_eq!(
+            context.attachment_profile,
+            TerminalBridgeAttachmentProfile::codex_app_server()
+        );
         assert_eq!(context.account_detail, "account");
         assert!(context.account_ok);
         assert_eq!(context.warnings, vec!["warning".to_string()]);

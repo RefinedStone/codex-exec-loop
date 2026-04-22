@@ -34,6 +34,7 @@ impl StartupService {
             workspace_ok: workspace_status.ok,
             workspace_path: workspace_status.path,
             workspace_detail: workspace_status.detail,
+            attachment_profile: startup_context.attachment_profile,
             initialize_ok: true,
             initialize_detail: startup_context.initialize_detail,
             account_ok: startup_context.account_ok,

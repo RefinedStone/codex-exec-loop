@@ -1,8 +1,9 @@
 use ratatui::text::Line;
 
 use super::super::capability_copy::{
-    startup_diagnostics_summary_line, startup_initializing_status_line,
-    startup_preparing_status_line, thread_history_loading_status_line,
+    startup_attachment_summary_line, startup_diagnostics_summary_line,
+    startup_initializing_status_line, startup_preparing_status_line,
+    thread_history_loading_status_line,
 };
 use super::super::planning::build_planner_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
@@ -188,6 +189,7 @@ fn build_inline_startup_screen_lines_with_context(
         StartupState::Ready(diagnostics) => {
             lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
             lines.push(Line::from(startup_diagnostics_summary_line(diagnostics)));
+            lines.push(Line::from(startup_attachment_summary_line(diagnostics)));
             if let Some(first_warning) = diagnostics.warnings.first() {
                 lines.push(Line::from(format!(
                     "warning: {}",

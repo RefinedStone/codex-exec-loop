@@ -3,11 +3,13 @@ use anyhow::{Context, Result};
 use super::CodexAppServerAdapter;
 use super::connection::AppServerConnection;
 use super::protocol::{initialize_detail, sort_and_dedup_warnings};
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 #[derive(Default)]
 pub(super) struct SharedAppServerRuntime {
     connection: Option<AppServerConnection>,
     initialize_detail: Option<String>,
+    attachment_profile: Option<TerminalBridgeAttachmentProfile>,
     pending_notices: Vec<String>,
 }
 
@@ -32,6 +34,7 @@ impl SharedAppServerRuntime {
         let mut connection = adapter.open_connection()?;
         let initialize_response = connection.initialize()?;
         self.initialize_detail = Some(initialize_detail(&initialize_response));
+        self.attachment_profile = Some(TerminalBridgeAttachmentProfile::codex_app_server());
         self.connection = Some(connection);
         if let Some(notice) = reconnect_notice {
             self.push_notice(notice);
@@ -45,6 +48,11 @@ impl SharedAppServerRuntime {
             .context("shared runtime initialize detail was not available")
     }
 
+    pub(super) fn attachment_profile(&self) -> Result<TerminalBridgeAttachmentProfile> {
+        self.attachment_profile
+            .context("shared runtime attachment profile was not available")
+    }
+
     pub(super) fn connection_mut(&mut self) -> Result<&mut AppServerConnection> {
         self.connection
             .as_mut()
@@ -53,6 +61,7 @@ impl SharedAppServerRuntime {
 
     pub(super) fn reset(&mut self) {
         self.initialize_detail = None;
+        self.attachment_profile = None;
         self.connection.take();
     }
 
@@ -74,6 +83,7 @@ impl SharedAppServerRuntime {
 pub(super) struct SharedRuntimeOutput<T> {
     pub(super) value: T,
     pub(super) warnings: Vec<String>,
+    pub(super) attachment_profile: TerminalBridgeAttachmentProfile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +165,7 @@ mod tests {
         RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime,
         SharedRuntimeRequestKind, request_failure_outcome,
     };
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[test]
     fn reset_preserves_pending_runtime_notices() {
@@ -182,6 +193,24 @@ mod tests {
                 "shared runtime reset".to_string(),
                 "stream warning".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn reset_clears_attachment_profile_until_runtime_reconnects() {
+        let mut runtime = SharedAppServerRuntime {
+            attachment_profile: Some(TerminalBridgeAttachmentProfile::codex_app_server()),
+            ..SharedAppServerRuntime::default()
+        };
+
+        runtime.reset();
+
+        let error = runtime
+            .attachment_profile()
+            .expect_err("attachment profile should clear on reset");
+        assert_eq!(
+            error.to_string(),
+            "shared runtime attachment profile was not available"
         );
     }
 
