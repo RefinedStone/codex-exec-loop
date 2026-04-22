@@ -1,5 +1,7 @@
 #[path = "wiring/surface.rs"]
 mod surface;
+#[path = "wiring/surface_handoff.rs"]
+mod surface_handoff;
 
 use super::super::super::super::super::super::super::PlanningInitOverlayView;
 use super::super::super::super::super::super::super::copy::PlanningSimpleReviewCopy;
@@ -7,5 +9,5 @@ use super::super::super::super::super::super::super::copy::PlanningSimpleReviewC
 pub(super) fn build_simple_review_overlay_view_from_copy(
     copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
-    surface::build_simple_review_overlay_view_from_copy(copy)
+    surface_handoff::build_simple_review_overlay_view_from_copy(copy)
 }
