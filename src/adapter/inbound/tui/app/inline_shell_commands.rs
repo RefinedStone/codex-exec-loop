@@ -42,7 +42,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue  :directions [apply]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 const RESET_USAGE: &str =
@@ -83,7 +83,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to open the planning queue inspection.",
         execution_status: Some("opened planning queue inspection"),
-        requires_argument: false,
+        requires_argument: true,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Directions,
@@ -231,6 +231,16 @@ impl InlineShellCommandInput {
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
+            InlineShellCommand::Queue => match self.argument() {
+                Some(value) if value.eq_ignore_ascii_case("apply") => {
+                    "Press Enter to import tracked task-ledger.json into active planning."
+                        .to_string()
+                }
+                Some(value) => format!(
+                    "Press Enter to apply `:queue {value}`. Supported arguments: apply."
+                ),
+                None => self.command.spec().buffered_hint.to_string(),
+            },
             InlineShellCommand::Reset => match parse_reset_argument(self.argument()) {
                 ResetArgument::None => RESET_USAGE.to_string(),
                 ResetArgument::Queue { .. } => {
@@ -266,7 +276,10 @@ impl InlineShellCommandInput {
     }
 
     pub(super) fn execution_status(&self) -> Option<String> {
-        self.command.spec().execution_status.map(str::to_string)
+        match self.command {
+            InlineShellCommand::Queue if self.argument().is_some() => None,
+            _ => self.command.spec().execution_status.map(str::to_string),
+        }
     }
 
     pub(super) fn from_command(command: InlineShellCommand) -> Self {
@@ -514,6 +527,10 @@ mod tests {
             (":sessions", Some((InlineShellCommand::Sessions, None))),
             (":q", Some((InlineShellCommand::Queue, None))),
             (":queue", Some((InlineShellCommand::Queue, None))),
+            (
+                ":queue apply",
+                Some((InlineShellCommand::Queue, Some("apply"))),
+            ),
             (":directions", Some((InlineShellCommand::Directions, None))),
             (
                 ":directions apply",
@@ -758,6 +775,26 @@ mod tests {
         assert_eq!(
             invalid.buffered_hint(),
             "Press Enter to apply `:directions later`. Supported arguments: apply."
+        );
+    }
+
+    #[test]
+    fn queue_command_hint_is_argument_aware() {
+        let plain = InlineShellCommandInput::parse(":queue").expect("command should parse");
+        let apply = InlineShellCommandInput::parse(":queue apply").expect("command should parse");
+        let invalid = InlineShellCommandInput::parse(":queue later").expect("command should parse");
+
+        assert_eq!(
+            plain.buffered_hint(),
+            "Press Enter to open the planning queue inspection."
+        );
+        assert_eq!(
+            apply.buffered_hint(),
+            "Press Enter to import tracked task-ledger.json into active planning."
+        );
+        assert_eq!(
+            invalid.buffered_hint(),
+            "Press Enter to apply `:queue later`. Supported arguments: apply."
         );
     }
 

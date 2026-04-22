@@ -18,6 +18,7 @@ use self::authoring::directions::PlanningDirectionsService;
 use self::authoring::directions_apply::PlanningDirectionsApplyService;
 use self::authoring::init::PlanningInitService;
 use self::authoring::proposal_promotion::PlanningProposalPromotionService;
+use self::authoring::task_ledger_apply::PlanningTaskLedgerApplyService;
 use self::repair::doctor::PlanningDoctorService;
 use self::repair::reconciliation::PlanningReconciliationService;
 use self::repair::reset::PlanningResetService;
@@ -49,6 +50,7 @@ pub use self::authoring::init::{
 pub use self::authoring::proposal_promotion::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
 };
+pub use self::authoring::task_ledger_apply::PlanningTrackedTaskLedgerApplyResult;
 pub use self::control::{PlanningControlCommand, PlanningControlReply, PlanningControlService};
 pub use self::repair::doctor::{PlanningDoctorReport, PlanningDoctorState};
 pub use self::repair::reconciliation::{
@@ -106,6 +108,11 @@ impl PlanningFeature {
             planning_workspace_port.clone(),
             validation_service.clone(),
         );
+        let task_ledger_apply_service = PlanningTaskLedgerApplyService::new(
+            planning_workspace_port.clone(),
+            validation_service.clone(),
+            priority_queue_service.clone(),
+        );
         let planning_prompt_service = PlanningPromptService::new(
             planning_workspace_port.clone(),
             validation_service.clone(),
@@ -137,6 +144,7 @@ impl PlanningFeature {
                 doctor_service,
                 directions_service.clone(),
                 directions_apply_service,
+                task_ledger_apply_service,
             ),
             runtime: PlanningRuntimeUseCases::new(runtime_facade.clone()),
             worker: PlanningWorkerUseCases::new(
@@ -159,6 +167,7 @@ pub struct PlanningWorkspaceUseCases {
     doctor_service: PlanningDoctorService,
     directions_service: PlanningDirectionsService,
     directions_apply_service: PlanningDirectionsApplyService,
+    task_ledger_apply_service: PlanningTaskLedgerApplyService,
 }
 
 impl PlanningWorkspaceUseCases {
@@ -168,6 +177,7 @@ impl PlanningWorkspaceUseCases {
         doctor_service: PlanningDoctorService,
         directions_service: PlanningDirectionsService,
         directions_apply_service: PlanningDirectionsApplyService,
+        task_ledger_apply_service: PlanningTaskLedgerApplyService,
     ) -> Self {
         Self {
             init_service,
@@ -175,6 +185,7 @@ impl PlanningWorkspaceUseCases {
             doctor_service,
             directions_service,
             directions_apply_service,
+            task_ledger_apply_service,
         }
     }
 
@@ -207,6 +218,14 @@ impl PlanningWorkspaceUseCases {
     ) -> anyhow::Result<PlanningTrackedDirectionsApplyResult> {
         self.directions_apply_service
             .apply_tracked_directions(workspace_dir)
+    }
+
+    pub fn apply_tracked_task_ledger(
+        &self,
+        workspace_dir: &str,
+    ) -> anyhow::Result<PlanningTrackedTaskLedgerApplyResult> {
+        self.task_ledger_apply_service
+            .apply_tracked_task_ledger(workspace_dir)
     }
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> anyhow::Result<()> {
