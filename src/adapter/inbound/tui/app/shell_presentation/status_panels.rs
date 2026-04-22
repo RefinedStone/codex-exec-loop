@@ -1,31 +1,28 @@
-use ratatui::style::{Color, Style};
 #[cfg(test)]
 use ratatui::text::Line;
-use ratatui::text::Span;
 
-use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
-};
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 #[cfg(test)]
 use super::ConversationViewModel;
+use super::NativeTuiApp;
 #[cfg(test)]
 use super::ShellCorePresentationContext;
-use super::{ConversationState, NativeTuiApp};
 
+#[cfg(test)]
+#[path = "status_panels/footer_copy.rs"]
+mod footer_copy;
 #[path = "status_panels/live_status_layout.rs"]
 mod live_status_layout;
+#[path = "status_panels/plan_indicator.rs"]
+mod plan_indicator;
 #[path = "status_panels/tail_copy.rs"]
 mod tail_copy;
+#[path = "status_panels/tail_shared.rs"]
+mod tail_shared;
 
 pub(in super::super) use live_status_layout::InlineTailView;
-
-#[derive(Clone, Copy)]
-pub(super) struct PlanModeIndicatorView {
-    primary_label: &'static str,
-    detail_label: Option<&'static str>,
-    color: Color,
-}
+pub(super) use plan_indicator::PlanModeIndicatorView;
 
 #[cfg(test)]
 pub(super) fn build_shell_footer_lines_with_context(
@@ -38,7 +35,7 @@ pub(super) fn build_shell_footer_lines_with_context(
     planning_notice_line: Option<String>,
     planner_panel_lines: Vec<String>,
 ) -> Vec<Line<'static>> {
-    tail_copy::build_shell_footer_lines_with_context(
+    footer_copy::build_shell_footer_lines_with_context(
         context,
         plan_mode_indicator,
         parallel_mode_summary_line,
@@ -63,71 +60,23 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
 pub(super) fn current_live_agent_lines(
     conversation: &ConversationViewModel,
 ) -> Option<Vec<Line<'static>>> {
-    tail_copy::current_live_agent_lines(conversation)
+    tail_shared::current_live_agent_lines(conversation)
 }
 
 #[cfg(test)]
 pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
-    tail_copy::parallel_mode_summary_line(app)
+    tail_shared::parallel_mode_summary_line(app)
 }
 
 #[cfg(test)]
 pub(super) fn parallel_mode_alert_line(app: &NativeTuiApp) -> Option<String> {
-    tail_copy::parallel_mode_alert_line(app)
+    tail_shared::parallel_mode_alert_line(app)
 }
 
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
-    match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            plan_mode_indicator_from_snapshot(&conversation.planning_runtime_snapshot)
-        }
-        ConversationState::Loading | ConversationState::Failed(_) => {
-            let workspace_directory = app.current_workspace_directory();
-            let snapshot = app.load_planning_runtime_snapshot(&workspace_directory);
-            plan_mode_indicator_from_snapshot(&snapshot)
-        }
-    }
-}
-
-fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanModeIndicatorView {
-    if !snapshot.plan_enabled() {
-        return PlanModeIndicatorView {
-            primary_label: "Plan off",
-            detail_label: None,
-            color: Color::Red,
-        };
-    }
-
-    PlanModeIndicatorView {
-        primary_label: "Plan on",
-        detail_label: Some(plan_runtime_substate_label(snapshot)),
-        color: Color::Blue,
-    }
+    plan_indicator::current_plan_mode_indicator(app)
 }
 
 pub(super) fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
-    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
-        "invalid"
-    } else if snapshot.auto_followup_pause_reason().is_some() {
-        "paused"
-    } else if snapshot.has_actionable_queue_head() {
-        "ready"
-    } else {
-        "idle"
-    }
-}
-
-fn plan_mode_prefixed_spans(
-    leading_text: String,
-    indicator: PlanModeIndicatorView,
-) -> Vec<Span<'static>> {
-    let mut spans = vec![Span::raw(leading_text), Span::raw("  |  ")];
-    spans.push(Span::styled(
-        indicator.primary_label,
-        Style::default().fg(indicator.color),
-    ));
-    if let Some(detail_label) = indicator.detail_label {
-        spans.push(Span::raw(format!(" / {detail_label}")));
-    }
-    spans
+    plan_indicator::plan_runtime_substate_label(snapshot)
 }
