@@ -122,7 +122,7 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
             Line::from(vec![
                 Span::styled(format!("{marker} "), style),
                 Span::styled(buffer.file_label(), style.add_modifier(Modifier::BOLD)),
-                Span::styled(dirty_suffix.to_string(), style),
+                Span::styled(dirty_suffix, style),
             ])
         })
         .collect::<Vec<_>>();
@@ -151,9 +151,8 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
         draft_name: app
             .planning_draft_editor_ui_state
             .draft_name()
-            .unwrap_or("unknown")
-            .to_string(),
-        active_path: selected_buffer.active_path().to_string(),
+            .unwrap_or("unknown"),
+        active_path: selected_buffer.active_path(),
         selected_file_position: selected_index + 1,
         file_count: buffers.len(),
         validation_ok: validation_report.is_valid(),
@@ -174,7 +173,7 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
             compact_inline_detail(&dirty_labels.join(", "), FOOTER_NOTICE_DETAIL_LIMIT)
         },
         has_dirty_labels: !dirty_labels.is_empty(),
-        next_action: next_action.to_string(),
+        next_action,
         close_risk,
         confirmation_pending: pending_close_risk.is_some(),
     });

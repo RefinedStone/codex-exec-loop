@@ -30,9 +30,9 @@ pub(super) struct PlanningDraftEditorIssueCopy {
     pub(super) detail: String,
 }
 
-pub(super) struct PlanningDraftEditorStatusCopy {
-    pub(super) draft_name: String,
-    pub(super) active_path: String,
+pub(super) struct PlanningDraftEditorStatusCopy<'a> {
+    pub(super) draft_name: &'a str,
+    pub(super) active_path: &'a str,
     pub(super) selected_file_position: usize,
     pub(super) file_count: usize,
     pub(super) validation_ok: bool,
@@ -40,12 +40,12 @@ pub(super) struct PlanningDraftEditorStatusCopy {
     pub(super) staged_path_summary: String,
     pub(super) dirty_label_summary: String,
     pub(super) has_dirty_labels: bool,
-    pub(super) next_action: String,
+    pub(super) next_action: &'static str,
     pub(super) close_risk: Option<PlanningDraftEditorCloseRisk>,
     pub(super) confirmation_pending: bool,
 }
 
-fn planning_setup_title_line(suffix: &str) -> Line<'static> {
+fn planning_setup_title_line(suffix: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "Planning Setup",
@@ -53,11 +53,11 @@ fn planning_setup_title_line(suffix: &str) -> Line<'static> {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(suffix.to_string()),
+        Span::raw(suffix),
     ])
 }
 
-fn planning_draft_title_line(suffix: &str) -> Line<'static> {
+fn planning_draft_title_line(suffix: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "Planning Draft",
@@ -65,7 +65,7 @@ fn planning_draft_title_line(suffix: &str) -> Line<'static> {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(suffix.to_string()),
+        Span::raw(suffix),
     ])
 }
 
@@ -322,7 +322,7 @@ pub(super) fn build_planning_draft_editor_header_lines(
 }
 
 pub(super) fn build_planning_draft_editor_status_lines(
-    copy: PlanningDraftEditorStatusCopy,
+    copy: PlanningDraftEditorStatusCopy<'_>,
 ) -> Vec<Line<'static>> {
     let mut status_lines = vec![
         Line::from(format!("staged draft: {}", copy.draft_name)),

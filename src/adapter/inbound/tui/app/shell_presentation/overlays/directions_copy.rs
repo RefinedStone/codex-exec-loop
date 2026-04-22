@@ -2,7 +2,7 @@ use super::super::super::{Color, DetailDocConfirmChoice, Line, Modifier, Span, S
 use super::super::option_lines::overlay_option_line;
 use super::DirectionsMaintenanceOverlayView;
 
-fn directions_title_line(suffix: &str) -> Line<'static> {
+fn directions_title_line(suffix: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "Directions Maintenance",
@@ -10,7 +10,7 @@ fn directions_title_line(suffix: &str) -> Line<'static> {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(suffix.to_string()),
+        Span::raw(suffix),
     ])
 }
 
