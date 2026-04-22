@@ -680,13 +680,13 @@
     {
       "id": "terminal-bridge-primary-implementation-slice",
       "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "With docs/plan/27 and docs/plan/28 closing the tmux readiness gate, this is the first real tmux-first execution slice under the implementation direction.",
-      "title": "Implement the first real terminal bridge slice",
-      "description": "Start the first executable implementation slice for the research-selected primary bridge path so the repo stops proving attachment truth only through Codex app-server and fake seams. Scope this around one reviewable tmux local-attach adapter path that consumes the shared attachment events and profiles, keeps `SessionCatalog` optional, surfaces `LocalAttach + SessionHandle`, and leaves managed wrapper, SSH or tunnel, and proxy work out of scope.",
+      "direction_relation_note": "With docs/plan/27 and docs/plan/28 closing the tmux readiness gate, the next executable slice is the first reviewable tmux adapter entrypoint rather than a broad all-at-once bridge rollout.",
+      "title": "Land the first tmux local-attach adapter entrypoint",
+      "description": "Implement the first reviewable tmux-only bridge slice by wiring a concrete tmux adapter through `StartupProbe` and `TerminalBridgeAttachment`, validating `tmux` presence plus target pane or session-handle resolution, surfacing missing-server and missing-target copy before shell entry, and exposing `LocalAttach + SessionHandle` with truthful `ManualHandoff` approval and `RuntimeNative` interrupt semantics. Leave live relay, transcript recovery, completion heuristics, and optional catalog discovery to follow-up slices.",
       "status": "ready",
       "base_priority": 90,
       "dynamic_priority_delta": 2,
-      "priority_reason": "The local tmux evidence gate is now closed, so the next remaining bridge work is a bounded tmux-only implementation slice rather than more research or fake-adapter alignment.",
+      "priority_reason": "The latest operator request and context review both point to implementation starting now, and the narrowest useful first PR is the tmux attach and probe path that makes capability truth visible before runtime relay work begins.",
       "depends_on": [
         "terminal-bridge-local-spike-readiness-gate"
       ],
@@ -694,7 +694,45 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T00:00:00Z"
+      "updated_at": "2026-04-23T03:20:00Z"
+    },
+    {
+      "id": "terminal-bridge-tmux-runtime-relay-and-completion",
+      "direction_id": "terminal-agent-bridge-implementation",
+      "direction_relation_note": "The gate verdict and latest main-session answer both call out live relay, transcript recovery, interrupt, and completion detection as the next bounded follow-up once the tmux entrypoint exists.",
+      "title": "Add tmux live relay, recovery capture, and turn completion",
+      "description": "Extend the tmux bridge after the attach entrypoint lands by implementing prompt submission via literal paste, incremental output relay via `pipe-pane`, transcript recovery via `capture-pane`, interrupt requests via `C-c`, and transcript or terminal-derived completion heuristics without inventing provider turn events or widening into wrapper, SSH, or proxy paths.",
+      "status": "proposed",
+      "base_priority": 88,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "This is the clearest next slice named in the latest answer, but it should stay behind the probe and attachment entrypoint so the queue keeps one concrete PR head.",
+      "depends_on": [
+        "terminal-bridge-primary-implementation-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-23T03:20:00Z"
+    },
+    {
+      "id": "terminal-bridge-tmux-session-catalog-reattach-surface",
+      "direction_id": "terminal-agent-bridge-implementation",
+      "direction_relation_note": "The capability-boundary docs keep `SessionCatalog` optional, so any tmux discovery or reattach UX should follow the explicit handle path instead of leading it.",
+      "title": "Add optional tmux session catalog and reattach surface",
+      "description": "Once the explicit tmux pane or session-handle attach path is stable, add an optional tmux discovery surface that exposes handle-based reattach without making catalog availability mandatory. Keep attach-only flows valid, and do not turn tmux discovery into a fake provider session model.",
+      "status": "proposed",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest answer still treats catalog support as optional, so this should remain a secondary follow-up behind the first attach path and runtime relay slice.",
+      "depends_on": [
+        "terminal-bridge-primary-implementation-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-23T03:20:00Z"
     }
   ]
 }
