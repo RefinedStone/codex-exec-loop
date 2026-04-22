@@ -46,7 +46,9 @@ fn build_inline_prompt_cursor_offset_for_lines(
     let prompt_start_row = tail_lines[..prompt_start_index]
         .iter()
         .map(|line| wrapped_row_count(line.width(), content_width))
-        .sum::<usize>() as u16;
+        .sum::<usize>()
+        .try_into()
+        .unwrap_or(u16::MAX);
     let (cursor_x, cursor_y) = build_prompt_cursor_offset(conversation, content_width)?;
 
     Some((cursor_x, prompt_start_row.saturating_add(cursor_y)))
