@@ -10,7 +10,7 @@ use super::super::{
 };
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningDoctorState, PlanningDraftEditorSession, PlanningResetTarget,
-    PlanningWorkspaceResetResult,
+    PlanningTrackedDirectionsApplyResult, PlanningWorkspaceResetResult,
 };
 
 type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
@@ -335,6 +335,25 @@ impl NativeTuiApp {
         );
     }
 
+    pub(in crate::adapter::inbound::tui::app) fn handle_directions_shell_command(
+        &mut self,
+        argument: Option<&str>,
+    ) {
+        match argument.map(str::trim).filter(|value| !value.is_empty()) {
+            None => self.show_directions_maintenance_overlay(),
+            Some(value) if value.eq_ignore_ascii_case("apply") => {
+                self.apply_tracked_directions_from_workspace()
+            }
+            Some(value) => self.dispatch_conversation_input(
+                ConversationInputEvent::StatusMessageShown {
+                    status_text: format!(
+                        "unsupported :directions argument `{value}` / supported: :directions, :directions apply"
+                    ),
+                },
+            ),
+        }
+    }
+
     pub(in crate::adapter::inbound::tui::app) fn present_directions_maintenance_overview(
         &mut self,
         status_text: String,
@@ -356,6 +375,35 @@ impl NativeTuiApp {
             Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!("directions maintenance unavailable: {error}"),
+                });
+            }
+        }
+    }
+
+    fn apply_tracked_directions_from_workspace(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning
+            .workspace
+            .apply_tracked_directions(&workspace_directory)
+        {
+            Ok(result) if result.applied() => {
+                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                    &workspace_directory,
+                );
+                self.present_directions_maintenance_overview(
+                    tracked_directions_apply_status_text(&result),
+                    true,
+                );
+            }
+            Ok(result) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: tracked_directions_apply_status_text(&result),
+                });
+            }
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("tracked directions apply failed: {error}"),
                 });
             }
         }
@@ -1240,6 +1288,23 @@ fn planning_doctor_status_text(report: &PlanningDoctorReport) -> String {
     }
 
     parts.join(" / ")
+}
+
+fn tracked_directions_apply_status_text(result: &PlanningTrackedDirectionsApplyResult) -> String {
+    if result.applied() {
+        return format!(
+            "tracked directions applied / files: {} / next action: review the refreshed directions overlay",
+            result.applied_paths.len()
+        );
+    }
+
+    let issue = result
+        .validation_report
+        .errors()
+        .first()
+        .map(|issue| issue.message.as_str())
+        .unwrap_or("planning validation failed");
+    format!("tracked directions apply blocked / issue: {issue}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

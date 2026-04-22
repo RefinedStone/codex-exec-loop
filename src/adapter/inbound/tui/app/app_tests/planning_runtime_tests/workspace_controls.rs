@@ -115,6 +115,66 @@ fn planning_off_command_turns_plan_off_and_blocks_directions() {
 }
 
 #[test]
+fn directions_apply_command_refreshes_overlay_on_success() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("directions-apply-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":directions apply").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+    assert!(
+        conversation
+            .status_text
+            .contains("tracked directions applied")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn directions_apply_command_surfaces_validation_reason() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("directions-apply-invalid-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    rewrite_active_directions_toml(&workspace_dir, |directions| {
+        directions.replace(
+            r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
+            r#"prompt_path = ".codex-exec-loop/planning/prompts/missing.md""#,
+        )
+    });
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":directions apply").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("tracked directions apply blocked")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("queue_idle.prompt_path does not exist")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn planning_on_command_requires_existing_workspace() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-on-command-no-workspace");

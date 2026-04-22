@@ -402,6 +402,18 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         Self::read_optional_workspace_file(workspace_dir, &relative_path)
     }
 
+    fn load_optional_planning_candidate_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>> {
+        let relative_path = normalize_workspace_relative_path(
+            relative_path,
+            &format!("invalid planning relative path: {relative_path}"),
+        )?;
+        Self::read_optional_candidate_workspace_file(workspace_dir, &relative_path)
+    }
+
     fn replace_planning_workspace_file(
         &self,
         workspace_dir: &str,
@@ -527,8 +539,7 @@ mod tests {
         PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-        TASK_LEDGER_FILE_PATH,
+        DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
 
     fn create_temp_workspace(prefix: &str) -> String {
@@ -843,6 +854,49 @@ mod tests {
 
         assert_eq!(active.directions_toml.as_deref(), Some("version = 1\n"));
         assert_eq!(candidate.directions_toml.as_deref(), Some("version = 2\n"));
+    }
+
+    #[test]
+    fn candidate_supporting_files_read_linked_worktree_copy_for_git_backed_workspace() {
+        let repo = TempGitRepo::new("planning-workspace-candidate-supporting-root");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        adapter
+            .commit_planning_workspace_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some("version = 1\n".to_string()),
+                    task_ledger_json: None,
+                    task_ledger_schema_json: None,
+                    queue_snapshot_json: None,
+                    result_output_markdown: None,
+                },
+            )
+            .expect("git-backed active commit should seed the authority store");
+        repo.write_repo_file(
+            ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            "# prompt from repo root\n",
+        );
+        let linked_prompt_path = repo
+            .worktree_root
+            .join(".codex-exec-loop/planning/prompts/queue-idle-review.md");
+        fs::create_dir_all(
+            linked_prompt_path
+                .parent()
+                .expect("linked prompt should have a parent directory"),
+        )
+        .expect("linked prompt directory should exist");
+        fs::write(&linked_prompt_path, "# prompt from worktree\n")
+            .expect("linked prompt should diverge");
+
+        let body = adapter
+            .load_optional_planning_candidate_file(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            )
+            .expect("candidate supporting file should load")
+            .expect("candidate supporting file should exist");
+
+        assert_eq!(body, "# prompt from worktree\n");
     }
 
     #[test]

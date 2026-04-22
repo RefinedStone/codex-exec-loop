@@ -815,6 +815,14 @@ mod tests {
             Ok(body)
         }
 
+        fn load_optional_planning_candidate_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            self.load_optional_planning_file(workspace_dir, relative_path)
+        }
+
         fn load_planning_draft_files(
             &self,
             _workspace_dir: &str,

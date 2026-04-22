@@ -373,6 +373,14 @@ mod tests {
             Ok(self.active_file(relative_path))
         }
 
+        fn load_optional_planning_candidate_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            self.load_optional_planning_file(workspace_dir, relative_path)
+        }
+
         fn replace_planning_workspace_file(
             &self,
             _workspace_dir: &str,

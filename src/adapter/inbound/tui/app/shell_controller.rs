@@ -126,7 +126,9 @@ impl NativeTuiApp {
             }
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Queue => self.show_queue_overlay(),
-            InlineShellCommand::Directions => self.show_directions_maintenance_overlay(),
+            InlineShellCommand::Directions => {
+                self.handle_directions_shell_command(command_input.argument())
+            }
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Automation => self.show_automation_overlay(),
             InlineShellCommand::Doctor => self.run_planning_doctor(),

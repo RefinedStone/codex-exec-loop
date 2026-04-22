@@ -1,7 +1,3 @@
-use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
-use crate::application::service::planning::runtime::prompt::{
-    PlanningPromptService, PlanningRuntimeSnapshot,
-};
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
@@ -9,6 +5,10 @@ use crate::application::service::planning::runtime::policy::{
     PlanningAutoFollowBlockReason, PlanningAutoFollowPolicyDecision, PlanningAutoFollowPromptMode,
     PlanningRuntimePolicyService,
 };
+use crate::application::service::planning::runtime::prompt::{
+    PlanningPromptService, PlanningRuntimeSnapshot,
+};
+use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::turn_prompt_assembly_service::{
     ManualPromptAssemblyRequest, PlanningAutoFollowOperation,
     PlanningAutoFollowPromptAssemblyRequest, PlanningAutoFollowPromptPreviewRequest,
@@ -321,14 +321,14 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
+    use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
+    use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
         RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
-    use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
-    use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::domain::planning::PriorityQueueTask;
@@ -416,6 +416,14 @@ mod tests {
                 _ => None,
             };
             Ok(body)
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            self.load_optional_planning_file(workspace_dir, relative_path)
         }
 
         fn replace_planning_workspace_file(

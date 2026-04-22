@@ -522,12 +522,12 @@ mod tests {
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
         DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
         QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
     #[derive(Default)]
     struct FakePlanningWorkspacePort {
@@ -703,6 +703,14 @@ mod tests {
                 .expect("active_file_bodies mutex should not be poisoned")
                 .get(relative_path)
                 .cloned())
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            self.load_optional_planning_file(workspace_dir, relative_path)
         }
 
         fn replace_planning_workspace_file(

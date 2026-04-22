@@ -42,7 +42,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue  :directions  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue  :directions [apply]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 const RESET_USAGE: &str =
@@ -218,6 +218,16 @@ impl InlineShellCommandInput {
                 }
                 Some(value) => format!(
                     "Press Enter to apply `:planning {value}`. Supported arguments: on, off, doctor."
+                ),
+                None => self.command.spec().buffered_hint.to_string(),
+            },
+            InlineShellCommand::Directions => match self.argument() {
+                Some(value) if value.eq_ignore_ascii_case("apply") => {
+                    "Press Enter to import tracked directions into active planning."
+                        .to_string()
+                }
+                Some(value) => format!(
+                    "Press Enter to apply `:directions {value}`. Supported arguments: apply."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -504,6 +514,11 @@ mod tests {
             (":sessions", Some((InlineShellCommand::Sessions, None))),
             (":q", Some((InlineShellCommand::Queue, None))),
             (":queue", Some((InlineShellCommand::Queue, None))),
+            (":directions", Some((InlineShellCommand::Directions, None))),
+            (
+                ":directions apply",
+                Some((InlineShellCommand::Directions, Some("apply"))),
+            ),
             (":stop", Some((InlineShellCommand::Stop, None))),
             (":auto", Some((InlineShellCommand::Automation, None))),
             (":automation", Some((InlineShellCommand::Automation, None))),
@@ -721,6 +736,28 @@ mod tests {
         assert_eq!(
             doctor.buffered_hint(),
             "Press Enter to inspect planning health."
+        );
+    }
+
+    #[test]
+    fn directions_command_hint_is_argument_aware() {
+        let plain = InlineShellCommandInput::parse(":directions").expect("command should parse");
+        let apply =
+            InlineShellCommandInput::parse(":directions apply").expect("command should parse");
+        let invalid =
+            InlineShellCommandInput::parse(":directions later").expect("command should parse");
+
+        assert_eq!(
+            plain.buffered_hint(),
+            "Press Enter to review or edit planning directions."
+        );
+        assert_eq!(
+            apply.buffered_hint(),
+            "Press Enter to import tracked directions into active planning."
+        );
+        assert_eq!(
+            invalid.buffered_hint(),
+            "Press Enter to apply `:directions later`. Supported arguments: apply."
         );
     }
 

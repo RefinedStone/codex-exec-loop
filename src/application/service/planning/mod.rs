@@ -13,10 +13,9 @@ use crate::application::port::outbound::planning_worker_port::{
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
-use super::priority_queue_service::PriorityQueueService;
-use super::turn_prompt_assembly_service::TurnPromptAssemblyService;
 use self::authoring::bootstrap::PlanningBootstrapService;
 use self::authoring::directions::PlanningDirectionsService;
+use self::authoring::directions_apply::PlanningDirectionsApplyService;
 use self::authoring::init::PlanningInitService;
 use self::authoring::proposal_promotion::PlanningProposalPromotionService;
 use self::repair::doctor::PlanningDoctorService;
@@ -27,6 +26,8 @@ use self::runtime::policy::PlanningRuntimePolicyService;
 use self::runtime::prompt::PlanningPromptService;
 use self::runtime::validation::PlanningValidationService;
 use self::worker::orchestration::PlanningWorkerOrchestrationService;
+use super::priority_queue_service::PriorityQueueService;
+use super::turn_prompt_assembly_service::TurnPromptAssemblyService;
 
 pub use self::PlanningFeature as PlanningServices;
 pub use self::admin::{
@@ -40,16 +41,16 @@ pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
 };
-pub use self::repair::doctor::{PlanningDoctorReport, PlanningDoctorState};
+pub use self::authoring::directions_apply::PlanningTrackedDirectionsApplyResult;
 pub use self::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
     PlanningDraftSaveResult, PlanningInitStageResult, PlanningWorkspaceInitResult,
 };
-pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 pub use self::authoring::proposal_promotion::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
 };
 pub use self::control::{PlanningControlCommand, PlanningControlReply, PlanningControlService};
+pub use self::repair::doctor::{PlanningDoctorReport, PlanningDoctorState};
 pub use self::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueSnapshotAction,
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
@@ -64,6 +65,7 @@ pub use self::runtime::facade::{
     PlanningRuntimeSummaryRequest, PlanningTaskHandoff,
 };
 pub use self::runtime::policy::PlanningAutoFollowBlockReason;
+pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 pub use self::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 pub use self::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
@@ -100,6 +102,10 @@ impl PlanningFeature {
             planning_workspace_port.clone(),
             validation_service.clone(),
         );
+        let directions_apply_service = PlanningDirectionsApplyService::new(
+            planning_workspace_port.clone(),
+            validation_service.clone(),
+        );
         let planning_prompt_service = PlanningPromptService::new(
             planning_workspace_port.clone(),
             validation_service.clone(),
@@ -130,6 +136,7 @@ impl PlanningFeature {
                 reset_service,
                 doctor_service,
                 directions_service.clone(),
+                directions_apply_service,
             ),
             runtime: PlanningRuntimeUseCases::new(runtime_facade.clone()),
             worker: PlanningWorkerUseCases::new(
@@ -151,6 +158,7 @@ pub struct PlanningWorkspaceUseCases {
     reset_service: PlanningResetService,
     doctor_service: PlanningDoctorService,
     directions_service: PlanningDirectionsService,
+    directions_apply_service: PlanningDirectionsApplyService,
 }
 
 impl PlanningWorkspaceUseCases {
@@ -159,12 +167,14 @@ impl PlanningWorkspaceUseCases {
         reset_service: PlanningResetService,
         doctor_service: PlanningDoctorService,
         directions_service: PlanningDirectionsService,
+        directions_apply_service: PlanningDirectionsApplyService,
     ) -> Self {
         Self {
             init_service,
             reset_service,
             doctor_service,
             directions_service,
+            directions_apply_service,
         }
     }
 
@@ -189,6 +199,14 @@ impl PlanningWorkspaceUseCases {
 
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
         self.doctor_service.inspect_workspace(workspace_dir)
+    }
+
+    pub fn apply_tracked_directions(
+        &self,
+        workspace_dir: &str,
+    ) -> anyhow::Result<PlanningTrackedDirectionsApplyResult> {
+        self.directions_apply_service
+            .apply_tracked_directions(workspace_dir)
     }
 
     pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> anyhow::Result<()> {
