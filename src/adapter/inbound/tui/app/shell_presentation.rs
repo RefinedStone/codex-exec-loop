@@ -187,13 +187,9 @@ pub(super) use overlays::{
     build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
 };
 #[cfg(test)]
-pub(super) use overlays::{
-    build_conversation_shell_frame_view, build_conversation_shell_view, build_transcript_panel_view,
-};
+pub(super) use overlays::build_conversation_shell_frame_view;
 #[cfg(test)]
 pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
-#[cfg(test)]
-pub(super) use shell_copy::build_status_title;
 pub(super) use status_panels::InlineTailView;
 
 #[cfg(test)]

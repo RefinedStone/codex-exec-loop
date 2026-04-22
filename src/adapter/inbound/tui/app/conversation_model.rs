@@ -20,8 +20,6 @@ pub(crate) use auto_follow::{
 };
 #[cfg(test)]
 pub(crate) use turn_activity::TurnActivityState;
-#[cfg(test)]
-pub(crate) use view_model::RecordedAutoFollowupActivity;
 pub(crate) use view_model::{
     ConversationInputState, ConversationState, ConversationViewModel, PlanningRepairState,
 };

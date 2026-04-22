@@ -15,9 +15,7 @@ mod popup;
 
 pub(crate) use base::build_startup_banner_lines;
 #[cfg(test)]
-pub(crate) use base::{
-    build_conversation_shell_frame_view, build_conversation_shell_view, build_transcript_panel_view,
-};
+pub(crate) use base::build_conversation_shell_frame_view;
 pub(crate) use directions::{
     DirectionsMaintenanceOverlayView, build_directions_maintenance_overlay_view,
 };
