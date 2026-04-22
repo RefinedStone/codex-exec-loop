@@ -3,7 +3,8 @@
 This document is the active short and mid-term roadmap for making Akra easier to change with small
 local context.
 
-It is future-facing. Shipped behavior still lives in `docs/design/`.
+It is future-facing. The current supersession, planning, and directions contract lives in
+`docs/supersession/`.
 
 ## Objective
 
@@ -18,9 +19,10 @@ That means:
 
 ## Working Rules
 
-- `docs/design/` stays reserved for shipped truth.
-- `docs/plan/` holds future work, research, and sequencing.
-- `docs/supersession/` stays available as history, not as the active roadmap.
+- `docs/supersession/current-contract.md` is the canonical current contract.
+- `docs/supersession/remaining-work.md` holds unfinished or lightly validated work.
+- `docs/design/` holds supporting deep dives and boundary explanations.
+- `docs/plan/` holds future work, research, sequencing, and historical audits.
 - Refactors must justify one operator-visible payoff, not just aesthetic cleanup.
 - Capability boundaries come before provider-wide abstractions.
 
@@ -28,11 +30,12 @@ That means:
 
 ### 1. Normalize Entry Docs And Vocabulary
 
-Refresh the repo entrypoints so a contributor can answer three questions quickly:
+Keep the repo entrypoints aligned so a contributor can answer four questions quickly:
 
 1. What is the current product contract?
-2. What is the current roadmap?
-3. Which doc is history only?
+2. What is still unfinished?
+3. What is the active roadmap?
+4. Which doc is history only?
 
 The shared vocabulary for this cycle should stay stable across README, docs/README, queue-idle
 guidance, and roadmap docs:
@@ -106,11 +109,12 @@ That work sets up terminal-agent exploration without overpromising multi-provide
 
 ## Acceptance Signals
 
-- README and docs/README point to one active roadmap instead of scattering current intent across
-  supersession history.
+- README and docs/README point to one current-contract hub plus one active roadmap.
 - A contributor can trace one roadmap item into the relevant code with one roadmap doc plus one
   current-truth doc.
 - The hotspot order is explicit enough that future PRs can say why they chose one slice first.
+- `docs/supersession/` stays compact for implemented behavior and comparatively detailed only for
+  unfinished work.
 - Docs/design is not polluted with future-state promises.
 - Codex-specific assumptions are documented in capability terms before bridge research turns into
   implementation.

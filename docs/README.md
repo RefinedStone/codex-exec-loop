@@ -1,6 +1,13 @@
 # Docs Map
 
-Use this map to answer three questions quickly: what ships now, what the active roadmap is, and which docs are history only.
+Use this map to answer four questions quickly: what ships now, what is still unfinished, which
+docs are deep dives, and which docs are history only.
+
+## Read First
+
+- [supersession/README.md](supersession/README.md): canonical docs hub for supersession, planning, and directions
+- [supersession/current-contract.md](supersession/current-contract.md): current shipped contract
+- [supersession/remaining-work.md](supersession/remaining-work.md): unfinished or lightly validated work
 
 ## Architecture Principles
 
@@ -9,11 +16,11 @@ Use this map to answer three questions quickly: what ships now, what the active 
 - Infrastructure-heavy implementations should sit behind ports and infra-specific directories so feature flow analysis can skip them.
 - When behavior, rendering, storage, and recovery logic pile into one file, prefer boundary-first splits over local convenience.
 
-## Current Product
+## Supporting Deep Dives
 
-- [design/01-current-product-state.md](design/01-current-product-state.md): current product and supersession status
+- [design/01-current-product-state.md](design/01-current-product-state.md): product identity and surface map
 - [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): operator-visible shell flow
-- [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md): current planning contract
+- [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md): planning/runtime implementation detail
 
 ## Active Roadmap
 
@@ -24,13 +31,6 @@ Use this map to answer three questions quickly: what ships now, what the active 
 ## Release Delta
 
 - [releases/v1.2.9-to-prerelease.md](releases/v1.2.9-to-prerelease.md): what `origin/prerelease` ships beyond `v1.2.9`
-
-## Historical Context
-
-- [supersession/README.md](supersession/README.md): supersession docs index
-- [supersession/implemented-summary.md](supersession/implemented-summary.md): merged summary of shipped supersession contracts
-- [supersession/10-implementation-slices.md](supersession/10-implementation-slices.md): remaining supersession follow-through notes
-- [supersession/11-open-questions-and-non-goals.md](supersession/11-open-questions-and-non-goals.md): supersession-era open questions and non-goals
 
 ## Runbooks And Validation
 
@@ -45,8 +45,8 @@ Use this map to answer three questions quickly: what ships now, what the active 
 - [plan/14-product-elevation-blueprint.md](plan/14-product-elevation-blueprint.md)
 - [plan/15-ux-flow-rearchitecture.md](plan/15-ux-flow-rearchitecture.md)
 - [plan/16-planning-and-automation-evolution.md](plan/16-planning-and-automation-evolution.md)
-- [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md)
-- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md)
+- [plan/18-repo-shared-planning-authority-store.md](plan/18-repo-shared-planning-authority-store.md): historical redesign record
+- [plan/19-supersession-runtime-risk-audit.md](plan/19-supersession-runtime-risk-audit.md): historical pre-store risk audit
 
 ## Training Material
 
@@ -55,10 +55,14 @@ Use this map to answer three questions quickly: what ships now, what the active 
 
 ## Rules
 
-- `docs/design/` holds current contracts.
+- `docs/supersession/current-contract.md` is the canonical current contract for supersession,
+  planning, and directions behavior.
+- `docs/supersession/remaining-work.md` tracks unfinished, lightly validated, or intentionally
+  deferred work.
+- `docs/design/` holds deep technical explanation and boundary rules.
 - `docs/releases/` holds tagged or branch release deltas only.
 - `docs/plan/20-*` and `docs/plan/21-*` hold the active roadmap for the current cycle.
-- `docs/supersession/` holds merged history and follow-through context, not the active roadmap.
+- `docs/supersession/` is the current-contract hub, not a historical side archive.
 - `docs/plan/` holds runbooks, active roadmap, and historical design audits.
 - Use `docs/plan/20-*` with `docs/plan/17-*` when a task touches a named hotspot; the roadmap explains why and the debt map fixes the current order.
 - `docs/training/` holds lecture and curriculum material that uses the repo as a textbook.

@@ -1,7 +1,15 @@
 # Repo-Shared Planning Authority And Runtime Domain
 
-This document resets the planned replacement for worktree-local planning authority on `prerelease`.
-It is a forward design and development document, not shipped behavior.
+Historical reference: the authority-store redesign described here is now implemented on the current
+branch.
+
+Use [../supersession/current-contract.md](../supersession/current-contract.md) for the current
+operator-facing contract and
+[../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md)
+for current technical detail.
+
+This document captures the forward design that replaced worktree-local planning authority on
+`prerelease`. It should be read as implementation background, not as the active contract.
 
 ## Summary
 
@@ -323,4 +331,4 @@ Examples that must be single-transaction:
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)
 - [16-planning-and-automation-evolution.md](16-planning-and-automation-evolution.md)
 - [../design/06-planning-runtime-and-draft-editor.md](../design/06-planning-runtime-and-draft-editor.md)
-- [../supersession/implemented-summary.md](../supersession/implemented-summary.md)
+- [../supersession/current-contract.md](../supersession/current-contract.md)
