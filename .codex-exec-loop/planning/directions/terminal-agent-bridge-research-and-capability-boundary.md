@@ -38,28 +38,29 @@ agents unless the boundary is clarified first.
   capability boundary without pretending every provider looks like `codex app-server`.
 - `docs/plan/24-terminal-agent-bridge-experiment-matrix.md` defines the evidence Akra still needs
   before any bounded bridge spike is justified.
-- The remaining gap is no longer document structure. It is Codex-only boundary validation plus one
-  local evidence pass.
+- `docs/plan/27-terminal-agent-tmux-local-attach-readiness-evidence.md` now records the executed
+  tmux local-attach evidence with captured artifacts.
+- `docs/plan/28-terminal-agent-tmux-local-attach-gate-verdict.md` now records the gate verdict and
+  the constraints for the first real tmux slice.
+- The remaining gap is no longer document structure or evidence capture. It is the first bounded
+  tmux implementation slice.
 
 ## Detailed Research Plan
 
 1. Keep the `21` through `24` document set stable as the research hub, matrix, capability note,
    and experiment plan.
-2. Finish the Codex-only capability audit so bridge work targets product seams instead of provider
-   vocabulary drift.
-3. Collect local evidence in the same order already implied by the research set:
-   - tmux-oriented local attach as the primary path
-   - managed local wrapper as the fallback path
-4. Re-evaluate whether a bounded local spike is justified only after relay fidelity, interrupt
-   truthfulness, approval handling, recovery anchors, and operator setup costs are written down.
-5. Keep SSH or tunnel and proxy or vibeProxy-style mediation deferred unless the local evidence
-   exposes a concrete unsolved gap.
+2. Keep the Codex-only capability audit and seam notes as the implementation boundary input rather
+   than reopening universal-provider abstraction work.
+3. Treat the tmux local-attach evidence pass as complete and use it as the entry gate for code.
+4. Start one bounded tmux local-attach slice that consumes `StartupProbe`,
+   `InteractiveTurnRuntime`, optional `SessionCatalog`, and `TerminalBridgeAttachment` directly.
+5. Keep the managed wrapper, SSH or tunnel, and proxy or vibeProxy-style mediation out of scope
+   until the tmux slice proves a concrete reason to widen.
 
 ## Feasibility Judgment
 
 - Research documentation: feasible now and materially in place.
-- tmux-oriented local attach spike: conditionally feasible after the Codex capability audit and a
-  documented local evidence pass.
+- tmux-oriented local attach spike: feasible now as the next bounded implementation slice.
 - managed local wrapper fallback: conditionally feasible, with explicit realism costs.
 - SSH or tunnel and proxy or vibeProxy-style mediation: not justified at this stage.
 
@@ -71,7 +72,8 @@ agents unless the boundary is clarified first.
   approval handling, recovery, security, portability, and architecture fit
 - one primary bridge path and one fallback path are named explicitly
 - deferred paths have written reasons instead of silent omission
-- no provider-specific adapter work is promoted before the boundary and experiment notes are stable
+- the tmux evidence pass records relay, approval, interrupt, recovery, and operator-cost truth in a
+  reviewable way before code starts
 
 ## Supporting Docs
 
@@ -79,4 +81,8 @@ agents unless the boundary is clarified first.
 - `docs/plan/22-terminal-agent-transport-and-attachment-matrix.md`
 - `docs/plan/23-terminal-agent-capability-boundary-and-session-contract.md`
 - `docs/plan/24-terminal-agent-bridge-experiment-matrix.md`
+- `docs/plan/25-codex-assumption-to-capability-target-map.md`
+- `docs/plan/26-capability-map-prioritized-seam-follow-ups.md`
+- `docs/plan/27-terminal-agent-tmux-local-attach-readiness-evidence.md`
+- `docs/plan/28-terminal-agent-tmux-local-attach-gate-verdict.md`
 - `docs/design/04-hexagonal-runtime-architecture.md`

@@ -1,0 +1,7 @@
+PROMPT> python3 - <<'PY'
+> print("send-keys-line-1")
+> print("send-keys-line-2")
+> PY
+send-keys-line-1
+send-keys-line-2
+PROMPT>

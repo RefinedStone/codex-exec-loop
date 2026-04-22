@@ -1,0 +1,2 @@
++ tmux -L akra-readiness-20260423 -f /dev/null capture-pane -p -t akra-evidence:missing
+can't find window: missing

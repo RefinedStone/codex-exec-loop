@@ -6,6 +6,11 @@ The purpose is evidence, not premature implementation.
 Local attach and managed wrapper get executable experiments first.
 SSH or tunnel and proxy or vibeProxy-style mediation stay in deferred-feasibility mode.
 
+The executed tmux local-attach pass now lives in
+[27-terminal-agent-tmux-local-attach-readiness-evidence.md](27-terminal-agent-tmux-local-attach-readiness-evidence.md),
+and its gate decision lives in
+[28-terminal-agent-tmux-local-attach-gate-verdict.md](28-terminal-agent-tmux-local-attach-gate-verdict.md).
+
 ## Experiment Rules
 
 - run local experiments before any remote or proxy work

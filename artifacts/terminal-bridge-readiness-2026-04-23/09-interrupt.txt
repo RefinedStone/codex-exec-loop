@@ -1,0 +1,5 @@
+PROMPT> sleep 30
+^C
+PROMPT> printf "status=%s\n" "$?"
+status=130
+PROMPT>

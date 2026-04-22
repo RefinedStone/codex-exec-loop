@@ -18,6 +18,9 @@ The output of this cycle should be:
 - one transport and attachment matrix
 - one capability-boundary note
 - one experiment matrix
+- one seam priority note
+- one local tmux evidence package
+- one explicit readiness-gate verdict
 
 ## Current Decision
 
@@ -62,6 +65,12 @@ Read the bridge work in this order:
    for capability seams and session expectations.
 5. [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
    for actual experiment design and evidence targets.
+6. [26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md)
+   for the already-landed seam order that bridge implementation must consume instead of replacing.
+7. [27-terminal-agent-tmux-local-attach-readiness-evidence.md](27-terminal-agent-tmux-local-attach-readiness-evidence.md)
+   for executed tmux local-attach evidence.
+8. [28-terminal-agent-tmux-local-attach-gate-verdict.md](28-terminal-agent-tmux-local-attach-gate-verdict.md)
+   for the gate decision and implementation constraints.
 
 ## Short-Term Research Sequence
 
@@ -73,17 +82,18 @@ Read the bridge work in this order:
 
 ## Current Report Status
 
-- The hub, current-state audit, transport matrix, capability note, and experiment matrix now exist
-  as `21` through `25`.
+- The hub, current-state audit, transport matrix, capability note, experiment matrix, and seam
+  priority note now exist as `21` through `26`.
+- The tmux local-attach evidence and gate verdict now exist as `27` and `28`.
 - The primary path, fallback path, and deferred paths are now explicit instead of implied.
-- The remaining gap is evidence and boundary validation, not missing research coverage.
+- The remaining gap is the first bounded tmux implementation slice, not missing research coverage.
 
 ## Feasibility Judgment
 
 | Scope | Status | Reason |
 | --- | --- | --- |
 | research and planning set | feasible now | the document set already covers the hub, comparison rubric, capability boundary, and experiment checklist |
-| tmux-oriented local attach spike | conditionally feasible | proceed only after the Codex capability audit and local evidence confirm relay fidelity, interrupt behavior, approval handling, recovery anchors, and operator setup costs |
+| tmux-oriented local attach spike | feasible now as a bounded next slice | the Codex capability audit, seam cleanup, and local evidence now cover relay fidelity, interrupt behavior, approval handling, recovery anchors, and operator setup costs well enough to start one tmux-only implementation path |
 | managed local wrapper fallback | conditionally feasible | lifecycle control is strong, but realism costs must stay explicit |
 | SSH or tunnel attach | deferred | remote auth, recovery, and portability costs are not yet justified by evidence |
 | proxy or vibeProxy-style mediation | deferred | extra protocol and trust surface are not justified without a concrete local gap |
@@ -99,6 +109,10 @@ Read the bridge work in this order:
   `TerminalBridgeAttachment` without pretending every provider shares Codex sessions
 - `24` describes concrete experiments for local attach, managed wrapper, and deferred-path evidence
   gaps
+- `26` records the prioritized seam follow-ups for bridge implementation
+- `27` records the executed tmux local-attach evidence with artifact links
+- `28` records the readiness-gate verdict and the constraints for the first real implementation
+  slice
 
 ## Non-Goals
 
@@ -113,5 +127,8 @@ Read the bridge work in this order:
 - [23-terminal-agent-capability-boundary-and-session-contract.md](23-terminal-agent-capability-boundary-and-session-contract.md)
 - [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
 - [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
+- [26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md)
+- [27-terminal-agent-tmux-local-attach-readiness-evidence.md](27-terminal-agent-tmux-local-attach-readiness-evidence.md)
+- [28-terminal-agent-tmux-local-attach-gate-verdict.md](28-terminal-agent-tmux-local-attach-gate-verdict.md)
 - [20-context-first-architecture-and-doc-coherence.md](20-context-first-architecture-and-doc-coherence.md)
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)

@@ -1,0 +1,1 @@
+session=akra-evidence window=discovery pane=0 id=%0 tty=/dev/pts/10 pid=1621979 cmd=bash

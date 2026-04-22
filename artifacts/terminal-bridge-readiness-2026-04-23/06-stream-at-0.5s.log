@@ -1,0 +1,8 @@
+python3 -u - <<'PY'
+[?2004l[?2004h> import time
+[?2004l[?2004h> for i in range(4):
+[?2004l[?2004h>     print(f"tick-{i}", flush=True)
+[?2004l[?2004h>     time.sleep(0.4)
+[?2004l[?2004h> PY
+[?2004ltick-0
+tick-1

@@ -1,0 +1,1 @@
+pane_id=%2 session=akra-evidence window=paste tty=/dev/pts/12 pid=1622004

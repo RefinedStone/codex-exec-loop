@@ -29,6 +29,10 @@ docs are deep dives, and which docs are history only.
 - [plan/22-terminal-agent-transport-and-attachment-matrix.md](plan/22-terminal-agent-transport-and-attachment-matrix.md): tmux, PTY, wrapper, SSH, and proxy or vibeProxy-style transport comparison
 - [plan/23-terminal-agent-capability-boundary-and-session-contract.md](plan/23-terminal-agent-capability-boundary-and-session-contract.md): capability seams and session expectations for terminal-agent work
 - [plan/24-terminal-agent-bridge-experiment-matrix.md](plan/24-terminal-agent-bridge-experiment-matrix.md): local attach and wrapper experiment design plus deferred-path evidence gaps
+- [plan/25-codex-assumption-to-capability-target-map.md](plan/25-codex-assumption-to-capability-target-map.md): current Codex-only assumptions mapped into bridge capability targets
+- [plan/26-capability-map-prioritized-seam-follow-ups.md](plan/26-capability-map-prioritized-seam-follow-ups.md): implementation-facing seam order for bridge follow-up work
+- [plan/27-terminal-agent-tmux-local-attach-readiness-evidence.md](plan/27-terminal-agent-tmux-local-attach-readiness-evidence.md): executed tmux evidence with artifact links
+- [plan/28-terminal-agent-tmux-local-attach-gate-verdict.md](plan/28-terminal-agent-tmux-local-attach-gate-verdict.md): readiness verdict and next-slice constraints
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): supporting hotspot map, current hotspot order, and refactor ordering input
 
 ## Release Delta
@@ -65,7 +69,8 @@ docs are deep dives, and which docs are history only.
 - `docs/design/` holds deep technical explanation and boundary rules.
 - `docs/releases/` holds tagged or branch release deltas only.
 - `docs/plan/20-*` holds the context-first roadmap for the current cycle.
-- `docs/plan/21-*`, `docs/plan/22-*`, `docs/plan/23-*`, and `docs/plan/24-*` hold the active terminal-agent bridge research set.
+- `docs/plan/21-*` through `docs/plan/28-*` hold the active terminal-agent bridge research,
+  seam, and readiness set.
 - `docs/supersession/` is the current-contract hub, not a historical side archive.
 - `docs/plan/` holds runbooks, active roadmap, and historical design audits.
 - Use `docs/plan/20-*` with `docs/plan/17-*` when a task touches a named hotspot; the roadmap explains why and the debt map fixes the current order.

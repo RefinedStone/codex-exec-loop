@@ -661,13 +661,13 @@
     {
       "id": "terminal-bridge-local-spike-readiness-gate",
       "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "This task is the implementation-direction entry gate that closes the remaining local tmux evidence gap before the first real adapter slice starts.",
+      "direction_relation_note": "This task closes the implementation-direction entry gate by recording the tmux local-attach evidence and verdict in docs/plan/27 and docs/plan/28 before the first real adapter slice starts.",
       "title": "Gate tmux local-attach spike on capability audit and evidence",
-      "description": "Track the preconditions for any tmux-based local attach spike after the completed bridge research pass: the Codex capability-boundary audit and the bridge attachment-truth cleanup are now done, so the remaining gate is to confirm local evidence for relay and recovery behavior before deciding whether the primary-path spike is safe to run ahead of the managed-wrapper fallback and before queueing the first real bridge implementation slice.",
-      "status": "blocked",
+      "description": "Track the preconditions for any tmux-based local attach spike after the completed bridge research pass. This gate is now closed by the executed local evidence in docs/plan/27-terminal-agent-tmux-local-attach-readiness-evidence.md and the verdict in docs/plan/28-terminal-agent-tmux-local-attach-gate-verdict.md, which record attach discovery, prompt injection, incremental relay, interrupt truth, approval truth, recovery anchors, and operator failure signatures without adding a provider adapter yet.",
+      "status": "done",
       "base_priority": 89,
       "dynamic_priority_delta": 2,
-      "priority_reason": "The latest main-session reply says fake-adapter attachment reuse is complete and the next bridge step is real implementation, but the research direction still requires local relay and recovery evidence first, so this stays blocked as the immediate prerequisite instead of becoming executable prematurely.",
+      "priority_reason": "The readiness evidence and verdict now exist as reviewable docs plus captured artifacts, so this prerequisite should stop blocking queue progression and hand off directly to the first real tmux implementation slice.",
       "depends_on": [
         "context-first-codex-capability-boundary-audit"
       ],
@@ -680,13 +680,13 @@
     {
       "id": "terminal-bridge-primary-implementation-slice",
       "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "This is the first real tmux-first execution slice under the implementation direction once the local readiness gate is cleared.",
+      "direction_relation_note": "With docs/plan/27 and docs/plan/28 closing the tmux readiness gate, this is the first real tmux-first execution slice under the implementation direction.",
       "title": "Implement the first real terminal bridge slice",
-      "description": "Start the first executable implementation slice for the research-selected primary bridge path so the repo stops proving attachment truth only through Codex app-server and fake seams. Scope this around one reviewable real adapter path that can consume the shared attachment events and profiles, while keeping broader transport expansion out of scope until the tmux local-attach readiness gate is cleared.",
-      "status": "blocked",
+      "description": "Start the first executable implementation slice for the research-selected primary bridge path so the repo stops proving attachment truth only through Codex app-server and fake seams. Scope this around one reviewable tmux local-attach adapter path that consumes the shared attachment events and profiles, keeps `SessionCatalog` optional, surfaces `LocalAttach + SessionHandle`, and leaves managed wrapper, SSH or tunnel, and proxy work out of scope.",
+      "status": "ready",
       "base_priority": 90,
       "dynamic_priority_delta": 2,
-      "priority_reason": "The latest main-session reply directly names real bridge implementation as the next remaining bridge work, but it still depends on the blocked tmux readiness gate, so it should be queued immediately behind that gate rather than promoted to ready.",
+      "priority_reason": "The local tmux evidence gate is now closed, so the next remaining bridge work is a bounded tmux-only implementation slice rather than more research or fake-adapter alignment.",
       "depends_on": [
         "terminal-bridge-local-spike-readiness-gate"
       ],

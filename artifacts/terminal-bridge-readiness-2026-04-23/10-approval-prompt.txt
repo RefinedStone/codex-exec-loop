@@ -1,0 +1,2 @@
+PROMPT> printf "approve? [y/N] "; read answer; printf "answer=%s\n" "$answer"
+approve? [y/N]

@@ -1,0 +1,9 @@
+PROMPT> python3 - <<'PY'
+> print("paste-line-1")
+> print("paste-line-2 with spaces")
+> print("json-ish: {\"ok\": true}")
+> PY
+paste-line-1
+paste-line-2 with spaces
+json-ish: {"ok": true}
+PROMPT>
