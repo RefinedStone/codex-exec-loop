@@ -7,34 +7,50 @@ prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 [[directions]]
 id = "context-first-architecture-and-doc-coherence"
 title = "Context-first architecture and doc coherence"
-summary = "Refine architecture boundaries, documentation entrypoints, and operator vocabulary so one flow can be understood with minimal local context."
+summary = "Keep the residual context-first cleanup parked behind the shipped architecture audit and shell-boundary work so only directly justified operator-copy follow-ups remain."
 success_criteria = [
-    "A single operator flow can be traced from one roadmap doc into a small code cluster without scanning unrelated infrastructure or historical notes.",
-    "README, docs/README, queue-idle review guidance, and planning vocabulary all use the same terms for directions, queue tasks, proposals, accepted planning, and repair.",
-    "Mixed-responsibility hotspots have an agreed split order and capability-boundary target before deeper refactor work starts.",
+    "The shipped hotspot order and capability-boundary notes stay stable enough that follow-up slices do not need to reopen the original audit.",
+    "Operator-facing wording follow-ups remain narrow and tied to one clear benefit instead of restarting a broad vocabulary rewrite.",
+    "Any remaining context-first task can point to one bounded code cluster without re-expanding docs/plan into backlog history.",
 ]
 scope_hints = [
-    "Start with repo entrypoints, vocabulary alignment, and explicit hotspot ordering before large code movement.",
-    "Prefer smaller, capability-shaped boundaries over provider-wide abstractions or aesthetic-only reshuffles.",
-    "Keep docs/design as shipped truth; put future refactor intent and research in docs/plan until behavior actually changes.",
+    "Treat this as a parked follow-up lane unless a concrete shell-copy or operator wording issue proves it should re-enter the queue.",
+    "Prefer bounded wording or projection slices over reopening the completed context-first roadmap wholesale.",
+    "Keep docs/design as shipped truth and use docs/plan only for new reviewable follow-up slices.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/context-first-architecture-and-doc-coherence.md"
-state = "active"
+state = "paused"
 
 [[directions]]
 id = "terminal-agent-bridge-research-and-capability-boundary"
 title = "Terminal agent bridge research and capability boundary"
-summary = "Research tmux, PTY, wrapper, SSH, and proxy-style ways to attach Akra to non-Codex terminal agents, including terminal-to-terminal data relay, before any provider-specific adapter lands."
+summary = "Preserve the completed bridge research set as the boundary and transport record that the implementation direction now consumes."
 success_criteria = [
-    "The research is organized as a hub plus supporting docs for transport comparison, capability boundaries, and experiment design.",
-    "Local PTY or tmux attach, local wrapper, SSH or tunnel, and proxy or vibeProxy-style mediation are compared with the same relay and control rubric.",
-    "The roadmap keeps one primary path, one fallback path, and explicit defer reasons while translating Codex-specific assumptions into InteractiveTurnRuntime, StartupProbe, SessionCatalog, and TerminalBridgeAttachment.",
+    "The bridge hub, transport matrix, capability boundary note, and experiment matrix remain the stable reference set for future implementation work.",
+    "The primary path, fallback path, and deferred transport families stay explicit instead of drifting back into implicit provider assumptions.",
+    "Capability-first seams remain the contract for implementation so transport work does not reopen a fake universal provider API.",
 ]
 scope_hints = [
-    "Treat this direction as research-first until the boundary, operator model, and experiment evidence are credible enough to spike safely.",
-    "Do not assume Claude or other terminal agents expose the same session or thread API as codex app-server.",
-    "Prefer tmux-oriented local attach first, keep the managed local wrapper as fallback, and defer SSH or tunnel plus proxy or vibeProxy-style mediation unless local evidence proves a real gap.",
-    "Keep docs/supersession as the shipped contract hub and land future-facing bridge research in docs/plan/21 through 24 plus this detail doc.",
+    "Treat this direction as a completed research baseline rather than the place to queue new implementation tasks.",
+    "Keep the managed wrapper as fallback and SSH or tunnel plus proxy mediation deferred unless the tmux path proves a concrete gap.",
+    "Do not remove the research docs just because the next queue items are implementation-facing.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/terminal-agent-bridge-research-and-capability-boundary.md"
+state = "done"
+
+[[directions]]
+id = "terminal-agent-bridge-implementation"
+title = "Terminal agent bridge implementation"
+summary = "Turn the completed terminal-agent bridge research into bounded implementation slices, starting with tmux local attach and keeping wider transport work parked."
+success_criteria = [
+    "The tmux local-attach readiness work and the first real tmux bridge slice land on the capability seams already defined in the repo.",
+    "Implementation stays honest about startup, attachment, interrupt, approval, and recovery truth instead of inheriting Codex app-server assumptions.",
+    "Managed wrapper remains an explicit fallback and SSH or tunnel plus proxy mediation stay out of scope until tmux evidence proves otherwise.",
+]
+scope_hints = [
+    "Keep concrete execution slices in task-ledger.json and use this direction plus its detail doc for strategy, sequencing, and scope control.",
+    "Treat SessionCatalog as optional so attach-only or handle-based reattach paths remain valid.",
+    "Do not widen into provider-wide abstractions, wrapper implementation, or remote mediation before the tmux path is proven locally.",
+]
+detail_doc_path = ".codex-exec-loop/planning/directions/terminal-agent-bridge-implementation.md"
 state = "active"

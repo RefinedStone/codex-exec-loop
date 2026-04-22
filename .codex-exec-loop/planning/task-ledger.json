@@ -660,8 +660,8 @@
     },
     {
       "id": "terminal-bridge-local-spike-readiness-gate",
-      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "With the research matrix, primary-path decision, and attachment-truth bridge cleanup now merged, this remains the immediate gate before any real tmux-based bridge implementation slice can start.",
+      "direction_id": "terminal-agent-bridge-implementation",
+      "direction_relation_note": "This task is the implementation-direction entry gate that closes the remaining local tmux evidence gap before the first real adapter slice starts.",
       "title": "Gate tmux local-attach spike on capability audit and evidence",
       "description": "Track the preconditions for any tmux-based local attach spike after the completed bridge research pass: the Codex capability-boundary audit and the bridge attachment-truth cleanup are now done, so the remaining gate is to confirm local evidence for relay and recovery behavior before deciding whether the primary-path spike is safe to run ahead of the managed-wrapper fallback and before queueing the first real bridge implementation slice.",
       "status": "blocked",
@@ -675,12 +675,12 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T23:50:00Z"
+      "updated_at": "2026-04-23T00:00:00Z"
     },
     {
       "id": "terminal-bridge-primary-implementation-slice",
-      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The latest main-session reply says the remaining bridge follow-up is no longer fake-adapter alignment but the first real bridge implementation slice, using the research-selected primary path once readiness evidence exists.",
+      "direction_id": "terminal-agent-bridge-implementation",
+      "direction_relation_note": "This is the first real tmux-first execution slice under the implementation direction once the local readiness gate is cleared.",
       "title": "Implement the first real terminal bridge slice",
       "description": "Start the first executable implementation slice for the research-selected primary bridge path so the repo stops proving attachment truth only through Codex app-server and fake seams. Scope this around one reviewable real adapter path that can consume the shared attachment events and profiles, while keeping broader transport expansion out of scope until the tmux local-attach readiness gate is cleared.",
       "status": "blocked",
@@ -694,7 +694,7 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T23:50:00Z"
+      "updated_at": "2026-04-23T00:00:00Z"
     }
   ]
 }
