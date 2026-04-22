@@ -5,16 +5,16 @@ use std::time::Duration;
 
 use super::super::shell_runtime;
 use super::{
-    AutoFollowupSubmitContext, ConversationRuntimeEvent, ConversationState, PromptOrigin,
-    StartupState, TempGitWorkspace, commit_active_planning_workspace_into_akra, current_git_branch,
-    git_branch_exists, install_ready_github_automation, make_test_app,
-    merge_active_branch_into_akra, ready_conversation, replace_active_planning_workspace_file,
-    run_git, sample_startup_diagnostics,
+    commit_active_planning_workspace_into_akra, current_git_branch, git_branch_exists,
+    install_ready_github_automation, make_test_app, merge_active_branch_into_akra,
+    ready_conversation, replace_active_planning_workspace_file, run_git,
+    sample_startup_diagnostics, AutoFollowupSubmitContext, ConversationRuntimeEvent,
+    ConversationState, PromptOrigin, StartupState, TempGitWorkspace,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
+    PlanningTaskHandoff, BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
 
@@ -152,13 +152,11 @@ fn parallel_mode_handoff_launch_uses_leased_slot_workspace_and_new_thread_stream
             .is_empty()
     });
 
-    assert!(
-        codex_port
-            .turn_calls
-            .lock()
-            .expect("turn calls mutex poisoned")
-            .is_empty()
-    );
+    assert!(codex_port
+        .turn_calls
+        .lock()
+        .expect("turn calls mutex poisoned")
+        .is_empty());
     let new_thread_calls = codex_port
         .new_thread_calls
         .lock()
@@ -209,7 +207,7 @@ fn leased_slot_success_completion_waits_for_official_refresh_before_cleanup() {
             ConversationStreamEvent::TurnCompleted {
                 turn_id: "planner-turn-1".to_string(),
                 changed_planning_file_paths: vec![
-                    ".codex-exec-loop/planning/task-ledger.json".to_string(),
+                    ".codex-exec-loop/planning/task-ledger.json".to_string()
                 ],
             },
         ];
@@ -449,7 +447,7 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
             ConversationStreamEvent::TurnCompleted {
                 turn_id: "planner-turn-9".to_string(),
                 changed_planning_file_paths: vec![
-                    ".codex-exec-loop/planning/task-ledger.json".to_string(),
+                    ".codex-exec-loop/planning/task-ledger.json".to_string()
                 ],
             },
         ];
@@ -769,7 +767,7 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
             ConversationStreamEvent::TurnCompleted {
                 turn_id: "planner-turn-13".to_string(),
                 changed_planning_file_paths: vec![
-                    ".codex-exec-loop/planning/task-ledger.json".to_string(),
+                    ".codex-exec-loop/planning/task-ledger.json".to_string()
                 ],
             },
         ];
@@ -840,7 +838,7 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
     let mut last_detail_state = String::new();
     let mut last_preview_detail = String::new();
     let mut last_worker_status = String::new();
-    let mut last_repeated_gate_inputs = String::new();
+    let mut last_repeated_gate_inputs = None;
 
     for _ in 0..50 {
         runtime.poll_background_messages();
@@ -875,17 +873,16 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
                     == conversation.planning_runtime_snapshot.queue_snapshot()
             }
         };
-        last_repeated_gate_inputs = format!(
-            "handoff={} queue={} unchanged={} ledger_unchanged={} prev_sig={:?} current_sig={:?}",
-            last_handoff.direction_id,
-            queue_head.direction_id,
+        last_repeated_gate_inputs = Some((
+            last_handoff.direction_id.clone(),
+            queue_head.direction_id.clone(),
             unchanged,
             ledger_unchanged,
             previous_snapshot.task_ledger_signature(),
             conversation
                 .planning_runtime_snapshot
                 .task_ledger_signature(),
-        );
+        ));
         last_roster_state = snapshot
             .roster
             .entries
@@ -945,7 +942,18 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
         thread::sleep(Duration::from_millis(10));
     }
 
+    let repeated_gate_inputs = last_repeated_gate_inputs
+        .as_ref()
+        .map(
+            |(handoff, queue, unchanged, ledger_unchanged, previous_signature, current_signature)| {
+                format!(
+                    "handoff={handoff} queue={queue} unchanged={unchanged} ledger_unchanged={ledger_unchanged} prev_sig={previous_signature:?} current_sig={current_signature:?}"
+                )
+            },
+        )
+        .unwrap_or_else(|| "unavailable".to_string());
+
     panic!(
-        "timed out waiting for repeated queue-head gate after official refresh: roster={last_roster_state} detail={last_detail_state} preview={last_preview_detail} worker={last_worker_status} inputs={last_repeated_gate_inputs}"
+        "timed out waiting for repeated queue-head gate after official refresh: roster={last_roster_state} detail={last_detail_state} preview={last_preview_detail} worker={last_worker_status} inputs={repeated_gate_inputs}"
     );
 }

@@ -8,13 +8,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::conversation_model::PlanningRepairState;
 use super::{
-    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext, ConversationInputState,
-    ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
-    ConversationViewModel, DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp,
-    PlannerWorkerStatus, PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability,
-    ShellOverlay, StartupState, TurnActivityState, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
-    build_planning_init_overlay_view, build_ready_input_lines, format_conversation_lines,
+    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
+    build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
+    format_conversation_lines, ActiveTurnPlanningCapture, AutoFollowState,
+    AutoFollowupSubmitContext, ConversationInputState, ConversationMessage,
+    ConversationMessageKind, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp, PlannerWorkerStatus,
+    PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability, ShellOverlay, StartupState,
+    TurnActivityState,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
 use crate::adapter::outbound::app_server::{
@@ -33,15 +34,15 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
-use crate::application::service::planning::PlanningServices;
-use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::authoring::bootstrap::{
-    PlanningBootstrapMode, PlanningBootstrapService,
+    PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
+use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -618,8 +619,7 @@ fn bootstrap_active_planning_workspace(workspace_dir: &str) {
 }
 
 fn commit_active_planning_workspace_into_akra(workspace_dir: &str) {
-    seed_ready_active_planning_workspace(workspace_dir);
-    seed_ready_candidate_planning_workspace(workspace_dir);
+    seed_ready_planning_workspace(workspace_dir);
     run_git(workspace_dir, &["add", ".codex-exec-loop"]);
     run_git(
         workspace_dir,
@@ -628,28 +628,36 @@ fn commit_active_planning_workspace_into_akra(workspace_dir: &str) {
     merge_active_branch_into_akra(workspace_dir, workspace_dir);
 }
 
-fn seed_ready_active_planning_workspace(workspace_dir: &str) {
-    let workspace_adapter = FilesystemPlanningWorkspaceAdapter::new();
+fn seed_ready_planning_workspace(workspace_dir: &str) {
     let bootstrap =
         PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+    seed_ready_active_planning_workspace(workspace_dir, &bootstrap);
+    seed_ready_candidate_planning_workspace(workspace_dir, &bootstrap);
+}
+
+fn seed_ready_active_planning_workspace(
+    workspace_dir: &str,
+    bootstrap: &PlanningBootstrapArtifacts,
+) {
+    let workspace_adapter = FilesystemPlanningWorkspaceAdapter::new();
     workspace_adapter
         .commit_planning_workspace_files(
             workspace_dir,
             &PlanningWorkspaceLoadRecord {
-                directions_toml: Some(bootstrap.directions_toml),
-                task_ledger_json: Some(bootstrap.task_ledger_json),
-                task_ledger_schema_json: Some(bootstrap.task_ledger_schema_json),
+                directions_toml: Some(bootstrap.directions_toml.clone()),
+                task_ledger_json: Some(bootstrap.task_ledger_json.clone()),
+                task_ledger_schema_json: Some(bootstrap.task_ledger_schema_json.clone()),
                 queue_snapshot_json: None,
-                result_output_markdown: Some(bootstrap.result_output_markdown),
+                result_output_markdown: Some(bootstrap.result_output_markdown.clone()),
             },
         )
         .expect("bootstrap planning workspace should commit");
-    for supplemental_file in bootstrap.supplemental_files {
+    for supplemental_file in &bootstrap.supplemental_files {
         workspace_adapter
             .replace_planning_workspace_file(
                 workspace_dir,
-                &supplemental_file.active_path,
-                Some(&supplemental_file.body),
+                supplemental_file.active_path.as_str(),
+                Some(supplemental_file.body.as_str()),
             )
             .expect("bootstrap planning supplemental file should write");
     }
@@ -665,34 +673,35 @@ fn seed_ready_active_planning_workspace(workspace_dir: &str) {
     );
 }
 
-fn seed_ready_candidate_planning_workspace(workspace_dir: &str) {
-    let bootstrap =
-        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+fn seed_ready_candidate_planning_workspace(
+    workspace_dir: &str,
+    bootstrap: &PlanningBootstrapArtifacts,
+) {
     replace_candidate_planning_workspace_file(
         workspace_dir,
-        &bootstrap.directions_path,
-        &bootstrap.directions_toml,
+        bootstrap.directions_path.as_str(),
+        bootstrap.directions_toml.as_str(),
     );
     replace_candidate_planning_workspace_file(
         workspace_dir,
-        &bootstrap.task_ledger_path,
-        &bootstrap.task_ledger_json,
+        bootstrap.task_ledger_path.as_str(),
+        bootstrap.task_ledger_json.as_str(),
     );
     replace_candidate_planning_workspace_file(
         workspace_dir,
-        &bootstrap.task_ledger_schema_path,
-        &bootstrap.task_ledger_schema_json,
+        bootstrap.task_ledger_schema_path.as_str(),
+        bootstrap.task_ledger_schema_json.as_str(),
     );
     replace_candidate_planning_workspace_file(
         workspace_dir,
-        &bootstrap.result_output_path,
-        &bootstrap.result_output_markdown,
+        bootstrap.result_output_path.as_str(),
+        bootstrap.result_output_markdown.as_str(),
     );
-    for supplemental_file in bootstrap.supplemental_files {
+    for supplemental_file in &bootstrap.supplemental_files {
         replace_candidate_planning_workspace_file(
             workspace_dir,
-            &supplemental_file.active_path,
-            &supplemental_file.body,
+            supplemental_file.active_path.as_str(),
+            supplemental_file.body.as_str(),
         );
     }
 }
