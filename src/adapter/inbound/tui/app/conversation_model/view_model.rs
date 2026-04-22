@@ -104,6 +104,7 @@ pub(crate) struct ConversationViewModel {
 }
 
 impl ConversationViewModel {
+    #[cfg(test)]
     pub(crate) fn new_draft(cwd: String) -> Self {
         Self::new_draft_with_truth(cwd, ConversationRuntimeControlTruth::default())
     }
@@ -147,6 +148,7 @@ impl ConversationViewModel {
         view_model
     }
 
+    #[cfg(test)]
     pub(crate) fn from_snapshot(
         snapshot: ConversationSnapshot,
         draft_workspace_directory: String,

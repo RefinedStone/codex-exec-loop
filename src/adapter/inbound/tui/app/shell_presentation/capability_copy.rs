@@ -4,6 +4,7 @@ use crate::domain::recent_sessions::SessionCatalogTier;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
+#[cfg(test)]
 pub(super) fn thread_history_loading_header_line() -> &'static str {
     "Reading thread history from codex app-server."
 }

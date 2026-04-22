@@ -22,6 +22,7 @@ mod tail_copy;
 mod tail_shared;
 
 pub(in super::super) use live_status_layout::InlineTailView;
+#[cfg(test)]
 pub(super) use plan_indicator::PlanModeIndicatorView;
 
 #[cfg(test)]
@@ -73,6 +74,7 @@ pub(super) fn parallel_mode_alert_line(app: &NativeTuiApp) -> Option<String> {
     tail_shared::parallel_mode_alert_line(app)
 }
 
+#[cfg(test)]
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
     plan_indicator::current_plan_mode_indicator(app)
 }
