@@ -40,7 +40,7 @@ pub(super) struct PlanningDraftEditorStatusCopy<'a> {
     pub(super) confirmation_pending: bool,
 }
 
-pub(super) fn planning_setup_title_line(suffix: &str) -> Line<'static> {
+pub(super) fn planning_setup_title_line(suffix: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "Planning Setup",
@@ -52,7 +52,7 @@ pub(super) fn planning_setup_title_line(suffix: &str) -> Line<'static> {
     ])
 }
 
-pub(super) fn planning_draft_title_line(suffix: &str) -> Line<'static> {
+pub(super) fn planning_draft_title_line(suffix: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "Planning Draft",
