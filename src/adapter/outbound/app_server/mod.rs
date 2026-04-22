@@ -26,7 +26,7 @@ use crate::application::port::outbound::codex_app_server_port::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::ConversationSnapshot;
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 
 const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
 const APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
@@ -423,7 +423,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         })
     }
 
-    fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
+    fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
         let output =
             self.with_shared_runtime(SharedRuntimeRequestKind::RecentSessions, |connection, _| {
                 connection.list_threads(ThreadListParams {
@@ -438,11 +438,14 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             .map(to_session_summary)
             .collect::<Vec<_>>();
 
-        Ok(RecentSessions {
-            items,
-            warnings: output.warnings,
-            next_cursor: output.value.next_cursor,
-        })
+        Ok(SessionCatalog::ready(
+            SessionCatalogTier::ProviderBackedCatalog,
+            RecentSessions {
+                items,
+                warnings: output.warnings,
+                next_cursor: output.value.next_cursor,
+            },
+        ))
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {

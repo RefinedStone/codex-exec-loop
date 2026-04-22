@@ -289,7 +289,7 @@ mod tests {
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::ConversationSnapshot;
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 
     #[test]
     fn pending_lines_returns_only_new_suffix_for_appended_history() {
@@ -540,12 +540,13 @@ mod tests {
             })
         }
 
-        fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+        fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
             Ok(RecentSessions {
                 items: Vec::new(),
                 warnings: Vec::new(),
                 next_cursor: None,
-            })
+            }
+            .into())
         }
 
         fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {

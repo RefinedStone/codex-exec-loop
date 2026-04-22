@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,7 +211,7 @@ impl SessionService {
         Self { session_catalog_port }
     }
 
-    pub fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
+    pub fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
         self.session_catalog_port.load_recent_sessions(limit)
     }
 }
@@ -529,6 +529,7 @@ mod tests {
     use crate::application::port::outbound::codex_app_server_port::AppServerStartupContext;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation::ConversationSnapshot;
+    use crate::domain::recent_sessions::SessionCatalog;
 
     #[derive(Default)]
     struct FakeCodexAppServerPort {
@@ -540,7 +541,7 @@ mod tests {
             unreachable!("startup context is not used in session service tests")
         }
 
-        fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
+        fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
             self.limits
                 .lock()
                 .expect("session limit mutex poisoned")
@@ -549,7 +550,8 @@ mod tests {
                 items: Vec::new(),
                 warnings: Vec::new(),
                 next_cursor: None,
-            })
+            }
+            .into())
         }
 
         fn load_conversation_snapshot(&self, _thread_id: &str) -> Result<ConversationSnapshot> {

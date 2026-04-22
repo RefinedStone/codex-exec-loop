@@ -69,7 +69,7 @@ mod tests {
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation::ConversationSnapshot;
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 
     #[derive(Default)]
     struct FakeCodexAppServerPort;
@@ -84,12 +84,13 @@ mod tests {
             })
         }
 
-        fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+        fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
             Ok(RecentSessions {
                 items: Vec::new(),
                 warnings: Vec::new(),
                 next_cursor: None,
-            })
+            }
+            .into())
         }
 
         fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {

@@ -7,13 +7,13 @@ pub use super::session_catalog_port::SessionCatalogPort;
 pub use super::startup_probe_port::{AppServerStartupContext, StartupProbePort};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::ConversationSnapshot;
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::SessionCatalog;
 
 // This remains as a Codex-shaped compatibility port while application services migrate to
 // capability-owned seams.
 pub trait CodexAppServerPort: Send + Sync {
     fn load_startup_context(&self) -> Result<AppServerStartupContext>;
-    fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions>;
+    fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog>;
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
     fn run_new_thread_stream(
         &self,
@@ -42,7 +42,7 @@ impl<T> SessionCatalogPort for T
 where
     T: CodexAppServerPort + ?Sized,
 {
-    fn load_recent_sessions(&self, limit: usize) -> Result<RecentSessions> {
+    fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
         CodexAppServerPort::load_recent_sessions(self, limit)
     }
 }
@@ -80,12 +80,12 @@ mod tests {
     use std::sync::mpsc::{Sender, channel};
 
     use super::{
-        AppServerStartupContext, CodexAppServerPort, InteractiveTurnRuntimePort, SessionCatalogPort,
-        StartupProbePort,
+        AppServerStartupContext, CodexAppServerPort, InteractiveTurnRuntimePort,
+        SessionCatalogPort, StartupProbePort,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation::ConversationSnapshot;
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 
     #[derive(Default)]
     struct FakeCodexAppServerPort {
@@ -104,16 +104,19 @@ mod tests {
             })
         }
 
-        fn load_recent_sessions(&self, limit: usize) -> anyhow::Result<RecentSessions> {
+        fn load_recent_sessions(&self, limit: usize) -> anyhow::Result<SessionCatalog> {
             self.recent_session_limits
                 .lock()
                 .expect("recent-session limit mutex poisoned")
                 .push(limit);
-            Ok(RecentSessions {
-                items: Vec::new(),
-                warnings: Vec::new(),
-                next_cursor: None,
-            })
+            Ok(SessionCatalog::ready(
+                SessionCatalogTier::ProviderBackedCatalog,
+                RecentSessions {
+                    items: Vec::new(),
+                    warnings: Vec::new(),
+                    next_cursor: None,
+                },
+            ))
         }
 
         fn load_conversation_snapshot(
@@ -190,7 +193,8 @@ mod tests {
             .expect("recent sessions should load");
 
         assert_eq!(
-            *port.recent_session_limits
+            *port
+                .recent_session_limits
                 .lock()
                 .expect("recent-session limit mutex poisoned"),
             vec![25]
@@ -216,13 +220,15 @@ mod tests {
 
         assert_eq!(snapshot.thread_id, "thread-123");
         assert_eq!(
-            *port.new_thread_streams
+            *port
+                .new_thread_streams
                 .lock()
                 .expect("new-thread stream mutex poisoned"),
             vec![("/tmp/root".to_string(), "prompt".to_string())]
         );
         assert_eq!(
-            *port.turn_streams
+            *port
+                .turn_streams
                 .lock()
                 .expect("turn stream mutex poisoned"),
             vec![("thread-123".to_string(), "follow-up".to_string())]

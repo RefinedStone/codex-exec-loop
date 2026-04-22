@@ -7,6 +7,7 @@ use super::{
 use crate::application::service::session_service::{
     SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
 };
+use crate::domain::recent_sessions::SessionCatalog;
 use crate::domain::session_summary::SessionSummary;
 
 impl NativeTuiApp {
@@ -69,7 +70,9 @@ impl NativeTuiApp {
     fn current_session_browser_view(&self) -> Option<SessionBrowserView<'_>> {
         let current_workspace_directory = self.current_workspace_directory();
         match &self.session_state {
-            SessionState::Ready(recent_sessions) => Some(build_session_browser_view(
+            SessionState::Ready(SessionCatalog::Ready {
+                recent_sessions, ..
+            }) => Some(build_session_browser_view(
                 recent_sessions,
                 self.session_overlay_ui_state.browser_state(),
                 Some(current_workspace_directory.as_str()),
@@ -231,5 +234,9 @@ impl NativeTuiApp {
             _ => {}
         }
         true
+    }
+
+    pub(super) fn session_browser_available(&self) -> bool {
+        self.current_session_browser_view().is_some()
     }
 }

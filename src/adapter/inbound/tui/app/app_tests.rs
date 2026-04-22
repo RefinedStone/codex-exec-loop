@@ -43,20 +43,20 @@ use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
-use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
+use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -88,12 +88,13 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
         })
     }
 
-    fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+    fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
         Ok(RecentSessions {
             items: Vec::new(),
             warnings: Vec::new(),
             next_cursor: None,
-        })
+        }
+        .into())
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {

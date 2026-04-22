@@ -8,7 +8,7 @@ use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestPollResult;
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::SessionCatalog;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::conversation_runtime::ConversationPostTurnEvaluation;
@@ -30,7 +30,7 @@ use crate::domain::conversation::ConversationSnapshot;
 #[allow(dead_code)]
 pub(super) enum BackgroundMessage {
     StartupLoaded(Result<StartupDiagnostics, String>),
-    SessionsLoaded(Result<RecentSessions, String>),
+    SessionsLoaded(Result<SessionCatalog, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),

@@ -1,5 +1,6 @@
 use ratatui::text::Line;
 
+use crate::domain::recent_sessions::SessionCatalogTier;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 pub(super) fn thread_history_loading_header_line() -> &'static str {
@@ -71,6 +72,18 @@ pub(super) fn recent_session_status_load_failed() -> &'static str {
     "load failed"
 }
 
+pub(super) fn recent_session_status_unsupported(tier: SessionCatalogTier) -> String {
+    format!("{}: catalog unsupported", tier.label())
+}
+
+pub(super) fn recent_session_status_partial(tier: SessionCatalogTier) -> String {
+    format!("{}: partial catalog", tier.label())
+}
+
+pub(super) fn recent_session_status_loaded(tier: SessionCatalogTier, count: usize) -> String {
+    format!("{}: {} loaded", tier.label(), count)
+}
+
 pub(super) fn session_catalog_not_loaded_message(available: bool) -> &'static str {
     if available {
         "session list has not loaded yet"
@@ -105,6 +118,44 @@ pub(super) fn session_catalog_warning_waiting_line() -> &'static str {
 
 pub(super) fn session_catalog_warning_blocked_line() -> &'static str {
     "recent sessions remain unavailable until startup diagnostics succeed"
+}
+
+pub(super) fn session_catalog_tier_line(tier: SessionCatalogTier) -> String {
+    format!("catalog tier: {}", tier.label())
+}
+
+pub(super) fn session_catalog_unsupported_message(tier: SessionCatalogTier) -> &'static str {
+    match tier {
+        SessionCatalogTier::AttachOnly => "this bridge does not expose a recent-session catalog",
+        SessionCatalogTier::HandleBasedReattach => {
+            "this bridge can reattach by handle, but no queryable session catalog is available"
+        }
+        SessionCatalogTier::ProviderBackedCatalog => {
+            "the provider-backed session catalog is unavailable right now"
+        }
+    }
+}
+
+pub(super) fn session_catalog_unsupported_detail_line(tier: SessionCatalogTier) -> &'static str {
+    match tier {
+        SessionCatalogTier::AttachOnly => {
+            "attach-only bridges can launch or attach without listing prior sessions"
+        }
+        SessionCatalogTier::HandleBasedReattach => {
+            "handle-based reattach keeps a stable recovery anchor even when listing is unsupported"
+        }
+        SessionCatalogTier::ProviderBackedCatalog => {
+            "provider-backed session metadata is not currently queryable"
+        }
+    }
+}
+
+pub(super) fn session_catalog_partial_message(tier: SessionCatalogTier) -> String {
+    format!("{} is only partially available", tier.label())
+}
+
+pub(super) fn session_catalog_partial_detail_line(detail: &str) -> String {
+    detail.to_string()
 }
 
 fn inline_diagnostic_status(

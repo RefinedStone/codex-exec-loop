@@ -4,8 +4,10 @@ use super::NativeTuiApp;
 use super::capability_copy::{
     session_catalog_empty_provider_line, session_catalog_loading_message,
     session_catalog_not_loaded_detail_line, session_catalog_not_loaded_message,
-    session_catalog_waiting_detail_line, session_catalog_warning_blocked_line,
-    session_catalog_warning_waiting_line,
+    session_catalog_partial_detail_line, session_catalog_partial_message,
+    session_catalog_tier_line, session_catalog_unsupported_detail_line,
+    session_catalog_unsupported_message, session_catalog_waiting_detail_line,
+    session_catalog_warning_blocked_line, session_catalog_warning_waiting_line,
 };
 use super::overlays::{OverlayListEntryView, OverlayListView};
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
@@ -14,6 +16,7 @@ use crate::application::service::session_service::SessionProjectFilterOption;
 use crate::application::service::session_service::{
     SessionBrowserProjection, SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
 use crate::domain::session_summary::SessionSummary;
 
 pub(super) fn build_session_overlay_content(
@@ -50,7 +53,10 @@ pub(super) fn build_session_overlay_content(
             },
             vec![Line::from(message.clone())],
         ),
-        SessionState::Ready(recent_sessions) => {
+        SessionState::Ready(catalog) => {
+            let Some(recent_sessions) = catalog.recent_sessions() else {
+                return build_non_queryable_session_catalog_content(catalog);
+            };
             let browser_view = build_session_browser_view(
                 recent_sessions,
                 app.session_overlay_ui_state.browser_state(),
@@ -59,7 +65,8 @@ pub(super) fn build_session_overlay_content(
                 app.selected_session_index,
             );
             if recent_sessions.items.is_empty() {
-                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                let mut lines =
+                    build_session_browser_summary_lines(app, &browser_view, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(session_catalog_empty_provider_line()));
                 lines.push(Line::from(
@@ -83,7 +90,8 @@ pub(super) fn build_session_overlay_content(
                     .browser_state()
                     .search_query
                     .as_str();
-                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                let mut lines =
+                    build_session_browser_summary_lines(app, &browser_view, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(build_session_empty_detail_line(
                     &browser_view,
@@ -109,7 +117,8 @@ pub(super) fn build_session_overlay_content(
                     .browser_state()
                     .search_query
                     .as_str();
-                let mut lines = build_session_browser_summary_lines(app, &browser_view);
+                let mut lines =
+                    build_session_browser_summary_lines(app, &browser_view, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(build_session_empty_detail_line(
                     &browser_view,
@@ -146,7 +155,11 @@ pub(super) fn build_session_overlay_content(
                 lines.push(Line::from(format!("git branch: {branch}")));
             }
 
-            lines.extend(build_session_browser_summary_lines(app, &browser_view));
+            lines.extend(build_session_browser_summary_lines(
+                app,
+                &browser_view,
+                catalog.tier(),
+            ));
 
             if recent_sessions.next_cursor.is_some() {
                 lines.push(Line::from("more threads are available in the next cursor"));
@@ -177,6 +190,7 @@ pub(super) fn build_session_overlay_content(
 fn build_session_browser_summary_lines(
     app: &NativeTuiApp,
     browser_view: &SessionBrowserView<'_>,
+    catalog_tier: SessionCatalogTier,
 ) -> Vec<Line<'static>> {
     let active_filter_option = browser_view.projection.active_project_filter_option();
     let filter_label = active_filter_option
@@ -191,6 +205,7 @@ fn build_session_browser_summary_lines(
         &app.session_overlay_ui_state.browser_state().search_query
     };
     let mut lines = vec![
+        Line::from(session_catalog_tier_line(catalog_tier)),
         Line::from(format!(
             "{}: {}",
             if app.session_overlay_ui_state.is_search_query_editing() {
@@ -229,6 +244,13 @@ pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
         return vec![
             Line::from("Type the session query directly. Spaces match multiple tokens."),
             Line::from("Enter: apply query    Esc/Ctrl+C: cancel    Backspace: delete"),
+        ];
+    }
+
+    if !app.session_browser_available() {
+        return vec![
+            Line::from("n: draft    r: reload    Ctrl+d: diagnostics    Esc/Ctrl+C: close"),
+            Line::from("Recent-session navigation requires a queryable catalog surface."),
         ];
     }
 
@@ -391,14 +413,12 @@ fn format_session_empty_detail_line(
 
 pub(super) fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.session_state {
-        SessionState::Ready(recent_sessions) if !recent_sessions.warnings.is_empty() => {
-            recent_sessions
-                .warnings
-                .iter()
-                .cloned()
-                .map(Line::from)
-                .collect::<Vec<_>>()
-        }
+        SessionState::Ready(catalog) if !catalog.warnings().is_empty() => catalog
+            .warnings()
+            .iter()
+            .cloned()
+            .map(Line::from)
+            .collect::<Vec<_>>(),
         SessionState::Failed(message) => vec![Line::from(message.clone())],
         SessionState::Loading => vec![Line::from(session_catalog_warning_waiting_line())],
         SessionState::Idle if !app.can_open_session_list() => {
@@ -424,6 +444,48 @@ fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
                 session.model_provider,
             )),
         ],
+    }
+}
+
+fn build_non_queryable_session_catalog_content(
+    catalog: &SessionCatalog,
+) -> (OverlayListView, Vec<Line<'static>>) {
+    let mut lines = vec![Line::from(session_catalog_tier_line(catalog.tier()))];
+    match catalog {
+        SessionCatalog::Unsupported(status) => {
+            lines.push(Line::from(session_catalog_unsupported_detail_line(
+                status.tier,
+            )));
+            if !status.detail.is_empty() {
+                lines.push(Line::from(format!("detail: {}", status.detail)));
+            }
+            (
+                OverlayListView {
+                    message_lines: Some(vec![Line::from(session_catalog_unsupported_message(
+                        status.tier,
+                    ))]),
+                    items: Vec::new(),
+                    selected_index: None,
+                },
+                lines,
+            )
+        }
+        SessionCatalog::Partial(status) => {
+            lines.push(Line::from(session_catalog_partial_detail_line(
+                status.detail.as_str(),
+            )));
+            (
+                OverlayListView {
+                    message_lines: Some(vec![Line::from(session_catalog_partial_message(
+                        status.tier,
+                    ))]),
+                    items: Vec::new(),
+                    selected_index: None,
+                },
+                lines,
+            )
+        }
+        SessionCatalog::Ready { .. } => unreachable!("ready catalogs should render a browser"),
     }
 }
 

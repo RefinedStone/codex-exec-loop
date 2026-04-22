@@ -1,11 +1,14 @@
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
+use crate::domain::recent_sessions::SessionCatalog;
 
 use super::capability_copy::{
     recent_session_status_blocked_by_startup, recent_session_status_load_failed,
-    recent_session_status_loading, recent_session_status_not_requested,
-    recent_session_status_ready_to_load, recent_session_status_waiting_for_startup,
-    startup_check_loading_lines, startup_check_not_started_line,
-    startup_probe_loading_summary_line, startup_probe_not_started_line,
+    recent_session_status_loaded, recent_session_status_loading,
+    recent_session_status_not_requested, recent_session_status_partial,
+    recent_session_status_ready_to_load, recent_session_status_unsupported,
+    recent_session_status_waiting_for_startup, startup_check_loading_lines,
+    startup_check_not_started_line, startup_probe_loading_summary_line,
+    startup_probe_not_started_line,
 };
 use super::{Color, Line, NativeTuiApp, Span, StartupState, Style};
 
@@ -121,7 +124,14 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
         SessionState::Idle => recent_session_status_ready_to_load().to_string(),
         SessionState::Loading => recent_session_status_loading().to_string(),
         SessionState::Failed(_) => recent_session_status_load_failed().to_string(),
-        SessionState::Ready(recent_sessions) => format!("{} loaded", recent_sessions.items.len()),
+        SessionState::Ready(catalog) => match catalog {
+            SessionCatalog::Unsupported(status) => recent_session_status_unsupported(status.tier),
+            SessionCatalog::Partial(status) => recent_session_status_partial(status.tier),
+            SessionCatalog::Ready {
+                tier,
+                recent_sessions,
+            } => recent_session_status_loaded(*tier, recent_sessions.items.len()),
+        },
     }
 }
 

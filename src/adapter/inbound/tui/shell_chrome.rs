@@ -1,4 +1,4 @@
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::SessionCatalog;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub enum StartupState {
 pub enum SessionState {
     Idle,
     Loading,
-    Ready(RecentSessions),
+    Ready(SessionCatalog),
     Failed(String),
 }
 
@@ -79,7 +79,7 @@ pub enum ShellChromeEvent {
     SessionsRequested {
         limit: usize,
     },
-    SessionsLoaded(Result<RecentSessions, String>),
+    SessionsLoaded(Result<SessionCatalog, String>),
     StartupOverlayShown,
     SessionsOverlayShown {
         limit: usize,
@@ -152,9 +152,9 @@ pub fn reduce_shell_chrome(
         }
         ShellChromeEvent::SessionsLoaded(result) => {
             state.session_state = match result {
-                Ok(recent_sessions) => {
+                Ok(catalog) => {
                     state.selected_session_index = 0;
-                    SessionState::Ready(recent_sessions)
+                    SessionState::Ready(catalog)
                 }
                 Err(message) => SessionState::Failed(message),
             };
@@ -235,7 +235,10 @@ pub fn reduce_shell_chrome(
             state.shell_overlay = ShellOverlay::Hidden;
         }
         ShellChromeEvent::SessionSelectionMoved { delta } => {
-            let SessionState::Ready(recent_sessions) = &state.session_state else {
+            let SessionState::Ready(catalog) = &state.session_state else {
+                return ShellChromeReduction { state, effects };
+            };
+            let Some(recent_sessions) = catalog.recent_sessions() else {
                 return ShellChromeReduction { state, effects };
             };
 
@@ -281,7 +284,7 @@ mod tests {
         ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
         ShellOverlay, StartupState, reduce_shell_chrome,
     };
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -405,15 +408,34 @@ mod tests {
     #[test]
     fn moving_selection_clamps_to_available_bounds() {
         let mut state = ShellChromeState::new();
-        state.session_state = SessionState::Ready(RecentSessions {
-            items: vec![sample_session("thread-1"), sample_session("thread-2")],
-            warnings: Vec::new(),
-            next_cursor: None,
-        });
+        state.session_state = SessionState::Ready(
+            RecentSessions {
+                items: vec![sample_session("thread-1"), sample_session("thread-2")],
+                warnings: Vec::new(),
+                next_cursor: None,
+            }
+            .into(),
+        );
         state.selected_session_index = 1;
 
         let reduced =
             reduce_shell_chrome(state, ShellChromeEvent::SessionSelectionMoved { delta: 5 });
+
+        assert_eq!(reduced.state.selected_session_index, 1);
+    }
+
+    #[test]
+    fn moving_selection_ignores_attach_only_catalog_without_browser_items() {
+        let mut state = ShellChromeState::new();
+        state.session_state = SessionState::Ready(SessionCatalog::unsupported(
+            SessionCatalogTier::AttachOnly,
+            "session listing is unsupported for this bridge",
+            Vec::new(),
+        ));
+        state.selected_session_index = 1;
+
+        let reduced =
+            reduce_shell_chrome(state, ShellChromeEvent::SessionSelectionMoved { delta: -1 });
 
         assert_eq!(reduced.state.selected_session_index, 1);
     }

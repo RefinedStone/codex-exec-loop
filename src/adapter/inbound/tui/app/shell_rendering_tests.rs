@@ -33,7 +33,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorState,
 };
 use crate::domain::planning::PlanningValidationReport;
-use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -289,11 +289,14 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.session_state = SessionState::Ready(RecentSessions {
-        items: vec![sample_session("thread-1"), sample_session("thread-2")],
-        warnings: vec!["cache is stale".to_string()],
-        next_cursor: None,
-    });
+    app.session_state = SessionState::Ready(
+        RecentSessions {
+            items: vec![sample_session("thread-1"), sample_session("thread-2")],
+            warnings: vec!["cache is stale".to_string()],
+            next_cursor: None,
+        }
+        .into(),
+    );
     app.shell_overlay = ShellOverlay::Sessions;
 
     terminal
@@ -309,6 +312,30 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navigation() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.session_state = SessionState::Ready(SessionCatalog::unsupported(
+        SessionCatalogTier::AttachOnly,
+        "session listing is unsupported for this bridge",
+        vec!["manual attach only".to_string()],
+    ));
+    app.shell_overlay = ShellOverlay::Sessions;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline attach-only session inspection render succeeds");
+
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(rendered.contains("catalog tier: attach-only"));
+    assert!(rendered.contains("session listing is unsupported"));
+    assert!(rendered.contains("manual attach only"));
+    assert!(rendered.contains("Recent-session navigation requires a queryable catalog surface."));
 }
 
 #[test]
@@ -388,6 +415,25 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
     assert!(rendered.contains("agents: 0 active"));
     assert!(rendered.contains("queue: idle"));
     assert!(rendered.contains("parallel alert:"));
+}
+
+#[test]
+fn inline_tail_reports_partial_handle_based_session_catalog_status() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.session_state = SessionState::Ready(SessionCatalog::partial(
+        SessionCatalogTier::HandleBasedReattach,
+        "cached handles are available but provider metadata is stale",
+        Vec::new(),
+    ));
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("handle-based reattach: partial catalog"));
 }
 
 #[test]
@@ -619,12 +665,13 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
         })
     }
 
-    fn load_recent_sessions(&self, _limit: usize) -> Result<RecentSessions> {
+    fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
         Ok(RecentSessions {
             items: Vec::new(),
             warnings: Vec::new(),
             next_cursor: None,
-        })
+        }
+        .into())
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
