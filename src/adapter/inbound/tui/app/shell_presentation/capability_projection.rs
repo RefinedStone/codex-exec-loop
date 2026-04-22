@@ -7,7 +7,9 @@ use super::capability_copy::{
     recent_session_status_not_requested, recent_session_status_partial,
     recent_session_status_ready_to_load, recent_session_status_unsupported,
     recent_session_status_waiting_for_startup, startup_check_loading_lines,
-    startup_check_not_started_line, startup_probe_loading_summary_line,
+    startup_check_not_started_line, startup_diagnostic_marker, startup_overlay_failed_label,
+    startup_overlay_idle_status_line, startup_overlay_readiness_label,
+    startup_overlay_running_checks_label, startup_probe_loading_summary_line,
     startup_probe_not_started_line,
 };
 use super::{Color, Line, NativeTuiApp, Span, StartupState, Style};
@@ -15,13 +17,16 @@ use super::{Color, Line, NativeTuiApp, Span, StartupState, Style};
 pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.startup_state {
         StartupState::Idle => vec![
-            Line::from("status: idle"),
+            Line::from(startup_overlay_idle_status_line()),
             Line::from(startup_probe_not_started_line()),
         ],
         StartupState::Loading => vec![
             Line::from(vec![
                 Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled("running checks", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    startup_overlay_running_checks_label(),
+                    Style::default().fg(Color::Yellow),
+                ),
             ]),
             Line::from(startup_probe_loading_summary_line()),
         ],
@@ -29,11 +34,7 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
             Line::from(vec![
                 Span::styled("status: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    if diagnostics.can_continue() {
-                        "ready"
-                    } else {
-                        "needs attention"
-                    },
+                    startup_overlay_readiness_label(diagnostics.can_continue()),
                     Style::default().fg(if diagnostics.can_continue() {
                         Color::Green
                     } else {
@@ -49,7 +50,10 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
         StartupState::Failed(message) => vec![
             Line::from(vec![
                 Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled("failed", Style::default().fg(Color::Red)),
+                Span::styled(
+                    startup_overlay_failed_label(),
+                    Style::default().fg(Color::Red),
+                ),
             ]),
             Line::from(message.clone()),
         ],
@@ -149,6 +153,6 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
 }
 
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> Line<'static> {
-    let marker = if ok { "[ok]" } else { "[warn]" };
+    let marker = startup_diagnostic_marker(ok);
     Line::from(format!("{marker} {title}: {detail}"))
 }

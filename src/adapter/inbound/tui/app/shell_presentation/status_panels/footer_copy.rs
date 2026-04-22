@@ -3,13 +3,15 @@ use ratatui::text::Line;
 use super::super::ConversationViewModel;
 use super::super::capability_copy::thread_history_loading_status_line;
 use super::super::{
-    FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT,
+    FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_MODE_LABEL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT,
     FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT, FOOTER_WARNING_DETAIL_LIMIT,
-    INLINE_TAIL_TEMPLATE_LABEL_LIMIT, ShellConversationState, ShellCorePresentationContext,
-    build_working_line, compact_inline_detail, turn_status_label,
+    ShellConversationState, ShellCorePresentationContext, build_working_line,
+    compact_inline_detail, turn_status_label,
 };
 use super::plan_indicator::{PlanModeIndicatorView, plan_mode_prefixed_spans};
-use super::tail_shared::{build_operator_notice_line, inline_thread_label};
+use super::tail_shared::{
+    build_operator_notice_line, compact_auto_follow_status_summary, inline_thread_label,
+};
 
 pub(super) fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
@@ -66,7 +68,10 @@ pub(super) fn build_shell_footer_lines_with_context(
                     "startup: {}  |  gh: {}  |  auto: {}  |  progress: {}  |  mode: {}",
                     context.shell_action_availability.status_text(),
                     context.github_review_polling_status_label.as_str(),
-                    auto_follow_status_summary(conversation, FOOTER_AUTO_FOLLOW_DETAIL_LIMIT),
+                    compact_auto_follow_status_summary(
+                        conversation,
+                        FOOTER_AUTO_FOLLOW_DETAIL_LIMIT,
+                    ),
                     conversation
                         .auto_follow_state
                         .compact_completed_progress_label(),
@@ -126,25 +131,9 @@ pub(super) fn build_shell_footer_lines_with_context(
     }
 }
 
-fn auto_follow_status_summary(
-    conversation: &ConversationViewModel,
-    max_detail_len: usize,
-) -> String {
-    let summary = if conversation.auto_follow_state.enabled {
-        format!(
-            "{} / {}",
-            conversation.auto_follow_state.status_label(),
-            conversation.auto_follow_state.activity_label()
-        )
-    } else {
-        conversation.auto_follow_state.status_label().to_string()
-    };
-    compact_inline_detail(&summary, max_detail_len)
-}
-
 fn footer_mode_label(conversation: &ConversationViewModel) -> String {
     compact_inline_detail(
         conversation.auto_follow_state.mode_label(),
-        INLINE_TAIL_TEMPLATE_LABEL_LIMIT,
+        FOOTER_MODE_LABEL_LIMIT,
     )
 }

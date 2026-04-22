@@ -13,7 +13,7 @@ pub(super) fn current_live_agent_lines(
 ) -> Option<Vec<Line<'static>>> {
     let message = conversation.live_agent_message.as_ref()?;
     let label = conversation_message_kind_label(message.kind, message.phase.as_deref());
-    let content_lines = message.text.split('\n').collect::<Vec<_>>();
+    let content_lines = message.text.lines().collect::<Vec<_>>();
     let start_index = content_lines
         .len()
         .saturating_sub(INLINE_LIVE_AGENT_MAX_CONTENT_LINES);
@@ -146,6 +146,22 @@ pub(super) fn compact_inline_summary_label(summary: &str) -> String {
             .replace("runtime:", "notice:"),
         INLINE_TAIL_WARNING_DETAIL_LIMIT,
     )
+}
+
+pub(super) fn compact_auto_follow_status_summary(
+    conversation: &ConversationViewModel,
+    max_detail_len: usize,
+) -> String {
+    let summary = if conversation.auto_follow_state.enabled {
+        format!(
+            "{}/{}",
+            conversation.auto_follow_state.status_label(),
+            conversation.auto_follow_state.activity_label()
+        )
+    } else {
+        conversation.auto_follow_state.status_label().to_string()
+    };
+    compact_inline_detail(&summary, max_detail_len)
 }
 
 pub(super) fn inline_thread_label(conversation: &ConversationViewModel) -> String {

@@ -2,6 +2,7 @@ use ratatui::text::Line;
 
 use super::NativeTuiApp;
 use super::capability_copy::{
+    session_catalog_empty_action_hint_line, session_catalog_empty_message_line,
     session_catalog_empty_provider_line, session_catalog_loading_message,
     session_catalog_not_loaded_detail_line, session_catalog_not_loaded_message,
     session_catalog_partial_detail_line, session_catalog_partial_message,
@@ -69,14 +70,10 @@ pub(super) fn build_session_overlay_content(
                     build_session_browser_summary_lines(app, &browser_view, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(session_catalog_empty_provider_line()));
-                lines.push(Line::from(
-                    "Start a new draft with n, then reload the browser with r.",
-                ));
+                lines.push(Line::from(session_catalog_empty_action_hint_line()));
                 return (
                     OverlayListView {
-                        message_lines: Some(vec![Line::from(
-                            "no recent sessions have been recorded yet",
-                        )]),
+                        message_lines: Some(vec![Line::from(session_catalog_empty_message_line())]),
                         items: Vec::new(),
                         selected_index: None,
                     },

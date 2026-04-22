@@ -151,7 +151,7 @@ fn requires_manual_client_action(status: &ConversationApprovalReviewStatus) -> b
     )
 }
 
-fn control_support_label(support: ConversationControlSupport) -> &'static str {
+pub(crate) fn control_support_label(support: ConversationControlSupport) -> &'static str {
     match support {
         ConversationControlSupport::RuntimeNative => "runtime-native",
         ConversationControlSupport::ManualHandoff => "manual handoff",

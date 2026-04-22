@@ -69,8 +69,13 @@ mod tests {
         let mut validation_report = PlanningValidationReport::default();
         validation_report.push_warning(
             PlanningFileKind::Directions,
-            "summary-warning",
-            "summary should be clearer",
+            "first-warning",
+            "first issue should be clearer",
+        );
+        validation_report.push_error(
+            PlanningFileKind::Directions,
+            "second-error",
+            "second issue is critical",
         );
 
         let status_copy = build_planning_draft_editor_status_copy(
@@ -90,6 +95,6 @@ mod tests {
             .first_issue
             .expect("first issue should exist for warnings");
         assert_eq!(first_issue.severity, PlanningValidationSeverity::Warning);
-        assert!(first_issue.detail.contains("summary should be clearer"));
+        assert!(first_issue.detail.contains("first issue should be clearer"));
     }
 }

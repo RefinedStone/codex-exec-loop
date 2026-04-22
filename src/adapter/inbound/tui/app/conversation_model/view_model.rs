@@ -3,7 +3,8 @@ use std::time::Instant;
 use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::conversation_text::{
-    approval_review_status_text, approval_review_summary_text, runtime_control_summary_text,
+    approval_review_status_text, approval_review_summary_text, control_support_label,
+    runtime_control_summary_text,
 };
 use crate::application::service::planning::{
     PlanningAutoFollowBlockReason, PlanningRepairRequest, PlanningRuntimeAutoFollowDecision,
@@ -11,8 +12,8 @@ use crate::application::service::planning::{
     PlanningTaskHandoff,
 };
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationControlSupport, ConversationMessage,
-    ConversationMessageKind, ConversationRuntimeControlTruth, ConversationSnapshot,
+    ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeControlTruth, ConversationSnapshot,
 };
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
@@ -307,11 +308,7 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn interrupt_support_label(&self) -> &'static str {
-        match self.turn_control_truth.interrupt {
-            ConversationControlSupport::RuntimeNative => "runtime-native",
-            ConversationControlSupport::ManualHandoff => "manual handoff",
-            ConversationControlSupport::Unsupported => "unsupported",
-        }
+        control_support_label(self.turn_control_truth.interrupt)
     }
 
     pub(crate) fn replace_planning_runtime_snapshot(

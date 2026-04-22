@@ -24,6 +24,26 @@ pub(super) fn startup_preparing_status_line() -> &'static str {
     "status: preparing startup checks"
 }
 
+pub(super) fn startup_overlay_idle_status_line() -> &'static str {
+    "status: idle"
+}
+
+pub(super) fn startup_overlay_running_checks_label() -> &'static str {
+    "running checks"
+}
+
+pub(super) fn startup_overlay_readiness_label(can_continue: bool) -> &'static str {
+    if can_continue {
+        "ready"
+    } else {
+        "needs attention"
+    }
+}
+
+pub(super) fn startup_overlay_failed_label() -> &'static str {
+    "failed"
+}
+
 pub(super) fn startup_initializing_status_line() -> &'static str {
     "status: initializing codex shell"
 }
@@ -97,6 +117,14 @@ pub(super) fn recent_session_status_loaded(tier: SessionCatalogTier, count: usiz
     format!("{}: {} loaded", tier.label(), count)
 }
 
+pub(super) fn session_catalog_empty_message_line() -> &'static str {
+    "no recent sessions have been recorded yet"
+}
+
+pub(super) fn session_catalog_empty_action_hint_line() -> &'static str {
+    "Start a new draft with n, then reload the browser with r."
+}
+
 pub(super) fn session_catalog_not_loaded_message(available: bool) -> &'static str {
     if available {
         "session list has not loaded yet"
@@ -131,6 +159,10 @@ pub(super) fn session_catalog_warning_waiting_line() -> &'static str {
 
 pub(super) fn session_catalog_warning_blocked_line() -> &'static str {
     "recent sessions remain unavailable until startup diagnostics succeed"
+}
+
+pub(super) fn startup_diagnostic_marker(ok: bool) -> &'static str {
+    if ok { "[ok]" } else { "[warn]" }
 }
 
 pub(super) fn session_catalog_tier_line(tier: SessionCatalogTier) -> String {

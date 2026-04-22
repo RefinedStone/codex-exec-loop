@@ -19,8 +19,9 @@ use super::super::{
 };
 use super::plan_indicator::{current_plan_mode_indicator, plan_mode_prefixed_spans};
 use super::tail_shared::{
-    build_operator_notice_line, compact_inline_summary_label, current_live_agent_lines,
-    inline_thread_label, parallel_mode_alert_line, parallel_mode_summary_line,
+    build_operator_notice_line, compact_auto_follow_status_summary, compact_inline_summary_label,
+    current_live_agent_lines, inline_thread_label, parallel_mode_alert_line,
+    parallel_mode_summary_line,
 };
 
 pub(super) fn build_inline_tail_lines_with_context(
@@ -95,7 +96,7 @@ pub(super) fn build_inline_tail_lines_with_context(
                     "thread: {}  |  turn: {}  |  auto: {}  |  done: {}  |  in: {}",
                     inline_thread_label(conversation),
                     turn_status_label(conversation),
-                    inline_auto_follow_status_summary(
+                    compact_auto_follow_status_summary(
                         conversation,
                         INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
                     ),
@@ -329,20 +330,4 @@ fn build_inline_ready_prompt_lines(
     };
     lines.push(Line::from(hint));
     lines
-}
-
-fn inline_auto_follow_status_summary(
-    conversation: &ConversationViewModel,
-    max_detail_len: usize,
-) -> String {
-    let summary = if conversation.auto_follow_state.enabled {
-        format!(
-            "{}/{}",
-            conversation.auto_follow_state.status_label(),
-            conversation.auto_follow_state.activity_label()
-        )
-    } else {
-        conversation.auto_follow_state.status_label().to_string()
-    };
-    compact_inline_detail(&summary, max_detail_len)
 }

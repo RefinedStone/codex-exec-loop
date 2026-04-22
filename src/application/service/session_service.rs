@@ -525,8 +525,9 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
-    use crate::application::port::outbound::codex_app_server_port::AppServerStartupContext;
+    use crate::application::port::outbound::codex_app_server_port::{
+        AppServerStartupContext, CodexAppServerPort,
+    };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation::ConversationSnapshot;
     use crate::domain::recent_sessions::SessionCatalog;
