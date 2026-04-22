@@ -1,3 +1,4 @@
+use super::capability_copy::thread_history_loading_header_line;
 use super::*;
 
 pub(super) fn build_shell_header_lines_with_context(
@@ -9,7 +10,7 @@ pub(super) fn build_shell_header_lines_with_context(
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
                 Span::raw(" / loading thread"),
             ]),
-            Line::from("Reading thread history from codex app-server."),
+            Line::from(thread_history_loading_header_line()),
         ],
         ShellConversationState::Ready(conversation) => vec![
             Line::from(vec![

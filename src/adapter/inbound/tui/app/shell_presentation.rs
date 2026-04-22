@@ -160,6 +160,10 @@ impl<'a> ShellCorePresentationContext<'a> {
     }
 }
 
+#[path = "shell_presentation/capability_copy.rs"]
+mod capability_copy;
+#[path = "shell_presentation/capability_projection.rs"]
+mod capability_projection;
 #[path = "shell_presentation/overlays.rs"]
 mod overlays;
 #[path = "shell_presentation/prompt_composer.rs"]
@@ -172,7 +176,7 @@ mod shell_copy;
 #[path = "shell_presentation/status_panels.rs"]
 mod status_panels;
 
-use session_browser::recent_session_status_label;
+use capability_projection::recent_session_status_label;
 
 pub(super) use overlays::{
     AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
@@ -372,59 +376,23 @@ pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static
 }
 
 fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    build_startup_check_lines_from_state(&app.startup_state)
+    capability_projection::build_startup_check_lines(app)
+}
+
+fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    capability_projection::build_startup_overlay_summary_lines(app)
 }
 
 fn build_startup_check_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
-    match startup_state {
-        StartupState::Idle => vec![Line::from("startup check has not started")],
-        StartupState::Loading => vec![
-            Line::from("checking codex binary"),
-            Line::from("opening codex app-server"),
-            Line::from("reading account state"),
-        ],
-        StartupState::Ready(diagnostics) => vec![
-            diagnostic_item(
-                "codex binary",
-                diagnostics.codex_binary_ok,
-                &diagnostics.codex_binary_detail,
-            ),
-            diagnostic_item(
-                "workspace",
-                diagnostics.workspace_ok,
-                &diagnostics.workspace_detail,
-            ),
-            diagnostic_item(
-                "app-server initialize",
-                diagnostics.initialize_ok,
-                &diagnostics.initialize_detail,
-            ),
-            diagnostic_item(
-                "account/read",
-                diagnostics.account_ok,
-                &diagnostics.account_detail,
-            ),
-            Line::from(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
-        ],
-        StartupState::Failed(message) => vec![Line::from(format!("startup error: {message}"))],
-    }
+    capability_projection::build_startup_check_lines_from_state(startup_state)
 }
 
 fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    build_startup_warning_lines_from_state(&app.startup_state)
+    capability_projection::build_startup_warning_lines(app)
 }
 
 fn build_startup_warning_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
-    match startup_state {
-        StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
-            .warnings
-            .iter()
-            .cloned()
-            .map(Line::from)
-            .collect::<Vec<_>>(),
-        StartupState::Failed(message) => vec![Line::from(message.clone())],
-        _ => vec![Line::from("no warnings")],
-    }
+    capability_projection::build_startup_warning_lines_from_state(startup_state)
 }
 
 fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
@@ -448,11 +416,6 @@ fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
             selected_index: None,
         },
     }
-}
-
-fn diagnostic_item(title: &str, ok: bool, detail: &str) -> Line<'static> {
-    let marker = if ok { "[ok]" } else { "[warn]" };
-    Line::from(format!("{marker} {title}: {detail}"))
 }
 
 fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {

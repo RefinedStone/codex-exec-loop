@@ -1,6 +1,7 @@
 use ratatui::text::Line;
 
 use super::super::ConversationViewModel;
+use super::super::capability_copy::thread_history_loading_status_line;
 use super::super::{
     FOOTER_AUTO_FOLLOW_DETAIL_LIMIT, FOOTER_NOTICE_DETAIL_LIMIT,
     FOOTER_RUNTIME_NOTICE_DETAIL_LIMIT, FOOTER_STATUS_DETAIL_LIMIT, FOOTER_WARNING_DETAIL_LIMIT,
@@ -32,7 +33,7 @@ pub(super) fn build_shell_footer_lines_with_context(
                 plan_mode_indicator,
             )),
             Line::from("conversation state: loading thread metadata"),
-            Line::from("status: waiting for thread history from codex app-server"),
+            Line::from(thread_history_loading_status_line()),
         ],
         ShellConversationState::Failed(message) => vec![
             Line::from(plan_mode_prefixed_spans(

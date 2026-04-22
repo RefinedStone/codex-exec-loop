@@ -1,33 +1,20 @@
 use ratatui::text::Line;
 
 use super::NativeTuiApp;
+use super::capability_copy::{
+    session_catalog_empty_provider_line, session_catalog_loading_message,
+    session_catalog_not_loaded_detail_line, session_catalog_not_loaded_message,
+    session_catalog_waiting_detail_line, session_catalog_warning_blocked_line,
+    session_catalog_warning_waiting_line,
+};
 use super::overlays::{OverlayListEntryView, OverlayListView};
-use crate::adapter::inbound::tui::shell_chrome::{SessionState, StartupState};
+use crate::adapter::inbound::tui::shell_chrome::SessionState;
 #[cfg(test)]
 use crate::application::service::session_service::SessionProjectFilterOption;
 use crate::application::service::session_service::{
     SessionBrowserProjection, SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
 use crate::domain::session_summary::SessionSummary;
-
-pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
-    if !app.can_open_session_list() {
-        return match &app.startup_state {
-            StartupState::Loading => "waiting for startup checks".to_string(),
-            StartupState::Ready(_) | StartupState::Failed(_) => {
-                "blocked by startup diagnostics".to_string()
-            }
-            StartupState::Idle => "not requested yet".to_string(),
-        };
-    }
-
-    match &app.session_state {
-        SessionState::Idle => "ready to load".to_string(),
-        SessionState::Loading => "loading from codex app-server".to_string(),
-        SessionState::Failed(_) => "load failed".to_string(),
-        SessionState::Ready(recent_sessions) => format!("{} loaded", recent_sessions.items.len()),
-    }
-}
 
 pub(super) fn build_session_overlay_content(
     app: &NativeTuiApp,
@@ -37,29 +24,23 @@ pub(super) fn build_session_overlay_content(
     match &app.session_state {
         SessionState::Idle => (
             OverlayListView {
-                message_lines: Some(vec![Line::from(if app.can_open_session_list() {
-                    "session list has not loaded yet"
-                } else {
-                    "recent sessions unlock after startup diagnostics pass"
-                })]),
+                message_lines: Some(vec![Line::from(session_catalog_not_loaded_message(
+                    app.can_open_session_list(),
+                ))]),
                 items: Vec::new(),
                 selected_index: None,
             },
-            vec![Line::from(if app.can_open_session_list() {
-                "session details are not available yet"
-            } else {
-                "startup diagnostics must pass before recent-session detail is available"
-            })],
+            vec![Line::from(session_catalog_not_loaded_detail_line(
+                app.can_open_session_list(),
+            ))],
         ),
         SessionState::Loading => (
             OverlayListView {
-                message_lines: Some(vec![Line::from(
-                    "loading recent sessions from codex app-server",
-                )]),
+                message_lines: Some(vec![Line::from(session_catalog_loading_message())]),
                 items: Vec::new(),
                 selected_index: None,
             },
-            vec![Line::from("waiting for session list response")],
+            vec![Line::from(session_catalog_waiting_detail_line())],
         ),
         SessionState::Failed(message) => (
             OverlayListView {
@@ -80,9 +61,7 @@ pub(super) fn build_session_overlay_content(
             if recent_sessions.items.is_empty() {
                 let mut lines = build_session_browser_summary_lines(app, &browser_view);
                 lines.push(Line::from(""));
-                lines.push(Line::from(
-                    "codex app-server has not returned any recent sessions yet",
-                ));
+                lines.push(Line::from(session_catalog_empty_provider_line()));
                 lines.push(Line::from(
                     "Start a new draft with n, then reload the browser with r.",
                 ));
@@ -421,10 +400,10 @@ pub(super) fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'stati
                 .collect::<Vec<_>>()
         }
         SessionState::Failed(message) => vec![Line::from(message.clone())],
-        SessionState::Loading => vec![Line::from("waiting for app-server response")],
-        SessionState::Idle if !app.can_open_session_list() => vec![Line::from(
-            "recent sessions remain unavailable until startup diagnostics succeed",
-        )],
+        SessionState::Loading => vec![Line::from(session_catalog_warning_waiting_line())],
+        SessionState::Idle if !app.can_open_session_list() => {
+            vec![Line::from(session_catalog_warning_blocked_line())]
+        }
         _ => vec![Line::from("no warnings")],
     }
 }

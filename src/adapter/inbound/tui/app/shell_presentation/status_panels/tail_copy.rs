@@ -1,5 +1,9 @@
 use ratatui::text::Line;
 
+use super::super::capability_copy::{
+    startup_diagnostics_summary_line, startup_initializing_status_line,
+    startup_preparing_status_line, thread_history_loading_status_line,
+};
 use super::super::planning::build_planner_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
@@ -60,9 +64,7 @@ pub(super) fn build_inline_tail_lines_with_context(
                 "github: {}  |  flow: terminal main buffer",
                 context.github_review_polling_status_label.as_str(),
             )));
-            lines.push(Line::from(
-                "status: waiting for thread history from codex app-server",
-            ));
+            lines.push(Line::from(thread_history_loading_status_line()));
         }
         ShellConversationState::Failed(message) => {
             lines.push(Line::from(plan_mode_prefixed_spans(
@@ -172,25 +174,20 @@ fn build_inline_startup_screen_lines_with_context(
 
     match context.startup_state {
         StartupState::Idle => {
-            lines.push(Line::from("status: preparing startup checks"));
+            lines.push(Line::from(startup_preparing_status_line()));
             if let Some(conversation) = context.ready_conversation() {
                 lines.push(Line::from(format!("workspace: {}", conversation.cwd)));
             }
         }
         StartupState::Loading => {
-            lines.push(Line::from("status: initializing codex shell"));
+            lines.push(Line::from(startup_initializing_status_line()));
             lines.extend(super::super::build_startup_check_lines_from_state(
                 context.startup_state,
             ));
         }
         StartupState::Ready(diagnostics) => {
             lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
-            lines.push(Line::from(format!(
-                "diagnostics: codex {}  |  app-server {}  |  account {}",
-                inline_diagnostic_status(diagnostics.codex_binary_ok, "ok", "check"),
-                inline_diagnostic_status(diagnostics.initialize_ok, "ok", "check"),
-                inline_diagnostic_status(diagnostics.account_ok, "ok", "attention"),
-            )));
+            lines.push(Line::from(startup_diagnostics_summary_line(diagnostics)));
             if let Some(first_warning) = diagnostics.warnings.first() {
                 lines.push(Line::from(format!(
                     "warning: {}",
@@ -226,14 +223,6 @@ fn build_inline_startup_screen_lines_with_context(
 
     lines.push(Line::from(""));
     lines
-}
-
-fn inline_diagnostic_status(
-    ok: bool,
-    ready_label: &'static str,
-    blocked_label: &'static str,
-) -> &'static str {
-    if ok { ready_label } else { blocked_label }
 }
 
 fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {
