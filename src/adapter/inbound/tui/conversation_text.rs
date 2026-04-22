@@ -2,6 +2,7 @@ use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationControlSupport,
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
 };
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 pub(crate) fn conversation_message_label(message: &ConversationMessage) -> &str {
     message
@@ -112,6 +113,14 @@ pub(crate) fn runtime_control_summary_text(truth: ConversationRuntimeControlTrut
     )
 }
 
+pub(crate) fn attachment_runtime_notice(profile: TerminalBridgeAttachmentProfile) -> String {
+    format!(
+        "bridge attachment: {} / recovery: {}",
+        profile.mode.label(),
+        profile.recovery_anchor.label()
+    )
+}
+
 fn approval_review_summary_label(status: &ConversationApprovalReviewStatus) -> String {
     match status {
         ConversationApprovalReviewStatus::InProgress => "reviewing".to_string(),
@@ -181,12 +190,14 @@ fn humanize_protocol_status(value: &str) -> String {
 mod tests {
     use super::{
         approval_review_manual_client_action_notice, approval_review_status_text,
-        approval_review_summary_text, interrupt_blocked_status_text, runtime_control_summary_text,
+        approval_review_summary_text, attachment_runtime_notice, interrupt_blocked_status_text,
+        runtime_control_summary_text,
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationControlSupport,
         ConversationRuntimeControlTruth,
     };
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[test]
     fn unknown_approval_statuses_are_preserved_as_readable_text() {
@@ -229,6 +240,10 @@ mod tests {
                 ConversationControlSupport::Unsupported,
             )),
             "approval: manual handoff  |  interrupt: unsupported"
+        );
+        assert_eq!(
+            attachment_runtime_notice(TerminalBridgeAttachmentProfile::codex_app_server_reattach()),
+            "bridge attachment: provider reattach / recovery: provider thread id"
         );
     }
 }

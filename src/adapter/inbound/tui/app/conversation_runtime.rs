@@ -2,7 +2,9 @@ use super::PromptOrigin;
 use super::conversation_model::{
     AutoFollowupSkipReason, ConversationViewModel, PlanningRepairState,
 };
-use crate::adapter::inbound::tui::conversation_text::approval_review_manual_client_action_notice;
+use crate::adapter::inbound::tui::conversation_text::{
+    approval_review_manual_client_action_notice, attachment_runtime_notice,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningTaskHandoff};
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
@@ -154,6 +156,9 @@ pub(super) fn reduce_conversation_runtime(
             });
         }
         ConversationRuntimeEvent::StreamUpdated(event) => match event {
+            ConversationStreamEvent::AttachmentObserved { profile } => {
+                state.extend_runtime_notices([attachment_runtime_notice(profile)]);
+            }
             ConversationStreamEvent::ThreadPrepared {
                 thread_id,
                 title,
@@ -270,6 +275,7 @@ mod tests {
         ConversationApprovalReview, ConversationApprovalReviewStatus,
         ConversationRuntimeControlTruth, ConversationToolActivity, ConversationToolActivityKind,
     };
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[test]
     fn submit_prompt_moves_state_to_submitting_and_emits_stream_effect() {
@@ -690,6 +696,23 @@ mod tests {
         assert_eq!(
             reduced.state.cached_conversation_lines,
             format_conversation_lines(&reduced.state.messages)
+        );
+    }
+
+    #[test]
+    fn attachment_observed_adds_runtime_notice() {
+        let state = sample_conversation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::AttachmentObserved {
+                profile: TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
+            }),
+        );
+
+        assert_eq!(
+            reduced.state.runtime_notices.last().map(String::as_str),
+            Some("bridge attachment: provider reattach / recovery: provider thread id")
         );
     }
 

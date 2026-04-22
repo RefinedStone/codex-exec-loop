@@ -185,6 +185,10 @@ impl CodexAppServerAdapter {
                 model: model.map(str::to_string),
             })?;
             let thread_id = thread_response.thread.id.clone();
+            emit_attachment_observed(
+                &event_sender,
+                TerminalBridgeAttachmentProfile::codex_app_server_launch(),
+            );
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
                 thread_id: thread_id.clone(),
                 title: thread_title(&thread_response.thread),
@@ -219,6 +223,10 @@ impl CodexAppServerAdapter {
                 model: Some(PLANNING_WORKER_MODEL.to_string()),
             })?;
             let thread_id = thread_response.thread.id.clone();
+            emit_attachment_observed(
+                &event_sender,
+                TerminalBridgeAttachmentProfile::codex_app_server_launch(),
+            );
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
                 thread_id: thread_id.clone(),
                 title: thread_title(&thread_response.thread),
@@ -497,6 +505,10 @@ impl CodexAppServerPort for CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
             })?;
+            emit_attachment_observed(
+                &event_sender,
+                TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
+            );
             self.start_turn_and_wait_for_stream(
                 connection,
                 thread_id,
@@ -533,6 +545,13 @@ fn finish_stream_result(
     }
 
     result
+}
+
+fn emit_attachment_observed(
+    event_sender: &Sender<ConversationStreamEvent>,
+    profile: TerminalBridgeAttachmentProfile,
+) {
+    let _ = event_sender.send(ConversationStreamEvent::AttachmentObserved { profile });
 }
 
 #[cfg(test)]
