@@ -24,7 +24,10 @@ use self::runtime::{
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::{
+    ConversationStreamEvent, emit_codex_app_server_launch_attachment,
+    emit_codex_app_server_reattach_attachment,
+};
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -185,10 +188,7 @@ impl CodexAppServerAdapter {
                 model: model.map(str::to_string),
             })?;
             let thread_id = thread_response.thread.id.clone();
-            emit_attachment_observed(
-                &event_sender,
-                TerminalBridgeAttachmentProfile::codex_app_server_launch(),
-            );
+            emit_codex_app_server_launch_attachment(&event_sender);
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
                 thread_id: thread_id.clone(),
                 title: thread_title(&thread_response.thread),
@@ -223,10 +223,7 @@ impl CodexAppServerAdapter {
                 model: Some(PLANNING_WORKER_MODEL.to_string()),
             })?;
             let thread_id = thread_response.thread.id.clone();
-            emit_attachment_observed(
-                &event_sender,
-                TerminalBridgeAttachmentProfile::codex_app_server_launch(),
-            );
+            emit_codex_app_server_launch_attachment(&event_sender);
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
                 thread_id: thread_id.clone(),
                 title: thread_title(&thread_response.thread),
@@ -333,7 +330,7 @@ impl CodexAppServerAdapter {
         let mut connection = self.open_connection()?;
         let initialize_response = connection.initialize()?;
         let initialize_detail = initialize_detail(&initialize_response);
-        let attachment_profile = TerminalBridgeAttachmentProfile::codex_app_server();
+        let attachment_profile = TerminalBridgeAttachmentProfile::codex_app_server_launch();
         let value = operation(&mut connection, &initialize_detail)?;
         let mut warnings = connection.take_warnings();
         if let Some(notice) = notice {
@@ -505,10 +502,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
             })?;
-            emit_attachment_observed(
-                &event_sender,
-                TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
-            );
+            emit_codex_app_server_reattach_attachment(&event_sender);
             self.start_turn_and_wait_for_stream(
                 connection,
                 thread_id,
@@ -545,13 +539,6 @@ fn finish_stream_result(
     }
 
     result
-}
-
-fn emit_attachment_observed(
-    event_sender: &Sender<ConversationStreamEvent>,
-    profile: TerminalBridgeAttachmentProfile,
-) {
-    let _ = event_sender.send(ConversationStreamEvent::AttachmentObserved { profile });
 }
 
 #[cfg(test)]

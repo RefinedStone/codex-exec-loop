@@ -97,7 +97,6 @@ mod tests {
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct HiddenPlanningThreadCall {
@@ -135,9 +134,7 @@ mod tests {
     fn run_planning_session_collects_completed_message_and_changed_paths() {
         let fake_launcher = Arc::new(FakePlanningThreadLauncher {
             events: vec![
-                ConversationStreamEvent::AttachmentObserved {
-                    profile: TerminalBridgeAttachmentProfile::codex_app_server_launch(),
-                },
+                ConversationStreamEvent::codex_app_server_launch_attachment(),
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: "thread-1".to_string(),
                     title: "Planner".to_string(),
