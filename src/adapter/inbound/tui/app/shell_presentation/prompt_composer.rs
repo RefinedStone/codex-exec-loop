@@ -149,7 +149,11 @@ pub(super) fn build_shell_command_palette_lines(
         return Vec::new();
     };
     if palette_state.suggestions().is_empty() {
-        return vec![Line::from(format!("  no shell commands match `{prefix}`"))];
+        return vec![Line::from(vec![
+            Span::raw("  no shell commands match `"),
+            Span::raw(prefix),
+            Span::raw("`"),
+        ])];
     }
 
     let selected_index = palette_state.selected_index().unwrap_or(0);
@@ -163,11 +167,6 @@ pub(super) fn build_shell_command_palette_lines(
         .map(|(offset, command)| {
             let is_selected = selected_index == window_start + offset;
             let selector = if is_selected { "> " } else { "  " };
-            let detail = if command.requires_argument() {
-                format!("{} / add value", command.suggestion_detail())
-            } else {
-                command.suggestion_detail().to_string()
-            };
             let label_style = if is_selected {
                 Style::default()
                     .fg(Color::Cyan)
@@ -183,9 +182,14 @@ pub(super) fn build_shell_command_palette_lines(
 
             Line::from(vec![
                 Span::raw(selector),
-                Span::styled(command.command_name().to_string(), label_style),
+                Span::styled(command.command_name(), label_style),
                 Span::raw("  "),
-                Span::styled(detail, detail_style),
+                Span::styled(command.suggestion_detail(), detail_style),
+                if command.requires_argument() {
+                    Span::styled(" / add value", detail_style)
+                } else {
+                    Span::raw("")
+                },
             ])
         })
         .collect()
@@ -250,17 +254,22 @@ pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> 
     let mut cursor_column = 0;
 
     for (index, buffer_line) in buffer_lines.iter().enumerate() {
-        let prefix = if index == 0 {
-            PROMPT_PRIMARY_PREFIX
+        let line = if index == 0 {
+            Line::from(vec![
+                Span::raw(PROMPT_PRIMARY_PREFIX),
+                Span::raw((*buffer_line).to_string()),
+            ])
         } else {
-            PROMPT_CONTINUATION_PREFIX
+            Line::from(vec![
+                Span::raw(PROMPT_CONTINUATION_PREFIX),
+                Span::raw((*buffer_line).to_string()),
+            ])
         };
-        let rendered_line = format!("{prefix}{buffer_line}");
         if index + 1 == buffer_lines.len() {
             cursor_line_index = index;
-            cursor_column = Line::from(rendered_line.clone()).width();
+            cursor_column = line.width();
         }
-        lines.push(Line::from(rendered_line));
+        lines.push(line);
     }
 
     PromptBufferView {

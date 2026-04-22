@@ -14,7 +14,8 @@ pub(super) fn build_shell_header_lines_with_context(
         ShellConversationState::Ready(conversation) => vec![
             Line::from(vec![
                 Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
-                Span::raw(format!(" / {}", conversation.title)),
+                Span::raw(" / "),
+                Span::raw(conversation.title.clone()),
             ]),
             Line::from(vec![
                 Span::raw(format!(
@@ -76,7 +77,7 @@ pub(super) fn build_input_title_with_context(
                 Span::raw("Prompt"),
                 Span::raw(" / "),
                 Span::styled(
-                    conversation.input_state.label().to_string(),
+                    conversation.input_state.label(),
                     input_state_style(conversation.input_state),
                 ),
                 Span::raw(" / "),
