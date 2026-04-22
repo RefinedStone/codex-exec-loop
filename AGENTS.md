@@ -27,6 +27,7 @@ This file is the fast path for Codex in this repo. Read it first, then open only
   `bash scripts/gh-refinedstone.sh` for PR and review-thread writes, and do not write to GitHub if identity is uncertain
 - Delivery default: once a change is reviewable, finish with `commit -> push -> PR` unless the user says to hold locally
 - Parallel work: one worktree and one reviewable slice per branch, usually from `origin/prerelease`; inspect active work before choosing a lane
+- Worktree cleanup: after a branch is merged into `prerelease`, remove the finished worktree from the integration checkout. Prefer `bash scripts/cleanup_merged_worktrees.sh --apply --branch <finished-branch>` for the lane you just integrated. If the lane is fully disposable but the repo still reports dirty CRLF or local churn noise, use `--force-dirty` explicitly for that finished branch only.
 - Do not expand this file into backlog or design notes; keep that in `docs/design` or `docs/plan`
 
 ## Open When Needed

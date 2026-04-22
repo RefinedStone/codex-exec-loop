@@ -19,6 +19,9 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - Once a change reaches a reviewable milestone, the default is `commit -> push -> PR`.
 - Do not stop at a local commit unless the user explicitly says to hold.
 - After a PR merges or closes, start the next task from the latest target base branch on a new feature branch.
+- After a PR is integrated into `prerelease`, return to the integration checkout and remove the finished feature worktree instead of leaving it parked indefinitely.
+- Prefer `bash scripts/cleanup_merged_worktrees.sh --apply --branch <finished-branch>` for the lane you just integrated. The helper can also run without `--branch` as a conservative sweep, and it skips dirty or unmerged worktrees automatically.
+- If the finished lane is already integrated and its remaining worktree dirtiness is disposable repo noise, use `--force-dirty` only with an explicit `--branch` or `--path`. Do not use `--force-dirty` as a broad sweep.
 - For final integration, do not use GitHub's merge-commit flow.
 - Rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits.
 
@@ -43,3 +46,4 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - Do not branch a new worktree from another in-flight feature branch unless the dependency is explicitly documented.
 - If overlap is intentional, document the expected conflict surface and resolve it consciously during rebase or merge.
 - Before starting concurrent work, map the slice to `../plan/04-worktree-branch-rules.md` and the current snapshot in `../plan/11-parallel-worktree-plan.md`.
+- Finished worktrees are not part of the live set. Once their branch is merged or closed, clean them up before opening more lanes so `git worktree list` remains actionable.

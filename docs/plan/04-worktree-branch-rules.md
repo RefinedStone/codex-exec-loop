@@ -67,6 +67,24 @@ Avoid unrelated parallel edits in these files:
 
 ## Cleanup
 
+Prefer the cleanup helper from the integration checkout after a branch lands in `prerelease`:
+
+```bash
+bash scripts/cleanup_merged_worktrees.sh --apply --branch feature/native-session-query-model
+```
+
+The helper removes a targeted finished branch immediately, or can scan for conservative merged candidates when run without `--branch`. It removes only non-root worktrees whose workspace is clean, and the scan mode skips dirty or still-active lanes automatically.
+
+If a finished lane is already integrated but still reports disposable worktree dirtiness, use the explicit force form for that one lane only:
+
+```bash
+bash scripts/cleanup_merged_worktrees.sh --apply --branch feature/native-session-query-model --force-dirty
+```
+
+If a branch is abandoned without merge, use the manual fallback for that specific lane.
+
+Manual fallback:
+
 ```bash
 git worktree remove ../codex-exec-loop-worktrees/feature-native-session-query-model
 git branch -d feature/native-session-query-model
