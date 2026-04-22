@@ -11,14 +11,15 @@ use anyhow::Result;
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
 };
-use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
-use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
 use crate::application::service::planning::repair::reconciliation::{
-    PlanningRepairRequest, PlanningRepairRetryReason, build_planning_repair_prompt,
+    PlanningRepairPromptHandoff, PlanningRepairRequest, PlanningRepairRetryReason,
+    build_planning_repair_prompt,
 };
 use crate::application::service::planning::runtime::facade::{
     PlanningRuntimeFacadeService, PlanningTaskHandoff,
 };
+use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
+use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningQueueRefreshRequest<'a> {
@@ -50,6 +51,7 @@ pub struct PlanningLedgerRepairRequest<'a> {
     pub workspace_directory: &'a str,
     pub root_turn_id: &'a str,
     pub repair_request: &'a PlanningRepairRequest,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
     pub attempt_number: usize,
     pub max_attempts: usize,
     pub retry_reason: Option<PlanningRepairRetryReason>,
@@ -213,6 +215,14 @@ impl PlanningWorkerOrchestrationService {
     ) -> String {
         build_planning_repair_prompt(
             request.repair_request,
+            request
+                .previous_handoff_task
+                .map(|task| PlanningRepairPromptHandoff {
+                    task_id: task.task_id.as_str(),
+                    task_title: task.task_title.as_str(),
+                    updated_at: task.updated_at.as_str(),
+                    status_label: task.status_label.as_str(),
+                }),
             request.attempt_number,
             request.max_attempts,
             request.retry_reason,
@@ -335,7 +345,8 @@ fn build_planning_queue_refresh_prompt(
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
 - builtin next-task 자동 진행을 위해, `proposed`만 있고 바로 이어서 진행해야 할 후속 작업이 분명하면 최상위 proposal 1개를 `ready`로 승격하고 나머지 선택지는 `proposed`로 유지하세요.
 - queue head를 유지하더라도 title, status, priority, updated_at 중 하나도 바뀌지 않은 채 그대로 반복하지 마세요.
-- 같은 queue head를 유지해야 한다면 그 task의 scope, description, priority_reason, updated_at 중 최소 하나는 최신 답변 기준으로 다시 써서 진전이 드러나게 하세요.
+- 같은 queue head를 유지해야 한다면 그 task 자체의 scope, description, priority_reason, updated_at 중 최소 하나는 최신 답변 기준으로 다시 써서 진전이 드러나게 하세요.
+- 다른 blocked/proposed task만 추가한 것은 queue advancement로 간주되지 않습니다.
 - 이미 일부가 끝났다면 기존 task를 더 좁은 남은 작업으로 갱신하거나, 완료된 slice와 새 follow-up task를 분리하세요.
 - 마지막에는 이번 refresh에서 queue에 반영한 핵심 변경을 짧게 요약하세요.
 {latest_user_request_section}
@@ -399,7 +410,8 @@ fn build_planning_official_completion_prompt(
 - 아래 completion payload는 비공식 agent report입니다. ledger refresh가 성공하기 전까지 이 결과를 공식 완료로 간주하지 마세요.
 - payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
 - follow-up work가 있으면 새 executable task를 queue에 반영하고, 없으면 queue를 비워 둘 수 있습니다.
-- 같은 task를 다시 queue head로 유지해야 한다면 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
+- 같은 task를 다시 queue head로 유지해야 한다면 그 task 자체의 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
+- 다른 blocked/proposed task만 추가한 것은 queue advancement로 간주되지 않습니다.
 - 아래 JSON contract는 이번 refresh에서 처리할 단일 official ledger update input입니다. 여러 completion이 누적돼도 `refresh_order`가 더 작은 contract가 끝난 뒤 다음 contract를 반영하세요.
 - `commit_sha`, `branch_name`, `worktree_path`는 provenance 용도입니다. ledger에는 작업 의미 중심으로 반영하되 repeat prevention 판단에 활용하세요.
 - `validation_summary`가 실패 또는 미실행이면 후속 task를 `blocked` 또는 보완 task로 표현할지 신중히 결정하세요.
@@ -436,7 +448,7 @@ fn latest_user_request_section(latest_user_message: Option<&str>) -> String {
 fn previous_handoff_section(previous_handoff_task: Option<&PlanningTaskHandoff>) -> String {
     previous_handoff_task.map_or_else(String::new, |task| {
         format!(
-            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
+            "\n직전에 main session으로 넘긴 task:\n- task_id: {}\n- title: {}\n- updated_at: {}\n- status: {}\n- 이 task를 아무 변화 없이 그대로 `ready` queue head로 다시 선택하지 마세요.\n- 같은 task를 유지하려면 그 task 자체가 바뀌었다는 근거가 ledger에 있어야 합니다.\n- 최신 답변 기준으로 끝났으면 `done`, 계속 진행 중이지만 내용이 갱신되었으면 task를 업데이트하세요.\n- 후속 작업이 분리되면 기존 task 갱신 또는 새 task 추가로 반영하세요.\n",
             task.task_id,
             task.task_title,
             task.updated_at,
@@ -488,16 +500,16 @@ mod tests {
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    };
-    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
     use crate::application::service::planning::runtime::facade::{
         PlanningRuntimeFacadeService, PlanningTaskHandoff,
     };
     use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
+    use crate::application::service::planning::shared::contract::{
+        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    };
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::domain::planning::{

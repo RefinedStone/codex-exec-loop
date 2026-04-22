@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -10,7 +11,7 @@ use crate::application::service::planning::shared::contract::{
     TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
 };
 use crate::application::service::priority_queue_service::PriorityQueueService;
-use crate::domain::planning::PlanningWorkspaceFiles;
+use crate::domain::planning::{PlanningWorkspaceFiles, TaskDefinition, TaskLedgerDocument};
 
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
@@ -68,6 +69,14 @@ pub struct PlanningRepairRequest {
     pub accepted_task_ledger_json: String,
     pub rejected_task_ledger_json: Option<String>,
     pub rejected_archive_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanningRepairPromptHandoff<'a> {
+    pub task_id: &'a str,
+    pub task_title: &'a str,
+    pub updated_at: &'a str,
+    pub status_label: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -480,8 +489,17 @@ fn validation_error_summaries(
         .collect()
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct PlanningRepairPromptContext {
+    accepted_heading: Option<String>,
+    accepted_excerpt: Option<String>,
+    rejected_heading: Option<String>,
+    rejected_excerpt: Option<String>,
+}
+
 pub fn build_planning_repair_prompt(
     request: &PlanningRepairRequest,
+    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
     attempt_number: usize,
     max_attempts: usize,
     retry_reason: Option<PlanningRepairRetryReason>,
@@ -500,6 +518,19 @@ pub fn build_planning_repair_prompt(
 
     if let Some(retry_reason) = retry_reason {
         lines.push(format!("- 추가 지시: {}", retry_reason.instruction()));
+    }
+
+    if let Some(previous_handoff) = previous_handoff {
+        lines.push(String::new());
+        lines.push("직전에 main session으로 넘긴 task:".to_string());
+        lines.push(format!("- task_id: {}", previous_handoff.task_id));
+        lines.push(format!("- title: {}", previous_handoff.task_title));
+        lines.push(format!("- updated_at: {}", previous_handoff.updated_at));
+        lines.push(format!("- status: {}", previous_handoff.status_label));
+        lines.push(
+            "- 같은 task를 유지하려면 그 task 자체가 바뀌었다는 근거가 ledger에 있어야 합니다."
+                .to_string(),
+        );
     }
 
     lines.push(String::new());
@@ -527,24 +558,36 @@ pub fn build_planning_repair_prompt(
         truncate_prompt_section(&request.task_ledger_schema_json, 4_000).as_str(),
     ));
 
+    let prompt_context = build_planning_repair_prompt_context(request, previous_handoff);
+    let accepted_excerpt = prompt_context
+        .accepted_excerpt
+        .clone()
+        .unwrap_or_else(|| truncate_prompt_section(&request.accepted_task_ledger_json, 4_000));
+
     lines.push(String::new());
-    lines.push("Current accepted `task-ledger.json` (restored on disk):".to_string());
-    lines.push(prompt_code_block(
-        "json",
-        truncate_prompt_section(&request.accepted_task_ledger_json, 4_000).as_str(),
-    ));
+    lines.push(
+        prompt_context.accepted_heading.unwrap_or_else(|| {
+            "Current accepted `task-ledger.json` (restored on disk):".to_string()
+        }),
+    );
+    lines.push(prompt_code_block("json", &accepted_excerpt));
 
     if let Some(rejected_task_ledger_json) = request
         .rejected_task_ledger_json
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
+        let rejected_excerpt = prompt_context
+            .rejected_excerpt
+            .clone()
+            .unwrap_or_else(|| truncate_prompt_section(rejected_task_ledger_json, 4_000));
         lines.push(String::new());
-        lines.push("Rejected candidate excerpt:".to_string());
-        lines.push(prompt_code_block(
-            "json",
-            truncate_prompt_section(rejected_task_ledger_json, 4_000).as_str(),
-        ));
+        lines.push(
+            prompt_context
+                .rejected_heading
+                .unwrap_or_else(|| "Rejected candidate excerpt:".to_string()),
+        );
+        lines.push(prompt_code_block("json", &rejected_excerpt));
     }
 
     lines.push(String::new());
@@ -554,6 +597,196 @@ pub fn build_planning_repair_prompt(
     );
 
     lines.join("\n")
+}
+
+fn build_planning_repair_prompt_context(
+    request: &PlanningRepairRequest,
+    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
+) -> PlanningRepairPromptContext {
+    let accepted_task_ledger = parse_task_ledger_document(&request.accepted_task_ledger_json);
+    let rejected_task_ledger = request
+        .rejected_task_ledger_json
+        .as_deref()
+        .and_then(parse_task_ledger_document);
+    let Some(accepted_task_ledger) = accepted_task_ledger.as_ref() else {
+        return PlanningRepairPromptContext::default();
+    };
+
+    let focus_ids = collect_focus_task_ids(
+        accepted_task_ledger,
+        rejected_task_ledger.as_ref(),
+        &request.validation_errors,
+        previous_handoff,
+    );
+    if focus_ids.is_empty() {
+        return PlanningRepairPromptContext::default();
+    }
+
+    PlanningRepairPromptContext {
+        accepted_heading: Some(
+            "Current accepted `task-ledger.json` focus (current handoff + validation context):"
+                .to_string(),
+        ),
+        accepted_excerpt: serialize_focused_task_ledger_excerpt(accepted_task_ledger, &focus_ids),
+        rejected_heading: rejected_task_ledger
+            .as_ref()
+            .map(|_| "Rejected candidate focus (changed tasks + validation context):".to_string()),
+        rejected_excerpt: rejected_task_ledger
+            .as_ref()
+            .and_then(|task_ledger| serialize_focused_task_ledger_excerpt(task_ledger, &focus_ids)),
+    }
+}
+
+fn parse_task_ledger_document(body: &str) -> Option<TaskLedgerDocument> {
+    serde_json::from_str(body).ok()
+}
+
+fn collect_focus_task_ids(
+    accepted_task_ledger: &TaskLedgerDocument,
+    rejected_task_ledger: Option<&TaskLedgerDocument>,
+    validation_errors: &[String],
+    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
+) -> BTreeSet<String> {
+    let mut focus_ids = BTreeSet::new();
+    if let Some(previous_handoff) = previous_handoff {
+        let task_id = previous_handoff.task_id.trim();
+        if !task_id.is_empty() {
+            focus_ids.insert(task_id.to_string());
+        }
+    }
+
+    let mut known_task_ids = accepted_task_ledger
+        .tasks
+        .iter()
+        .map(|task| task.id.trim().to_string())
+        .collect::<BTreeSet<_>>();
+    if let Some(rejected_task_ledger) = rejected_task_ledger {
+        known_task_ids.extend(
+            rejected_task_ledger
+                .tasks
+                .iter()
+                .map(|task| task.id.trim().to_string()),
+        );
+        focus_ids.extend(changed_task_ids(accepted_task_ledger, rejected_task_ledger));
+    }
+
+    for validation_error in validation_errors {
+        for task_id in &known_task_ids {
+            if validation_error.contains(task_id) {
+                focus_ids.insert(task_id.clone());
+            }
+        }
+    }
+
+    expand_related_task_ids(&mut focus_ids, accepted_task_ledger);
+    if let Some(rejected_task_ledger) = rejected_task_ledger {
+        expand_related_task_ids(&mut focus_ids, rejected_task_ledger);
+    }
+
+    focus_ids
+}
+
+fn changed_task_ids(
+    accepted_task_ledger: &TaskLedgerDocument,
+    rejected_task_ledger: &TaskLedgerDocument,
+) -> BTreeSet<String> {
+    let accepted_task_map = accepted_task_ledger
+        .tasks
+        .iter()
+        .map(|task| (task.id.trim(), task))
+        .collect::<HashMap<_, _>>();
+    let rejected_task_map = rejected_task_ledger
+        .tasks
+        .iter()
+        .map(|task| (task.id.trim(), task))
+        .collect::<HashMap<_, _>>();
+    let all_task_ids = accepted_task_map
+        .keys()
+        .copied()
+        .chain(rejected_task_map.keys().copied())
+        .collect::<BTreeSet<_>>();
+    let mut changed_task_ids = BTreeSet::new();
+
+    for task_id in all_task_ids {
+        match (
+            accepted_task_map.get(task_id),
+            rejected_task_map.get(task_id),
+        ) {
+            (Some(accepted_task), Some(rejected_task))
+                if normalized_task_definition(accepted_task)
+                    != normalized_task_definition(rejected_task) =>
+            {
+                changed_task_ids.insert(task_id.to_string());
+            }
+            (None, Some(_)) | (Some(_), None) => {
+                changed_task_ids.insert(task_id.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    changed_task_ids
+}
+
+fn normalized_task_definition(task: &TaskDefinition) -> TaskDefinition {
+    let mut normalized_task = task.clone();
+    normalized_task.depends_on.sort();
+    normalized_task.blocked_by.sort();
+    normalized_task
+}
+
+fn expand_related_task_ids(focus_ids: &mut BTreeSet<String>, task_ledger: &TaskLedgerDocument) {
+    let seed_ids = focus_ids.clone();
+    for task in &task_ledger.tasks {
+        let task_id = task.id.trim();
+        let directly_related = seed_ids.contains(task_id)
+            || task
+                .depends_on
+                .iter()
+                .any(|dependency_id| seed_ids.contains(dependency_id.trim()))
+            || task
+                .blocked_by
+                .iter()
+                .any(|blocker_id| seed_ids.contains(blocker_id.trim()));
+        if !directly_related {
+            continue;
+        }
+
+        focus_ids.insert(task_id.to_string());
+        for dependency_id in &task.depends_on {
+            let dependency_id = dependency_id.trim();
+            if !dependency_id.is_empty() {
+                focus_ids.insert(dependency_id.to_string());
+            }
+        }
+        for blocker_id in &task.blocked_by {
+            let blocker_id = blocker_id.trim();
+            if !blocker_id.is_empty() {
+                focus_ids.insert(blocker_id.to_string());
+            }
+        }
+    }
+}
+
+fn serialize_focused_task_ledger_excerpt(
+    task_ledger: &TaskLedgerDocument,
+    focus_ids: &BTreeSet<String>,
+) -> Option<String> {
+    let focused_tasks = task_ledger
+        .tasks
+        .iter()
+        .filter(|task| focus_ids.contains(task.id.trim()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if focused_tasks.is_empty() {
+        return None;
+    }
+
+    serde_json::to_string_pretty(&TaskLedgerDocument {
+        version: task_ledger.version,
+        tasks: focused_tasks,
+    })
+    .ok()
 }
 
 fn prompt_code_block(language: &str, body: &str) -> String {
@@ -593,17 +826,17 @@ mod tests {
 
     use super::{
         PlanningExecutionSnapshot, PlanningQueueSnapshotAction, PlanningReconciliationService,
-        PlanningRepairRetryReason, build_planning_repair_prompt,
+        PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {
@@ -812,6 +1045,7 @@ mod tests {
                         .to_string(),
                 ),
             },
+            None,
             1,
             2,
             Some(PlanningRepairRetryReason::TaskLedgerStillInvalid),
@@ -822,6 +1056,160 @@ mod tests {
         assert!(prompt.contains("rejected archive"));
         assert!(prompt.contains("Rejected candidate excerpt"));
         assert!(prompt.contains("수정했지만 여전히 유효하지 않습니다"));
+    }
+
+    #[test]
+    fn repair_prompt_surfaces_previous_handoff_and_changed_task_context_from_large_ledger() {
+        let filler_tasks = (0..40)
+            .map(|index| {
+                json!({
+                    "id": format!("filler-task-{index:02}"),
+                    "direction_id": "example-direction",
+                    "direction_relation_note": format!("Filler relation note {index}"),
+                    "title": format!("Filler task {index}"),
+                    "description": "This filler task makes the accepted ledger large enough that naive truncation would hide the real repair targets.".repeat(3),
+                    "status": "done",
+                    "base_priority": 10,
+                    "dynamic_priority_delta": 0,
+                    "priority_reason": "",
+                    "depends_on": [],
+                    "blocked_by": [],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": null,
+                    "updated_at": "2026-04-22T00:00:00Z"
+                })
+            })
+            .collect::<Vec<_>>();
+        let accepted_task_ledger_json = serde_json::to_string_pretty(&json!({
+            "version": 1,
+            "tasks": filler_tasks.iter().cloned().chain([
+                json!({
+                    "id": "context-first-bridge-adapter-attachment-event-reuse",
+                    "direction_id": "context-first-architecture-and-doc-coherence",
+                    "direction_relation_note": "Current queue head before repair.",
+                    "title": "Reuse attachment event and profiles across remaining bridge adapters",
+                    "description": "Carry the same attachment truth through remaining bridge adapters.",
+                    "status": "ready",
+                    "base_priority": 87,
+                    "dynamic_priority_delta": 2,
+                    "priority_reason": "Current top executable task.",
+                    "depends_on": [],
+                    "blocked_by": [],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": null,
+                    "updated_at": "2026-04-22T23:30:00Z"
+                }),
+                json!({
+                    "id": "terminal-bridge-local-spike-readiness-gate",
+                    "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+                    "direction_relation_note": "Immediate gate before implementation.",
+                    "title": "Gate tmux local-attach spike on capability audit and evidence",
+                    "description": "Hold the local spike until evidence exists.",
+                    "status": "blocked",
+                    "base_priority": 89,
+                    "dynamic_priority_delta": 2,
+                    "priority_reason": "Research gate remains closed.",
+                    "depends_on": [],
+                    "blocked_by": [],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": null,
+                    "updated_at": "2026-04-22T23:50:00Z"
+                })
+            ]).collect::<Vec<_>>()
+        }))
+        .expect("accepted task ledger should serialize");
+        let rejected_task_ledger_json = serde_json::to_string_pretty(&json!({
+            "version": 1,
+            "tasks": filler_tasks.into_iter().chain([
+                json!({
+                    "id": "context-first-bridge-adapter-attachment-event-reuse",
+                    "direction_id": "context-first-architecture-and-doc-coherence",
+                    "direction_relation_note": "Repair candidate incorrectly left the old queue head untouched.",
+                    "title": "Reuse attachment event and profiles across remaining bridge adapters",
+                    "description": "Carry the same attachment truth through remaining bridge adapters.",
+                    "status": "ready",
+                    "base_priority": 87,
+                    "dynamic_priority_delta": 2,
+                    "priority_reason": "Current top executable task.",
+                    "depends_on": [],
+                    "blocked_by": [],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": null,
+                    "updated_at": "2026-04-22T23:30:00Z"
+                }),
+                json!({
+                    "id": "terminal-bridge-local-spike-readiness-gate",
+                    "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+                    "direction_relation_note": "Immediate gate before implementation.",
+                    "title": "Gate tmux local-attach spike on capability audit and evidence",
+                    "description": "Hold the local spike until evidence exists.",
+                    "status": "blocked",
+                    "base_priority": 89,
+                    "dynamic_priority_delta": 2,
+                    "priority_reason": "Research gate remains closed.",
+                    "depends_on": [],
+                    "blocked_by": [],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": null,
+                    "updated_at": "2026-04-22T23:50:00Z"
+                }),
+                json!({
+                    "id": "terminal-bridge-primary-implementation-slice",
+                    "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+                    "direction_relation_note": "First real implementation slice.",
+                    "title": "Implement the first real terminal bridge slice",
+                    "description": "Start the first real implementation slice.",
+                    "status": "blocked",
+                    "base_priority": 90,
+                    "dynamic_priority_delta": 2,
+                    "priority_reason": "Implementation waits for readiness gate.",
+                    "depends_on": ["terminal-bridge-local-spike-readiness-gate"],
+                    "blocked_by": ["terminal-bridge-local-spike-readiness-gate"],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": null,
+                    "updated_at": "2026-04-22T23:50:00Z"
+                })
+            ]).collect::<Vec<_>>()
+        }))
+        .expect("rejected task ledger should serialize");
+        let prompt = build_planning_repair_prompt(
+            &super::PlanningRepairRequest {
+                failure_summary: "task terminal-bridge-primary-implementation-slice cannot list terminal-bridge-local-spike-readiness-gate in both depends_on and blocked_by".to_string(),
+                validation_errors: vec![
+                    "task terminal-bridge-primary-implementation-slice cannot list terminal-bridge-local-spike-readiness-gate in both depends_on and blocked_by".to_string(),
+                ],
+                directions_toml: "version = 1".to_string(),
+                task_ledger_schema_json: "{\"type\":\"object\"}".to_string(),
+                accepted_task_ledger_json,
+                rejected_task_ledger_json: Some(rejected_task_ledger_json),
+                rejected_archive_path: Some(
+                    "/tmp/workspace/.codex-exec-loop/planning/rejected/turn-1/task-ledger.json"
+                        .to_string(),
+                ),
+            },
+            Some(PlanningRepairPromptHandoff {
+                task_id: "context-first-bridge-adapter-attachment-event-reuse",
+                task_title: "Reuse attachment event and profiles across remaining bridge adapters",
+                updated_at: "2026-04-22T23:30:00Z",
+                status_label: "ready",
+            }),
+            1,
+            2,
+            Some(PlanningRepairRetryReason::TaskLedgerStillInvalid),
+        );
+
+        assert!(prompt.contains("직전에 main session으로 넘긴 task:"));
+        assert!(prompt.contains("Current accepted `task-ledger.json` focus"));
+        assert!(prompt.contains("Rejected candidate focus"));
+        assert!(prompt.contains("context-first-bridge-adapter-attachment-event-reuse"));
+        assert!(prompt.contains("terminal-bridge-primary-implementation-slice"));
+        assert!(prompt.contains("terminal-bridge-local-spike-readiness-gate"));
     }
 
     #[test]

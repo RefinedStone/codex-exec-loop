@@ -116,6 +116,7 @@ impl PostTurnEvaluationExecutor {
                 &request.workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
+                conversation.last_planning_task_handoff(),
             );
             planning_runtime_snapshot = repair_outcome.runtime_snapshot;
         }
@@ -394,6 +395,7 @@ impl PostTurnEvaluationExecutor {
                 planning_workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
+                conversation.last_planning_task_handoff(),
             );
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
@@ -456,6 +458,7 @@ impl PostTurnEvaluationExecutor {
         workspace_directory: &str,
         root_turn_id: &str,
         repair_request: &PlanningRepairRequest,
+        previous_handoff_task: Option<&PlanningTaskHandoff>,
     ) -> HiddenPlanningRepairOutcome {
         let mut runtime_snapshot = self
             .planning
@@ -469,6 +472,7 @@ impl PostTurnEvaluationExecutor {
                 workspace_directory,
                 root_turn_id,
                 repair_request: &next_request,
+                previous_handoff_task,
                 attempt_number,
                 max_attempts: MAX_PLANNING_REPAIR_ATTEMPTS,
                 retry_reason: next_retry_reason,
@@ -701,6 +705,7 @@ impl PostTurnEvaluationExecutor {
                 &request.workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
+                conversation.last_planning_task_handoff(),
             );
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
@@ -997,19 +1002,19 @@ fn repeated_queue_head_detail(
         return None;
     }
 
-    let ledger_unchanged = match (
-        previous_snapshot.task_ledger_signature(),
-        snapshot.task_ledger_signature(),
+    let queue_head_task_unchanged = match (
+        previous_snapshot.queue_head_task_signature(),
+        snapshot.queue_head_task_signature(),
     ) {
         (Some(previous), Some(current)) => previous == current,
-        _ => previous_snapshot.queue_snapshot() == snapshot.queue_snapshot(),
+        _ => true,
     };
-    if !ledger_unchanged {
+    if !queue_head_task_unchanged {
         return None;
     }
 
     Some(format!(
-        "planner refresh kept the previously handed-off task unchanged as the queue head and did not materially change task-ledger.json: {}",
+        "planner refresh kept the previously handed-off task unchanged as the queue head; unrelated ledger edits do not count as queue advancement: {}",
         previous_handoff.task_title
     ))
 }

@@ -325,13 +325,13 @@
     {
       "id": "context-first-popup-planning-step-router-surface-slice",
       "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "After PR #319, the latest main-session reply leaves planning init-step dispatch as the most immediate popup-planning seam still living in `planning.rs`, with final composition explicitly called out as the follow-up behind it.",
+      "direction_relation_note": "The latest main-session verification confirmed that `planning.rs` already delegates init-step dispatch into `planning_init_router.rs`, so this router seam is complete and queue progression can move to the remaining popup planning composition surface.",
       "title": "Split popup planning init-step router surface",
-      "description": "Extract the planning init-step and step-level dispatch surface that still lives in `shell_presentation/overlays/popup/planning.rs` into a dedicated helper so the popup planning coordinator stops branching across existing-workspace, simple-review, and draft-editor selection now that existing-workspace routing is already isolated in `popup/planning_existing_workspace.rs`.",
-      "status": "ready",
+      "description": "Extract the planning init-step and step-level dispatch surface that still lives in `shell_presentation/overlays/popup/planning.rs` into a dedicated helper so the popup planning coordinator stops branching across existing-workspace, simple-review, and draft-editor selection now that existing-workspace routing is already isolated in `popup/planning_existing_workspace.rs`. Main-session verification confirmed this already shipped via `planning_init_router.rs`, with the targeted popup planning tests passing.",
+      "status": "done",
       "base_priority": 92,
-      "dynamic_priority_delta": 4,
-      "priority_reason": "Builtin next-task progression still needs one immediately executable queue head, and the latest main-session reply explicitly names planning init-step dispatch as the next direct popup-planning split after PR #319.",
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply marked this seam complete, so builtin next-task progression should advance to the remaining popup planning composition follow-up instead of re-queueing the same router split.",
       "depends_on": [
         "context-first-popup-planning-existing-workspace-routing-slice"
       ],
@@ -339,18 +339,18 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T19:05:00Z"
+      "updated_at": "2026-04-22T19:50:00Z"
     },
     {
       "id": "context-first-popup-planning-final-composition-slice",
       "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "The latest main-session reply now names final composition as the last larger popup-planning responsibility behind the more immediate init-step dispatch cut.",
+      "direction_relation_note": "The latest main-session verification confirmed that `planning.rs` is already reduced to a thin coordinator, with final composition delegated to `planning_init_router.rs`, `planning_existing_workspace.rs`, and `planning_editor_surface.rs`, so this popup-planning seam is complete.",
       "title": "Split popup planning final composition surface",
-      "description": "Extract the final existing-workspace, simple-review, and draft-editor overlay composition that still lives in `shell_presentation/overlays/popup/planning.rs` after the step router split so the module reduces to a thin coordinator over routing, copy, projection, runtime, session, and existing-workspace helpers.",
-      "status": "proposed",
+      "description": "Extract the final existing-workspace, simple-review, and draft-editor overlay composition that still lives in `shell_presentation/overlays/popup/planning.rs` now that init-step routing is already handled by `planning_init_router.rs`, so the module reduces to a thin coordinator over routing, copy, projection, runtime, session, editor-surface, and existing-workspace helpers. Main-session verification confirmed this is already shipped, with three popup-planning tests passing and no further work remaining inside this task scope.",
+      "status": "done",
       "base_priority": 90,
-      "dynamic_priority_delta": 2,
-      "priority_reason": "This is a direct follow-up from the latest main-session reply, but the queue should first clear the more immediate init-step dispatch seam still called out inside `planning.rs`.",
+      "dynamic_priority_delta": 4,
+      "priority_reason": "The latest main-session reply marked this seam complete, so queue progression should move to any remaining helper-level popup-planning cleanup instead of reselecting the same composition slice as queue head.",
       "depends_on": [
         "context-first-popup-planning-step-router-surface-slice"
       ],
@@ -358,54 +358,18 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T19:05:00Z"
+      "updated_at": "2026-04-22T20:10:00Z"
     },
     {
-      "id": "context-first-status-panels-indicator-and-footer-copy-slice",
+      "id": "context-first-popup-planning-helper-cleanup-slice",
       "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "The latest reply also exposed a smaller follow-up inside the status-panels cluster, but it is a secondary cut behind the larger shell-rendering hotspot.",
-      "title": "Finish plan indicator and footer-tail copy split",
-      "description": "Reduce the remaining responsibility in `status_panels.rs` by moving plan-mode indicator calculation and re-export wiring into a narrower surface, and consider splitting framed footer copy from inline tail copy inside `tail_copy.rs` if the status-panels cluster needs one more dedicated extraction after the inline inspection slice.",
-      "status": "proposed",
-      "base_priority": 84,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "This is a concrete follow-up from the latest implementation notes, but the queue should favor the larger `shell_rendering.rs` hotspot first.",
-      "depends_on": [
-        "context-first-status-panels-tail-and-live-status-slice"
-      ],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-22T00:00:00Z"
-    },
-    {
-      "id": "cleanup-app-tests-unused-import-warning",
-      "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "The latest verification still reported three pre-existing warnings, but they remain cleanup work rather than the main architecture slice.",
-      "title": "Clear the lingering app_tests unused import warning",
-      "description": "Remove or justify the remaining unused imports in `app_tests.rs` so focused shell-presentation slices can run without carrying forward known warning noise.",
-      "status": "proposed",
-      "base_priority": 72,
-      "dynamic_priority_delta": 1,
-      "priority_reason": "The warning is still present in the latest verification, but it remains cleanup work behind the popup-planning coordinator slices called out directly in the main-session reply.",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-22T18:35:00Z"
-    },
-    {
-      "id": "context-first-codex-capability-boundary-audit",
-      "direction_id": "context-first-architecture-and-doc-coherence",
-      "direction_relation_note": "The capability audit should still wait until the residual popup-planning coordinator seams settle, which now means the init-step router and final composition follow-ups after PR #319.",
-      "title": "Map Codex-only assumptions into capability targets",
-      "description": "Audit where `codex app-server`, Codex-specific session semantics, and Codex-flavored approval or resume assumptions are embedded today, then restate those spots as capability targets around `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and `TerminalBridgeAttachment` after the remaining popup-planning init-step router and final composition slices, plus any final status-panel boundary slices, settle.",
-      "status": "blocked",
-      "base_priority": 92,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "External-agent boundary work should not outrun the remaining context-first popup-planning cleanup, because the latest main-session reply still leaves init-step dispatch and final composition inside `popup/planning.rs` after PR #319.",
+      "direction_relation_note": "This helper cleanup is now shipped via PR #360, splitting the old shared planning input surface into focused existing-workspace, simple-review, and editor modules so popup planning can hand queue progression to a different seam.",
+      "title": "Trim residual popup planning helper-level seams",
+      "description": "Audit the remaining popup planning subtree for any still-mixed helper responsibilities beneath `shell_presentation/overlays/popup`, then extract or simplify the narrowest residual helper-level composition seams without reopening the already-complete final coordinator split in `planning.rs`. This landed as commit `314a424` and PR `#360`, replacing the shared `planning_inputs.rs` surface with `planning_existing_workspace_inputs.rs`, `planning_simple_review_inputs.rs`, and `planning_editor_inputs.rs` plus focused status-helper coverage.",
+      "status": "done",
+      "base_priority": 89,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply explicitly says nothing material remains in this popup-planning helper scope after PR #360, so queue progression should move to a different executable seam.",
       "depends_on": [
         "context-first-popup-planning-final-composition-slice"
       ],
@@ -413,35 +377,278 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T19:05:00Z"
+      "updated_at": "2026-04-22T20:25:00Z"
     },
     {
-      "id": "terminal-bridge-research-matrix",
-      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The transport comparison is now captured in docs/plan/22 and tied back to the bridge hub, capability note, and experiment matrix, so the remaining work is evidence gathering rather than matrix authoring.",
-      "title": "Compare local attach, wrapper, tunnel, and proxy bridge paths",
-      "description": "Write the research matrix that compares pre-opened local terminal attach, controlled local wrappers, SSH or tunnel approaches, and proxy or vibeproxy-style mediation across UX, streaming fidelity, interrupt handling, approval handling, recovery, security, portability, and architecture fit.",
+      "id": "context-first-status-panels-indicator-and-footer-copy-slice",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This status-panels follow-up is now complete via PR #361, leaving `status_panels.rs` as a thin coordinator while plan indicator, footer copy, and shared tail helpers moved into dedicated modules.",
+      "title": "Finish plan indicator and footer-tail copy split",
+      "description": "Reduce the remaining responsibility in `status_panels.rs` by moving plan-mode indicator calculation and re-export wiring into a narrower surface, and consider splitting framed footer copy from inline tail copy inside `tail_copy.rs` if the status-panels cluster needs one more dedicated extraction after the inline inspection slice. This landed as commit `baba422`, PR `#361`, and prerelease rebase-merge commit `9207a85`, with dedicated `plan_indicator.rs`, `footer_copy.rs`, and `tail_shared.rs` modules plus focused shell-presentation test coverage.",
       "status": "done",
-      "base_priority": 90,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "The transport matrix is already documented, so follow-up work should stay focused on evidence and capability validation instead of rewriting the comparison.",
+      "base_priority": 84,
+      "dynamic_priority_delta": 4,
+      "priority_reason": "The latest main-session reply marked this slice complete and merged, so queue progression should move to the next cross-cutting audit instead of repeating the same status-panels seam as queue head.",
+      "depends_on": [
+        "context-first-status-panels-tail-and-live-status-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T20:40:00Z"
+    },
+    {
+      "id": "cleanup-app-tests-unused-import-warning",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The residual `app_tests.rs` warning cleanup is now complete via PR #368 and prerelease merge commit `d01c5d0`, clearing the last directly named leftover from the official-refresh runtime-test repair without widening scope into broader warning cleanup.",
+      "title": "Clear the lingering app_tests unused import warning",
+      "description": "Remove or justify the remaining unused imports in `app_tests.rs` that the latest main-session reply explicitly carried forward after fixing and merging the official-refresh runtime tests. This is now complete through commit `5703522`, PR `#368`, and prerelease merge commit `d01c5d0`, with the direct helper import removed, related intermediate re-export leftovers folded back in `app.rs`, `conversation_model.rs`, `shell_presentation.rs`, and `overlays.rs`, and verification finished with `cargo test parallel_mode_runtime_tests --lib` plus `git diff --check` on the touched files.",
+      "status": "done",
+      "base_priority": 72,
+      "dynamic_priority_delta": 4,
+      "priority_reason": "The latest main-session reply marked this warning cleanup complete and explicitly said no follow-up remains in scope, so the task should close and hand queue progression back to the next ordered context-first seam.",
       "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T11:36:13Z"
+      "updated_at": "2026-04-22T22:40:00Z"
+    },
+    {
+      "id": "context-first-codex-capability-boundary-audit",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This audit is now complete via the merged capability-target map docs pass, giving later context-first follow-ups a concrete translation from Codex-only assumptions into `StartupProbe`, `InteractiveTurnRuntime`, `SessionCatalog`, and `TerminalBridgeAttachment`.",
+      "title": "Map Codex-only assumptions into capability targets",
+      "description": "Audit where `codex app-server`, Codex-specific session semantics, and Codex-flavored approval or resume assumptions are embedded today, then restate those spots as capability targets around `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and `TerminalBridgeAttachment`. This is now documented in `docs/plan/25-codex-assumption-to-capability-target-map.md`, cross-linked from docs 20, 21, and 23, and merged through commit `eff81c3`, PR `#362`, and prerelease rebase-merge commit `be9729e`.",
+      "status": "done",
+      "base_priority": 92,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The main-session reply marked this capability audit complete with merged docs and validation, so queue progression should move to the follow-up task that turns the map into executable seam priorities instead of repeating the same audit as queue head.",
+      "depends_on": [
+        "context-first-popup-planning-final-composition-slice"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T21:20:00Z"
+    },
+    {
+      "id": "context-first-capability-map-followup-priority-cut",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This prioritization pass is now complete via the merged seam-order doc, fixing the next context-first code-boundary sequence and handing queue progression to the first shell capability split.",
+      "title": "Turn the capability map into prioritized seam follow-ups",
+      "description": "Use `docs/plan/25-codex-assumption-to-capability-target-map.md` as the source of truth, then identify which mapped assumptions should land next as concrete code seam work versus operator copy cleanup, with an explicit recommended first slice rather than leaving the capability map as research-only context. This is now documented in `docs/plan/26-capability-map-prioritized-seam-follow-ups.md`, cross-linked back into docs 20 and 25, and merged through commit `6fe312a`, PR `#363`, and prerelease rebase-merge commit `a6952ac`.",
+      "status": "done",
+      "base_priority": 93,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply marked this prioritization pass complete and named the shell capability wording/projection split as the direct next step, so this task should close instead of being repeated as queue head.",
+      "depends_on": [
+        "context-first-codex-capability-boundary-audit"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T21:45:00Z"
+    },
+    {
+      "id": "context-first-shell-capability-wording-projection-split",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "Doc 26 fixed this as the first executable seam after the capability-map prioritization pass, and the merged shell-presentation split now hands queue progression to the second seam on outbound capability ownership.",
+      "title": "Split shell capability wording and projection ownership",
+      "description": "Take the first prioritized seam from `docs/plan/26-capability-map-prioritized-seam-follow-ups.md` and turn the shell capability surface into a narrower code slice by separating operator-facing capability wording from the projection or mapping layer that feeds it, so later capability-boundary work can build on a cleaner shell-facing truth surface instead of mixed copy and projection ownership. This landed through commit `38672f5`, PR `#364`, and fast-forward merge into `prerelease`, with shell capability copy and projection split into dedicated shell-presentation helpers and the targeted shell-presentation tests passing.",
+      "status": "done",
+      "base_priority": 94,
+      "dynamic_priority_delta": 3,
+      "priority_reason": "The latest main-session reply says this task scope has no remaining work and that the next follow-up is the outbound capability ownership split, so this should close instead of remaining the queue head.",
+      "depends_on": [
+        "context-first-capability-map-followup-priority-cut"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T21:55:00Z"
+    },
+    {
+      "id": "context-first-outbound-capability-ownership-split",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "Doc 26 fixed this as the second seam after the shell capability split, and the latest merged reply now confirms the capability seam split shipped through PR #365 and prerelease merge commit `ca2f901`.",
+      "title": "Split outbound capability ownership by seam",
+      "description": "Follow the second prioritized seam from `docs/plan/26-capability-map-prioritized-seam-follow-ups.md` by separating outbound capability ownership and translation responsibilities so adapter-side capability concerns stop leaking across broader runtime or shell-facing surfaces once the shell capability wording and projection split is done. This is now complete via commit `ca2f901` and PR `#365`, splitting outbound seams into `startup_probe_port.rs`, `session_catalog_port.rs`, and `interactive_turn_runtime_port.rs`, keeping `codex_app_server_port.rs` as a compatibility layer, and rewiring the shell entrypoint plus service constructors to depend on capability-specific ports.",
+      "status": "done",
+      "base_priority": 91,
+      "dynamic_priority_delta": 4,
+      "priority_reason": "The latest main-session reply says this task scope has no remaining work after the merged capability seam split, so queue progression should move to the optional session catalog and session-tier surface follow-up instead of repeating the same queue head.",
+      "depends_on": [
+        "context-first-shell-capability-wording-projection-split"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T22:15:00Z"
+    },
+    {
+      "id": "context-first-session-catalog-session-tier-surface",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "Doc 26 fixed this as the third seam, and this slice is now complete via PR #366 plus prerelease merge after the optional session catalog and session-tier truth surface was split out of the legacy recent-sessions assumption.",
+      "title": "Carve out optional session catalog and session-tier surface",
+      "description": "Follow the third prioritized seam from `docs/plan/26-capability-map-prioritized-seam-follow-ups.md` by reducing how optional session catalog and session-tier assumptions are surfaced, so session discovery and tier-specific capability semantics can be expressed without continuing Codex-only coupling after the first two seams land. This is now complete through commit `a4e66f6`, PR `#366`, and prerelease merge, adding `SessionCatalog` and `SessionCatalogTier`, rewiring the session-service and outbound-port boundary away from fixed `RecentSessions`, and updating shell presentation to render attach-only, partial handle-based, and provider-backed states truthfully with targeted regression coverage.",
+      "status": "done",
+      "base_priority": 89,
+      "dynamic_priority_delta": 4,
+      "priority_reason": "The latest main-session reply says this seam is complete and merged, so it should close instead of being selected again as the queue head.",
+      "depends_on": [
+        "context-first-outbound-capability-ownership-split"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T22:30:00Z"
+    },
+    {
+      "id": "parallel-mode-runtime-official-refresh-ledger-path-repair",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This runtime-test repair is now complete via commit `ef95586`, PR `#367`, and prerelease rebase-merge commit `b403646`, fixing the official-refresh ledger-path setup and timeout diagnostics in the parallel-mode runtime coverage.",
+      "title": "Repair official refresh ledger-path handling in parallel-mode runtime tests",
+      "description": "Investigate and fix the failing `parallel_mode_runtime_tests` cases `official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advances`, `leased_slot_success_completion_waits_for_official_refresh_before_cleanup`, and `parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return`. This is now complete: `app_tests.rs` updates the candidate workspace ledger writes and git-backed temp-repo seed path correctly, `parallel_mode_runtime_tests.rs` includes direct timeout diagnostics, and verification finished with `cargo test parallel_mode_runtime_tests --lib`, `cargo test queue_refresh --lib`, and `git diff --check -- src/adapter/inbound/tui/app/app_tests.rs src/adapter/inbound/tui/app/app_tests/parallel_mode_runtime_tests.rs` before merge.",
+      "status": "done",
+      "base_priority": 90,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The latest main-session reply says this task scope has no remaining work after merge, so it should close and hand the queue to the directly mentioned residual warning cleanup instead of staying at the head.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T13:36:15Z"
+    },
+    {
+      "id": "context-first-approval-interrupt-truth-surface",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "Doc 26 fixed this as the fourth seam, and the latest main-session reply confirms it is now complete through PR #369 and prerelease merge commit `bba963f`, leaving attachment mode and recovery anchor cleanup as the next ordered capability-boundary follow-up.",
+      "title": "Separate approval and interrupt truth surface",
+      "description": "Follow the fourth prioritized seam from `docs/plan/26-capability-map-prioritized-seam-follow-ups.md` by isolating approval and interrupt truth-surface ownership so operator-visible approval state and runtime interrupt semantics stop sharing the same mixed Codex-only assumption path after the earlier seams are complete. This is now complete through commit `2dc1f47`, PR `#369`, and prerelease merge commit `bba963f`, adding `ConversationControlSupport` and `ConversationRuntimeControlTruth`, rewiring runtime and app-server ports plus conversation service and adapters, and surfacing approval or interrupt truth directly in shell and planning controls.",
+      "status": "done",
+      "base_priority": 87,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply says this seam has no remaining work in scope after validation and merge, so the task should close and hand queue progression to the fifth ordered capability-boundary seam instead of repeating the same queue head.",
+      "depends_on": [
+        "context-first-session-catalog-session-tier-surface"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T22:55:00Z"
+    },
+    {
+      "id": "context-first-attachment-mode-recovery-anchor-seam",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "Doc 26 fixed this as the fifth seam, and the latest main-session reply confirms this slice is now complete through PR #370 and prerelease merge commit `3eae688`, leaving bridge-implementation adoption of the new attachment truth as the next separate follow-up.",
+      "title": "Split attachment mode and recovery anchor seam",
+      "description": "Follow the fifth prioritized seam from `docs/plan/26-capability-map-prioritized-seam-follow-ups.md` by separating attachment mode and recovery anchor responsibilities so bridge-attachment recovery semantics can evolve after the shell, outbound, session, and approval surfaces have already been narrowed. This is now complete through commit `2e08060`, PR `#370`, and prerelease merge commit `3eae688`, adding `terminal_bridge_attachment.rs`, rewiring startup/runtime and startup diagnostics around explicit attachment truth, and splitting shell startup copy so attachment and recovery messaging render independently with added rendering coverage.",
+      "status": "done",
+      "base_priority": 85,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply says this task scope has no remaining work after validation and merge, so it should close and hand queue progression to the new bridge-implementation follow-up instead of repeating the same queue head.",
+      "depends_on": [
+        "context-first-approval-interrupt-truth-surface"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T23:10:00Z"
+    },
+    {
+      "id": "context-first-terminal-bridge-attachment-truth-adoption",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The attachment-truth adoption slice is now complete through PR #371 and prerelease merge commit `13875e7`, leaving only direct reuse of the new event and launch or reattach profiles across any remaining bridge adapters as the next executable follow-up.",
+      "title": "Connect attachment truth to remaining bridge implementation seams",
+      "description": "Carry the new `TerminalBridgeAttachment` truth beyond the startup/runtime seam by wiring the same provider-launched and provider-thread-id semantics through any remaining bridge implementations or adapter seams that still infer attachment mode or recovery anchor indirectly. This is now complete through commit `237e23f`, PR `#371`, and prerelease merge commit `13875e7`, adding explicit launch vs reattach profiles in `terminal_bridge_attachment.rs`, emitting `ConversationStreamEvent::AttachmentObserved` from new-thread, hidden-planning, and existing-thread resume app-server paths, reducing the TUI runtime to notice-only handling, and teaching the hidden planning worker to ignore the new event with added regression coverage.",
+      "status": "done",
+      "base_priority": 86,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply says this task scope has no remaining work after validation and merge, so it should close and hand queue progression to the narrower bridge-adapter reuse slice instead of staying at the head unchanged.",
+      "depends_on": [
+        "context-first-attachment-mode-recovery-anchor-seam"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T23:30:00Z"
+    },
+    {
+      "id": "context-first-bridge-adapter-attachment-event-reuse",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "This bridge-adapter reuse slice is now complete through PR #372 and prerelease merge commit `d755436`, leaving no remaining fake-adapter alignment work and narrowing the next bridge step to a separate real bridge implementation slice.",
+      "title": "Reuse attachment event and profiles across remaining bridge adapters",
+      "description": "Take the post-PR-#371 attachment truth surface and connect it to any remaining bridge adapter implementations that do not yet reuse `ConversationStreamEvent::AttachmentObserved` or the shared launch-vs-reattach profile constructors. This is now complete through commit `85881d3`, PR `#372`, and prerelease merge commit `d755436`, centralizing the launch and reattach attachment helpers in `conversation_runtime_event.rs`, rewiring the app-server adapter/runtime plus planning-worker and test seams to reuse the same event constructors, and locking fake adapter coverage for inferred, explicit, and omitted attachment profiles.",
+      "status": "done",
+      "base_priority": 87,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply says this task scope has no remaining work after validation and merge, so it should close and hand queue progression to the separate real bridge implementation path instead of staying at the queue head.",
+      "depends_on": [
+        "context-first-terminal-bridge-attachment-truth-adoption"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T23:50:00Z"
+    },
+    {
+      "id": "context-first-capability-map-operator-copy-priority-pass",
+      "direction_id": "context-first-architecture-and-doc-coherence",
+      "direction_relation_note": "The capability-map work still surfaced operator-facing terminology debt, but doc 26 now fixes a five-step engineering seam order ahead of any broader operator copy pass unless wording debt blocks those slices directly.",
+      "title": "Prioritize operator copy cleanup from the capability map",
+      "description": "Review the merged capability-target map for operator-facing wording, startup diagnostics, approval messaging, and shell-copy assumptions that should be normalized after the doc-26 seam sequence is underway, without reopening the completed audit itself or duplicating the dedicated shell capability wording/projection split.",
+      "status": "proposed",
+      "base_priority": 82,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "The latest main-session reply says the first direct follow-up is the shell capability wording/projection split, so a broader operator-copy pass should stay secondary until that ordered engineering sequence proves it still needs a separate queue item.",
+      "depends_on": [
+        "context-first-codex-capability-boundary-audit"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T21:45:00Z"
+    },
+    {
+      "id": "terminal-bridge-research-matrix",
+      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+      "direction_relation_note": "This research matrix is now complete via the merged terminal-agent-bridge feasibility docs pass, giving the direction one consolidated comparison across local attach, wrapper, SSH or tunnel, and proxy-style mediation.",
+      "title": "Compare local attach, wrapper, tunnel, and proxy bridge paths",
+      "description": "Write the research matrix that compares pre-opened local terminal attach, controlled local wrappers, SSH or tunnel approaches, and proxy or vibeproxy-style mediation across UX, streaming fidelity, interrupt handling, approval handling, recovery, security, portability, and architecture fit. This is now shipped through the merged research detail and hub docs on branch `docs/native-planning-runtime-terminal-bridge-feasibility`, commit `03ef824`, and PR `#359`.",
+      "status": "done",
+      "base_priority": 90,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The comparison matrix is already documented and merged, so follow-up should move to the blocked local-spike readiness gate instead of keeping this research task in the executable queue.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T19:35:00Z"
     },
     {
       "id": "terminal-bridge-primary-path-decision-note",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The decision note is now captured in docs/plan/21, naming tmux-oriented local attach as the primary path, the managed local wrapper as fallback, and explicit defer reasons for remote and proxy routes.",
+      "direction_relation_note": "The primary-path decision is now complete in the merged feasibility docs, locking tmux-based local attach as the primary research path, the managed wrapper as fallback, and SSH or proxy-style mediation as deferred.",
       "title": "Choose the primary and fallback terminal bridge paths",
-      "description": "Turn the completed research matrix into one decision note that names the primary bridge path, the fallback path, and the reasons for deferring the remaining transport options for now.",
+      "description": "Turn the completed research matrix into one decision note that names the primary bridge path, the fallback path, and the reasons for deferring the remaining transport options for now. This is now shipped through the merged research detail and hub docs on branch `docs/native-planning-runtime-terminal-bridge-feasibility`, commit `03ef824`, and PR `#359`.",
       "status": "done",
       "base_priority": 86,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The decision note is already documented, so the next gate is whether local evidence and capability validation justify any bounded spike at all.",
+      "priority_reason": "The path decision is already documented and merged, so queue follow-up should move to the blocked readiness gate for any local attach spike rather than keep this as a pending proposal.",
       "depends_on": [
         "terminal-bridge-research-matrix"
       ],
@@ -449,27 +656,45 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T11:36:13Z"
+      "updated_at": "2026-04-22T19:35:00Z"
     },
     {
       "id": "terminal-bridge-local-spike-readiness-gate",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The research report set is now explicit, but a bounded local bridge spike should stay blocked until the Codex capability audit and one local evidence pass confirm that tmux attach or the wrapper path can be evaluated against real product seams.",
-      "title": "Decide whether a bounded local bridge spike is justified",
-      "description": "Use the Codex capability audit together with docs/plan/24 to record whether tmux-oriented local attach and the managed local wrapper have enough relay, interrupt, approval, recovery, and operator-setup evidence to justify a limited spike. Do not queue provider-specific adapter work before that gate is written down.",
+      "direction_relation_note": "With the research matrix, primary-path decision, and attachment-truth bridge cleanup now merged, this remains the immediate gate before any real tmux-based bridge implementation slice can start.",
+      "title": "Gate tmux local-attach spike on capability audit and evidence",
+      "description": "Track the preconditions for any tmux-based local attach spike after the completed bridge research pass: the Codex capability-boundary audit and the bridge attachment-truth cleanup are now done, so the remaining gate is to confirm local evidence for relay and recovery behavior before deciding whether the primary-path spike is safe to run ahead of the managed-wrapper fallback and before queueing the first real bridge implementation slice.",
       "status": "blocked",
-      "base_priority": 84,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "The research documents now exist, but implementation should remain blocked until the capability boundary is audited and the primary local paths are backed by concrete experiment notes.",
+      "base_priority": 89,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply says fake-adapter attachment reuse is complete and the next bridge step is real implementation, but the research direction still requires local relay and recovery evidence first, so this stays blocked as the immediate prerequisite instead of becoming executable prematurely.",
       "depends_on": [
-        "context-first-codex-capability-boundary-audit",
-        "terminal-bridge-primary-path-decision-note"
+        "context-first-codex-capability-boundary-audit"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T11:36:13Z"
+      "updated_at": "2026-04-22T23:50:00Z"
+    },
+    {
+      "id": "terminal-bridge-primary-implementation-slice",
+      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+      "direction_relation_note": "The latest main-session reply says the remaining bridge follow-up is no longer fake-adapter alignment but the first real bridge implementation slice, using the research-selected primary path once readiness evidence exists.",
+      "title": "Implement the first real terminal bridge slice",
+      "description": "Start the first executable implementation slice for the research-selected primary bridge path so the repo stops proving attachment truth only through Codex app-server and fake seams. Scope this around one reviewable real adapter path that can consume the shared attachment events and profiles, while keeping broader transport expansion out of scope until the tmux local-attach readiness gate is cleared.",
+      "status": "blocked",
+      "base_priority": 90,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "The latest main-session reply directly names real bridge implementation as the next remaining bridge work, but it still depends on the blocked tmux readiness gate, so it should be queued immediately behind that gate rather than promoted to ready.",
+      "depends_on": [
+        "terminal-bridge-local-spike-readiness-gate"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T23:50:00Z"
     }
   ]
 }

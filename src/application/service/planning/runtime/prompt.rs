@@ -14,7 +14,7 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueSnapshot,
-    PriorityQueueTask, QueueIdlePolicy, TaskLedgerDocument,
+    PriorityQueueTask, QueueIdlePolicy, TaskDefinition, TaskLedgerDocument,
 };
 
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
@@ -52,6 +52,7 @@ pub struct PlanningRuntimeSnapshot {
     queue_head: Option<PriorityQueueTask>,
     queue_snapshot: Option<PriorityQueueSnapshot>,
     task_ledger_signature: Option<u64>,
+    queue_head_task_signature: Option<u64>,
     failure_reason: Option<String>,
     auto_followup_pause_reason: Option<String>,
 }
@@ -70,6 +71,7 @@ impl PlanningRuntimeSnapshot {
             queue_head: None,
             queue_snapshot: None,
             task_ledger_signature: None,
+            queue_head_task_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -88,6 +90,7 @@ impl PlanningRuntimeSnapshot {
             queue_head: None,
             queue_snapshot: None,
             task_ledger_signature: None,
+            queue_head_task_signature: None,
             failure_reason: Some(reason.into()),
             auto_followup_pause_reason: None,
         }
@@ -123,6 +126,7 @@ impl PlanningRuntimeSnapshot {
             queue_head,
             queue_snapshot: None,
             task_ledger_signature: None,
+            queue_head_task_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -151,6 +155,7 @@ impl PlanningRuntimeSnapshot {
             queue_head,
             queue_snapshot: Some(queue_snapshot),
             task_ledger_signature: None,
+            queue_head_task_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
         }
@@ -218,6 +223,10 @@ impl PlanningRuntimeSnapshot {
 
     pub fn task_ledger_signature(&self) -> Option<u64> {
         self.task_ledger_signature
+    }
+
+    pub fn queue_head_task_signature(&self) -> Option<u64> {
+        self.queue_head_task_signature
     }
 
     pub fn failure_reason(&self) -> Option<&str> {
@@ -369,6 +378,16 @@ impl PlanningPromptService {
         let queue_idle_prompt_path =
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
         let task_ledger_signature = normalized_task_ledger_signature(&task_ledger);
+        let queue_head_task_signature = queue_snapshot
+            .next_task
+            .as_ref()
+            .and_then(|queue_head| {
+                task_ledger
+                    .tasks
+                    .iter()
+                    .find(|task| task.id.trim() == queue_head.task_id.trim())
+            })
+            .map(normalized_task_signature);
 
         Ok(PlanningRuntimeSnapshot {
             workspace_present,
@@ -386,6 +405,7 @@ impl PlanningPromptService {
             queue_head: queue_snapshot.next_task.clone(),
             queue_snapshot: Some(queue_snapshot),
             task_ledger_signature: Some(task_ledger_signature),
+            queue_head_task_signature,
             failure_reason: None,
             auto_followup_pause_reason: None,
         })
@@ -402,8 +422,22 @@ fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> u64 {
         task.blocked_by.sort();
     }
 
-    let json = serde_json::to_string(&normalized_ledger)
-        .expect("valid task ledger should serialize into a normalized signature");
+    normalized_json_signature(&normalized_ledger)
+}
+
+fn normalized_task_signature(task: &TaskDefinition) -> u64 {
+    let mut normalized_task = task.clone();
+    normalized_task.depends_on.sort();
+    normalized_task.blocked_by.sort();
+    normalized_json_signature(&normalized_task)
+}
+
+fn normalized_json_signature<T>(value: &T) -> u64
+where
+    T: serde::Serialize,
+{
+    let json = serde_json::to_string(value)
+        .expect("valid planning state should serialize into a signature");
     let mut hasher = DefaultHasher::new();
     json.hash(&mut hasher);
     hasher.finish()
@@ -710,11 +744,11 @@ mod tests {
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
         TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     #[derive(Default)]

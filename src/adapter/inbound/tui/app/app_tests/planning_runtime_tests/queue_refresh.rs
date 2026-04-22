@@ -610,6 +610,170 @@ fn refreshed_queue_head_with_same_projection_but_changed_ledger_still_submits_au
 }
 
 #[test]
+fn refreshed_queue_head_with_only_unrelated_blocked_task_added_still_pauses_auto_followup() {
+    let (mut app, codex_port) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let workspace_dir = create_temp_workspace("planning-repeated-next-task-unrelated-blocked");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    let planning_dir = std::path::Path::new(&workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning");
+    std::fs::write(
+        planning_dir.join("task-ledger.json"),
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-repeat-1",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Current next task.",
+      "title": "Rust 입문 8주 커리큘럼 구체화",
+      "description": "Expand the roadmap into a week-by-week curriculum.",
+      "status": "ready",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": "turn-prev",
+      "updated_at": "2026-04-13T00:00:00Z"
+    }
+  ]
+}"#,
+    )
+    .expect("task ledger should write");
+
+    codex_port
+        .new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned")
+        .events = vec![
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id: "planner-thread-1".to_string(),
+            title: "Planner".to_string(),
+            cwd: workspace_dir.clone(),
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id: "planner-item-1".to_string(),
+            phase: None,
+            text: "planner added a blocked follow-up but kept the same queue head".to_string(),
+        },
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "planner-turn-1".to_string(),
+            changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+        },
+    ];
+    codex_port
+        .new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned")
+        .planning_file_writes = vec![(
+        TASK_LEDGER_FILE_PATH.to_string(),
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-repeat-1",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "Current next task.",
+      "title": "Rust 입문 8주 커리큘럼 구체화",
+      "description": "Expand the roadmap into a week-by-week curriculum.",
+      "status": "ready",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": "turn-prev",
+      "updated_at": "2026-04-13T00:00:00Z"
+    },
+    {
+      "id": "task-blocked-2",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "New blocked follow-up that should not count as queue advancement.",
+      "title": "실습 과제 선행 조건 정리",
+      "description": "Add a blocked follow-up behind the unchanged queue head.",
+      "status": "blocked",
+      "base_priority": 70,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "This follow-up depends on an external review.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": "turn-main",
+      "updated_at": "2026-04-14T00:00:00Z"
+    }
+  ]
+}"#
+        .to_string(),
+    )];
+
+    let mut conversation = ready_conversation();
+    conversation.cwd = workspace_dir.clone();
+    conversation.draft_workspace_directory = workspace_dir.clone();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-main".to_string());
+    conversation.last_planning_task_handoff = Some(PlanningTaskHandoff {
+        task_id: "task-repeat-1".to_string(),
+        task_title: "Rust 입문 8주 커리큘럼 구체화".to_string(),
+        direction_id: "general-workstream".to_string(),
+        combined_priority: 80,
+        updated_at: "2026-04-13T00:00:00Z".to_string(),
+        status_label: "ready".to_string(),
+    });
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer",
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.replace_planning_runtime_snapshot(
+        app.planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(&workspace_dir),
+    );
+    app.conversation_state = ConversationState::ready(conversation);
+
+    app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(
+        ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-main".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        },
+    ));
+
+    thread::sleep(Duration::from_millis(50));
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready");
+    };
+
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn call mutex poisoned")
+            .is_empty()
+    );
+    assert_eq!(
+        conversation.status_text,
+        "turn completed / auto follow-up paused: planning queue repeated the previous task"
+    );
+    assert!(
+        conversation
+            .planning_runtime_snapshot
+            .auto_followup_pause_reason()
+            .is_some_and(|reason: &str| reason.contains("unrelated ledger edits do not count"))
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn builtin_next_task_refresh_passes_full_latest_agent_reply_to_hidden_planner_prompt() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
