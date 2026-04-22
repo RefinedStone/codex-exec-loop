@@ -10,16 +10,18 @@ use super::inputs::build_simple_review_copy;
 pub(super) fn build_planning_init_overlay_view_for_app(
     app: &NativeTuiApp,
 ) -> PlanningInitOverlayView {
-    match app.planning_init_overlay_ui_state.step() {
+    let state = &app.planning_init_overlay_ui_state;
+
+    match state.step() {
         PlanningInitOverlayStep::ExistingWorkspace => {
             build_existing_workspace_overlay_view_for_app(app)
         }
         PlanningInitOverlayStep::ModeSelection => {
-            build_mode_selection_overlay_view(app.planning_init_overlay_ui_state.selected_mode())
+            build_mode_selection_overlay_view(state.selected_mode())
         }
-        PlanningInitOverlayStep::DetailSelection => build_detail_selection_overlay_view(
-            app.planning_init_overlay_ui_state.selected_detail(),
-        ),
+        PlanningInitOverlayStep::DetailSelection => {
+            build_detail_selection_overlay_view(state.selected_detail())
+        }
         PlanningInitOverlayStep::SimpleReview => {
             build_simple_review_overlay_view(build_simple_review_copy(app))
         }
