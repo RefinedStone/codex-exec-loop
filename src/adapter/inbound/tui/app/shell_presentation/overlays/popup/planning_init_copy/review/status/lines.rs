@@ -1,5 +1,6 @@
-use super::super::super::super::super::super::super::Line;
-use super::super::super::super::copy::PlanningSimpleReviewCopy;
+use ratatui::text::Line;
+
+use crate::adapter::inbound::tui::app::shell_presentation::overlays::popup::planning::copy::PlanningSimpleReviewCopy;
 
 pub(super) fn build_simple_review_status_lines(
     copy: &PlanningSimpleReviewCopy,

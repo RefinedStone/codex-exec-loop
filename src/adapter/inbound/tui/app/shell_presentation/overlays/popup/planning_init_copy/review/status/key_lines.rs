@@ -1,4 +1,4 @@
-use super::super::super::super::super::super::super::Line;
+use ratatui::text::Line;
 
 pub(super) fn build_simple_review_key_lines(is_turn_budget_editing: bool) -> Vec<Line<'static>> {
     if is_turn_budget_editing {
