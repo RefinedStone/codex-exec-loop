@@ -50,7 +50,7 @@ success_criteria = [
 scope_hints = [
     "Keep concrete execution slices in task-ledger.json and use this direction plus its detail doc for strategy, sequencing, and scope control.",
     "Treat SessionCatalog as optional so attach-only or handle-based reattach paths remain valid.",
-    "Do not widen into provider-wide abstractions, wrapper implementation, or remote mediation before the tmux path is proven locally.",
+    "Do not widen into provider-wide abstractions, wrapper implementation, or remote-attach/proxy-mediated paths before the tmux path is proven locally.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/terminal-agent-bridge-implementation.md"
 state = "active"
