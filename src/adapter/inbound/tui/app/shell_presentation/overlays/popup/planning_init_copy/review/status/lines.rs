@@ -25,10 +25,8 @@ pub(super) fn build_simple_review_status_lines(
     } else {
         status_lines.extend(non_editing::build_simple_review_non_editing_status_lines());
     }
-    if let Some(line) =
-        first_error_tail::build_simple_review_first_error_tail_line(copy.first_error.as_deref())
-    {
-        status_lines.push(line);
-    }
+    status_lines.extend(first_error_tail::build_simple_review_first_error_tail_line(
+        copy.first_error.as_deref(),
+    ));
     status_lines
 }
