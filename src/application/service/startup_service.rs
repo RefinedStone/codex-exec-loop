@@ -3,19 +3,17 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
+use crate::application::port::outbound::startup_probe_port::StartupProbePort;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 #[derive(Clone)]
 pub struct StartupService {
-    codex_app_server_port: Arc<dyn CodexAppServerPort>,
+    startup_probe_port: Arc<dyn StartupProbePort>,
 }
 
 impl StartupService {
-    pub fn new(codex_app_server_port: Arc<dyn CodexAppServerPort>) -> Self {
-        Self {
-            codex_app_server_port,
-        }
+    pub fn new(startup_probe_port: Arc<dyn StartupProbePort>) -> Self {
+        Self { startup_probe_port }
     }
 
     pub fn run_checks(&self) -> Result<StartupDiagnostics> {
@@ -27,7 +25,7 @@ impl StartupService {
         let codex_path = which::which("codex").context("`codex` was not found on PATH")?;
         let workspace_status = self.detect_workspace_status()?;
 
-        let startup_context = self.codex_app_server_port.load_startup_context()?;
+        let startup_context = self.startup_probe_port.load_startup_context()?;
 
         Ok(StartupDiagnostics {
             cwd: current_directory,

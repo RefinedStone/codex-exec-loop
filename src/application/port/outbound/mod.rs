@@ -1,7 +1,10 @@
 pub mod codex_app_server_port;
 pub mod github_automation_port;
 pub mod github_review_poller_port;
+pub mod interactive_turn_runtime_port;
 pub mod planning_authority_port;
 pub mod planning_worker_port;
 pub mod planning_workspace_port;
+pub mod session_catalog_port;
+pub mod startup_probe_port;
 pub mod telegram_bot_port;

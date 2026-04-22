@@ -3,24 +3,24 @@ use std::sync::mpsc::Sender;
 
 use anyhow::Result;
 
-use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
+use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::ConversationSnapshot;
 
 #[derive(Clone)]
 pub struct ConversationService {
-    codex_app_server_port: Arc<dyn CodexAppServerPort>,
+    interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>,
 }
 
 impl ConversationService {
-    pub fn new(codex_app_server_port: Arc<dyn CodexAppServerPort>) -> Self {
+    pub fn new(interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>) -> Self {
         Self {
-            codex_app_server_port,
+            interactive_turn_runtime_port,
         }
     }
 
     pub fn load_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
-        self.codex_app_server_port
+        self.interactive_turn_runtime_port
             .load_conversation_snapshot(thread_id)
     }
 
@@ -30,7 +30,7 @@ impl ConversationService {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.codex_app_server_port
+        self.interactive_turn_runtime_port
             .run_new_thread_stream(cwd, prompt, event_sender)
     }
 
@@ -40,7 +40,7 @@ impl ConversationService {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.codex_app_server_port
+        self.interactive_turn_runtime_port
             .run_turn_stream(thread_id, prompt, event_sender)
     }
 }

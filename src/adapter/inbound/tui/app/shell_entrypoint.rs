@@ -6,7 +6,6 @@ use anyhow::Result;
 use crate::adapter::outbound::app_server::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::app_server::CodexAppServerAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::application::port::outbound::codex_app_server_port::CodexAppServerPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::PlanningServices;
@@ -29,12 +28,11 @@ fn build_default_app() -> NativeTuiApp {
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let codex_app_server_port: Arc<dyn CodexAppServerPort> = app_server_adapter.clone();
     let planning_worker_port: Arc<dyn PlanningWorkerPort> =
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter));
-    let startup_service = StartupService::new(codex_app_server_port.clone());
-    let session_service = SessionService::new(codex_app_server_port.clone());
-    let conversation_service = ConversationService::new(codex_app_server_port);
+        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()));
+    let startup_service = StartupService::new(app_server_adapter.clone());
+    let session_service = SessionService::new(app_server_adapter.clone());
+    let conversation_service = ConversationService::new(app_server_adapter.clone());
     let planning = PlanningServices::from_ports(
         Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
         planning_worker_port,
