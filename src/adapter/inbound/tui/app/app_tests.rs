@@ -37,6 +37,9 @@ use crate::application::port::outbound::codex_app_server_port::{
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
+use crate::application::port::outbound::planning_workspace_port::{
+    PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
@@ -188,14 +191,7 @@ fn run_fake_stream(
 ) -> Result<()> {
     if let Some(workspace_directory) = workspace_directory {
         for (relative_path, body) in &behavior.planning_file_writes {
-            let file_path = Path::new(workspace_directory).join(relative_path);
-            fs::create_dir_all(
-                file_path
-                    .parent()
-                    .expect("fake planning file should have a parent directory"),
-            )
-            .expect("fake planning directory should be created");
-            fs::write(&file_path, body).expect("fake planning file should write");
+            replace_candidate_planning_workspace_file(workspace_directory, relative_path, body);
         }
     }
 
@@ -474,13 +470,100 @@ fn bootstrap_active_planning_workspace(workspace_dir: &str) {
 }
 
 fn commit_active_planning_workspace_into_akra(workspace_dir: &str) {
-    bootstrap_active_planning_workspace(workspace_dir);
+    seed_ready_active_planning_workspace(workspace_dir);
+    seed_ready_candidate_planning_workspace(workspace_dir);
     run_git(workspace_dir, &["add", ".codex-exec-loop"]);
     run_git(
         workspace_dir,
         &["commit", "-m", "Bootstrap planning workspace"],
     );
     merge_active_branch_into_akra(workspace_dir, workspace_dir);
+}
+
+fn seed_ready_active_planning_workspace(workspace_dir: &str) {
+    let workspace_adapter = FilesystemPlanningWorkspaceAdapter::new();
+    let bootstrap =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+    workspace_adapter
+        .commit_planning_workspace_files(
+            workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                directions_toml: Some(bootstrap.directions_toml),
+                task_ledger_json: Some(bootstrap.task_ledger_json),
+                task_ledger_schema_json: Some(bootstrap.task_ledger_schema_json),
+                queue_snapshot_json: None,
+                result_output_markdown: Some(bootstrap.result_output_markdown),
+            },
+        )
+        .expect("bootstrap planning workspace should commit");
+    for supplemental_file in bootstrap.supplemental_files {
+        workspace_adapter
+            .replace_planning_workspace_file(
+                workspace_dir,
+                &supplemental_file.active_path,
+                Some(&supplemental_file.body),
+            )
+            .expect("bootstrap planning supplemental file should write");
+    }
+    let seeded_workspace = workspace_adapter
+        .load_planning_workspace_files(workspace_dir)
+        .expect("seeded planning workspace should load");
+    assert!(
+        seeded_workspace.directions_toml.is_some()
+            && seeded_workspace.task_ledger_json.is_some()
+            && seeded_workspace.task_ledger_schema_json.is_some()
+            && seeded_workspace.result_output_markdown.is_some(),
+        "seeded planning workspace should contain the active contract files"
+    );
+}
+
+fn seed_ready_candidate_planning_workspace(workspace_dir: &str) {
+    let bootstrap =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+    replace_candidate_planning_workspace_file(
+        workspace_dir,
+        &bootstrap.directions_path,
+        &bootstrap.directions_toml,
+    );
+    replace_candidate_planning_workspace_file(
+        workspace_dir,
+        &bootstrap.task_ledger_path,
+        &bootstrap.task_ledger_json,
+    );
+    replace_candidate_planning_workspace_file(
+        workspace_dir,
+        &bootstrap.task_ledger_schema_path,
+        &bootstrap.task_ledger_schema_json,
+    );
+    replace_candidate_planning_workspace_file(
+        workspace_dir,
+        &bootstrap.result_output_path,
+        &bootstrap.result_output_markdown,
+    );
+    for supplemental_file in bootstrap.supplemental_files {
+        replace_candidate_planning_workspace_file(
+            workspace_dir,
+            &supplemental_file.active_path,
+            &supplemental_file.body,
+        );
+    }
+}
+
+fn replace_active_planning_workspace_file(workspace_dir: &str, relative_path: &str, body: &str) {
+    FilesystemPlanningWorkspaceAdapter::new()
+        .replace_planning_workspace_file(workspace_dir, relative_path, Some(body))
+        .expect("active planning workspace file should write");
+    replace_candidate_planning_workspace_file(workspace_dir, relative_path, body);
+}
+
+fn replace_candidate_planning_workspace_file(workspace_dir: &str, relative_path: &str, body: &str) {
+    let path = Path::new(workspace_dir).join(relative_path);
+    fs::create_dir_all(
+        path.parent()
+            .expect("candidate planning workspace file should have a parent"),
+    )
+    .expect("candidate planning workspace directory should exist");
+    fs::write(&path, body).expect("candidate planning workspace file should write");
 }
 
 fn rewrite_active_directions_toml(workspace_dir: &str, f: impl FnOnce(String) -> String) {

@@ -8,15 +8,14 @@ use super::{
     AutoFollowupSubmitContext, ConversationRuntimeEvent, ConversationState, PromptOrigin,
     StartupState, TempGitWorkspace, commit_active_planning_workspace_into_akra, current_git_branch,
     git_branch_exists, install_ready_github_automation, make_test_app,
-    merge_active_branch_into_akra, ready_conversation, run_git, sample_startup_diagnostics,
+    merge_active_branch_into_akra, ready_conversation, replace_active_planning_workspace_file,
+    run_git, sample_startup_diagnostics,
 };
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };
-use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
 
 fn current_branch(workspace_directory: &str) -> String {
@@ -265,26 +264,53 @@ fn leased_slot_success_completion_waits_for_official_refresh_before_cleanup() {
         .join(".leases")
         .join("slot-1.json");
     let leased_branch = current_git_branch(&leased_workspace);
+    let mut last_roster_state = String::new();
+    let mut last_detail_state = String::new();
+    let mut last_worker_status = String::new();
+    let mut last_preview_detail = String::new();
+    let mut hidden_call_count = 0usize;
 
     for _ in 0..50 {
         runtime.poll_background_messages();
+        let snapshot = runtime.app().parallel_mode_supervisor_snapshot();
+        last_roster_state = snapshot
+            .roster
+            .entries
+            .first()
+            .map(|entry| entry.state_label.clone())
+            .unwrap_or_else(|| "none".to_string());
+        last_detail_state = snapshot
+            .detail
+            .session
+            .as_ref()
+            .map(|detail| detail.state_label.clone())
+            .unwrap_or_else(|| "none".to_string());
+        last_worker_status = format!("{:?}", runtime.app().planner_worker_panel_state.status);
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        last_preview_detail = conversation
+            .planning_runtime_snapshot
+            .preview_detail()
+            .unwrap_or("none")
+            .to_string();
+        hidden_call_count = codex_port
+            .hidden_planning_calls
+            .lock()
+            .expect("hidden planning calls mutex poisoned")
+            .len();
         if !lease_path.exists() {
             assert_eq!(current_git_branch(&leased_workspace), "HEAD");
             assert!(!git_branch_exists(repo.workspace_dir(), &leased_branch));
-            assert_eq!(
-                codex_port
-                    .hidden_planning_calls
-                    .lock()
-                    .expect("hidden planning calls mutex poisoned")
-                    .len(),
-                1
-            );
+            assert_eq!(hidden_call_count, 1);
             return;
         }
         thread::sleep(Duration::from_millis(10));
     }
 
-    panic!("timed out waiting for the slot to return after official refresh");
+    panic!(
+        "timed out waiting for the slot to return after official refresh: roster={last_roster_state} detail={last_detail_state} worker={last_worker_status} preview={last_preview_detail} hidden_calls={hidden_call_count}"
+    );
 }
 
 #[test]
@@ -477,9 +503,49 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
             .is_empty()
     });
 
+    let mut last_roster_state = String::new();
+    let mut last_detail_state = String::new();
+    let mut last_worker_status = String::new();
+    let mut last_preview_detail = String::new();
+    let mut last_history = String::new();
+
     for _ in 0..50 {
         runtime.poll_background_messages();
         let snapshot = runtime.app().parallel_mode_supervisor_snapshot();
+        last_roster_state = snapshot
+            .roster
+            .entries
+            .first()
+            .map(|entry| entry.state_label.clone())
+            .unwrap_or_else(|| "none".to_string());
+        last_detail_state = snapshot
+            .detail
+            .session
+            .as_ref()
+            .map(|detail| detail.state_label.clone())
+            .unwrap_or_else(|| "none".to_string());
+        last_history = snapshot
+            .detail
+            .session
+            .as_ref()
+            .map(|detail| {
+                detail
+                    .history
+                    .iter()
+                    .map(|entry| entry.state_label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(">")
+            })
+            .unwrap_or_else(|| "none".to_string());
+        last_worker_status = format!("{:?}", runtime.app().planner_worker_panel_state.status);
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("conversation should remain ready");
+        };
+        last_preview_detail = conversation
+            .planning_runtime_snapshot
+            .preview_detail()
+            .unwrap_or("none")
+            .to_string();
         if snapshot.roster.active_count() == 0
             && snapshot.detail.session.as_ref().is_some_and(|detail| {
                 detail.state_label == "cleaned" && detail.thread_id.as_deref() == Some("thread-9")
@@ -518,7 +584,9 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    panic!("timed out waiting for cleaned session detail to refresh");
+    panic!(
+        "timed out waiting for cleaned session detail to refresh: roster={last_roster_state} detail={last_detail_state} worker={last_worker_status} preview={last_preview_detail} history={last_history}"
+    );
 }
 
 #[test]
@@ -648,14 +716,12 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
     let repo = TempGitWorkspace::new("parallel-mode-runtime-repeat-gate");
     commit_active_planning_workspace_into_akra(repo.workspace_dir());
     let repeated_ledger = repeated_official_completion_task_ledger();
-    FilesystemPlanningWorkspaceAdapter::new()
-        .replace_planning_workspace_file(
-            repo.workspace_dir(),
-            TASK_LEDGER_FILE_PATH,
-            Some(&repeated_ledger),
-        )
-        .expect("repeated task ledger should write");
-    run_git(repo.workspace_dir(), &["add", TASK_LEDGER_FILE_PATH]);
+    replace_active_planning_workspace_file(
+        repo.workspace_dir(),
+        TASK_LEDGER_FILE_PATH,
+        &repeated_ledger,
+    );
+    run_git(repo.workspace_dir(), &["add", ".codex-exec-loop"]);
     run_git(
         repo.workspace_dir(),
         &["commit", "-m", "Seed repeated official completion task"],
