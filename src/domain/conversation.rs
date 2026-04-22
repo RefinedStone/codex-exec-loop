@@ -83,3 +83,41 @@ pub struct ConversationApprovalReview {
     pub risk_level: Option<String>,
     pub rationale: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationControlSupport {
+    RuntimeNative,
+    ManualHandoff,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConversationRuntimeControlTruth {
+    pub approval: ConversationControlSupport,
+    pub interrupt: ConversationControlSupport,
+}
+
+impl ConversationRuntimeControlTruth {
+    pub const fn new(
+        approval: ConversationControlSupport,
+        interrupt: ConversationControlSupport,
+    ) -> Self {
+        Self {
+            approval,
+            interrupt,
+        }
+    }
+
+    pub const fn codex_app_server() -> Self {
+        Self::new(
+            ConversationControlSupport::ManualHandoff,
+            ConversationControlSupport::Unsupported,
+        )
+    }
+}
+
+impl Default for ConversationRuntimeControlTruth {
+    fn default() -> Self {
+        Self::codex_app_server()
+    }
+}

@@ -1,7 +1,7 @@
 pub(crate) mod connection;
+mod planning_worker;
 pub(crate) mod protocol;
 pub(crate) mod runtime;
-mod planning_worker;
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, TryLockError};
@@ -25,7 +25,7 @@ use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 
 const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
@@ -446,6 +446,10 @@ impl CodexAppServerPort for CodexAppServerAdapter {
                 next_cursor: output.value.next_cursor,
             },
         ))
+    }
+
+    fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+        ConversationRuntimeControlTruth::codex_app_server()
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {

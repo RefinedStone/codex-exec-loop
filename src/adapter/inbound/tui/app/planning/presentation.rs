@@ -227,6 +227,7 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                     "planner detail: {}",
                     app.planner_visibility_label()
                 )),
+                Line::from(format!("controls: {}", conversation.turn_control_summary())),
                 Line::from(planning_status_line),
                 Line::from(format!(
                     "{activity_scope} commands: {}  |  {activity_scope} file changes: {}",

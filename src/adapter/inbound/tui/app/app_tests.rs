@@ -8,18 +8,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::conversation_model::PlanningRepairState;
 use super::{
-    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext,
-    ConversationInputState, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-    DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp,
+    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext, ConversationInputState,
+    ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
+    ConversationViewModel, DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp,
     PlannerWorkerStatus, PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability,
     ShellOverlay, StartupState, TurnActivityState, build_automation_overlay_view,
     build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
     build_planning_init_overlay_view, build_ready_input_lines, format_conversation_lines,
 };
-use crate::adapter::inbound::tui::app::test_helpers::{
-    sample_planning_runtime_snapshot,
-};
+use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
 use crate::adapter::outbound::app_server::{
     AppServerPlanningWorkerAdapter, PlanningThreadLauncher,
 };
@@ -48,7 +45,7 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
@@ -651,6 +648,7 @@ fn ready_conversation() -> ConversationViewModel {
         planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
+        turn_control_truth: ConversationRuntimeControlTruth::default(),
         last_auto_followup_activity: None,
         last_planning_task_handoff: None,
         status_text: "thread loaded".to_string(),

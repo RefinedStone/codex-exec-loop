@@ -65,6 +65,25 @@ fn inline_tail_compacts_empty_session_prompt_copy() {
     assert!(!rendered.contains("Ready to continue this session."));
     assert!(!rendered.contains("Shell commands: :diag"));
 }
+
+#[test]
+fn inline_tail_surfaces_interrupt_truth_while_turn_runs() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    conversation.active_turn_started_at = Some(std::time::Instant::now());
+    app.conversation_state = ConversationState::ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("interrupt unsupported"));
+}
 #[test]
 fn inline_tail_compacts_empty_draft_prompt_copy() {
     let (mut app, _) = make_test_app();

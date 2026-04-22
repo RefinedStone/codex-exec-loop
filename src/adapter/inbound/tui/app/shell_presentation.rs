@@ -178,6 +178,8 @@ mod status_panels;
 
 use capability_projection::recent_session_status_label;
 
+#[cfg(test)]
+pub(super) use overlays::build_conversation_shell_frame_view;
 pub(super) use overlays::{
     AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
@@ -186,8 +188,6 @@ pub(super) use overlays::{
     build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
     build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
 };
-#[cfg(test)]
-pub(super) use overlays::build_conversation_shell_frame_view;
 #[cfg(test)]
 pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
 pub(super) use status_panels::InlineTailView;
@@ -459,13 +459,18 @@ fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<St
         return None;
     }
 
+    let interrupt_label = conversation.interrupt_support_label();
     match conversation.input_state {
-        ConversationInputState::SubmittingTurn => Some("starting turn".to_string()),
+        ConversationInputState::SubmittingTurn => {
+            Some(format!("starting turn / interrupt {interrupt_label}"))
+        }
         ConversationInputState::StreamingTurn => {
             if conversation.live_agent_message.is_some() {
-                Some("turn running".to_string())
+                Some(format!("turn running / interrupt {interrupt_label}"))
             } else {
-                Some("waiting for response".to_string())
+                Some(format!(
+                    "waiting for response / interrupt {interrupt_label}"
+                ))
             }
         }
         ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => None,
@@ -474,6 +479,7 @@ fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<St
 
 fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
     let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
+    let interrupt_label = conversation.interrupt_support_label();
     match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => "idle".to_string(),
         AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
@@ -481,10 +487,12 @@ fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
             format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
         }
         AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} starting")
+            format!(
+                "auto turn {turn_index}/{max_auto_turns} starting / interrupt {interrupt_label}"
+            )
         }
         AutoFollowRuntimePhase::Running { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} running")
+            format!("auto turn {turn_index}/{max_auto_turns} running / interrupt {interrupt_label}")
         }
     }
 }
@@ -590,7 +598,7 @@ mod tests {
 
         assert_eq!(
             auto_follow_working_detail(&conversation),
-            "auto turn 2/infinite running"
+            "auto turn 2/infinite running / interrupt unsupported"
         );
         assert_eq!(
             auto_follow_prompt_status_line(&conversation, true).as_deref(),

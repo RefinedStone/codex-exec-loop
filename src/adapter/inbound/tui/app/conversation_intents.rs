@@ -1,3 +1,5 @@
+use crate::adapter::inbound::tui::conversation_text::interrupt_blocked_status_text;
+use crate::domain::conversation::ConversationControlSupport;
 use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub(super) enum ConversationIntentMode {
 pub(super) struct ConversationIntentState {
     pub has_running_turn: bool,
     pub mode: ConversationIntentMode,
+    pub interrupt_support: ConversationControlSupport,
 }
 
 #[derive(Debug, Clone)]
@@ -68,9 +71,7 @@ pub(super) fn reduce_conversation_intents(
         ConversationIntentEvent::CtrlCPressed => {
             if state.has_running_turn {
                 effects.push(ConversationIntentEffect::ShowStatus {
-                    status_text:
-                        "turn still running; wait for completion before leaving the shell view"
-                            .to_string(),
+                    status_text: interrupt_blocked_status_text(state.interrupt_support),
                 });
             } else {
                 match state.mode {
@@ -92,6 +93,7 @@ pub(super) fn reduce_conversation_intents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::conversation::ConversationControlSupport;
 
     #[test]
     fn new_draft_requested_while_running_turn_only_shows_status() {
@@ -99,6 +101,7 @@ mod tests {
             ConversationIntentState {
                 has_running_turn: true,
                 mode: ConversationIntentMode::Ready,
+                interrupt_support: ConversationControlSupport::Unsupported,
             },
             ConversationIntentEvent::NewDraftRequested,
         );
@@ -118,6 +121,7 @@ mod tests {
             ConversationIntentState {
                 has_running_turn: false,
                 mode: ConversationIntentMode::BlankDraft,
+                interrupt_support: ConversationControlSupport::Unsupported,
             },
             ConversationIntentEvent::CtrlCPressed,
         );
@@ -134,6 +138,7 @@ mod tests {
             ConversationIntentState {
                 has_running_turn: false,
                 mode: ConversationIntentMode::Failed,
+                interrupt_support: ConversationControlSupport::Unsupported,
             },
             ConversationIntentEvent::CtrlCPressed,
         );
@@ -150,10 +155,30 @@ mod tests {
             ConversationIntentState {
                 has_running_turn: false,
                 mode: ConversationIntentMode::Ready,
+                interrupt_support: ConversationControlSupport::Unsupported,
             },
             ConversationIntentEvent::SessionOpenRequested { session: None },
         );
 
         assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_while_turn_runs_surfaces_interrupt_truth() {
+        let reduced = reduce_conversation_intents(
+            ConversationIntentState {
+                has_running_turn: true,
+                mode: ConversationIntentMode::Ready,
+                interrupt_support: ConversationControlSupport::Unsupported,
+            },
+            ConversationIntentEvent::CtrlCPressed,
+        );
+
+        assert!(matches!(
+            reduced.effects.as_slice(),
+            [ConversationIntentEffect::ShowStatus { status_text }]
+                if status_text
+                    == "turn still running; this runtime does not expose interrupt control in the shell"
+        ));
     }
 }

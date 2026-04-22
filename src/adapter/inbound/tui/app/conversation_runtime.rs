@@ -186,7 +186,10 @@ pub(super) fn reduce_conversation_runtime(
                 state.buffer_tool_message(activity.text);
             }
             ConversationStreamEvent::ApprovalReviewUpdated { review } => {
-                if let Some(notice) = approval_review_manual_client_action_notice(&review) {
+                if let Some(notice) = approval_review_manual_client_action_notice(
+                    &review,
+                    state.turn_control_truth().approval,
+                ) {
                     state.extend_runtime_notices([notice]);
                 }
                 state.update_approval_review(review);
@@ -226,9 +229,8 @@ pub(super) fn reduce_conversation_runtime(
                     } = *queued_prompt;
                     state.clear_auto_followup_skip();
                     state.record_auto_followup_queue(&queued_from_turn_id);
-                    state.status_text = format!(
-                        "turn completed / queued auto follow-up with mode {mode_label}"
-                    );
+                    state.status_text =
+                        format!("turn completed / queued auto follow-up with mode {mode_label}");
                     state.append_status_message(state.status_text.clone());
                     effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
                         prompt,
@@ -265,8 +267,8 @@ mod tests {
         DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
     use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
-        ConversationToolActivityKind,
+        ConversationApprovalReview, ConversationApprovalReviewStatus,
+        ConversationRuntimeControlTruth, ConversationToolActivity, ConversationToolActivityKind,
     };
 
     #[test]
@@ -547,7 +549,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.status_text,
-            "approval review in progress / target: command-1 / risk: high"
+            "approval review in progress / target: command-1 / risk: high / handling: manual handoff"
         );
         assert_eq!(
             reduced
@@ -582,7 +584,7 @@ mod tests {
         assert_eq!(
             reduced.state.runtime_notices.last().map(String::as_str),
             Some(
-                "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action"
+                "approval requires manual review; this runtime hands approval back to the operator"
             )
         );
     }
@@ -618,7 +620,7 @@ mod tests {
                 .runtime_notices
                 .iter()
                 .filter(|notice| notice.as_str()
-                    == "approval requires manual review, but the app-server protocol does not yet expose a client approve/deny action")
+                    == "approval requires manual review; this runtime hands approval back to the operator")
                 .count(),
             1
         );
@@ -1270,6 +1272,7 @@ mod tests {
             planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
+            turn_control_truth: ConversationRuntimeControlTruth::default(),
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
             status_text: "thread loaded".to_string(),

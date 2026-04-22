@@ -17,15 +17,16 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningRuntimeUseCases;
-use crate::application::service::planning::runtime::prompt::PlanningPromptService;
 use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
 use crate::application::service::planning::runtime::facade::PlanningRuntimeFacadeService;
 use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
+use crate::application::service::planning::runtime::prompt::PlanningPromptService;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
+    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationRuntimeControlTruth,
+    ConversationSnapshot,
 };
 
 fn ready_conversation() -> ConversationViewModel {
@@ -53,6 +54,7 @@ fn ready_conversation() -> ConversationViewModel {
         planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
+        turn_control_truth: ConversationRuntimeControlTruth::default(),
         last_auto_followup_activity: None,
         last_planning_task_handoff: None,
         status_text: "thread loaded".to_string(),
@@ -282,7 +284,7 @@ fn approval_review_status_preserves_warning_suffix() {
 
     assert_eq!(
         conversation.status_text,
-        "approval review in progress / target: command-1 / risk: high / warning"
+        "approval review in progress / target: command-1 / risk: high / handling: manual handoff / warning"
     );
 }
 
