@@ -1,4 +1,6 @@
+#[path = "lines/editing.rs"]
 mod editing;
+#[path = "lines/non_editing.rs"]
 mod non_editing;
 
 use ratatui::text::Line;
