@@ -69,12 +69,21 @@ struct FakeStreamBehavior {
     error: Option<String>,
     planning_file_writes: Vec<(String, String)>,
     merge_active_branch_into_akra_repo: Option<String>,
+    attachment_event: FakeStreamAttachmentEvent,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FakeStreamAttachmentEvent {
+    #[default]
+    InferFromStreamKind,
+    Explicit(TerminalBridgeAttachmentProfile),
+    Omit,
 }
 
 impl CodexAppServerPort for FakeCodexAppServerPort {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         Ok(AppServerStartupContext {
-            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server_launch(),
             initialize_detail: "ok".to_string(),
             account_detail: "ok".to_string(),
             account_ok: true,
@@ -180,27 +189,60 @@ fn run_fake_stream(
     event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     behavior: FakeStreamBehavior,
 ) -> Result<()> {
+    let FakeStreamBehavior {
+        events,
+        error,
+        planning_file_writes,
+        merge_active_branch_into_akra_repo,
+        attachment_event,
+    } = behavior;
+
     if let Some(workspace_directory) = workspace_directory {
-        for (relative_path, body) in &behavior.planning_file_writes {
+        for (relative_path, body) in &planning_file_writes {
             replace_candidate_planning_workspace_file(workspace_directory, relative_path, body);
         }
     }
 
-    for event in behavior.events {
+    emit_fake_attachment_event(workspace_directory, &event_sender, attachment_event);
+
+    for event in events {
         let _ = event_sender.send(event);
     }
 
     if let (Some(workspace_directory), Some(repo_root)) = (
         workspace_directory,
-        behavior.merge_active_branch_into_akra_repo.as_deref(),
+        merge_active_branch_into_akra_repo.as_deref(),
     ) {
         merge_active_branch_into_akra(repo_root, workspace_directory);
     }
 
-    if let Some(error) = behavior.error {
+    if let Some(error) = error {
         Err(anyhow::anyhow!(error))
     } else {
         Ok(())
+    }
+}
+
+fn emit_fake_attachment_event(
+    workspace_directory: Option<&str>,
+    event_sender: &std::sync::mpsc::Sender<ConversationStreamEvent>,
+    attachment_event: FakeStreamAttachmentEvent,
+) {
+    match attachment_event {
+        FakeStreamAttachmentEvent::InferFromStreamKind => match workspace_directory {
+            Some(_) => {
+                let _ = event_sender
+                    .send(ConversationStreamEvent::codex_app_server_launch_attachment());
+            }
+            None => {
+                let _ = event_sender
+                    .send(ConversationStreamEvent::codex_app_server_reattach_attachment());
+            }
+        },
+        FakeStreamAttachmentEvent::Explicit(profile) => {
+            let _ = event_sender.send(ConversationStreamEvent::attachment_observed(profile));
+        }
+        FakeStreamAttachmentEvent::Omit => {}
     }
 }
 
@@ -218,6 +260,120 @@ fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
     app.show_startup_ascii_art = false;
 
     (app, codex_port)
+}
+
+#[test]
+fn fake_new_thread_stream_emits_launch_attachment_before_behavior_events() {
+    let port = FakeCodexAppServerPort::default();
+    port.new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned")
+        .events = vec![ConversationStreamEvent::TurnCompleted {
+        turn_id: "turn-1".to_string(),
+        changed_planning_file_paths: Vec::new(),
+    }];
+    let (event_sender, event_receiver) = std::sync::mpsc::channel();
+
+    port.run_new_thread_stream("/tmp/root", "ship it", event_sender)
+        .expect("new-thread stream should succeed");
+
+    assert_eq!(
+        event_receiver
+            .recv()
+            .expect("launch attachment event should be emitted first"),
+        ConversationStreamEvent::codex_app_server_launch_attachment()
+    );
+    assert!(matches!(
+        event_receiver
+            .recv()
+            .expect("terminal event should follow launch attachment"),
+        ConversationStreamEvent::TurnCompleted { .. }
+    ));
+}
+
+#[test]
+fn fake_turn_stream_emits_reattach_attachment_before_behavior_events() {
+    let port = FakeCodexAppServerPort::default();
+    port.turn_stream_behavior
+        .lock()
+        .expect("turn stream behavior mutex poisoned")
+        .events = vec![ConversationStreamEvent::TurnCompleted {
+        turn_id: "turn-2".to_string(),
+        changed_planning_file_paths: Vec::new(),
+    }];
+    let (event_sender, event_receiver) = std::sync::mpsc::channel();
+
+    port.run_turn_stream("thread-1", "continue", event_sender)
+        .expect("turn stream should succeed");
+
+    assert_eq!(
+        event_receiver
+            .recv()
+            .expect("reattach attachment event should be emitted first"),
+        ConversationStreamEvent::codex_app_server_reattach_attachment()
+    );
+    assert!(matches!(
+        event_receiver
+            .recv()
+            .expect("terminal event should follow reattach attachment"),
+        ConversationStreamEvent::TurnCompleted { .. }
+    ));
+}
+
+#[test]
+fn fake_stream_behavior_can_override_the_inferred_attachment_profile() {
+    let port = FakeCodexAppServerPort::default();
+    let mut behavior = port
+        .new_thread_stream_behavior
+        .lock()
+        .expect("new-thread stream behavior mutex poisoned");
+    behavior.attachment_event = FakeStreamAttachmentEvent::Explicit(
+        TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
+    );
+    behavior.events = vec![ConversationStreamEvent::TurnCompleted {
+        turn_id: "turn-override".to_string(),
+        changed_planning_file_paths: Vec::new(),
+    }];
+    drop(behavior);
+    let (event_sender, event_receiver) = std::sync::mpsc::channel();
+
+    port.run_new_thread_stream("/tmp/root", "ship it", event_sender)
+        .expect("new-thread stream should succeed");
+
+    assert_eq!(
+        event_receiver
+            .recv()
+            .expect("explicit attachment event should be emitted first"),
+        ConversationStreamEvent::attachment_observed(
+            TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
+        )
+    );
+}
+
+#[test]
+fn fake_stream_behavior_can_omit_attachment_events() {
+    let port = FakeCodexAppServerPort::default();
+    let mut behavior = port
+        .turn_stream_behavior
+        .lock()
+        .expect("turn stream behavior mutex poisoned");
+    behavior.attachment_event = FakeStreamAttachmentEvent::Omit;
+    behavior.events = vec![ConversationStreamEvent::TurnCompleted {
+        turn_id: "turn-no-attachment".to_string(),
+        changed_planning_file_paths: Vec::new(),
+    }];
+    drop(behavior);
+    let (event_sender, event_receiver) = std::sync::mpsc::channel();
+
+    port.run_turn_stream("thread-1", "continue", event_sender)
+        .expect("turn stream should succeed");
+
+    assert!(matches!(
+        event_receiver
+            .recv()
+            .expect("terminal event should be emitted first when attachment is omitted"),
+        ConversationStreamEvent::TurnCompleted { .. }
+    ));
 }
 
 #[derive(Debug, Clone, Default)]
@@ -334,7 +490,7 @@ fn sample_startup_diagnostics(workspace_path: &str, can_continue: bool) -> Start
         workspace_ok: true,
         workspace_path: workspace_path.to_string(),
         workspace_detail: "ok".to_string(),
-        attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+        attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server_launch(),
         initialize_ok: true,
         initialize_detail: "ok".to_string(),
         account_ok: can_continue,

@@ -34,7 +34,7 @@ impl SharedAppServerRuntime {
         let mut connection = adapter.open_connection()?;
         let initialize_response = connection.initialize()?;
         self.initialize_detail = Some(initialize_detail(&initialize_response));
-        self.attachment_profile = Some(TerminalBridgeAttachmentProfile::codex_app_server());
+        self.attachment_profile = Some(TerminalBridgeAttachmentProfile::codex_app_server_launch());
         self.connection = Some(connection);
         if let Some(notice) = reconnect_notice {
             self.push_notice(notice);
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn reset_clears_attachment_profile_until_runtime_reconnects() {
         let mut runtime = SharedAppServerRuntime {
-            attachment_profile: Some(TerminalBridgeAttachmentProfile::codex_app_server()),
+            attachment_profile: Some(TerminalBridgeAttachmentProfile::codex_app_server_launch()),
             ..SharedAppServerRuntime::default()
         };
 

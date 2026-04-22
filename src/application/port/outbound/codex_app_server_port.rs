@@ -107,7 +107,7 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> anyhow::Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
-                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server_launch(),
                 initialize_detail: "init".to_string(),
                 account_detail: "account".to_string(),
                 account_ok: true,
@@ -154,6 +154,8 @@ mod tests {
                 .lock()
                 .expect("new-thread stream mutex poisoned")
                 .push((cwd.to_string(), prompt.to_string()));
+            let _ =
+                event_sender.send(ConversationStreamEvent::codex_app_server_launch_attachment());
             let _ = event_sender.send(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-1".to_string(),
                 changed_planning_file_paths: Vec::new(),
@@ -171,6 +173,8 @@ mod tests {
                 .lock()
                 .expect("turn stream mutex poisoned")
                 .push((thread_id.to_string(), prompt.to_string()));
+            let _ =
+                event_sender.send(ConversationStreamEvent::codex_app_server_reattach_attachment());
             let _ = event_sender.send(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-2".to_string(),
                 changed_planning_file_paths: Vec::new(),
@@ -191,7 +195,7 @@ mod tests {
         assert_eq!(context.initialize_detail, "init");
         assert_eq!(
             context.attachment_profile,
-            TerminalBridgeAttachmentProfile::codex_app_server()
+            TerminalBridgeAttachmentProfile::codex_app_server_launch()
         );
         assert_eq!(context.account_detail, "account");
         assert!(context.account_ok);
@@ -256,16 +260,28 @@ mod tests {
                 .expect("turn stream mutex poisoned"),
             vec![("thread-123".to_string(), "follow-up".to_string())]
         );
+        assert_eq!(
+            new_thread_receiver
+                .recv()
+                .expect("new-thread stream should emit launch attachment first"),
+            ConversationStreamEvent::codex_app_server_launch_attachment()
+        );
         assert!(matches!(
             new_thread_receiver
                 .recv()
-                .expect("new-thread stream should emit an event"),
+                .expect("new-thread stream should emit a terminal event"),
             ConversationStreamEvent::TurnCompleted { .. }
         ));
+        assert_eq!(
+            turn_receiver
+                .recv()
+                .expect("turn stream should emit reattach attachment first"),
+            ConversationStreamEvent::codex_app_server_reattach_attachment()
+        );
         assert!(matches!(
             turn_receiver
                 .recv()
-                .expect("turn stream should emit an event"),
+                .expect("turn stream should emit a terminal event"),
             ConversationStreamEvent::TurnCompleted { .. }
         ));
     }
