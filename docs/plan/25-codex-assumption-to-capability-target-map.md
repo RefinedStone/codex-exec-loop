@@ -6,6 +6,8 @@ translates those assumptions into the capability targets defined in
 
 It exists so bridge research can consume one current-state audit instead of repeating the same
 inventory in every transport or experiment note.
+The prioritized implementation-facing follow-ups derived from this map live in
+[26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md).
 
 ## Working Rules
 
@@ -90,6 +92,8 @@ Target:
   uses this as the current audit requested before external bridge work.
 - [21-terminal-agent-bridge-research-and-capability-boundary.md](21-terminal-agent-bridge-research-and-capability-boundary.md)
   uses this as the current-state input for the research set.
+- [26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md)
+  turns this inventory into the ordered refactor slices that should land next.
 - [22-terminal-agent-transport-and-attachment-matrix.md](22-terminal-agent-transport-and-attachment-matrix.md)
   should read the attachment rows here before comparing tmux, wrapper, SSH, or proxy paths.
 - [23-terminal-agent-capability-boundary-and-session-contract.md](23-terminal-agent-capability-boundary-and-session-contract.md)

@@ -79,6 +79,8 @@ The target is not a giant `Provider` abstraction. The target is a smaller set of
 that future implementations can satisfy selectively.
 The current audit output lives in
 [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md).
+The prioritized seam order derived from that audit lives in
+[26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md).
 The terminal-agent research set in `docs/plan/21-*`, `docs/plan/22-*`, `docs/plan/23-*`, and
 `docs/plan/24-*` should consume that audit rather than duplicate it.
 
@@ -137,3 +139,4 @@ That work sets up terminal-agent exploration without overpromising multi-provide
 - [14-product-elevation-blueprint.md](14-product-elevation-blueprint.md)
 - [21-terminal-agent-bridge-research-and-capability-boundary.md](21-terminal-agent-bridge-research-and-capability-boundary.md)
 - [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
+- [26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md)
