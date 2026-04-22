@@ -1,6 +1,6 @@
-use super::super::super::super::super::super::PlanningInitOverlayView;
 use super::super::super::status::PlanningSimpleReviewStatusView;
 use crate::adapter::inbound::tui::app::Line;
+use crate::adapter::inbound::tui::app::shell_presentation::overlays::PlanningInitOverlayView;
 
 pub(super) struct PlanningSimpleReviewOverlaySections {
     pub(super) header_lines: Vec<Line<'static>>,
