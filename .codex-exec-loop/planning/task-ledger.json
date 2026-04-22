@@ -686,7 +686,7 @@
       "status": "ready",
       "base_priority": 90,
       "dynamic_priority_delta": 2,
-      "priority_reason": "The queue is no longer truly idle because this tmux attach and probe slice is the highest-priority executable item. The latest planning review only derived the head and did not start implementation, so it should stay `ready` as the single immediate execution target while the remaining tmux follow-ups stay queued behind it.",
+      "priority_reason": "The latest operator request still leaves this tmux attach and probe slice as the highest-priority executable item. Keep it as the single ready head so execution can resume from one concrete bridge implementation task while the remaining tmux follow-ups stay blocked behind it.",
       "depends_on": [
         "terminal-bridge-local-spike-readiness-gate"
       ],
@@ -694,7 +694,7 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T04:10:00Z"
+      "updated_at": "2026-04-23T05:20:00Z"
     },
     {
       "id": "terminal-bridge-tmux-runtime-relay-and-completion",
