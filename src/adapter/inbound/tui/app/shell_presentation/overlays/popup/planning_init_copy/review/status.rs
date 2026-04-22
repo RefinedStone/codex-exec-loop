@@ -5,8 +5,9 @@ mod lines;
 #[path = "status/view.rs"]
 mod view;
 
-use super::super::super::super::super::super::Line;
-use super::super::super::copy::PlanningSimpleReviewCopy;
+use ratatui::text::Line;
+
+use crate::adapter::inbound::tui::app::shell_presentation::overlays::popup::planning::copy::PlanningSimpleReviewCopy;
 
 pub(super) struct PlanningSimpleReviewStatusView {
     pub(super) status_lines: Vec<Line<'static>>,

@@ -1,5 +1,4 @@
-use super::super::super::super::copy::PlanningSimpleReviewCopy;
-use super::{PlanningSimpleReviewStatusView, key_lines, lines};
+use super::{PlanningSimpleReviewCopy, PlanningSimpleReviewStatusView, key_lines, lines};
 
 pub(super) fn build_simple_review_status_view(
     copy: &PlanningSimpleReviewCopy,
