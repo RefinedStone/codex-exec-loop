@@ -5,6 +5,9 @@ goes beyond research.
 
 The point is not to recreate the `codex app-server` model with different names.
 The point is to name the smallest capabilities that different terminal-agent paths can satisfy.
+Use [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
+for the current Codex-shaped seam inventory; this document defines the target boundary names, not
+the current implementation map.
 
 ## Boundary Principles
 
@@ -130,3 +133,10 @@ Akra should design for these tiers explicitly instead of claiming a universal se
 - `TerminalBridgeAttachment` is mandatory because transport shape is the heart of the problem.
 - `SessionCatalog` remains optional and must not block the local attach path.
 - Any future spike should declare which tier it satisfies before code is written.
+
+## Related Docs
+
+- [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
+- [21-terminal-agent-bridge-research-and-capability-boundary.md](21-terminal-agent-bridge-research-and-capability-boundary.md)
+- [22-terminal-agent-transport-and-attachment-matrix.md](22-terminal-agent-transport-and-attachment-matrix.md)
+- [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
