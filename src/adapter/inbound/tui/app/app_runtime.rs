@@ -7,6 +7,7 @@ use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::recent_sessions::SessionCatalog;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -24,7 +25,6 @@ use super::{
     reduce_conversation_runtime, reduce_followup_controls, reduce_followup_overlay_ui,
     reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
-use crate::domain::conversation::ConversationSnapshot;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -55,8 +55,11 @@ impl NativeTuiApp {
         let workspace_directory = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
-        let mut initial_conversation =
-            ConversationViewModel::new_draft(workspace_directory.clone());
+        let turn_control_truth = conversation_service.runtime_control_truth();
+        let mut initial_conversation = ConversationViewModel::new_draft_with_truth(
+            workspace_directory.clone(),
+            turn_control_truth,
+        );
         initial_conversation.replace_planning_runtime_snapshot(
             planning
                 .runtime
@@ -82,6 +85,7 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
+            turn_control_truth,
             parallel_mode_service: ParallelModeService::new(),
             planning,
             active_turn_planning_capture: None,
@@ -151,6 +155,7 @@ impl NativeTuiApp {
                 ConversationState::Loading,
             ),
             active_session: self.active_session.take(),
+            turn_control_truth: self.turn_control_truth,
         }
     }
 
@@ -256,6 +261,14 @@ impl NativeTuiApp {
         ConversationIntentState {
             has_running_turn: self.conversation_has_running_turn(),
             mode,
+            interrupt_support: match &self.conversation_state {
+                ConversationState::Ready(conversation) => {
+                    conversation.turn_control_truth().interrupt
+                }
+                ConversationState::Loading | ConversationState::Failed(_) => {
+                    self.turn_control_truth.interrupt
+                }
+            },
         }
     }
 

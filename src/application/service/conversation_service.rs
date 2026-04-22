@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 
 #[derive(Clone)]
 pub struct ConversationService {
@@ -22,6 +22,10 @@ impl ConversationService {
     pub fn load_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
         self.interactive_turn_runtime_port
             .load_conversation_snapshot(thread_id)
+    }
+
+    pub fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+        self.interactive_turn_runtime_port.runtime_control_truth()
     }
 
     pub fn run_new_thread_stream(

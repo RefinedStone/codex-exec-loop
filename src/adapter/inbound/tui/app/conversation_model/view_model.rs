@@ -3,7 +3,7 @@ use std::time::Instant;
 use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::conversation_text::{
-    approval_review_status_text, approval_review_summary_text,
+    approval_review_status_text, approval_review_summary_text, runtime_control_summary_text,
 };
 use crate::application::service::planning::{
     PlanningAutoFollowBlockReason, PlanningRepairRequest, PlanningRuntimeAutoFollowDecision,
@@ -11,7 +11,8 @@ use crate::application::service::planning::{
     PlanningTaskHandoff,
 };
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationMessage, ConversationMessageKind, ConversationSnapshot,
+    ConversationApprovalReview, ConversationControlSupport, ConversationMessage,
+    ConversationMessageKind, ConversationRuntimeControlTruth, ConversationSnapshot,
 };
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
@@ -95,6 +96,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) planning_runtime_snapshot: PlanningRuntimeSnapshot,
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) approval_review: Option<ConversationApprovalReview>,
+    pub(crate) turn_control_truth: ConversationRuntimeControlTruth,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
     pub(crate) status_text: String,
@@ -102,6 +104,13 @@ pub(crate) struct ConversationViewModel {
 
 impl ConversationViewModel {
     pub(crate) fn new_draft(cwd: String) -> Self {
+        Self::new_draft_with_truth(cwd, ConversationRuntimeControlTruth::default())
+    }
+
+    pub(crate) fn new_draft_with_truth(
+        cwd: String,
+        turn_control_truth: ConversationRuntimeControlTruth,
+    ) -> Self {
         let base_status = "new thread draft".to_string();
         let mut view_model = Self {
             thread_id: String::new(),
@@ -127,6 +136,7 @@ impl ConversationViewModel {
             planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
+            turn_control_truth,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
             status_text: String::new(),
@@ -139,6 +149,18 @@ impl ConversationViewModel {
     pub(crate) fn from_snapshot(
         snapshot: ConversationSnapshot,
         draft_workspace_directory: String,
+    ) -> Self {
+        Self::from_snapshot_with_truth(
+            snapshot,
+            draft_workspace_directory,
+            ConversationRuntimeControlTruth::default(),
+        )
+    }
+
+    pub(crate) fn from_snapshot_with_truth(
+        snapshot: ConversationSnapshot,
+        draft_workspace_directory: String,
+        turn_control_truth: ConversationRuntimeControlTruth,
     ) -> Self {
         let base_warnings = snapshot.warnings;
         let runtime_notices = snapshot.runtime_notices;
@@ -169,6 +191,7 @@ impl ConversationViewModel {
             planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
+            turn_control_truth,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
             status_text: String::new(),
@@ -268,8 +291,27 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn update_approval_review(&mut self, review: ConversationApprovalReview) {
-        self.set_status_with_warnings(approval_review_status_text(&review));
+        self.set_status_with_warnings(approval_review_status_text(
+            &review,
+            self.turn_control_truth.approval,
+        ));
         self.approval_review = Some(review);
+    }
+
+    pub(crate) fn turn_control_truth(&self) -> ConversationRuntimeControlTruth {
+        self.turn_control_truth
+    }
+
+    pub(crate) fn turn_control_summary(&self) -> String {
+        runtime_control_summary_text(self.turn_control_truth)
+    }
+
+    pub(crate) fn interrupt_support_label(&self) -> &'static str {
+        match self.turn_control_truth.interrupt {
+            ConversationControlSupport::RuntimeNative => "runtime-native",
+            ConversationControlSupport::ManualHandoff => "manual handoff",
+            ConversationControlSupport::Unsupported => "unsupported",
+        }
     }
 
     pub(crate) fn replace_planning_runtime_snapshot(

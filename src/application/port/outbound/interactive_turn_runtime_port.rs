@@ -3,9 +3,10 @@ use std::sync::mpsc::Sender;
 use anyhow::Result;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 
 pub trait InteractiveTurnRuntimePort: Send + Sync {
+    fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth;
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
     fn run_new_thread_stream(
         &self,

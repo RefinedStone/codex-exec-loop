@@ -19,7 +19,9 @@ use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+use crate::domain::conversation::{
+    ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
+};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::session_summary::SessionSummary;
 
@@ -121,13 +123,13 @@ use conversation_lifecycle::{
     ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
     reduce_conversation_lifecycle,
 };
+#[cfg(test)]
+pub(super) use conversation_model::TurnActivityState;
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
     AutoFollowRuntimePhase, AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason,
     ConversationInputState, ConversationState, ConversationViewModel, StopKeywordRule,
 };
-#[cfg(test)]
-pub(super) use conversation_model::TurnActivityState;
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
@@ -223,6 +225,7 @@ struct NativeTuiApp {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
+    turn_control_truth: ConversationRuntimeControlTruth,
     parallel_mode_service: ParallelModeService,
     planning: PlanningServices,
     active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,

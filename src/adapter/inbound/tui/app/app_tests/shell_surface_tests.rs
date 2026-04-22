@@ -309,6 +309,7 @@ fn automation_overlay_view_surfaces_preview_status_and_keys() {
     assert!(preview.contains("mode: planning queue"));
     assert!(preview.contains("Rendered Preview"));
     assert!(status.contains("automation: on"));
+    assert!(status.contains("controls: approval: manual handoff  |  interrupt: unsupported"));
     assert!(keys.contains("Ctrl+a: automation on/off"));
 }
 

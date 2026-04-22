@@ -6,7 +6,7 @@ pub use super::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 pub use super::session_catalog_port::SessionCatalogPort;
 pub use super::startup_probe_port::{AppServerStartupContext, StartupProbePort};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::recent_sessions::SessionCatalog;
 
 // This remains as a Codex-shaped compatibility port while application services migrate to
@@ -14,6 +14,9 @@ use crate::domain::recent_sessions::SessionCatalog;
 pub trait CodexAppServerPort: Send + Sync {
     fn load_startup_context(&self) -> Result<AppServerStartupContext>;
     fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog>;
+    fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+        ConversationRuntimeControlTruth::codex_app_server()
+    }
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
     fn run_new_thread_stream(
         &self,
@@ -51,6 +54,10 @@ impl<T> InteractiveTurnRuntimePort for T
 where
     T: CodexAppServerPort + ?Sized,
 {
+    fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+        CodexAppServerPort::runtime_control_truth(self)
+    }
+
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
         CodexAppServerPort::load_conversation_snapshot(self, thread_id)
     }
@@ -84,7 +91,9 @@ mod tests {
         SessionCatalogPort, StartupProbePort,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::domain::conversation::ConversationSnapshot;
+    use crate::domain::conversation::{
+        ConversationControlSupport, ConversationRuntimeControlTruth, ConversationSnapshot,
+    };
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 
     #[derive(Default)]
@@ -208,6 +217,7 @@ mod tests {
         let (new_thread_sender, new_thread_receiver) = channel();
         let (turn_sender, turn_receiver) = channel();
 
+        let truth = runtime_port.runtime_control_truth();
         let snapshot = runtime_port
             .load_conversation_snapshot("thread-123")
             .expect("conversation snapshot should load");
@@ -218,6 +228,13 @@ mod tests {
             .run_turn_stream("thread-123", "follow-up", turn_sender)
             .expect("turn stream should run");
 
+        assert_eq!(
+            truth,
+            ConversationRuntimeControlTruth::new(
+                ConversationControlSupport::ManualHandoff,
+                ConversationControlSupport::Unsupported,
+            )
+        );
         assert_eq!(snapshot.thread_id, "thread-123");
         assert_eq!(
             *port

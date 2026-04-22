@@ -1,5 +1,5 @@
 use super::{ConversationState, ConversationViewModel};
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone)]
@@ -25,6 +25,7 @@ pub(super) enum ConversationLifecycleEffect {
 pub(super) struct ConversationLifecycleState {
     pub conversation_state: ConversationState,
     pub active_session: Option<SessionSummary>,
+    pub turn_control_truth: ConversationRuntimeControlTruth,
 }
 
 #[derive(Debug, Clone)]
@@ -40,10 +41,15 @@ pub(super) fn reduce_conversation_lifecycle(
     let mut effects = Vec::new();
 
     match event {
-        ConversationLifecycleEvent::NewDraftOpened { workspace_directory } => {
+        ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory,
+        } => {
             state.active_session = None;
             state.conversation_state =
-                ConversationState::ready(ConversationViewModel::new_draft(workspace_directory));
+                ConversationState::ready(ConversationViewModel::new_draft_with_truth(
+                    workspace_directory,
+                    state.turn_control_truth,
+                ));
         }
         ConversationLifecycleEvent::SessionChosen { session } => {
             let thread_id = session.id.clone();
@@ -56,10 +62,13 @@ pub(super) fn reduce_conversation_lifecycle(
             draft_workspace_directory,
         } => {
             state.conversation_state = match result {
-                Ok(snapshot) => ConversationState::ready(ConversationViewModel::from_snapshot(
-                    snapshot,
-                    draft_workspace_directory,
-                )),
+                Ok(snapshot) => {
+                    ConversationState::ready(ConversationViewModel::from_snapshot_with_truth(
+                        snapshot,
+                        draft_workspace_directory,
+                        state.turn_control_truth,
+                    ))
+                }
                 Err(message) => ConversationState::Failed(message),
             };
         }
@@ -123,10 +132,14 @@ mod tests {
 
     fn sample_state() -> ConversationLifecycleState {
         ConversationLifecycleState {
-            conversation_state: ConversationState::ready(ConversationViewModel::new_draft(
-                "/tmp/root".to_string(),
-            )),
+            conversation_state: ConversationState::ready(
+                ConversationViewModel::new_draft_with_truth(
+                    "/tmp/root".to_string(),
+                    ConversationRuntimeControlTruth::default(),
+                ),
+            ),
             active_session: None,
+            turn_control_truth: ConversationRuntimeControlTruth::default(),
         }
     }
 
