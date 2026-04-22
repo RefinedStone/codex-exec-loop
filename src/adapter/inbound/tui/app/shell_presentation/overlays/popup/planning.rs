@@ -61,8 +61,11 @@ pub(crate) fn build_planning_draft_editor_overlay_view(
     let selected_buffer = app.planning_draft_editor_ui_state.selected_buffer()?;
     let dirty_labels = app.planning_draft_editor_ui_state.dirty_file_labels();
     let validation_report = app.planning_draft_editor_ui_state.validation_report()?;
-    let runtime_state =
-        interpret_planning_draft_editor_runtime_state(app, &dirty_labels, validation_report);
+    let runtime_state = interpret_planning_draft_editor_runtime_state(
+        &app.planning_draft_editor_ui_state,
+        &dirty_labels,
+        validation_report,
+    );
     let projection = build_planning_draft_editor_projection(
         buffers,
         selected_index,

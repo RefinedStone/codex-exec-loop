@@ -1,7 +1,7 @@
+use crate::adapter::inbound::tui::app::planning_draft_editor_ui::{
+    PlanningDraftEditorCloseRisk, PlanningDraftEditorUiState,
+};
 use crate::domain::planning::PlanningValidationReport;
-
-use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
-use super::super::super::super::NativeTuiApp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PlanningDraftEditorRuntimeState {
@@ -11,11 +11,11 @@ pub(super) struct PlanningDraftEditorRuntimeState {
 }
 
 pub(super) fn interpret_planning_draft_editor_runtime_state(
-    app: &NativeTuiApp,
+    ui_state: &PlanningDraftEditorUiState,
     dirty_labels: &[String],
     validation_report: &PlanningValidationReport,
 ) -> PlanningDraftEditorRuntimeState {
-    let (close_risk, confirmation_pending) = resolve_planning_draft_editor_close_state(app);
+    let (close_risk, confirmation_pending) = resolve_planning_draft_editor_close_state(ui_state);
 
     PlanningDraftEditorRuntimeState {
         next_action: planning_draft_editor_next_action(dirty_labels, validation_report),
@@ -25,11 +25,11 @@ pub(super) fn interpret_planning_draft_editor_runtime_state(
 }
 
 fn resolve_planning_draft_editor_close_state(
-    app: &NativeTuiApp,
+    ui_state: &PlanningDraftEditorUiState,
 ) -> (Option<PlanningDraftEditorCloseRisk>, bool) {
-    let pending_close_risk = app.planning_draft_editor_ui_state.pending_close_risk();
+    let pending_close_risk = ui_state.pending_close_risk();
     (
-        pending_close_risk.or_else(|| app.planning_draft_editor_ui_state.close_risk()),
+        pending_close_risk.or_else(|| ui_state.close_risk()),
         pending_close_risk.is_some(),
     )
 }
