@@ -27,6 +27,7 @@ use crate::application::port::outbound::codex_app_server_port::{
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
 const APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
@@ -296,6 +297,7 @@ impl CodexAppServerAdapter {
     {
         runtime.ensure_connected(self)?;
         let initialize_detail = runtime.initialize_detail()?.to_string();
+        let attachment_profile = runtime.attachment_profile()?;
         let (value, connection_warnings) = {
             let connection = runtime.connection_mut()?;
             let value = operation(connection, &initialize_detail)?;
@@ -305,7 +307,11 @@ impl CodexAppServerAdapter {
         let mut warnings = runtime.take_notices();
         warnings.extend(connection_warnings);
         sort_and_dedup_warnings(&mut warnings);
-        Ok(SharedRuntimeOutput { value, warnings })
+        Ok(SharedRuntimeOutput {
+            value,
+            warnings,
+            attachment_profile,
+        })
     }
 
     fn with_isolated_runtime<T, F>(
@@ -319,13 +325,18 @@ impl CodexAppServerAdapter {
         let mut connection = self.open_connection()?;
         let initialize_response = connection.initialize()?;
         let initialize_detail = initialize_detail(&initialize_response);
+        let attachment_profile = TerminalBridgeAttachmentProfile::codex_app_server();
         let value = operation(&mut connection, &initialize_detail)?;
         let mut warnings = connection.take_warnings();
         if let Some(notice) = notice {
             warnings.push(notice);
         }
         sort_and_dedup_warnings(&mut warnings);
-        Ok(SharedRuntimeOutput { value, warnings })
+        Ok(SharedRuntimeOutput {
+            value,
+            warnings,
+            attachment_profile,
+        })
     }
 
     fn with_isolated_streaming_runtime<F>(&self, mut operation: F) -> Result<()>
@@ -416,6 +427,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         let (initialize_detail, account_response) = output.value;
 
         Ok(AppServerStartupContext {
+            attachment_profile: output.attachment_profile,
             initialize_detail,
             account_detail: account_response.to_summary_text(),
             account_ok: account_response.is_authenticated(),

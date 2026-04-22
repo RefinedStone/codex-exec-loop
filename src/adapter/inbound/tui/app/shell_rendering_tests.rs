@@ -36,6 +36,7 @@ use crate::domain::planning::PlanningValidationReport;
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 #[test]
 fn centered_rect_clamps_percentages_above_hundred() {
@@ -138,6 +139,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
     assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("attachment: provider-launched  |  recovery: provider thread id"));
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("prompt: new thread ready"));
@@ -233,7 +235,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 7));
+        .assert_cursor_position(Position::new(2, 8));
 }
 
 #[test]
@@ -456,6 +458,7 @@ fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
         workspace_ok: true,
         workspace_path: workspace_dir.clone(),
         workspace_detail: "workspace found".to_string(),
+        attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
         initialize_ok: true,
         initialize_detail: "app-server initialize ok".to_string(),
         account_ok: true,
@@ -658,6 +661,7 @@ struct FakeCodexAppServerPort;
 impl CodexAppServerPort for FakeCodexAppServerPort {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         Ok(AppServerStartupContext {
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
             initialize_detail: "ok".to_string(),
             account_detail: "ok".to_string(),
             account_ok: true,
@@ -724,6 +728,7 @@ fn sample_startup_diagnostics() -> StartupDiagnostics {
         workspace_ok: true,
         workspace_path: "/tmp/root".to_string(),
         workspace_detail: "workspace found".to_string(),
+        attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
         initialize_ok: true,
         initialize_detail: "app-server initialize ok".to_string(),
         account_ok: true,
@@ -731,6 +736,31 @@ fn sample_startup_diagnostics() -> StartupDiagnostics {
         warnings: Vec::new(),
         schema_snapshot: "snapshot.json".to_string(),
     }
+}
+
+#[test]
+fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    let view =
+        crate::adapter::inbound::tui::app::shell_presentation::build_startup_overlay_view(&app);
+    let summary = view
+        .summary_lines
+        .iter()
+        .map(|line: &Line<'static>| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let checks = view
+        .check_lines
+        .iter()
+        .map(|line: &Line<'static>| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(summary.contains("attachment: provider-launched  |  recovery: provider thread id"));
+    assert!(checks.contains("[ok] attachment mode: provider-launched"));
+    assert!(checks.contains("[ok] recovery anchor: provider thread id"));
 }
 
 fn sample_session(id: &str) -> SessionSummary {

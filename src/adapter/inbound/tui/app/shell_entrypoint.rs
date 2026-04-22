@@ -70,6 +70,7 @@ mod tests {
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation::ConversationSnapshot;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[derive(Default)]
     struct FakeCodexAppServerPort;
@@ -77,6 +78,7 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
                 initialize_detail: "ok".to_string(),
                 account_detail: "ok".to_string(),
                 account_ok: true,
