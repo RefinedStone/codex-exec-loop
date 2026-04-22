@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalBridgeAttachmentMode {
     ProviderLaunch,
+    ProviderReattach,
     LocalAttach,
     ManagedWrapper,
     RemoteAttach,
@@ -11,6 +12,7 @@ impl TerminalBridgeAttachmentMode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::ProviderLaunch => "provider-launched",
+            Self::ProviderReattach => "provider reattach",
             Self::LocalAttach => "local attach",
             Self::ManagedWrapper => "managed wrapper",
             Self::RemoteAttach => "remote attach",
@@ -55,11 +57,22 @@ impl TerminalBridgeAttachmentProfile {
         }
     }
 
-    pub const fn codex_app_server() -> Self {
+    pub const fn codex_app_server_launch() -> Self {
         Self::new(
             TerminalBridgeAttachmentMode::ProviderLaunch,
             TerminalBridgeRecoveryAnchor::ProviderThreadId,
         )
+    }
+
+    pub const fn codex_app_server_reattach() -> Self {
+        Self::new(
+            TerminalBridgeAttachmentMode::ProviderReattach,
+            TerminalBridgeRecoveryAnchor::ProviderThreadId,
+        )
+    }
+
+    pub const fn codex_app_server() -> Self {
+        Self::codex_app_server_launch()
     }
 }
 
@@ -76,11 +89,22 @@ mod tests {
     };
 
     #[test]
-    fn codex_profile_reports_provider_launch_and_thread_id_recovery() {
+    fn codex_launch_profile_reports_provider_launch_and_thread_id_recovery() {
         assert_eq!(
-            TerminalBridgeAttachmentProfile::codex_app_server(),
+            TerminalBridgeAttachmentProfile::codex_app_server_launch(),
             TerminalBridgeAttachmentProfile::new(
                 TerminalBridgeAttachmentMode::ProviderLaunch,
+                TerminalBridgeRecoveryAnchor::ProviderThreadId,
+            )
+        );
+    }
+
+    #[test]
+    fn codex_reattach_profile_reports_provider_reattach_and_thread_id_recovery() {
+        assert_eq!(
+            TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
+            TerminalBridgeAttachmentProfile::new(
+                TerminalBridgeAttachmentMode::ProviderReattach,
                 TerminalBridgeRecoveryAnchor::ProviderThreadId,
             )
         );

@@ -1,7 +1,11 @@
 use crate::domain::conversation::{ConversationApprovalReview, ConversationToolActivity};
+use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversationStreamEvent {
+    AttachmentObserved {
+        profile: TerminalBridgeAttachmentProfile,
+    },
     ThreadPrepared {
         thread_id: String,
         title: String,
