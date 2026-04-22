@@ -2,8 +2,8 @@ use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningSer
 
 use super::super::super::super::{ConversationState, NativeTuiApp};
 use super::super::PlanningInitOverlayView;
+use super::existing_workspace_inputs::build_existing_workspace_copy;
 use super::init_copy::build_existing_workspace_overlay_view;
-use super::inputs::build_existing_workspace_copy;
 
 pub(super) fn build_existing_workspace_overlay_view_for_app(
     app: &NativeTuiApp,

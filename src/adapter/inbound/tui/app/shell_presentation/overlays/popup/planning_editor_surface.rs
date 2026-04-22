@@ -4,7 +4,7 @@ use super::editor_copy::{
     build_planning_draft_editor_header_lines, build_planning_draft_editor_key_lines,
     build_planning_draft_editor_status_lines,
 };
-use super::inputs::build_planning_draft_editor_status_copy;
+use super::editor_inputs::build_planning_draft_editor_status_copy;
 use super::projection::build_planning_draft_editor_projection;
 use super::runtime::interpret_planning_draft_editor_runtime_state;
 use super::session::collect_planning_draft_editor_session_view;

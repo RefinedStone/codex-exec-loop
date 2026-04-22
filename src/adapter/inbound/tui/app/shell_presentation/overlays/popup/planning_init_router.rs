@@ -5,7 +5,7 @@ use super::init_copy::{
     build_detail_selection_overlay_view, build_manual_editor_overlay_view,
     build_mode_selection_overlay_view, build_simple_review_overlay_view,
 };
-use super::inputs::build_simple_review_copy;
+use super::simple_review_inputs::build_simple_review_copy;
 
 pub(super) fn build_planning_init_overlay_view_for_app(
     app: &NativeTuiApp,

@@ -2,16 +2,18 @@
 mod copy;
 #[path = "planning_editor_copy.rs"]
 mod editor_copy;
+#[path = "planning_editor_inputs.rs"]
+mod editor_inputs;
 #[path = "planning_editor_surface.rs"]
 mod editor_surface;
 #[path = "planning_existing_workspace.rs"]
 mod existing_workspace;
+#[path = "planning_existing_workspace_inputs.rs"]
+mod existing_workspace_inputs;
 #[path = "planning_init_copy.rs"]
 mod init_copy;
 #[path = "planning_init_router.rs"]
 mod init_router;
-#[path = "planning_inputs.rs"]
-mod inputs;
 #[path = "planning_projection.rs"]
 mod projection;
 #[path = "planning_projection_lines.rs"]
@@ -20,6 +22,8 @@ mod projection_lines;
 mod runtime;
 #[path = "planning_session.rs"]
 mod session;
+#[path = "planning_simple_review_inputs.rs"]
+mod simple_review_inputs;
 
 use super::super::super::NativeTuiApp;
 use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
