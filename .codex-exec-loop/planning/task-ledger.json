@@ -686,7 +686,7 @@
       "status": "ready",
       "base_priority": 90,
       "dynamic_priority_delta": 2,
-      "priority_reason": "The latest operator request and context review both point to implementation starting now, and the narrowest useful first PR is the tmux attach and probe path that makes capability truth visible before runtime relay work begins.",
+      "priority_reason": "The queue is no longer truly idle because this tmux attach and probe slice is the highest-priority executable item. The latest planning review only derived the head and did not start implementation, so it should stay `ready` as the single immediate execution target while the remaining tmux follow-ups stay queued behind it.",
       "depends_on": [
         "terminal-bridge-local-spike-readiness-gate"
       ],
@@ -694,7 +694,7 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T03:20:00Z"
+      "updated_at": "2026-04-23T04:10:00Z"
     },
     {
       "id": "terminal-bridge-tmux-runtime-relay-and-completion",
@@ -702,18 +702,20 @@
       "direction_relation_note": "The gate verdict and latest main-session answer both call out live relay, transcript recovery, interrupt, and completion detection as the next bounded follow-up once the tmux entrypoint exists.",
       "title": "Add tmux live relay, recovery capture, and turn completion",
       "description": "Extend the tmux bridge after the attach entrypoint lands by implementing prompt submission via literal paste, incremental output relay via `pipe-pane`, transcript recovery via `capture-pane`, interrupt requests via `C-c`, and transcript or terminal-derived completion heuristics without inventing provider turn events or widening into wrapper, SSH, or proxy paths.",
-      "status": "proposed",
+      "status": "blocked",
       "base_priority": 88,
       "dynamic_priority_delta": 1,
-      "priority_reason": "This is the clearest next slice named in the latest answer, but it should stay behind the probe and attachment entrypoint so the queue keeps one concrete PR head.",
+      "priority_reason": "The latest execution-focused summary made this a concrete queued follow-up, not just a candidate. It remains blocked only because the active tmux entrypoint slice must land first so relay and completion work can build on a real attachment path.",
       "depends_on": [
         "terminal-bridge-primary-implementation-slice"
       ],
-      "blocked_by": [],
+      "blocked_by": [
+        "terminal-bridge-primary-implementation-slice"
+      ],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T03:20:00Z"
+      "updated_at": "2026-04-23T03:45:00Z"
     },
     {
       "id": "terminal-bridge-tmux-session-catalog-reattach-surface",
@@ -721,18 +723,20 @@
       "direction_relation_note": "The capability-boundary docs keep `SessionCatalog` optional, so any tmux discovery or reattach UX should follow the explicit handle path instead of leading it.",
       "title": "Add optional tmux session catalog and reattach surface",
       "description": "Once the explicit tmux pane or session-handle attach path is stable, add an optional tmux discovery surface that exposes handle-based reattach without making catalog availability mandatory. Keep attach-only flows valid, and do not turn tmux discovery into a fake provider session model.",
-      "status": "proposed",
+      "status": "blocked",
       "base_priority": 80,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The latest answer still treats catalog support as optional, so this should remain a secondary follow-up behind the first attach path and runtime relay slice.",
+      "priority_reason": "This is now explicit queued follow-up work because the latest summary named the optional session-catalog surface as a concrete post-entrypoint slice. It stays blocked behind the active tmux entrypoint so attach-only and explicit-handle flows can stabilize first.",
       "depends_on": [
         "terminal-bridge-primary-implementation-slice"
       ],
-      "blocked_by": [],
+      "blocked_by": [
+        "terminal-bridge-primary-implementation-slice"
+      ],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T03:20:00Z"
+      "updated_at": "2026-04-23T03:45:00Z"
     }
   ]
 }
