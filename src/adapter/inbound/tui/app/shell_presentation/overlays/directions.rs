@@ -68,7 +68,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                 .selected_actionable_detail_doc_direction();
             let projection = build_detail_doc_selection_projection(
                 actionable_directions.as_slice(),
-                selected_direction.map(|direction| direction.id.as_str()),
+                selected_direction,
             );
 
             build_detail_doc_selection_overlay_view(

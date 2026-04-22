@@ -9,7 +9,7 @@ pub(super) struct DetailDocSelectionProjection {
 
 pub(super) fn build_detail_doc_selection_projection(
     actionable_directions: &[&DirectionsMaintenanceDirectionSummary],
-    selected_direction_id: Option<&str>,
+    selected_direction: Option<&DirectionsMaintenanceDirectionSummary>,
 ) -> DetailDocSelectionProjection {
     let option_lines = if actionable_directions.is_empty() {
         vec![Line::from(
@@ -20,7 +20,7 @@ pub(super) fn build_detail_doc_selection_projection(
             .iter()
             .map(|direction| {
                 let selected =
-                    selected_direction_id.is_some_and(|selected_id| selected_id == direction.id);
+                    selected_direction.is_some_and(|candidate| candidate.id == direction.id);
                 let style = if selected {
                     Style::default().fg(Color::Black).bg(Color::Cyan)
                 } else {
@@ -43,12 +43,7 @@ pub(super) fn build_detail_doc_selection_projection(
             })
             .collect()
     };
-    let selected_direction_title = actionable_directions
-        .iter()
-        .find(|direction| {
-            selected_direction_id.is_some_and(|selected_id| selected_id == direction.id)
-        })
-        .map(|direction| direction.title.clone());
+    let selected_direction_title = selected_direction.map(|direction| direction.title.clone());
 
     DetailDocSelectionProjection {
         option_lines,
