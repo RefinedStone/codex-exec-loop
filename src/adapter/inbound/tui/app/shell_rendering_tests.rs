@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui::Terminal;
-use ratatui::TerminalOptions;
-use ratatui::Viewport;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 use ratatui::style::Color;
+use ratatui::Terminal;
+use ratatui::TerminalOptions;
+use ratatui::Viewport;
 
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
@@ -57,11 +57,9 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
     .with_debug_detail("planner temp session: refresh / refresh ok");
 
     let without_debug = format_conversation_lines(std::slice::from_ref(&message));
-    assert!(
-        !without_debug
-            .iter()
-            .any(|line| line.to_string().contains("planner temp session"))
-    );
+    assert!(!without_debug
+        .iter()
+        .any(|line| line.to_string().contains("planner temp session")));
 
     let with_debug = format_conversation_lines_with_debug(&[message], true);
     let detail_line = with_debug
@@ -139,7 +137,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
     assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
-    assert!(rendered.contains("attachment: provider-launched  |  recovery: provider thread id"));
+    assert!(rendered.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("prompt: new thread ready"));
@@ -758,9 +756,9 @@ fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(summary.contains("attachment: provider-launched  |  recovery: provider thread id"));
+    assert!(summary.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
     assert!(checks.contains("[ok] attachment mode: provider-launched"));
-    assert!(checks.contains("[ok] recovery anchor: provider thread id"));
+    assert!(checks.contains("[ok] recovery anchor: provider-thread-id"));
 }
 
 fn sample_session(id: &str) -> SessionSummary {

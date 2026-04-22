@@ -1,7 +1,7 @@
-use super::PromptOrigin;
 use super::conversation_model::{
     AutoFollowupSkipReason, ConversationViewModel, PlanningRepairState,
 };
+use super::PromptOrigin;
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
@@ -262,15 +262,16 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
     use crate::adapter::inbound::tui::app::{
-        AutoFollowRuntimePhase, AutoFollowState, AutoFollowupSubmitContext, ConversationInputState,
-        INFINITE_AUTO_FOLLOW_MAX_TURNS, TurnActivityState, format_conversation_lines,
+        format_conversation_lines, AutoFollowRuntimePhase, AutoFollowState,
+        AutoFollowupSubmitContext, ConversationInputState, TurnActivityState,
+        INFINITE_AUTO_FOLLOW_MAX_TURNS,
     };
     use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
-    use crate::application::service::planning::PlanningRepairRequest;
-    use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::application::service::planning::shared::contract::{
         DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
+    use crate::application::service::planning::PlanningRepairRequest;
+    use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus,
         ConversationRuntimeControlTruth, ConversationToolActivity, ConversationToolActivityKind,
@@ -712,7 +713,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.runtime_notices.last().map(String::as_str),
-            Some("bridge attachment: provider reattach / recovery: provider thread id")
+            Some("bridge attachment: provider-reattach / recovery: provider-thread-id")
         );
     }
 
@@ -913,14 +914,12 @@ mod tests {
         );
 
         assert!(reduced.state.buffered_tool_messages.is_empty());
-        assert!(
-            reduced
-                .state
-                .messages
-                .iter()
-                .any(|message| message.kind == ConversationMessageKind::Tool
-                    && message.text == "command: cargo test [completed]")
-        );
+        assert!(reduced
+            .state
+            .messages
+            .iter()
+            .any(|message| message.kind == ConversationMessageKind::Tool
+                && message.text == "command: cargo test [completed]"));
         assert_eq!(
             reduced.state.cached_conversation_lines,
             format_conversation_lines(&reduced.state.messages)
@@ -1128,12 +1127,10 @@ mod tests {
             reduced.state.status_text,
             "turn completed / queued auto follow-up with mode planning queue"
         );
-        assert!(
-            reduced
-                .state
-                .runtime_notices
-                .contains(&"planning reconciliation completed".to_string())
-        );
+        assert!(reduced
+            .state
+            .runtime_notices
+            .contains(&"planning reconciliation completed".to_string()));
         assert_eq!(
             reduced
                 .state

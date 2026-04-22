@@ -12,10 +12,10 @@ impl TerminalBridgeAttachmentMode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::ProviderLaunch => "provider-launched",
-            Self::ProviderReattach => "provider reattach",
-            Self::LocalAttach => "local attach",
-            Self::ManagedWrapper => "managed wrapper",
-            Self::RemoteAttach => "remote attach",
+            Self::ProviderReattach => "provider-reattach",
+            Self::LocalAttach => "local-attach",
+            Self::ManagedWrapper => "managed-wrapper",
+            Self::RemoteAttach => "remote-attach",
             Self::ProxyMediated => "proxy-mediated",
         }
     }
@@ -33,9 +33,9 @@ impl TerminalBridgeRecoveryAnchor {
     pub const fn label(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::ProviderThreadId => "provider thread id",
-            Self::SessionHandle => "session handle",
-            Self::TerminalSession => "terminal session",
+            Self::ProviderThreadId => "provider-thread-id",
+            Self::SessionHandle => "session-handle",
+            Self::TerminalSession => "terminal-session",
         }
     }
 }
@@ -107,6 +107,46 @@ mod tests {
                 TerminalBridgeAttachmentMode::ProviderReattach,
                 TerminalBridgeRecoveryAnchor::ProviderThreadId,
             )
+        );
+    }
+
+    #[test]
+    fn attachment_labels_stay_kebab_case() {
+        assert_eq!(
+            TerminalBridgeAttachmentMode::ProviderLaunch.label(),
+            "provider-launched"
+        );
+        assert_eq!(
+            TerminalBridgeAttachmentMode::ProviderReattach.label(),
+            "provider-reattach"
+        );
+        assert_eq!(
+            TerminalBridgeAttachmentMode::LocalAttach.label(),
+            "local-attach"
+        );
+        assert_eq!(
+            TerminalBridgeAttachmentMode::ManagedWrapper.label(),
+            "managed-wrapper"
+        );
+        assert_eq!(
+            TerminalBridgeAttachmentMode::RemoteAttach.label(),
+            "remote-attach"
+        );
+        assert_eq!(
+            TerminalBridgeAttachmentMode::ProxyMediated.label(),
+            "proxy-mediated"
+        );
+        assert_eq!(
+            TerminalBridgeRecoveryAnchor::ProviderThreadId.label(),
+            "provider-thread-id"
+        );
+        assert_eq!(
+            TerminalBridgeRecoveryAnchor::SessionHandle.label(),
+            "session-handle"
+        );
+        assert_eq!(
+            TerminalBridgeRecoveryAnchor::TerminalSession.label(),
+            "terminal-session"
         );
     }
 }

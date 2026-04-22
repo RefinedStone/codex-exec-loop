@@ -243,7 +243,7 @@ mod tests {
         );
         assert_eq!(
             attachment_runtime_notice(TerminalBridgeAttachmentProfile::codex_app_server_reattach()),
-            "bridge attachment: provider reattach / recovery: provider thread id"
+            "bridge attachment: provider-reattach / recovery: provider-thread-id"
         );
     }
 }
