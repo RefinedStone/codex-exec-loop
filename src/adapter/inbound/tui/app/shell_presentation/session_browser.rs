@@ -201,8 +201,8 @@ fn build_session_browser_summary_lines(
 ) -> Vec<Line<'static>> {
     let active_filter_option = browser_view.projection.active_project_filter_option();
     let filter_label = active_filter_option
-        .map(|option| option.label.clone())
-        .unwrap_or_else(|| "all projects".to_string());
+        .map(|option| option.label.as_str())
+        .unwrap_or("all projects");
     let filter_session_count = active_filter_option
         .map(|option| option.session_count)
         .unwrap_or(browser_view.projection.filtered_session_count);
@@ -260,11 +260,11 @@ pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
     ]
 }
 
-fn format_session_query_label(search_query: &str) -> String {
+fn format_session_query_label(search_query: &str) -> &str {
     if search_query.is_empty() {
-        "(all text)".to_string()
+        "(all text)"
     } else {
-        search_query.to_string()
+        search_query
     }
 }
 
@@ -350,10 +350,7 @@ fn format_session_empty_message(
             "no sessions match the current browser state".to_string()
         }
         SessionProjectFilter::AllProjects => {
-            format!(
-                "no sessions match query {}",
-                quoted_session_query(search_query)
-            )
+            format!("no sessions match query \"{search_query}\"")
         }
         SessionProjectFilter::RecentProject { .. }
             if is_current_workspace_filter && search_query.is_empty() =>
@@ -361,19 +358,16 @@ fn format_session_empty_message(
             "no current-workspace sessions match the current browser state".to_string()
         }
         SessionProjectFilter::RecentProject { .. } if is_current_workspace_filter => {
-            format!(
-                "no current-workspace sessions match query {}",
-                quoted_session_query(search_query)
-            )
+            format!("no current-workspace sessions match query \"{search_query}\"")
         }
         SessionProjectFilter::RecentProject { .. } if search_query.is_empty() => format!(
             "no sessions in {} match the current browser state",
             active_filter_label.unwrap_or("the selected project")
         ),
         SessionProjectFilter::RecentProject { .. } => format!(
-            "no sessions in {} match query {}",
+            "no sessions in {} match query \"{}\"",
             active_filter_label.unwrap_or("the selected project"),
-            quoted_session_query(search_query),
+            search_query,
         ),
     }
 }
@@ -394,10 +388,7 @@ fn format_session_empty_detail_line(
             "no session detail is available for the current browser state".to_string()
         }
         SessionProjectFilter::AllProjects => {
-            format!(
-                "no session detail is available for query {}",
-                quoted_session_query(search_query)
-            )
+            format!("no session detail is available for query \"{search_query}\"")
         }
         SessionProjectFilter::RecentProject { .. }
             if is_current_workspace_filter && search_query.is_empty() =>
@@ -405,25 +396,18 @@ fn format_session_empty_detail_line(
             "no session detail is available for the current workspace filter".to_string()
         }
         SessionProjectFilter::RecentProject { .. } if is_current_workspace_filter => {
-            format!(
-                "no current-workspace session detail is available for query {}",
-                quoted_session_query(search_query)
-            )
+            format!("no current-workspace session detail is available for query \"{search_query}\"")
         }
         SessionProjectFilter::RecentProject { .. } if search_query.is_empty() => format!(
             "no session detail is available for {}",
             active_filter_label.unwrap_or("the selected project filter")
         ),
         SessionProjectFilter::RecentProject { .. } => format!(
-            "no session detail is available for {} and query {}",
+            "no session detail is available for {} and query \"{}\"",
             active_filter_label.unwrap_or("the selected project filter"),
-            quoted_session_query(search_query),
+            search_query,
         ),
     }
-}
-
-fn quoted_session_query(search_query: &str) -> String {
-    format!("\"{search_query}\"")
 }
 
 pub(super) fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
