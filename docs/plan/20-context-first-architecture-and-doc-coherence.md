@@ -77,8 +77,10 @@ The audit should cover:
 
 The target is not a giant `Provider` abstraction. The target is a smaller set of capability notes
 that future implementations can satisfy selectively.
+The current audit output lives in
+[25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md).
 The terminal-agent research set in `docs/plan/21-*`, `docs/plan/22-*`, `docs/plan/23-*`, and
-`docs/plan/24-*` should consume this audit rather than duplicate it.
+`docs/plan/24-*` should consume that audit rather than duplicate it.
 
 ### 4. Keep Planning Artifacts Clean
 
@@ -134,3 +136,4 @@ That work sets up terminal-agent exploration without overpromising multi-provide
 - [16-planning-and-automation-evolution.md](16-planning-and-automation-evolution.md)
 - [14-product-elevation-blueprint.md](14-product-elevation-blueprint.md)
 - [21-terminal-agent-bridge-research-and-capability-boundary.md](21-terminal-agent-bridge-research-and-capability-boundary.md)
+- [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)

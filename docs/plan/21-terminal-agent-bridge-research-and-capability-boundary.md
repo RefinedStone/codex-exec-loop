@@ -14,6 +14,7 @@ terminal-first nature.
 The output of this cycle should be:
 
 - one hub doc that explains the decision and reading order
+- one current-state audit that maps Codex-only assumptions into capability targets
 - one transport and attachment matrix
 - one capability-boundary note
 - one experiment matrix
@@ -53,11 +54,13 @@ and avoid inventing network or proxy infrastructure too early.
 Read the bridge work in this order:
 
 1. This hub for the current decision and reading order.
-2. [22-terminal-agent-transport-and-attachment-matrix.md](22-terminal-agent-transport-and-attachment-matrix.md)
+2. [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
+   for the current Codex-shaped seams that need capability-first names.
+3. [22-terminal-agent-transport-and-attachment-matrix.md](22-terminal-agent-transport-and-attachment-matrix.md)
    for tmux, PTY, wrapper, SSH, and proxy or vibeProxy-style transport comparison.
-3. [23-terminal-agent-capability-boundary-and-session-contract.md](23-terminal-agent-capability-boundary-and-session-contract.md)
+4. [23-terminal-agent-capability-boundary-and-session-contract.md](23-terminal-agent-capability-boundary-and-session-contract.md)
    for capability seams and session expectations.
-4. [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
+5. [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
    for actual experiment design and evidence targets.
 
 ## Short-Term Research Sequence
@@ -70,8 +73,8 @@ Read the bridge work in this order:
 
 ## Current Report Status
 
-- The hub, transport matrix, capability note, and experiment matrix already exist as `21` through
-  `24`.
+- The hub, current-state audit, transport matrix, capability note, and experiment matrix now exist
+  as `21` through `25`.
 - The primary path, fallback path, and deferred paths are now explicit instead of implied.
 - The remaining gap is evidence and boundary validation, not missing research coverage.
 
@@ -88,6 +91,8 @@ Read the bridge work in this order:
 ## Acceptance Signals
 
 - `21` stays short and clearly names primary, fallback, and deferred paths
+- `25` maps current `CodexAppServerPort`, startup checks, session catalog assumptions,
+  approval or interrupt handling, and shell copy into capability targets
 - `22` compares tmux, PTY, wrapper, SSH or tunnel, and proxy or vibeProxy-style mediation with
   one rubric
 - `23` explains `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and
@@ -107,5 +112,6 @@ Read the bridge work in this order:
 - [22-terminal-agent-transport-and-attachment-matrix.md](22-terminal-agent-transport-and-attachment-matrix.md)
 - [23-terminal-agent-capability-boundary-and-session-contract.md](23-terminal-agent-capability-boundary-and-session-contract.md)
 - [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
+- [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
 - [20-context-first-architecture-and-doc-coherence.md](20-context-first-architecture-and-doc-coherence.md)
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)
