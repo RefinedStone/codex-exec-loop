@@ -125,7 +125,7 @@ impl NativeTuiApp {
                 self.handle_parallel_shell_command(command_input.argument())
             }
             InlineShellCommand::Sessions => self.show_session_overlay(),
-            InlineShellCommand::Queue => self.show_queue_overlay(),
+            InlineShellCommand::Queue => self.handle_queue_shell_command(command_input.argument()),
             InlineShellCommand::Directions => {
                 self.handle_directions_shell_command(command_input.argument())
             }

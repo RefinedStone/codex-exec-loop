@@ -155,7 +155,7 @@ impl PlanningReconciliationService {
     ) -> Result<PlanningExecutionSnapshot> {
         let workspace_record = self
             .planning_workspace_port
-            .load_planning_workspace_candidate_files(workspace_dir)?;
+            .load_planning_workspace_files(workspace_dir)?;
 
         Ok(PlanningExecutionSnapshot {
             directions_toml: workspace_record.directions_toml,
@@ -179,14 +179,14 @@ impl PlanningReconciliationService {
         }
 
         let mut result = PlanningReconciliationResult::default();
-        let workspace_record = self
+        let candidate_workspace_record = self
             .planning_workspace_port
-            .load_planning_workspace_files(workspace_dir)?;
+            .load_planning_workspace_candidate_files(workspace_dir)?;
 
         let reconciled_workspace = self.restore_protected_workspace_files(
             workspace_dir,
             turn_id,
-            &workspace_record,
+            &candidate_workspace_record,
             execution_snapshot,
             change_set,
             &mut result,
@@ -196,14 +196,14 @@ impl PlanningReconciliationService {
             self.reconcile_task_ledger(
                 workspace_dir,
                 turn_id,
-                &workspace_record,
+                &candidate_workspace_record,
                 execution_snapshot,
                 &reconciled_workspace,
                 &mut result,
             )?;
         } else if change_set.queue_snapshot_changed {
             self.restore_queue_snapshot(
-                workspace_record.queue_snapshot_json.as_deref(),
+                candidate_workspace_record.queue_snapshot_json.as_deref(),
                 execution_snapshot,
                 &mut result,
             )?;
@@ -274,10 +274,26 @@ impl PlanningReconciliationService {
         result: &mut PlanningReconciliationResult,
     ) -> Result<String> {
         if !request.changed {
-            return Ok(request.current_body.unwrap_or_default().to_string());
+            return Ok(request
+                .current_body
+                .or(request.execution_snapshot_body)
+                .unwrap_or_default()
+                .to_string());
         }
 
         if request.current_body == request.execution_snapshot_body {
+            return Ok(request
+                .current_body
+                .or(request.execution_snapshot_body)
+                .unwrap_or_default()
+                .to_string());
+        }
+
+        if request.current_body.is_none() && request.execution_snapshot_body.is_none() {
+            return Ok(String::new());
+        }
+
+        if request.current_body.is_none() {
             return Ok(request
                 .execution_snapshot_body
                 .unwrap_or_default()
@@ -817,6 +833,8 @@ impl PlanningRepairRetryReason {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
@@ -826,6 +844,9 @@ mod tests {
         PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
@@ -905,6 +926,73 @@ mod tests {
 
     use std::sync::Arc;
 
+    struct TempGitRepo {
+        root: PathBuf,
+        worktree_root: PathBuf,
+    }
+
+    impl TempGitRepo {
+        fn new(label: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("{label}-{unique}"));
+            let repo_root = root.join("repo");
+            let worktree_root = root.join("worktrees").join("linked");
+            fs::create_dir_all(&repo_root).expect("temp repo root should exist");
+            run_git(&repo_root, &["init", "-q"]);
+            run_git(&repo_root, &["config", "user.name", "RefinedStone"]);
+            run_git(
+                &repo_root,
+                &["config", "user.email", "chem.en.9273@gmail.com"],
+            );
+            fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
+            run_git(&repo_root, &["add", "README.md"]);
+            run_git(&repo_root, &["commit", "-qm", "init"]);
+            fs::create_dir_all(
+                worktree_root
+                    .parent()
+                    .expect("worktree parent should exist"),
+            )
+            .expect("worktree parent should exist");
+            run_git(
+                &repo_root,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    "feature/worktree",
+                    worktree_root.to_str().expect("valid worktree path"),
+                ],
+            );
+
+            Self {
+                root,
+                worktree_root,
+            }
+        }
+    }
+
+    impl Drop for TempGitRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn run_git(repo_root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo_root)
+            .args(args)
+            .status()
+            .expect("git command should spawn");
+        assert!(
+            status.success(),
+            "git command should succeed: git {}",
+            args.join(" ")
+        );
+    }
+
     #[test]
     fn valid_task_ledger_change_rebuilds_queue_snapshot() {
         let workspace_dir = create_temp_workspace("planning-reconcile-valid");
@@ -960,6 +1048,108 @@ mod tests {
         assert!(queue_snapshot.contains("\"task_id\": \"task-1\""));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn git_backed_task_ledger_change_accepts_tracked_candidate_into_authority() {
+        let repo = TempGitRepo::new("planning-reconcile-git-backed");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+        let empty_task_ledger_json = serde_json::to_string_pretty(&json!({
+            "version": 1,
+            "tasks": []
+        }))
+        .expect("empty task ledger should serialize");
+        let directions =
+            toml::from_str(&artifacts.directions_toml).expect("bootstrap directions should parse");
+        let empty_task_ledger =
+            serde_json::from_str(&empty_task_ledger_json).expect("empty task ledger should parse");
+        let empty_queue_snapshot = PriorityQueueService::new()
+            .build_snapshot(&directions, &empty_task_ledger)
+            .expect("empty queue snapshot should build");
+        let empty_queue_snapshot_json = serde_json::to_string_pretty(&empty_queue_snapshot)
+            .expect("empty queue snapshot should serialize");
+        FilesystemPlanningWorkspaceAdapter::new()
+            .commit_planning_workspace_files(
+                workspace_dir,
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some(artifacts.directions_toml.clone()),
+                    task_ledger_json: Some(empty_task_ledger_json.clone()),
+                    task_ledger_schema_json: Some(artifacts.task_ledger_schema_json.clone()),
+                    queue_snapshot_json: Some(empty_queue_snapshot_json),
+                    result_output_markdown: Some(artifacts.result_output_markdown.clone()),
+                },
+            )
+            .expect("active authority should seed");
+
+        fs::create_dir_all(repo.worktree_root.join(".codex-exec-loop/planning"))
+            .expect("tracked planning directory should exist");
+        fs::write(
+            repo.worktree_root.join(TASK_LEDGER_FILE_PATH),
+            serde_json::to_string_pretty(&json!({
+                "version": 1,
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "direction_id": "example-direction",
+                        "direction_relation_note": "implements the active example direction",
+                        "title": "Do the thing",
+                        "description": "Implement the next queued step.",
+                        "status": "ready",
+                        "base_priority": 10,
+                        "dynamic_priority_delta": 0,
+                        "priority_reason": "",
+                        "depends_on": [],
+                        "blocked_by": [],
+                        "created_by": "llm",
+                        "last_updated_by": "llm",
+                        "source_turn_id": "turn-git-backed",
+                        "updated_at": "2026-04-23T10:00:00Z"
+                    }
+                ]
+            }))
+            .expect("valid task ledger should serialize"),
+        )
+        .expect("tracked task ledger should write");
+
+        let execution_snapshot = service()
+            .load_execution_snapshot(workspace_dir)
+            .expect("execution snapshot should load from active authority");
+        assert_eq!(
+            execution_snapshot.task_ledger_json.as_deref(),
+            Some(empty_task_ledger_json.as_str())
+        );
+
+        let result = service()
+            .reconcile_after_turn(
+                workspace_dir,
+                "turn-git-backed",
+                &[TASK_LEDGER_FILE_PATH.to_string()],
+                &execution_snapshot,
+            )
+            .expect("reconciliation should succeed");
+        let active_workspace = FilesystemPlanningWorkspaceAdapter::new()
+            .load_planning_workspace_files(workspace_dir)
+            .expect("active authority should load");
+
+        assert_eq!(
+            result.queue_snapshot_action,
+            Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning)
+        );
+        assert!(!result.rejected_task_ledger);
+        assert!(
+            active_workspace
+                .task_ledger_json
+                .as_deref()
+                .is_some_and(|body| body.contains("\"task-1\""))
+        );
+        assert!(
+            active_workspace
+                .queue_snapshot_json
+                .as_deref()
+                .is_some_and(|body| body.contains("\"task_id\": \"task-1\""))
+        );
     }
 
     #[test]

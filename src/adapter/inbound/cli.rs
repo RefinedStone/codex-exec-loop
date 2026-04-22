@@ -8,13 +8,14 @@ use anyhow::{Context, Result, bail};
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
-    PlanningTrackedDirectionsApplyResult, PlanningWorkspaceInitResult,
-    PlanningWorkspaceResetResult,
+    PlanningTrackedDirectionsApplyResult, PlanningTrackedTaskLedgerApplyResult,
+    PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
 };
 
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
 const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
+const QUEUE_USAGE: &str = "Usage: akra queue apply [workspace_dir]";
 const DIRECTIONS_USAGE: &str = "Usage: akra directions apply [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
@@ -69,6 +70,15 @@ struct ResetReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DirectionsApplyReport {
+    workspace_path: String,
+    applied_paths: Vec<String>,
+    validation_report: Option<crate::domain::planning::PlanningValidationReport>,
+    status: Option<String>,
+    issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueueApplyReport {
     workspace_path: String,
     applied_paths: Vec<String>,
     validation_report: Option<crate::domain::planning::PlanningValidationReport>,
@@ -215,6 +225,63 @@ impl DirectionsApplyReport {
     }
 }
 
+impl QueueApplyReport {
+    fn path_issue(workspace_path: String, issue: String) -> Self {
+        Self {
+            workspace_path,
+            applied_paths: Vec::new(),
+            validation_report: None,
+            status: None,
+            issue: Some(issue),
+        }
+    }
+
+    fn success(workspace_path: String, result: PlanningTrackedTaskLedgerApplyResult) -> Self {
+        let status = if result.applied() {
+            Some(format!(
+                "tracked task ledger applied to active planning ({} files)",
+                result.applied_paths.len()
+            ))
+        } else {
+            Some("tracked task ledger apply blocked by validation".to_string())
+        };
+        let issue = if result.validation_report.is_valid() {
+            None
+        } else {
+            Some(first_validation_issue_message(&result.validation_report))
+        };
+        Self {
+            workspace_path,
+            applied_paths: result.applied_paths,
+            validation_report: Some(result.validation_report),
+            status,
+            issue,
+        }
+    }
+
+    fn failure(workspace_path: String, issue: String) -> Self {
+        Self {
+            workspace_path,
+            applied_paths: Vec::new(),
+            validation_report: None,
+            status: None,
+            issue: Some(issue),
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        let blocked_by_validation = self
+            .validation_report
+            .as_ref()
+            .is_some_and(|report| !report.is_valid());
+        if self.issue.is_some() || blocked_by_validation {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
     run_with_args(std::env::args_os().skip(1), stdout)
 }
@@ -233,6 +300,7 @@ where
             writeln!(stdout, "{TELEGRAM_BOT_USAGE}")?;
             writeln!(stdout, "{TELEGRAM_BOT_ALIAS_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
+            writeln!(stdout, "{QUEUE_USAGE}")?;
             writeln!(stdout, "{DIRECTIONS_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
@@ -246,6 +314,17 @@ where
         [command, workspace] if command == OsStr::new("doctor") => {
             Ok(Some(run_doctor(Some(workspace.as_os_str()), stdout)?))
         }
+        [command] if command == OsStr::new("queue") => {
+            bail!("{QUEUE_USAGE}");
+        }
+        [command, action] if command == OsStr::new("queue") => {
+            Ok(Some(run_queue(action.as_os_str(), None, stdout)?))
+        }
+        [command, action, workspace] if command == OsStr::new("queue") => Ok(Some(run_queue(
+            action.as_os_str(),
+            Some(workspace.as_os_str()),
+            stdout,
+        )?)),
         [command] if command == OsStr::new("directions") => {
             bail!("{DIRECTIONS_USAGE}");
         }
@@ -340,6 +419,27 @@ fn run_directions(
             Ok(report.exit_code())
         }
         _ => bail!("{DIRECTIONS_USAGE}"),
+    }
+}
+
+fn run_queue(
+    action_arg: &OsStr,
+    workspace_arg: Option<&OsStr>,
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    match action_arg
+        .to_string_lossy()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "apply" => {
+            let workspace_path = resolve_workspace_path(workspace_arg)?;
+            let report = apply_tracked_task_ledger(&workspace_path);
+            render_queue_apply_report(stdout, &report)?;
+            Ok(report.exit_code())
+        }
+        _ => bail!("{QUEUE_USAGE}"),
     }
 }
 
@@ -469,6 +569,23 @@ fn apply_tracked_directions(workspace_path: &Path) -> DirectionsApplyReport {
     }
 }
 
+fn apply_tracked_task_ledger(workspace_path: &Path) -> QueueApplyReport {
+    let workspace_label = workspace_path.display().to_string();
+    if let Err(issue) = validate_workspace_path(workspace_path) {
+        return QueueApplyReport::path_issue(workspace_label, issue);
+    }
+
+    let planning =
+        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    match planning
+        .workspace
+        .apply_tracked_task_ledger(workspace_path.to_string_lossy().as_ref())
+    {
+        Ok(result) => QueueApplyReport::success(workspace_label, result),
+        Err(error) => QueueApplyReport::failure(workspace_label, error.to_string()),
+    }
+}
+
 fn render_doctor_report(stdout: &mut impl Write, report: &DoctorReport) -> Result<()> {
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
     writeln!(
@@ -506,6 +623,34 @@ fn render_directions_apply_report(
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
     writeln!(stdout, "command: directions apply")?;
     writeln!(stdout, "source: .codex-exec-loop/planning/directions.toml")?;
+
+    for applied_path in &report.applied_paths {
+        writeln!(stdout, "applied: {applied_path}")?;
+    }
+    if let Some(validation_report) = &report.validation_report {
+        writeln!(
+            stdout,
+            "validation: {}",
+            validation_label(validation_report)
+        )?;
+        for issue in validation_report.errors() {
+            writeln!(stdout, "validation issue: {}", issue.message)?;
+        }
+    }
+    if let Some(status) = &report.status {
+        writeln!(stdout, "status: {status}")?;
+    }
+    if let Some(issue) = &report.issue {
+        writeln!(stdout, "issue: {issue}")?;
+    }
+
+    Ok(())
+}
+
+fn render_queue_apply_report(stdout: &mut impl Write, report: &QueueApplyReport) -> Result<()> {
+    writeln!(stdout, "workspace: {}", report.workspace_path)?;
+    writeln!(stdout, "command: queue apply")?;
+    writeln!(stdout, "source: .codex-exec-loop/planning/task-ledger.json")?;
 
     for applied_path in &report.applied_paths {
         writeln!(stdout, "applied: {applied_path}")?;
@@ -711,6 +856,14 @@ mod tests {
         ]
     }
 
+    fn queue_apply_args(workspace: &TestWorkspace) -> Vec<OsString> {
+        vec![
+            OsString::from("queue"),
+            OsString::from("apply"),
+            workspace.path.as_os_str().to_os_string(),
+        ]
+    }
+
     fn reset_args(target: &str, workspace: &TestWorkspace) -> Vec<OsString> {
         vec![
             OsString::from("reset"),
@@ -747,6 +900,7 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(output.contains("Usage: akra admin [--port <port>]"));
         assert!(output.contains("Alias: akra admin-server [--port <port>]"));
+        assert!(output.contains("Usage: akra queue apply [workspace_dir]"));
         assert!(output.contains("Usage: akra directions apply [workspace_dir]"));
     }
 
@@ -901,6 +1055,117 @@ mod tests {
         assert!(output.contains("validation issue: queue_idle.prompt_path does not exist"));
         assert!(output.contains("status: tracked directions apply blocked by validation"));
         assert!(output.contains("issue: queue_idle.prompt_path does not exist"));
+    }
+
+    #[test]
+    fn queue_apply_reports_success_with_applied_paths() {
+        let workspace =
+            TestWorkspace::new("queue-apply-success").expect("test workspace should exist");
+        let planning = PlanningServices::from_workspace_port(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
+            .expect("planning workspace should initialize");
+        workspace
+            .write_file(
+                TASK_LEDGER_FILE_PATH,
+                r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-1",
+      "direction_id": "general-workstream",
+      "direction_relation_note": "repair authority drift",
+      "title": "Apply tracked queue head",
+      "description": "Sync the tracked queue head into active planning.",
+      "status": "ready",
+      "base_priority": 50,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "user",
+      "source_turn_id": null,
+      "updated_at": "2026-04-23T12:00:00Z"
+    }
+  ]
+}"#,
+            )
+            .expect("candidate task ledger should write");
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args(queue_apply_args(&workspace), &mut stdout)
+            .expect("queue apply should run")
+            .expect("queue apply should produce an exit code");
+        let output = String::from_utf8(stdout).expect("queue apply output should be valid utf-8");
+
+        assert_eq!(exit_code, 0);
+        assert!(output.contains("command: queue apply"));
+        assert!(output.contains("source: .codex-exec-loop/planning/task-ledger.json"));
+        assert!(output.contains(&format!("applied: {TASK_LEDGER_FILE_PATH}")));
+        assert!(output.contains("applied: .codex-exec-loop/planning/queue.snapshot.json"));
+        assert!(output.contains("validation: valid"));
+        assert!(output.contains("status: tracked task ledger applied to active planning"));
+    }
+
+    #[test]
+    fn queue_apply_reports_validation_failure_reason() {
+        let workspace =
+            TestWorkspace::new("queue-apply-invalid").expect("test workspace should exist");
+        let planning = PlanningServices::from_workspace_port(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
+            .expect("planning workspace should initialize");
+        workspace
+            .write_file(
+                TASK_LEDGER_FILE_PATH,
+                r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-1",
+      "direction_id": "missing-direction",
+      "direction_relation_note": "repair authority drift",
+      "title": "Apply tracked queue head",
+      "description": "Sync the tracked queue head into active planning.",
+      "status": "ready",
+      "base_priority": 50,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "user",
+      "source_turn_id": null,
+      "updated_at": "2026-04-23T12:00:00Z"
+    }
+  ]
+}"#,
+            )
+            .expect("invalid candidate task ledger should write");
+        let mut stdout = Vec::new();
+
+        let exit_code = run_with_args(queue_apply_args(&workspace), &mut stdout)
+            .expect("queue apply should run")
+            .expect("queue apply should produce an exit code");
+        let output = String::from_utf8(stdout).expect("queue apply output should be valid utf-8");
+
+        assert_eq!(exit_code, 1);
+        assert!(output.contains("command: queue apply"));
+        assert!(output.contains("validation: invalid"));
+        assert!(output.contains(
+            "validation issue: task task-1 references unknown direction_id missing-direction"
+        ));
+        assert!(output.contains("status: tracked task ledger apply blocked by validation"));
+        assert!(
+            output.contains("issue: task task-1 references unknown direction_id missing-direction")
+        );
     }
 
     #[test]

@@ -175,6 +175,86 @@ fn directions_apply_command_surfaces_validation_reason() {
 }
 
 #[test]
+fn queue_apply_command_refreshes_queue_overlay_on_success() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("queue-apply-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":queue apply").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+    assert!(
+        conversation
+            .status_text
+            .contains("tracked task ledger applied")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn queue_apply_command_surfaces_validation_reason() {
+    let (mut app, _) = make_test_app();
+    let workspace_dir = create_temp_workspace("queue-apply-invalid-command");
+    bootstrap_active_planning_workspace(&workspace_dir);
+    std::fs::write(
+        Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH),
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-1",
+      "direction_id": "missing-direction",
+      "direction_relation_note": "queue apply test",
+      "title": "Apply tracked queue head",
+      "description": "Sync the tracked queue head into active planning.",
+      "status": "ready",
+      "base_priority": 50,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Current top executable task.",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "user",
+      "source_turn_id": null,
+      "updated_at": "2026-04-23T12:00:00Z"
+    }
+  ]
+}"#,
+    )
+    .expect("invalid task ledger should write");
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":queue apply").expect("command should parse"),
+    );
+
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("app should stay in ready state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("tracked task ledger apply blocked")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("references unknown direction_id")
+    );
+
+    std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
 fn planning_on_command_requires_existing_workspace() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("planning-on-command-no-workspace");
