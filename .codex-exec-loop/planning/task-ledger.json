@@ -418,32 +418,30 @@
     {
       "id": "terminal-bridge-research-matrix",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The research direction still starts with a comparison matrix, but only after the Codex capability audit names the stable target boundary.",
+      "direction_relation_note": "The transport comparison is now captured in docs/plan/22 and tied back to the bridge hub, capability note, and experiment matrix, so the remaining work is evidence gathering rather than matrix authoring.",
       "title": "Compare local attach, wrapper, tunnel, and proxy bridge paths",
       "description": "Write the research matrix that compares pre-opened local terminal attach, controlled local wrappers, SSH or tunnel approaches, and proxy or vibeproxy-style mediation across UX, streaming fidelity, interrupt handling, approval handling, recovery, security, portability, and architecture fit.",
-      "status": "blocked",
+      "status": "done",
       "base_priority": 90,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The bridge matrix should wait for the capability vocabulary refresh so the comparison stays grounded in product seams rather than transport trivia.",
-      "depends_on": [
-        "context-first-codex-capability-boundary-audit"
-      ],
+      "priority_reason": "The transport matrix is already documented, so follow-up work should stay focused on evidence and capability validation instead of rewriting the comparison.",
+      "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T00:00:00Z"
+      "updated_at": "2026-04-22T11:36:13Z"
     },
     {
       "id": "terminal-bridge-primary-path-decision-note",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The decision note remains the expected follow-up once the bridge matrix exists, but it is still a proposal rather than an immediately executable queue item.",
+      "direction_relation_note": "The decision note is now captured in docs/plan/21, naming tmux-oriented local attach as the primary path, the managed local wrapper as fallback, and explicit defer reasons for remote and proxy routes.",
       "title": "Choose the primary and fallback terminal bridge paths",
       "description": "Turn the completed research matrix into one decision note that names the primary bridge path, the fallback path, and the reasons for deferring the remaining transport options for now.",
-      "status": "proposed",
+      "status": "done",
       "base_priority": 86,
       "dynamic_priority_delta": 0,
-      "priority_reason": "This stays as the likely post-research deliverable, but it cannot advance until the matrix is written.",
+      "priority_reason": "The decision note is already documented, so the next gate is whether local evidence and capability validation justify any bounded spike at all.",
       "depends_on": [
         "terminal-bridge-research-matrix"
       ],
@@ -451,7 +449,27 @@
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-22T00:00:00Z"
+      "updated_at": "2026-04-22T11:36:13Z"
+    },
+    {
+      "id": "terminal-bridge-local-spike-readiness-gate",
+      "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
+      "direction_relation_note": "The research report set is now explicit, but a bounded local bridge spike should stay blocked until the Codex capability audit and one local evidence pass confirm that tmux attach or the wrapper path can be evaluated against real product seams.",
+      "title": "Decide whether a bounded local bridge spike is justified",
+      "description": "Use the Codex capability audit together with docs/plan/24 to record whether tmux-oriented local attach and the managed local wrapper have enough relay, interrupt, approval, recovery, and operator-setup evidence to justify a limited spike. Do not queue provider-specific adapter work before that gate is written down.",
+      "status": "blocked",
+      "base_priority": 84,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The research documents now exist, but implementation should remain blocked until the capability boundary is audited and the primary local paths are backed by concrete experiment notes.",
+      "depends_on": [
+        "context-first-codex-capability-boundary-audit",
+        "terminal-bridge-primary-path-decision-note"
+      ],
+      "blocked_by": [],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-22T11:36:13Z"
     }
   ]
 }

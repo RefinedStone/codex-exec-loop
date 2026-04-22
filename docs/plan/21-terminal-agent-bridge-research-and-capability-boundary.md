@@ -68,6 +68,23 @@ Read the bridge work in this order:
 4. Write the experiments for local attach and managed wrapper.
 5. Only then decide whether a limited local-attach spike is worth queueing.
 
+## Current Report Status
+
+- The hub, transport matrix, capability note, and experiment matrix already exist as `21` through
+  `24`.
+- The primary path, fallback path, and deferred paths are now explicit instead of implied.
+- The remaining gap is evidence and boundary validation, not missing research coverage.
+
+## Feasibility Judgment
+
+| Scope | Status | Reason |
+| --- | --- | --- |
+| research and planning set | feasible now | the document set already covers the hub, comparison rubric, capability boundary, and experiment checklist |
+| tmux-oriented local attach spike | conditionally feasible | proceed only after the Codex capability audit and local evidence confirm relay fidelity, interrupt behavior, approval handling, and recovery anchors |
+| managed local wrapper fallback | conditionally feasible | lifecycle control is strong, but realism costs must stay explicit |
+| SSH or tunnel attach | deferred | remote auth, recovery, and portability costs are not yet justified by evidence |
+| proxy or vibeProxy-style mediation | deferred | extra protocol and trust surface are not justified without a concrete local gap |
+
 ## Acceptance Signals
 
 - `21` stays short and clearly names primary, fallback, and deferred paths
