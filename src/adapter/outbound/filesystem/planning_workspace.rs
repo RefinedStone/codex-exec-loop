@@ -10,9 +10,10 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspacePort,
 };
 use crate::application::service::planning::shared::contract::{
-    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY,
-    PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
+    PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
+    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    canonical_active_planning_file_path,
 };
 
 #[derive(Default)]
@@ -118,6 +119,11 @@ impl FilesystemPlanningWorkspaceAdapter {
             record.result_output_markdown.as_deref(),
         )?;
         Ok(())
+    }
+
+    fn authority_managed_path(relative_path: &str) -> bool {
+        canonical_active_planning_file_path(relative_path).is_some()
+            || relative_path.trim().replace('\\', "/") == PLAN_OFF_FILE_PATH
     }
 
     fn staged_draft_file_path(
@@ -384,10 +390,14 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             &format!("invalid planning relative path: {relative_path}"),
         )?;
         if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            let active_body = SqlitePlanningAuthorityAdapter::load_active_planning_file(
                 workspace_dir,
                 &relative_path,
-            );
+            )?;
+            if active_body.is_some() || Self::authority_managed_path(&relative_path) {
+                return Ok(active_body);
+            }
+            return Self::read_optional_workspace_file(workspace_dir, &relative_path);
         }
         Self::read_optional_workspace_file(workspace_dir, &relative_path)
     }
@@ -517,7 +527,8 @@ mod tests {
         PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+        DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+        TASK_LEDGER_FILE_PATH,
     };
 
     fn create_temp_workspace(prefix: &str) -> String {
@@ -714,6 +725,81 @@ mod tests {
             .expect("directions.toml should exist");
 
         assert_eq!(body, "version = 1\n");
+    }
+
+    #[test]
+    fn git_backed_supporting_files_fall_back_to_tracked_repo_copy() {
+        let repo = TempGitRepo::new("planning-workspace-supporting-fallback");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        adapter
+            .commit_planning_workspace_files(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some("version = 1\n".to_string()),
+                    task_ledger_json: None,
+                    task_ledger_schema_json: None,
+                    queue_snapshot_json: None,
+                    result_output_markdown: None,
+                },
+            )
+            .expect("git-backed active commit should seed the authority store");
+        repo.write_repo_file(
+            ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            "# prompt from tracked repo\n",
+        );
+
+        let body = adapter
+            .load_optional_planning_file(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            )
+            .expect("tracked supporting file should load")
+            .expect("tracked supporting file should exist");
+
+        assert_eq!(body, "# prompt from tracked repo\n");
+    }
+
+    #[test]
+    fn git_backed_supporting_files_prefer_authority_store_when_present() {
+        let repo = TempGitRepo::new("planning-workspace-supporting-store-preferred");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        repo.write_repo_file(
+            ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            "# prompt from tracked repo\n",
+        );
+        adapter
+            .replace_planning_workspace_file(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+                Some("# prompt from authority store\n"),
+            )
+            .expect("supporting file should write through authority store");
+
+        let body = adapter
+            .load_optional_planning_file(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            )
+            .expect("supporting file should load")
+            .expect("supporting file should exist");
+
+        assert_eq!(body, "# prompt from authority store\n");
+    }
+
+    #[test]
+    fn git_backed_plan_off_does_not_fall_back_to_tracked_repo_copy() {
+        let repo = TempGitRepo::new("planning-workspace-plan-off-authority-only");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        repo.write_repo_file(PLAN_OFF_FILE_PATH, "plan off\n");
+
+        let body = adapter
+            .load_optional_planning_file(
+                repo.worktree_root.to_str().expect("valid worktree path"),
+                PLAN_OFF_FILE_PATH,
+            )
+            .expect("plan off lookup should succeed");
+
+        assert!(body.is_none());
     }
 
     #[test]
