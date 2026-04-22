@@ -1,6 +1,5 @@
 use super::super::super::super::super::copy::PlanningSimpleReviewCopy;
-use super::super::super::status::PlanningSimpleReviewStatusView;
-use super::super::super::{header, options, status};
+use super::super::super::{header, options, status::{self, PlanningSimpleReviewStatusView}};
 use crate::adapter::inbound::tui::app::Line;
 
 pub(super) struct PlanningSimpleReviewOverlaySections {
