@@ -8,24 +8,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::conversation_model::PlanningRepairState;
 use super::{
-    ActiveTurnPlanningCapture, AutoFollowRuntimePhase, AutoFollowState, AutoFollowupSubmitContext,
-    BackgroundMessage, ConversationInputState, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-    DirectionsMaintenanceOverlayStep, ExitConfirmationState, FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP,
-    GithubReviewPollingState, InlineShellCommand, InlineShellCommandInput, MAX_COMPOSER_HEIGHT,
-    NativeTuiApp, PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus,
-    PlanningInitOverlayStep, PromptOrigin, RecordedAutoFollowupActivity, SessionOverlayUiState,
-    SessionState, ShellActionAvailability, ShellFrontendMode, ShellOverlay, StartupState,
-    TurnActivityState, build_automation_overlay_view, build_automation_preview_lines,
-    build_automation_status_lines, build_conversation_shell_frame_view,
-    build_conversation_shell_view, build_inline_tail_lines, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_ready_input_lines, build_session_overlay_view,
-    build_startup_overlay_view, build_status_title, build_transcript_panel_view,
-    format_conversation_lines, shell_layout, startup_ascii_art_enabled_from_value,
+    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext,
+    ConversationInputState, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp,
+    PlannerWorkerStatus, PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability,
+    ShellOverlay, StartupState, TurnActivityState, build_automation_overlay_view,
+    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
+    build_planning_init_overlay_view, build_ready_input_lines, format_conversation_lines,
 };
 use crate::adapter::inbound::tui::app::test_helpers::{
-    sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
+    sample_planning_runtime_snapshot,
 };
 use crate::adapter::outbound::app_server::{
     AppServerPlanningWorkerAdapter, PlanningThreadLauncher,
@@ -60,7 +53,6 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
-use crate::domain::session_summary::SessionSummary;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 #[derive(Default)]

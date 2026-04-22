@@ -127,7 +127,7 @@ pub(super) use conversation_model::{
     ConversationInputState, ConversationState, ConversationViewModel, StopKeywordRule,
 };
 #[cfg(test)]
-pub(super) use conversation_model::{RecordedAutoFollowupActivity, TurnActivityState};
+pub(super) use conversation_model::TurnActivityState;
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
@@ -158,10 +158,7 @@ use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{
     build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
-    build_conversation_shell_frame_view, build_conversation_shell_view, build_inline_tail_lines,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_ready_input_lines,
-    build_session_overlay_view, build_startup_overlay_view, build_status_title,
-    build_transcript_panel_view,
+    build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
