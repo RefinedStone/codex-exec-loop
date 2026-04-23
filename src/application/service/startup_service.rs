@@ -21,26 +21,24 @@ impl StartupService {
             .context("failed to resolve current directory")?
             .display()
             .to_string();
-
-        let codex_path = which::which("codex").context("`codex` was not found on PATH")?;
         let workspace_status = self.detect_workspace_status()?;
 
         let startup_context = self.startup_probe_port.load_startup_context()?;
 
         Ok(StartupDiagnostics {
             cwd: current_directory,
-            codex_binary_ok: true,
-            codex_binary_detail: codex_path.display().to_string(),
+            codex_binary_ok: startup_context.launch_target_ok,
+            codex_binary_detail: startup_context.launch_target_detail,
             workspace_ok: workspace_status.ok,
             workspace_path: workspace_status.path,
             workspace_detail: workspace_status.detail,
             attachment_profile: startup_context.attachment_profile,
-            initialize_ok: true,
-            initialize_detail: startup_context.initialize_detail,
-            account_ok: startup_context.account_ok,
-            account_detail: startup_context.account_detail,
+            initialize_ok: startup_context.readiness_ok,
+            initialize_detail: startup_context.readiness_detail,
+            account_ok: startup_context.access_ok,
+            account_detail: startup_context.access_detail,
             warnings: startup_context.warnings,
-            schema_snapshot: StartupDiagnostics::bundled_schema_snapshot_label(),
+            schema_snapshot: startup_context.schema_snapshot,
         })
     }
 

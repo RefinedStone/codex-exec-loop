@@ -533,11 +533,15 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
+                launch_target_ok: true,
+                launch_target_detail: "codex".to_string(),
+                readiness_ok: true,
                 attachment_profile:
                     crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile::codex_app_server(),
-                initialize_detail: "ok".to_string(),
-                account_detail: "ok".to_string(),
-                account_ok: true,
+                readiness_detail: "ok".to_string(),
+                access_detail: "ok".to_string(),
+                access_ok: true,
+                schema_snapshot: "schema".to_string(),
                 warnings: Vec::new(),
             })
         }

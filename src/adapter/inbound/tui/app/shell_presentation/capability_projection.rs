@@ -72,7 +72,7 @@ pub(super) fn build_startup_check_lines_from_state(
         StartupState::Loading => startup_check_loading_lines(),
         StartupState::Ready(diagnostics) => vec![
             diagnostic_item(
-                "codex binary",
+                "launch target",
                 diagnostics.codex_binary_ok,
                 &diagnostics.codex_binary_detail,
             ),
@@ -82,7 +82,7 @@ pub(super) fn build_startup_check_lines_from_state(
                 &diagnostics.workspace_detail,
             ),
             diagnostic_item(
-                "app-server initialize",
+                "bridge readiness",
                 diagnostics.initialize_ok,
                 &diagnostics.initialize_detail,
             ),
@@ -97,7 +97,7 @@ pub(super) fn build_startup_check_lines_from_state(
                 diagnostics.attachment_profile.recovery_anchor.label(),
             ),
             diagnostic_item(
-                "account/read",
+                "access posture",
                 diagnostics.account_ok,
                 &diagnostics.account_detail,
             ),

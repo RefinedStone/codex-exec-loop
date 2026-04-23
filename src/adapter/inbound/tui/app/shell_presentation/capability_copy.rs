@@ -18,7 +18,7 @@ pub(super) fn startup_probe_not_started_line() -> &'static str {
 }
 
 pub(super) fn startup_probe_loading_summary_line() -> &'static str {
-    "probing codex binary, app-server handshake, account state, and cwd"
+    "probing launch target, bridge readiness, access posture, and cwd"
 }
 
 pub(super) fn startup_preparing_status_line() -> &'static str {
@@ -46,7 +46,7 @@ pub(super) fn startup_overlay_failed_label() -> &'static str {
 }
 
 pub(super) fn startup_initializing_status_line() -> &'static str {
-    "status: initializing codex shell"
+    "status: initializing bridge path"
 }
 
 pub(super) fn startup_check_not_started_line() -> &'static str {
@@ -55,15 +55,15 @@ pub(super) fn startup_check_not_started_line() -> &'static str {
 
 pub(super) fn startup_check_loading_lines() -> Vec<Line<'static>> {
     vec![
-        Line::from("checking codex binary"),
-        Line::from("opening codex app-server"),
-        Line::from("reading account state"),
+        Line::from("checking launch target"),
+        Line::from("checking bridge readiness"),
+        Line::from("checking access posture"),
     ]
 }
 
 pub(super) fn startup_diagnostics_summary_line(diagnostics: &StartupDiagnostics) -> String {
     format!(
-        "diagnostics: codex {}  |  app-server {}  |  account {}",
+        "diagnostics: launch target {}  |  bridge {}  |  access {}",
         inline_diagnostic_status(diagnostics.codex_binary_ok, "ok", "check"),
         inline_diagnostic_status(diagnostics.initialize_ok, "ok", "check"),
         inline_diagnostic_status(diagnostics.account_ok, "ok", "attention"),
@@ -99,7 +99,7 @@ pub(super) fn recent_session_status_ready_to_load() -> &'static str {
 }
 
 pub(super) fn recent_session_status_loading() -> &'static str {
-    "loading from codex app-server"
+    "loading bridge session catalog"
 }
 
 pub(super) fn recent_session_status_load_failed() -> &'static str {
@@ -143,7 +143,7 @@ pub(super) fn session_catalog_not_loaded_detail_line(available: bool) -> &'stati
 }
 
 pub(super) fn session_catalog_loading_message() -> &'static str {
-    "loading recent sessions from codex app-server"
+    "loading bridge session catalog"
 }
 
 pub(super) fn session_catalog_waiting_detail_line() -> &'static str {
@@ -155,7 +155,7 @@ pub(super) fn session_catalog_empty_provider_line() -> &'static str {
 }
 
 pub(super) fn session_catalog_warning_waiting_line() -> &'static str {
-    "waiting for app-server response"
+    "waiting for session catalog response"
 }
 
 pub(super) fn session_catalog_warning_blocked_line() -> &'static str {

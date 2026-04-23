@@ -8,14 +8,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::conversation_model::PlanningRepairState;
 use super::{
-    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
-    build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
-    format_conversation_lines, ActiveTurnPlanningCapture, AutoFollowState,
-    AutoFollowupSubmitContext, ConversationInputState, ConversationMessage,
-    ConversationMessageKind, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-    DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp, PlannerWorkerStatus,
-    PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability, ShellOverlay, StartupState,
-    TurnActivityState,
+    ActiveTurnPlanningCapture, AutoFollowState, AutoFollowupSubmitContext, ConversationInputState,
+    ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
+    ConversationViewModel, DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp,
+    PlannerWorkerStatus, PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability,
+    ShellOverlay, StartupState, TurnActivityState, build_automation_overlay_view,
+    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
+    build_planning_init_overlay_view, build_ready_input_lines, format_conversation_lines,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
 use crate::adapter::outbound::app_server::{
@@ -34,15 +33,15 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
-use crate::application::service::planning::PlanningRuntimeSnapshot;
-use crate::application::service::planning::PlanningServices;
-use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -84,10 +83,14 @@ enum FakeStreamAttachmentEvent {
 impl CodexAppServerPort for FakeCodexAppServerPort {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         Ok(AppServerStartupContext {
+            launch_target_ok: true,
+            launch_target_detail: "codex".to_string(),
+            readiness_ok: true,
             attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server_launch(),
-            initialize_detail: "ok".to_string(),
-            account_detail: "ok".to_string(),
-            account_ok: true,
+            readiness_detail: "ok".to_string(),
+            access_detail: "ok".to_string(),
+            access_ok: true,
+            schema_snapshot: "schema".to_string(),
             warnings: Vec::new(),
         })
     }

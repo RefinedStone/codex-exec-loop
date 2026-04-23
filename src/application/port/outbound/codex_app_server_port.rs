@@ -107,10 +107,14 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> anyhow::Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
+                launch_target_ok: true,
+                launch_target_detail: "codex".to_string(),
+                readiness_ok: true,
                 attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server_launch(),
-                initialize_detail: "init".to_string(),
-                account_detail: "account".to_string(),
-                account_ok: true,
+                readiness_detail: "init".to_string(),
+                access_detail: "account".to_string(),
+                access_ok: true,
+                schema_snapshot: "schema".to_string(),
                 warnings: vec!["warning".to_string()],
             })
         }
@@ -192,13 +196,17 @@ mod tests {
             .load_startup_context()
             .expect("startup probe should load");
 
-        assert_eq!(context.initialize_detail, "init");
+        assert!(context.launch_target_ok);
+        assert_eq!(context.launch_target_detail, "codex");
+        assert!(context.readiness_ok);
+        assert_eq!(context.readiness_detail, "init");
         assert_eq!(
             context.attachment_profile,
             TerminalBridgeAttachmentProfile::codex_app_server_launch()
         );
-        assert_eq!(context.account_detail, "account");
-        assert!(context.account_ok);
+        assert_eq!(context.access_detail, "account");
+        assert!(context.access_ok);
+        assert_eq!(context.schema_snapshot, "schema");
         assert_eq!(context.warnings, vec!["warning".to_string()]);
     }
 

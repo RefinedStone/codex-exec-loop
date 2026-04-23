@@ -74,6 +74,13 @@ impl TerminalBridgeAttachmentProfile {
     pub const fn codex_app_server() -> Self {
         Self::codex_app_server_launch()
     }
+
+    pub const fn tmux_local_attach() -> Self {
+        Self::new(
+            TerminalBridgeAttachmentMode::LocalAttach,
+            TerminalBridgeRecoveryAnchor::SessionHandle,
+        )
+    }
 }
 
 impl Default for TerminalBridgeAttachmentProfile {
@@ -147,6 +154,17 @@ mod tests {
         assert_eq!(
             TerminalBridgeRecoveryAnchor::TerminalSession.label(),
             "terminal-session"
+        );
+    }
+
+    #[test]
+    fn tmux_local_attach_profile_reports_local_attach_and_session_handle_recovery() {
+        assert_eq!(
+            TerminalBridgeAttachmentProfile::tmux_local_attach(),
+            TerminalBridgeAttachmentProfile::new(
+                TerminalBridgeAttachmentMode::LocalAttach,
+                TerminalBridgeRecoveryAnchor::SessionHandle,
+            )
         );
     }
 }

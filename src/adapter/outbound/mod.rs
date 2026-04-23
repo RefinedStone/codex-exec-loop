@@ -3,3 +3,4 @@ pub mod db;
 pub mod filesystem;
 pub mod github;
 pub mod telegram;
+pub mod terminal_bridge;

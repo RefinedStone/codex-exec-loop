@@ -423,6 +423,7 @@ impl CodexAppServerAdapter {
 
 impl CodexAppServerPort for CodexAppServerAdapter {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+        let codex_path = which::which("codex")?;
         let output = self.with_shared_runtime(
             SharedRuntimeRequestKind::StartupChecks,
             |connection, initialize_detail| {
@@ -432,10 +433,15 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         let (initialize_detail, account_response) = output.value;
 
         Ok(AppServerStartupContext {
+            launch_target_ok: true,
+            launch_target_detail: codex_path.display().to_string(),
+            readiness_ok: true,
             attachment_profile: output.attachment_profile,
-            initialize_detail,
-            account_detail: account_response.to_summary_text(),
-            account_ok: account_response.is_authenticated(),
+            readiness_detail: initialize_detail,
+            access_detail: account_response.to_summary_text(),
+            access_ok: account_response.is_authenticated(),
+            schema_snapshot:
+                crate::domain::startup_diagnostics::StartupDiagnostics::bundled_schema_snapshot_label(),
             warnings: output.warnings,
         })
     }

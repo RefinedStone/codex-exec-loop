@@ -101,7 +101,7 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
 
     assert!(rendered.contains("startup: startup ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
+    assert!(rendered.contains("diagnostics: launch target ok  |  bridge ok  |  access ok"));
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
     assert!(rendered.contains("starter: start with a task, file path, or bug summary"));

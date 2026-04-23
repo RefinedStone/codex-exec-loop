@@ -6,6 +6,7 @@ use anyhow::Result;
 use crate::adapter::outbound::app_server::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::app_server::CodexAppServerAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::terminal_bridge::build_terminal_conversation_ports;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::PlanningServices;
@@ -28,11 +29,14 @@ fn build_default_app() -> NativeTuiApp {
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> =
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()));
-    let startup_service = StartupService::new(app_server_adapter.clone());
-    let session_service = SessionService::new(app_server_adapter.clone());
-    let conversation_service = ConversationService::new(app_server_adapter.clone());
+    let terminal_conversation_ports = build_terminal_conversation_ports(app_server_adapter.clone());
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
+        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
+    );
+    let startup_service = StartupService::new(terminal_conversation_ports.startup_probe_port);
+    let session_service = SessionService::new(terminal_conversation_ports.session_catalog_port);
+    let conversation_service =
+        ConversationService::new(terminal_conversation_ports.interactive_turn_runtime_port);
     let planning = PlanningServices::from_ports(
         Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
         planning_worker_port,
@@ -78,10 +82,14 @@ mod tests {
     impl CodexAppServerPort for FakeCodexAppServerPort {
         fn load_startup_context(&self) -> Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
+                launch_target_ok: true,
+                launch_target_detail: "codex".to_string(),
+                readiness_ok: true,
                 attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
-                initialize_detail: "ok".to_string(),
-                account_detail: "ok".to_string(),
-                account_ok: true,
+                readiness_detail: "ok".to_string(),
+                access_detail: "ok".to_string(),
+                access_ok: true,
+                schema_snapshot: "schema".to_string(),
                 warnings: Vec::new(),
             })
         }
