@@ -4,6 +4,9 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningStagedFileRecord,
     PlanningWorkspacePort,
@@ -18,12 +21,15 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::priority_queue_service::PriorityQueueService;
 
 #[derive(Clone)]
 pub struct PlanningInitService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_bootstrap_service: PlanningBootstrapService,
     planning_validation_service: PlanningValidationService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    priority_queue_service: PriorityQueueService,
 }
 
 #[derive(Debug, Clone)]
@@ -95,15 +101,34 @@ pub struct PlanningWorkspaceInitResult {
 }
 
 impl PlanningInitService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_bootstrap_service: PlanningBootstrapService,
         planning_validation_service: PlanningValidationService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_bootstrap_service,
+            planning_validation_service,
+            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
+            PriorityQueueService::new(),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_bootstrap_service: PlanningBootstrapService,
+        planning_validation_service: PlanningValidationService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        priority_queue_service: PriorityQueueService,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_bootstrap_service,
             planning_validation_service,
+            planning_task_repository_port,
+            priority_queue_service,
         }
     }
 
@@ -236,7 +261,8 @@ impl PlanningInitService {
         draft_name: &str,
         loaded: PlanningDraftLoadRecord,
     ) -> Result<PlanningDraftPromoteResult> {
-        let validation_report = self.validate_loaded_draft(&loaded);
+        let validation_result = self.validate_loaded_draft_result(&loaded);
+        let validation_report = validation_result.report.clone();
         if !validation_report.is_valid() {
             return Ok(PlanningDraftPromoteResult {
                 draft_name: draft_name.to_string(),
@@ -244,6 +270,18 @@ impl PlanningInitService {
                 validation_report,
             });
         }
+        let directions = validation_result
+            .directions
+            .as_ref()
+            .ok_or_else(|| anyhow!("valid staged draft did not include directions"))?;
+        let task_ledger = validation_result
+            .task_ledger
+            .as_ref()
+            .ok_or_else(|| anyhow!("valid staged draft did not include task-ledger"))?;
+        let queue_snapshot = self
+            .priority_queue_service
+            .build_snapshot(directions, task_ledger)
+            .map_err(|error| anyhow!("valid staged draft queue build failed: {error}"))?;
         let mut previous_active_files = HashMap::new();
         for file in &loaded.staged_files {
             previous_active_files.insert(
@@ -268,6 +306,14 @@ impl PlanningInitService {
                 applied_paths.push(file.active_path.clone());
             }
             self.set_plan_enabled(workspace_dir, true)?;
+            self.planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    workspace_dir,
+                    PlanningTaskAuthorityCommit {
+                        task_ledger,
+                        queue_snapshot: &queue_snapshot,
+                    },
+                )?;
             Ok(())
         })();
         if let Err(error) = promote_result {
@@ -351,6 +397,13 @@ impl PlanningInitService {
     }
 
     fn validate_loaded_draft(&self, loaded: &PlanningDraftLoadRecord) -> PlanningValidationReport {
+        self.validate_loaded_draft_result(loaded).report
+    }
+
+    fn validate_loaded_draft_result(
+        &self,
+        loaded: &PlanningDraftLoadRecord,
+    ) -> crate::domain::planning::PlanningValidationResult {
         let staged_file_map = loaded
             .staged_files
             .iter()
@@ -385,7 +438,7 @@ impl PlanningInitService {
                 );
         }
 
-        result.report
+        result
     }
 
     fn initialize_workspace(
@@ -420,6 +473,7 @@ impl PlanningInitService {
         }
         self.planning_workspace_port
             .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None)?;
+        self.commit_task_authority_from_bootstrap(workspace_dir, &bootstrap.files)?;
 
         Ok(PlanningWorkspaceInitResult {
             mode,
@@ -482,6 +536,60 @@ impl PlanningInitService {
             files,
             validation_report: validation_result.report,
         }
+    }
+
+    fn commit_task_authority_from_bootstrap(
+        &self,
+        workspace_dir: &str,
+        files: &[PlanningDraftFileRecord],
+    ) -> Result<()> {
+        let staged_file_map = files
+            .iter()
+            .map(|file| (file.active_path.as_str(), file.body.as_str()))
+            .collect::<HashMap<_, _>>();
+        let validation_result = self.planning_validation_service.validate_workspace_files(
+            crate::domain::planning::PlanningWorkspaceFiles {
+                directions_toml: staged_file_map
+                    .get(DIRECTIONS_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+                task_ledger_json: staged_file_map
+                    .get(TASK_LEDGER_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+                task_ledger_schema_json: staged_file_map
+                    .get(TASK_LEDGER_SCHEMA_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+                result_output_markdown: staged_file_map
+                    .get(RESULT_OUTPUT_FILE_PATH)
+                    .copied()
+                    .unwrap_or_default(),
+            },
+        );
+        if !validation_result.is_valid() {
+            return Ok(());
+        }
+        let directions = validation_result
+            .directions
+            .as_ref()
+            .ok_or_else(|| anyhow!("valid bootstrap did not include directions"))?;
+        let task_ledger = validation_result
+            .task_ledger
+            .as_ref()
+            .ok_or_else(|| anyhow!("valid bootstrap did not include task-ledger"))?;
+        let queue_snapshot = self
+            .priority_queue_service
+            .build_snapshot(directions, task_ledger)
+            .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
+        self.planning_task_repository_port
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )
     }
 }
 

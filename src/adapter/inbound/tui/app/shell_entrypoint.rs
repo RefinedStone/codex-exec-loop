@@ -33,8 +33,8 @@ fn build_default_app() -> NativeTuiApp {
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let planning_authority: Arc<dyn PlanningAuthorityPort> =
-        Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let sqlite_planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning_authority: Arc<dyn PlanningAuthorityPort> = sqlite_planning_authority.clone();
     let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
     let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
     let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
@@ -46,6 +46,7 @@ fn build_default_app() -> NativeTuiApp {
     let planning = PlanningServices::from_ports(
         planning_workspace_port,
         planning_authority.clone(),
+        sqlite_planning_authority,
         planning_worker_port,
     );
     let parallel_mode_service = ParallelModeService::new(planning_authority, github_automation);

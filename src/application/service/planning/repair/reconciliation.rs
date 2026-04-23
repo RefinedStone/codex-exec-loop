@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -20,6 +23,7 @@ pub struct PlanningReconciliationService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -137,15 +141,31 @@ struct ProtectedFileRestoreRequest<'a> {
 }
 
 impl PlanningReconciliationService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_validation_service,
+            priority_queue_service,
+            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_validation_service,
             priority_queue_service,
+            planning_task_repository_port,
         }
     }
 
@@ -373,6 +393,14 @@ impl PlanningReconciliationService {
             committed_record.queue_snapshot_json = Some(queue_snapshot_json);
             self.planning_workspace_port
                 .commit_planning_workspace_files(workspace_dir, &committed_record)?;
+            self.planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    workspace_dir,
+                    PlanningTaskAuthorityCommit {
+                        task_ledger,
+                        queue_snapshot: &queue_snapshot,
+                    },
+                )?;
             result.queue_snapshot_action =
                 Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning);
             result.notices.push(
@@ -1098,8 +1126,15 @@ mod tests {
             .load_execution_snapshot(workspace_dir)
             .expect("execution snapshot should load from active authority");
         assert_eq!(
-            execution_snapshot.task_ledger_json.as_deref(),
-            Some(empty_task_ledger_json.as_str())
+            serde_json::from_str::<serde_json::Value>(
+                execution_snapshot
+                    .task_ledger_json
+                    .as_deref()
+                    .expect("execution task ledger should exist")
+            )
+            .expect("execution task ledger should parse"),
+            serde_json::from_str::<serde_json::Value>(&empty_task_ledger_json)
+                .expect("empty task ledger should parse")
         );
 
         let result = service()

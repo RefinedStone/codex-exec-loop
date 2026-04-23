@@ -45,7 +45,7 @@ success_criteria = [
 ]
 scope_hints = [
     "Use this generic direction until the operator replaces it with a richer direction catalog.",
-    "Treat task-ledger.json as the source of truth for concrete next actions and proposals.",
+    "Represent concrete next actions and proposals in the accepted task ledger.",
     "If the user asked for a multi-step artifact, convert the next obvious step from the latest answer into a queued task.",
 ]
 detail_doc_path = ""

@@ -13,6 +13,7 @@ use super::tail_shared::{
     build_operator_notice_line, compact_auto_follow_status_summary, inline_thread_label,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     plan_mode_indicator: PlanModeIndicatorView,

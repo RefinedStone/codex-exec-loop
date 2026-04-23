@@ -1,9 +1,9 @@
+use crate::application::service::planning::runtime::prompt::{
+    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+};
 use crate::application::service::planning::shared::auto_follow_copy::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
     PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
-};
-use crate::application::service::planning::runtime::prompt::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
@@ -537,7 +537,9 @@ mod tests {
                 .detail
                 .as_deref()
                 .is_some_and(|detail| {
-                    detail.contains("queue-driven auto follow-up requires an actionable planning queue head")
+                    detail.contains(
+                        "queue-driven auto follow-up requires an actionable planning queue head",
+                    )
                 })
         );
     }
@@ -580,7 +582,10 @@ mod tests {
         );
         assert!(
             service
-                .auto_follow_transcript_text(&snapshot, PlanningAutoFollowPromptMode::RefreshPlanningQueue)
+                .auto_follow_transcript_text(
+                    &snapshot,
+                    PlanningAutoFollowPromptMode::RefreshPlanningQueue
+                )
                 .contains("existing proposal 작업 목록을 priority queue에 넣고")
         );
     }

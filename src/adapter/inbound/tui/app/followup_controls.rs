@@ -2,18 +2,12 @@ use super::{AutoFollowState, ConversationViewModel, StopKeywordRule};
 
 #[derive(Debug, Clone)]
 pub(super) enum FollowupControlEvent {
-    DraftWorkspaceSynced {
-        workspace_directory: String,
-    },
+    DraftWorkspaceSynced { workspace_directory: String },
     AutoFollowToggled,
     AutoFollowStopped,
-    MaxAutoTurnsUpdated {
-        value: String,
-    },
+    MaxAutoTurnsUpdated { value: String },
     StopKeywordToggled,
-    StopKeywordValueUpdated {
-        value: String,
-    },
+    StopKeywordValueUpdated { value: String },
     NoFileChangeStopToggled,
 }
 
@@ -37,7 +31,9 @@ pub(super) fn reduce_followup_controls(
     let mut effects = Vec::new();
 
     match event {
-        FollowupControlEvent::DraftWorkspaceSynced { workspace_directory } => {
+        FollowupControlEvent::DraftWorkspaceSynced {
+            workspace_directory,
+        } => {
             if state.sync_draft_workspace(workspace_directory) {
                 effects.push(FollowupControlEffect::OverlayUi);
             }
@@ -203,7 +199,10 @@ mod tests {
             },
         );
 
-        assert_eq!(reduced.state.auto_follow_state.stop_keyword_value(), "DONE_NOW");
+        assert_eq!(
+            reduced.state.auto_follow_state.stop_keyword_value(),
+            "DONE_NOW"
+        );
         assert!(reduced.state.last_auto_followup_activity.is_none());
         assert_eq!(
             reduced.effects,

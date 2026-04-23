@@ -214,7 +214,7 @@ fn build_session_browser_summary_lines(
         )),
         Line::from(format_session_filter_line(
             &browser_view.projection,
-            &filter_label,
+            filter_label,
             filter_session_count,
         )),
         Line::from(build_session_project_context_line(
@@ -223,7 +223,7 @@ fn build_session_browser_summary_lines(
         )),
         Line::from(format_session_browser_line(
             &browser_view.projection,
-            &filter_label,
+            filter_label,
         )),
     ];
 

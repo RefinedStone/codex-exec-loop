@@ -26,6 +26,7 @@ pub(in super::super) use live_status_layout::InlineTailView;
 pub(super) use plan_indicator::PlanModeIndicatorView;
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     plan_mode_indicator: PlanModeIndicatorView,

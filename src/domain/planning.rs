@@ -236,7 +236,7 @@ pub enum TaskActor {
     System,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriorityQueueSnapshot {
     pub next_task: Option<PriorityQueueTask>,
     pub active_tasks: Vec<PriorityQueueTask>,
@@ -244,7 +244,7 @@ pub struct PriorityQueueSnapshot {
     pub skipped_tasks: Vec<PriorityQueueSkippedTask>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriorityQueueTask {
     pub rank: usize,
     pub task_id: String,
@@ -257,7 +257,7 @@ pub struct PriorityQueueTask {
     pub rank_reasons: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriorityQueueSkippedTask {
     pub task_id: String,
     pub task_title: String,

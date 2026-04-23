@@ -30,7 +30,7 @@ Accepted planning stays on the `draft -> validate -> promote` contract.
 | --- | --- |
 | `:doctor`, `akra doctor` | read-only planning inspection |
 | `:init`, `akra init` | create or stage the default planning scaffold |
-| `:reset queue` | rewrites `task-ledger.json` and clears derived queue state |
+| `:reset queue` | rewrites the accepted task ledger and clears derived queue state |
 | `:reset directions` | rewrites direction-side defaults and removes generated supporting artifacts |
 | `:reset all` | replaces the full planning scaffold and clears derived queue state |
 | `:planning on|off` | toggles plan execution without deleting the workspace |
@@ -41,7 +41,7 @@ Key artifacts:
 | --- | --- |
 | `.codex-exec-loop/planning/directions.toml` | directions, detail-doc mapping, and queue-idle policy |
 | `.codex-exec-loop/planning/directions/<direction-id>.md` | long-form direction detail |
-| `.codex-exec-loop/planning/task-ledger.json` | accepted task source of truth |
+| `.codex-exec-loop/planning/task-ledger.json` | task ledger import/review artifact; relational store is authority in git-backed workspaces |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | queue-idle supporting prompt |
 | `.codex-exec-loop/planning/drafts/<draft>/...` | staged inactive edits awaiting promote |
 | `.codex-exec-loop/planning/rejected/<turn>/...` | archived invalid planning writes |
