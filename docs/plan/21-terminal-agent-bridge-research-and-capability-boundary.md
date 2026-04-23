@@ -1,125 +1,82 @@
 # Terminal Agent Bridge Research And Capability Boundary
 
-This document is the active hub and decision note for exploring Claude Code class terminal agents
-in Akra.
-
-It is research-first.
-No provider-specific adapter is implied by this document alone.
+This document is the research hub for future non-Codex terminal-agent work in Akra.
+It is a baseline, not an active rollout plan.
 
 ## Objective
 
-Find an elegant way for Akra to work with non-Codex terminal agents while preserving the product's
-terminal-first nature.
+Preserve a credible capability-first boundary for non-Codex work without pretending those agents
+are drop-in replacements for `codex app-server`.
 
-The output of this cycle should be:
+## Current Product Baseline
 
-- one hub doc that explains the decision and reading order
-- one current-state audit that maps Codex-only assumptions into capability targets
-- one transport and attachment matrix
-- one capability-boundary note
-- one experiment matrix
-- one seam priority note
-- one local tmux evidence package
-- one explicit readiness-gate verdict
-
-## Current Decision
-
-Primary path:
-
-- pre-opened local terminal attach, with tmux-oriented attachment as the concrete operator-ready
-  shape
-
-Fallback path:
-
-- controlled local wrapper inside a managed PTY
-
-Deferred until the local boundary is better evidenced:
-
-- SSH or tunnel mediation
-- proxy or vibeProxy-style mediation
-
-The decision is intentionally conservative.
-Akra is already terminal-native, so the first extension should stay close to real terminal behavior
-and avoid inventing network or proxy infrastructure too early.
+- main interactive runtime stays on `codex app-server`
+- the next bounded expansion is a Claude-first headless runner for `PlanningWorkerPort` and future
+  sub-task flows
+- main interactive Claude, SSH or tunnel mediation, and proxy mediation remain out of scope
 
 ## Constraints
 
-- Akra currently assumes `codex app-server` in multiple runtime seams.
-- External terminal agents may expose only TTY interaction instead of a stable session API.
-- Streaming fidelity, terminal-to-terminal data relay, interrupt behavior, and approval handling
-  matter more than transport novelty.
-- The operator may be allowed to pre-open a terminal or tmux pane before Akra attaches.
-- Security and recovery matter; local elegance wins over remote complexity unless research proves
-  otherwise.
+- Akra still ships around `codex app-server` for startup, session browsing, and the main
+  conversation runtime.
+- Future non-Codex work may expose only terminal or headless CLI behavior instead of a stable
+  provider session API.
+- Streaming fidelity, changed-file reporting, failure truth, and recovery vocabulary matter more
+  than transport novelty.
+- Capability seams must stay explicit so new work does not drift back into a fake universal
+  provider contract.
 
 ## Document Set
 
 Read the bridge work in this order:
 
-1. This hub for the current decision and reading order.
+1. This hub for the current baseline and reading order.
 2. [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
-   for the current Codex-shaped seams that need capability-first names.
+   for the Codex-shaped seams that already need capability-first names.
 3. [22-terminal-agent-transport-and-attachment-matrix.md](22-terminal-agent-transport-and-attachment-matrix.md)
-   for tmux, PTY, wrapper, SSH, and proxy or vibeProxy-style transport comparison.
+   for local attach, managed launch, SSH or tunnel, and proxy transport comparison.
 4. [23-terminal-agent-capability-boundary-and-session-contract.md](23-terminal-agent-capability-boundary-and-session-contract.md)
    for capability seams and session expectations.
 5. [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
-   for actual experiment design and evidence targets.
+   for future experiment design and evidence targets.
 6. [26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md)
-   for the already-landed seam order that bridge implementation must consume instead of replacing.
-7. [27-terminal-agent-tmux-local-attach-readiness-evidence.md](27-terminal-agent-tmux-local-attach-readiness-evidence.md)
-   for executed tmux local-attach evidence.
-8. [28-terminal-agent-tmux-local-attach-gate-verdict.md](28-terminal-agent-tmux-local-attach-gate-verdict.md)
-   for the gate decision and implementation constraints.
-
-## Short-Term Research Sequence
-
-1. Audit Codex-only coupling in current runtime seams.
-2. Compare terminal transport and attachment families with one rubric.
-3. Lock the capability boundary without inventing a fake shared session API.
-4. Write the experiments for local attach and managed wrapper.
-5. Only then decide whether a limited local-attach spike is worth queueing.
+   for the seam order that implementation work should consume instead of replacing.
 
 ## Current Report Status
 
-- The hub, current-state audit, transport matrix, capability note, experiment matrix, and seam
-  priority note now exist as `21` through `26`.
-- The tmux local-attach evidence and gate verdict now exist as `27` and `28`.
-- The primary path, fallback path, and deferred paths are now explicit instead of implied.
-- The remaining gap is the first bounded tmux implementation slice, not missing research coverage.
+- The hub, transport matrix, capability note, experiment matrix, assumption map, and seam-priority
+  note exist as `21` through `26`.
+- The main interactive runtime has been reset to a single `codex app-server` path.
+- The remaining implementation gap is no longer a tmux bridge slice.
+  It is the planning-worker-only Claude headless runner direction.
 
 ## Feasibility Judgment
 
 | Scope | Status | Reason |
 | --- | --- | --- |
-| research and planning set | feasible now | the document set already covers the hub, comparison rubric, capability boundary, and experiment checklist |
-| tmux-oriented local attach spike | feasible now as a bounded next slice | the Codex capability audit, seam cleanup, and local evidence now cover relay fidelity, interrupt behavior, approval handling, recovery anchors, and operator setup costs well enough to start one tmux-only implementation path |
-| managed local wrapper fallback | conditionally feasible | lifecycle control is strong, but realism costs must stay explicit |
-| SSH or tunnel attach | deferred | remote auth, recovery, and portability costs are not yet justified by evidence |
+| research and planning set | feasible now | the baseline docs already cover transport comparison, capability vocabulary, and experiment framing |
+| Claude-first headless planning runner | feasible now as the next bounded slice | `PlanningWorkerPort` already exists and currently has a single app-server-backed implementation |
+| managed launch or wrapper semantics | conditionally feasible | they fit a headless worker better than a new interactive runtime, but attachment truth still needs one explicit decision |
+| main interactive Claude runtime | deferred | changing the primary conversation runtime is a wider product decision than the next planning-worker slice |
+| SSH or tunnel attach | deferred | auth, recovery, and portability costs are not justified by the current scope |
 | proxy or vibeProxy-style mediation | deferred | extra protocol and trust surface are not justified without a concrete local gap |
 
 ## Acceptance Signals
 
-- `21` stays short and clearly names primary, fallback, and deferred paths
-- `25` maps current `CodexAppServerPort`, startup checks, session catalog assumptions,
-  approval or interrupt handling, and shell copy into capability targets
-- `22` compares tmux, PTY, wrapper, SSH or tunnel, and proxy or vibeProxy-style mediation with
-  one rubric
+- `21` stays short and clearly names the shipped runtime baseline plus the next bounded expansion
+- `22` compares candidate transport families without declaring a new shipped primary path
 - `23` explains `InteractiveTurnRuntime`, `StartupProbe`, `SessionCatalog`, and
   `TerminalBridgeAttachment` without pretending every provider shares Codex sessions
-- `24` describes concrete experiments for local attach, managed wrapper, and deferred-path evidence
+- `24` describes concrete future experiments for headless runner work and deferred-path evidence
   gaps
-- `26` records the prioritized seam follow-ups for bridge implementation
-- `27` records the executed tmux local-attach evidence with artifact links
-- `28` records the readiness-gate verdict and the constraints for the first real implementation
-  slice
+- `25` and `26` remain the implementation boundary input for future runner work
 
 ## Non-Goals
 
-- shipping a full Claude adapter in this cycle
-- assuming other agents match `codex app-server` semantics
+- shipping a main interactive Claude runtime in this cycle
+- reviving `tmux` as a hidden or alternate product path
 - starting with network proxy infrastructure
-- committing to one provider-specific UX before the bridge boundary is credible
+- assuming other agents match `codex app-server` semantics
 
 ## Related Docs
 
@@ -128,7 +85,5 @@ Read the bridge work in this order:
 - [24-terminal-agent-bridge-experiment-matrix.md](24-terminal-agent-bridge-experiment-matrix.md)
 - [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
 - [26-capability-map-prioritized-seam-follow-ups.md](26-capability-map-prioritized-seam-follow-ups.md)
-- [27-terminal-agent-tmux-local-attach-readiness-evidence.md](27-terminal-agent-tmux-local-attach-readiness-evidence.md)
-- [28-terminal-agent-tmux-local-attach-gate-verdict.md](28-terminal-agent-tmux-local-attach-gate-verdict.md)
 - [20-context-first-architecture-and-doc-coherence.md](20-context-first-architecture-and-doc-coherence.md)
 - [17-structure-and-architecture-debt-map.md](17-structure-and-architecture-debt-map.md)

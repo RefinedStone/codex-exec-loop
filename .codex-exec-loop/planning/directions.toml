@@ -24,33 +24,33 @@ state = "paused"
 [[directions]]
 id = "terminal-agent-bridge-research-and-capability-boundary"
 title = "Terminal agent bridge research and capability boundary"
-summary = "Preserve the completed bridge research set as the boundary and transport record that the implementation direction now consumes."
+summary = "Preserve `docs/plan/21` through `26` as the capability and transport baseline for future non-Codex work without treating any terminal bridge transport as the active product path."
 success_criteria = [
-    "The bridge hub, transport matrix, capability boundary note, and experiment matrix remain the stable reference set for future implementation work.",
-    "The primary path, fallback path, and deferred transport families stay explicit instead of drifting back into implicit provider assumptions.",
-    "Capability-first seams remain the contract for implementation so transport work does not reopen a fake universal provider API.",
+    "The bridge hub, transport matrix, capability boundary note, and experiment matrix remain a stable reference set for future non-Codex exploration.",
+    "The research docs keep candidate transport families explicit without presenting tmux or any other bridge transport as the current shipped runtime path.",
+    "Capability-first seams remain the contract so future headless runner work does not reopen a fake universal provider API.",
 ]
 scope_hints = [
     "Treat this direction as a completed research baseline rather than the place to queue new implementation tasks.",
-    "Keep the managed wrapper as fallback and SSH or tunnel plus proxy mediation deferred unless the tmux path proves a concrete gap.",
-    "Do not remove the research docs just because the next queue items are implementation-facing.",
+    "Use it when future work needs transport comparison or capability vocabulary, not when choosing the active product runtime.",
+    "Keep the research docs concise and current after the tmux-specific readiness package is removed from the official set.",
 ]
 detail_doc_path = ".codex-exec-loop/planning/directions/terminal-agent-bridge-research-and-capability-boundary.md"
 state = "done"
 
 [[directions]]
-id = "terminal-agent-bridge-implementation"
-title = "Terminal agent bridge implementation"
-summary = "Turn the completed terminal-agent bridge research into bounded implementation slices, starting with tmux local attach and keeping wider transport work parked."
+id = "claude-first-headless-cli-runner"
+title = "Claude-first headless CLI runner"
+summary = "Keep the main interactive runtime on Codex app-server while preparing a Claude-first headless runner for `PlanningWorkerPort` and sub-task flows only."
 success_criteria = [
-    "The tmux local-attach readiness work and the first real tmux bridge slice land on the capability seams already defined in the repo.",
-    "Implementation stays honest about startup, attachment, interrupt, approval, and recovery truth instead of inheriting Codex app-server assumptions.",
-    "Managed wrapper remains an explicit fallback and SSH or tunnel plus proxy mediation stay out of scope until tmux evidence proves otherwise.",
+    "The shell bootstrap path stays directly wired to `CodexAppServerAdapter` with no terminal-bridge selector or tmux-specific environment contract in the product runtime.",
+    "The next executable work fixes `PlanningWorkerPort` as the extension seam for a Claude-first headless runner while leaving `AppServerPlanningWorkerAdapter` as the current shipped implementation.",
+    "Main interactive Claude, SSH or tunnel mediation, proxy mediation, and any managed wrapper details beyond planning-worker scope stay explicitly out of scope.",
 ]
 scope_hints = [
     "Keep concrete execution slices in task-ledger.json and use this direction plus its detail doc for strategy, sequencing, and scope control.",
-    "Treat SessionCatalog as optional so attach-only or handle-based reattach paths remain valid.",
-    "Do not widen into provider-wide abstractions, wrapper implementation, or remote-attach/proxy-mediated paths before the tmux path is proven locally.",
+    "Treat the current product baseline as `Codex main interactive + Claude hidden planning or sub-task runner`, not as a new general terminal bridge rollout.",
+    "Use attachment vocabulary generically, but defer the final headless attachment-profile constructor choice until the first bounded runner design slice.",
 ]
-detail_doc_path = ".codex-exec-loop/planning/directions/terminal-agent-bridge-implementation.md"
+detail_doc_path = ".codex-exec-loop/planning/directions/claude-first-headless-cli-runner.md"
 state = "active"

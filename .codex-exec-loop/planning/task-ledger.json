@@ -642,13 +642,13 @@
     {
       "id": "terminal-bridge-primary-path-decision-note",
       "direction_id": "terminal-agent-bridge-research-and-capability-boundary",
-      "direction_relation_note": "The primary-path decision is now complete in the merged feasibility docs, locking tmux-based local attach as the primary research path, the managed wrapper as fallback, and SSH or proxy-style mediation as deferred.",
-      "title": "Choose the primary and fallback terminal bridge paths",
-      "description": "Turn the completed research matrix into one decision note that names the primary bridge path, the fallback path, and the reasons for deferring the remaining transport options for now. This is now shipped through the merged research detail and hub docs on branch `docs/native-planning-runtime-terminal-bridge-feasibility`, commit `03ef824`, and PR `#359`.",
+      "direction_relation_note": "The transport-baseline decision is now complete in the merged feasibility docs, recording local attach, managed launch, and deferred remote transports without binding the current product path to any local-attach rollout.",
+      "title": "Record the terminal bridge transport baseline",
+      "description": "Turn the completed research matrix into one decision note that records the candidate transport families and the reasons for deferring broader remote options for now. This is now shipped through the merged research detail and hub docs on branch `docs/native-planning-runtime-terminal-bridge-feasibility`, commit `03ef824`, and PR `#359`.",
       "status": "done",
       "base_priority": 86,
       "dynamic_priority_delta": 0,
-      "priority_reason": "The path decision is already documented and merged, so queue follow-up should move to the blocked readiness gate for any local attach spike rather than keep this as a pending proposal.",
+      "priority_reason": "The transport baseline is already documented and merged, so queue follow-up should move to the active planning-worker headless runner direction instead of promoting a new bridge path here.",
       "depends_on": [
         "terminal-bridge-research-matrix"
       ],
@@ -659,15 +659,15 @@
       "updated_at": "2026-04-22T19:35:00Z"
     },
     {
-      "id": "terminal-bridge-local-spike-readiness-gate",
-      "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "This task closes the implementation-direction entry gate by recording the tmux local-attach evidence and verdict in docs/plan/27 and docs/plan/28 before the first real adapter slice starts.",
-      "title": "Gate tmux local-attach spike on capability audit and evidence",
-      "description": "Track the preconditions for any tmux-based local attach spike after the completed bridge research pass. This gate is now closed by the executed local evidence in docs/plan/27-terminal-agent-tmux-local-attach-readiness-evidence.md and the verdict in docs/plan/28-terminal-agent-tmux-local-attach-gate-verdict.md, which record attach discovery, prompt injection, incremental relay, interrupt truth, approval truth, recovery anchors, and operator failure signatures without adding a provider adapter yet.",
+      "id": "runtime-codex-app-server-single-path-reset",
+      "direction_id": "claude-first-headless-cli-runner",
+      "direction_relation_note": "This reset slice removes the tmux product path and restores a single Codex main-session runtime so the next queue head can focus on `PlanningWorkerPort` instead of bridge rollout residue.",
+      "title": "Reset the runtime to a Codex app-server single path",
+      "description": "Remove the `tmux` selector and adapter path from the product runtime, wire `shell_entrypoint` directly to `CodexAppServerAdapter`, delete tmux-specific readiness docs, and rewrite planning authority so the official next step becomes a Claude-first headless planning worker instead of further tmux implementation.",
       "status": "done",
-      "base_priority": 89,
-      "dynamic_priority_delta": 2,
-      "priority_reason": "The readiness evidence and verdict now exist as reviewable docs plus captured artifacts, so this prerequisite should stop blocking queue progression and hand off directly to the first real tmux implementation slice.",
+      "base_priority": 93,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The runtime and authority reset is complete, so queue progression can move directly to the first bounded Claude headless planning-worker design task.",
       "depends_on": [
         "context-first-codex-capability-boundary-audit"
       ],
@@ -678,61 +678,82 @@
       "updated_at": "2026-04-23T00:00:00Z"
     },
     {
-      "id": "terminal-bridge-primary-implementation-slice",
-      "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "With docs/plan/27 and docs/plan/28 closing the tmux readiness gate, the next executable slice is the first reviewable tmux adapter entrypoint rather than a broad all-at-once bridge rollout.",
-      "title": "Land the first tmux local-attach adapter entrypoint",
-      "description": "Implement the first reviewable tmux-only bridge slice by wiring a concrete tmux adapter through `StartupProbe` and `TerminalBridgeAttachment`, validating `tmux` presence plus target pane or session-handle resolution, surfacing missing-server and missing-target copy before shell entry, and exposing `LocalAttach + SessionHandle` with truthful `ManualHandoff` approval and `RuntimeNative` interrupt semantics. Leave live relay, transcript recovery, completion heuristics, and optional catalog discovery to follow-up slices.",
+      "id": "claude-headless-planning-worker-contract",
+      "direction_id": "claude-first-headless-cli-runner",
+      "direction_relation_note": "With the runtime reset complete, the clearest next slice is to define what a Claude-first headless planning worker must promise through `PlanningWorkerPort` before any adapter code lands.",
+      "title": "Define the Claude headless planning-worker contract",
+      "description": "Write the bounded contract for a Claude-first headless planning worker behind `PlanningWorkerPort`: launch inputs, environment assumptions, streaming and failure handling, changed-file reporting, and the exact places where the worker may differ from `AppServerPlanningWorkerAdapter` while leaving the main interactive Codex session untouched.",
       "status": "ready",
-      "base_priority": 90,
+      "base_priority": 94,
       "dynamic_priority_delta": 2,
-      "priority_reason": "The latest operator request still leaves this tmux attach and probe slice as the highest-priority executable item. Keep it as the single ready head so execution can resume from one concrete bridge implementation task while the remaining tmux follow-ups stay blocked behind it.",
+      "priority_reason": "This is now the single ready queue head because the product path reset is done and the next uncertainty is the planning-worker contract, not another runtime or transport experiment.",
       "depends_on": [
-        "terminal-bridge-local-spike-readiness-gate"
+        "runtime-codex-app-server-single-path-reset"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T05:20:00Z"
+      "updated_at": "2026-04-24T00:00:00Z"
     },
     {
-      "id": "terminal-bridge-tmux-runtime-relay-and-completion",
-      "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "The gate verdict and latest main-session answer both call out live relay, transcript recovery, interrupt, and completion detection as the next bounded follow-up once the tmux entrypoint exists.",
-      "title": "Add tmux live relay, recovery capture, and turn completion",
-      "description": "Extend the tmux bridge after the attach entrypoint lands by implementing prompt submission via literal paste, incremental output relay via `pipe-pane`, transcript recovery via `capture-pane`, interrupt requests via `C-c`, and transcript or terminal-derived completion heuristics without inventing provider turn events or widening into wrapper, SSH, or proxy paths.",
-      "status": "blocked",
-      "base_priority": 88,
+      "id": "claude-headless-runner-attachment-truth",
+      "direction_id": "claude-first-headless-cli-runner",
+      "direction_relation_note": "The contract slice should hand off to one explicit attachment-truth decision so the future runner does not inherit interactive-session assumptions accidentally.",
+      "title": "Choose attachment truth for the Claude headless runner",
+      "description": "Decide how the Claude-first headless planning worker should express `TerminalBridgeAttachmentProfile`: reuse `ManagedWrapper`, add a new managed-headless constructor, or document another bounded truth that fits hidden planning and future sub-task runners without implying interactive attach or session catalog semantics.",
+      "status": "proposed",
+      "base_priority": 89,
       "dynamic_priority_delta": 1,
-      "priority_reason": "The latest execution-focused summary made this a concrete queued follow-up, not just a candidate. It remains blocked only because the active tmux entrypoint slice must land first so relay and completion work can build on a real attachment path.",
+      "priority_reason": "The direction doc already makes this decision point explicit, but it should stay behind the contract slice so the attachment vocabulary is chosen against a concrete runner contract rather than by intuition alone.",
       "depends_on": [
-        "terminal-bridge-primary-implementation-slice"
+        "claude-headless-planning-worker-contract"
       ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T03:45:00Z"
+      "updated_at": "2026-04-24T00:00:00Z"
     },
     {
-      "id": "terminal-bridge-tmux-session-catalog-reattach-surface",
-      "direction_id": "terminal-agent-bridge-implementation",
-      "direction_relation_note": "The capability-boundary docs keep `SessionCatalog` optional, so any tmux discovery or reattach UX should follow the explicit handle path instead of leading it.",
-      "title": "Add optional tmux session catalog and reattach surface",
-      "description": "Once the explicit tmux pane or session-handle attach path is stable, add an optional tmux discovery surface that exposes handle-based reattach without making catalog availability mandatory. Keep attach-only flows valid, and do not turn tmux discovery into a fake provider session model.",
+      "id": "claude-headless-planning-worker-adapter",
+      "direction_id": "claude-first-headless-cli-runner",
+      "direction_relation_note": "After the contract and attachment-truth work land, the next reviewable slice is one concrete adapter that satisfies `PlanningWorkerPort` without changing the main interactive runtime wiring.",
+      "title": "Implement the first Claude headless planning-worker adapter",
+      "description": "Add the first production adapter that satisfies `PlanningWorkerPort` with a Claude-first headless CLI runner, mapping launch, stream collection, failure reporting, and changed planning file paths into the existing planning-worker response contract while keeping `AppServerPlanningWorkerAdapter` available as the current baseline or fallback until rollout policy is decided.",
       "status": "blocked",
-      "base_priority": 80,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "This is now explicit queued follow-up work because the latest summary named the optional session-catalog surface as a concrete post-entrypoint slice. It stays blocked behind the active tmux entrypoint so attach-only and explicit-handle flows can stabilize first.",
+      "base_priority": 91,
+      "dynamic_priority_delta": 1,
+      "priority_reason": "This is the direct implementation follow-up, but it should wait until the contract and attachment-truth slices fix the exact launch and reporting semantics.",
       "depends_on": [
-        "terminal-bridge-primary-implementation-slice"
+        "claude-headless-planning-worker-contract",
+        "claude-headless-runner-attachment-truth"
       ],
+      "blocked_by": [
+        "claude-headless-planning-worker-contract",
+        "claude-headless-runner-attachment-truth"
+      ],
+      "created_by": "llm",
+      "last_updated_by": "llm",
+      "source_turn_id": null,
+      "updated_at": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "claude-headless-subtask-runner-followup",
+      "direction_id": "claude-first-headless-cli-runner",
+      "direction_relation_note": "The product baseline explicitly calls out hidden planning and future sub-task work as the first scope for Claude, so sub-task runtime follow-up should stay visible but behind the planning-worker adapter.",
+      "title": "Extend the Claude headless runner into sub-task flows",
+      "description": "After the planning-worker adapter is stable, extend the same Claude-first headless runner baseline into future sub-task flows while preserving the rule that the main interactive session remains `codex app-server`. Keep rollout bounded to hidden or delegated work and do not widen into a main interactive Claude path here.",
+      "status": "proposed",
+      "base_priority": 83,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "The user intent already names sub-task support as part of the target baseline, but it is still a follow-up behind the planning-worker contract and first adapter slice.",
+      "depends_on": [],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
-      "updated_at": "2026-04-23T03:45:00Z"
+      "updated_at": "2026-04-24T00:00:00Z"
     }
   ]
 }

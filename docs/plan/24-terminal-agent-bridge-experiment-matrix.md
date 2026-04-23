@@ -1,71 +1,60 @@
 # Terminal Agent Bridge Experiment Matrix
 
-This document turns the bridge research into concrete experiments.
+This document turns the bridge research into concrete future experiments.
 
 The purpose is evidence, not premature implementation.
-Local attach and managed wrapper get executable experiments first.
-SSH or tunnel and proxy or vibeProxy-style mediation stay in deferred-feasibility mode.
-
-The executed tmux local-attach pass now lives in
-[27-terminal-agent-tmux-local-attach-readiness-evidence.md](27-terminal-agent-tmux-local-attach-readiness-evidence.md),
-and its gate decision lives in
-[28-terminal-agent-tmux-local-attach-gate-verdict.md](28-terminal-agent-tmux-local-attach-gate-verdict.md).
+The next executable experiment family is a Claude-first headless runner behind `PlanningWorkerPort`
+while the main interactive runtime stays on `codex app-server`.
 
 ## Experiment Rules
 
-- run local experiments before any remote or proxy work
-- record what Akra can really observe and control, not what the transport theoretically allows
-- treat terminal-to-terminal data relay as a first-class concern
+- keep the main interactive runtime unchanged while exploring the first non-Codex worker path
+- record what Akra can really observe and control, not what the runtime theoretically allows
+- treat changed-file reporting, stream completion, and failure truth as first-class concerns
 - capture both success and failure signatures so deferred paths have explicit reasons
 
 ## Primary Experiments
 
 | Experiment | Candidate | Goal | Evidence to collect | Pass signal |
 | --- | --- | --- | --- | --- |
-| local attach via tmux | pre-opened local attach | prove Akra can attach to a stable pane or session and keep one terminal cockpit story | attach target discovery, prompt injection path, live output capture, stop behavior, restart behavior | pane-oriented attach works with explainable operator setup and no fake session model |
-| managed wrapper PTY | local wrapper | prove Akra can launch and control a target CLI when attach discovery is unavailable | launch flow, stream capture fidelity, interrupt support, prompt boundary handling, teardown and recovery | wrapper path is more controlled but clearly documented as less faithful than tmux attach |
+| Claude headless planning worker | managed local launch | prove Akra can satisfy `PlanningWorkerPort` with a Claude-first headless CLI runner without changing the main interactive runtime | launch contract, stream capture, completion or failure detection, changed planning file reporting, environment requirements | hidden planning runs through the new worker while the main conversation path remains on `codex app-server` |
+| headless attachment truth | managed local launch | decide how the runner should surface attachment truth without pretending it is a full interactive attach story | `TerminalBridgeAttachmentProfile` mode choice, recovery-anchor choice, operator notices, future extensibility notes | the runner advertises explicit truth such as `ManagedWrapper` or a new managed-headless constructor instead of leaking provider assumptions |
 
 ## Deferred Feasibility Questions
 
 | Candidate | Question that must be answered before a spike | Required evidence |
 | --- | --- | --- |
-| SSH or tunnel attach | does the remote use case justify wider auth and recovery complexity after local attach is already credible? | concrete remote operator story plus recovery notes that local attach cannot satisfy |
-| proxy or vibeProxy-style mediation | what specific fidelity, replay, or observer requirement cannot be met by tmux or wrapper paths? | one explicit gap, a smaller failed local attempt, and a security posture note |
+| main interactive Claude runtime | what operator or product requirement justifies replacing the shipped Codex main session? | one explicit operator story plus transition and recovery notes |
+| SSH or tunnel attach | does the remote use case justify wider auth and recovery complexity after a local headless worker is already credible? | concrete remote operator story plus recovery notes that local launch cannot satisfy |
+| proxy or vibeProxy-style mediation | what specific fidelity, replay, or observer requirement cannot be met by local launch or other simpler paths? | one explicit gap, a smaller failed local attempt, and a security posture note |
 
 ## Scenario Checklist
 
 Every primary experiment should walk the same scenarios:
 
 1. Detect prerequisites before entry.
-2. Attach or launch successfully.
+2. Launch the worker successfully.
 3. Send a one-line prompt.
 4. Send multiline input without mangling it.
-5. Observe streaming output with enough fidelity to mirror the operator story.
-6. Request interrupt or stop and record the true provider behavior.
-7. Handle an approval or confirmation prompt without hiding responsibility.
-8. Restart Akra and test whether reattach is possible, partial, or unsupported.
+5. Observe streaming output with enough fidelity to decide completion or failure.
+6. Capture changed planning files truthfully.
+7. Record what interrupt or cancellation can and cannot do in the worker path.
+8. Restart Akra and record whether worker recovery is supported, partial, or intentionally absent.
 
-## tmux-Focused Checks
-
-- confirm how Akra addresses the pane or session
-- confirm how prompt text is injected and whether multiline payloads stay faithful
-- confirm whether output is captured through snapshot, pipe, or direct control semantics
-- confirm what stable recovery anchor Akra can store after restart
-- record where tmux semantics leak into operator setup so the path stays explicit rather than
-  magical
-
-## Managed Wrapper Checks
+## Headless Runner Checks
 
 - confirm the exact launch contract and environment preparation
-- confirm whether the wrapper can preserve the same approval and interrupt semantics as the real CLI
-- record where wrapper control improves recovery and where it distorts real behavior
-- keep a clear note on what is wrapper-only convenience and not portable provider truth
+- confirm whether the worker runs as a hidden planning-only surface rather than a new main session
+- confirm how completion and failure are detected without relying on a provider session catalog
+- confirm how changed planning files are surfaced back through `PlanningWorkerPort`
+- record where attachment vocabulary needs a managed headless truth instead of an interactive
+  attach claim
 
 ## Expected Outcome
 
-- tmux-oriented local attach either stays the primary path with evidence or loses that status for a
-  written reason
-- managed wrapper either stays the fallback path with known realism costs or is rejected with
-  evidence
-- SSH or tunnel and proxy or vibeProxy-style mediation remain deferred unless the local experiments
-  reveal a concrete unsolved gap
+- a Claude-first headless runner either becomes the next bounded planning-worker slice or is
+  rejected for a written reason
+- the main interactive runtime stays on `codex app-server` unless a later decision explicitly
+  changes that baseline
+- SSH or tunnel and proxy or vibeProxy-style mediation remain deferred unless local headless work
+  reveals a concrete unsolved gap
