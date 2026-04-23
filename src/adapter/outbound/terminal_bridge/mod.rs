@@ -3,12 +3,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
 use crate::adapter::outbound::app_server::CodexAppServerAdapter;
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -17,7 +17,7 @@ use crate::application::port::outbound::startup_probe_port::{
     StartupProbeContext, StartupProbePort,
 };
 use crate::application::service::conversation_runtime_event::{
-    ConversationStreamEvent, emit_attachment_observed,
+    emit_attachment_observed, ConversationStreamEvent,
 };
 use crate::domain::conversation::{
     ConversationControlSupport, ConversationMessage, ConversationMessageKind,
@@ -36,6 +36,8 @@ const TMUX_DEFAULT_POLL_INTERVAL_MS: u64 = 250;
 const TMUX_DEFAULT_IDLE_TIMEOUT_MS: u64 = 3000;
 const TMUX_DEFAULT_NO_OUTPUT_TIMEOUT_SECS: u64 = 30;
 const TMUX_SCHEMA_SNAPSHOT_LABEL: &str = "not applicable for tmux local attach";
+const TMUX_STREAMING_STATUS_PREFIX: &str = "streaming through tmux pane";
+const TMUX_MANUAL_HANDOFF_STATUS_PREFIX: &str = "manual operator handoff required in tmux pane";
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -326,6 +328,7 @@ impl TmuxLocalAttachAdapter {
         let mut capture = self.enable_pipe_capture(&target.pane_id)?;
         let mut expected_echo = expected_prompt_echo(prompt);
         let mut aggregated_output = String::new();
+        let mut manual_handoff_active = false;
         let mut saw_output = false;
         let start = Instant::now();
         let mut last_output_change = start;
@@ -334,7 +337,7 @@ impl TmuxLocalAttachAdapter {
             turn_id: turn_id.clone(),
         });
         let _ = event_sender.send(ConversationStreamEvent::StatusUpdated {
-            text: format!("streaming through tmux pane {}", target.display_name),
+            text: streaming_status_text(target),
         });
 
         self.inject_prompt(&target.pane_id, prompt)?;
@@ -352,10 +355,19 @@ impl TmuxLocalAttachAdapter {
                         phase: None,
                         delta: chunk,
                     });
+                    sync_manual_handoff_status(
+                        &aggregated_output,
+                        &mut manual_handoff_active,
+                        target,
+                        event_sender,
+                    );
                 }
             }
 
-            if saw_output && last_output_change.elapsed() >= self.config.idle_timeout {
+            if saw_output
+                && !manual_handoff_active
+                && last_output_change.elapsed() >= self.config.idle_timeout
+            {
                 break;
             }
             if !saw_output && start.elapsed() >= self.config.no_output_timeout {
@@ -635,6 +647,59 @@ fn parse_list_panes_output(stdout: &str) -> Result<Vec<TmuxPaneTarget>> {
         .collect()
 }
 
+fn sync_manual_handoff_status(
+    transcript: &str,
+    manual_handoff_active: &mut bool,
+    target: &TmuxPaneTarget,
+    event_sender: &std::sync::mpsc::Sender<ConversationStreamEvent>,
+) {
+    let handoff_detected = detect_manual_handoff_prompt(transcript);
+    if handoff_detected == *manual_handoff_active {
+        return;
+    }
+
+    *manual_handoff_active = handoff_detected;
+    let text = if handoff_detected {
+        manual_handoff_status_text(target)
+    } else {
+        streaming_status_text(target)
+    };
+    let _ = event_sender.send(ConversationStreamEvent::StatusUpdated { text });
+}
+
+fn streaming_status_text(target: &TmuxPaneTarget) -> String {
+    format!("{TMUX_STREAMING_STATUS_PREFIX} {}", target.display_name)
+}
+
+fn manual_handoff_status_text(target: &TmuxPaneTarget) -> String {
+    format!(
+        "{TMUX_MANUAL_HANDOFF_STATUS_PREFIX} {} ({}); respond in the attached terminal to continue",
+        target.display_name, target.pane_id
+    )
+}
+
+fn detect_manual_handoff_prompt(transcript: &str) -> bool {
+    let Some(line) = transcript
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+    else {
+        return false;
+    };
+
+    let normalized = line
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    let confirmation_suffixes = ["[y/n]", "(y/n)", "[yes/no]", "(yes/no)"];
+
+    confirmation_suffixes
+        .iter()
+        .any(|suffix| normalized.ends_with(suffix))
+}
+
 fn sanitize_terminal_transcript(text: &str) -> String {
     let mut sanitized = String::new();
     let mut chars = text.chars().peekable();
@@ -757,9 +822,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        InteractiveTurnRuntimePort, TerminalBridgeMode, TmuxLocalAttachAdapter,
-        TmuxLocalAttachConfig, common_prefix_byte_len, parse_list_panes_output,
-        sanitize_terminal_transcript, strip_prompt_echo,
+        common_prefix_byte_len, detect_manual_handoff_prompt, parse_list_panes_output,
+        sanitize_terminal_transcript, strip_prompt_echo, InteractiveTurnRuntimePort,
+        TerminalBridgeMode, TmuxLocalAttachAdapter, TmuxLocalAttachConfig,
+        TMUX_MANUAL_HANDOFF_STATUS_PREFIX,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
@@ -830,6 +896,17 @@ mod tests {
     }
 
     #[test]
+    fn manual_handoff_prompt_detection_only_matches_pending_tail_prompts() {
+        assert!(detect_manual_handoff_prompt(
+            "PROMPT> printf \"approve? [y/N] \"; read answer\napprove? [y/N]"
+        ));
+        assert!(!detect_manual_handoff_prompt(
+            "approve? [y/N] y\nanswer=y\nPROMPT>"
+        ));
+        assert!(!detect_manual_handoff_prompt("assistant reply\nall done"));
+    }
+
+    #[test]
     fn tmux_local_attach_streams_a_shell_prompt_through_a_real_pane() {
         if which::which("tmux").is_err() {
             return;
@@ -888,20 +965,16 @@ mod tests {
         result.expect("tmux local attach stream should succeed");
 
         let events = rx.iter().collect::<Vec<_>>();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ConversationStreamEvent::AttachmentObserved { .. }))
-        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ConversationStreamEvent::AttachmentObserved { .. })));
         assert!(events.iter().any(|event| matches!(
             event,
             ConversationStreamEvent::ThreadPrepared { thread_id, .. } if thread_id == &pane_id
         )));
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. }))
-        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. })));
         assert!(events.iter().any(|event| matches!(
             event,
             ConversationStreamEvent::AgentMessageCompleted { text, .. } if text.contains("smoke-bridge")
@@ -1008,10 +1081,136 @@ mod tests {
             event,
             ConversationStreamEvent::ThreadPrepared { thread_id, .. } if thread_id == &pane_id
         )));
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. }))
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. })));
+    }
+
+    #[test]
+    fn tmux_local_attach_keeps_manual_handoff_turn_open_until_input_arrives() {
+        if which::which("tmux").is_err() {
+            return;
+        }
+
+        let socket = format!(
+            "codex-exec-loop-test-{}",
+            super::unique_label("tmux-local-attach-handoff")
         );
+        let session_name = "codex-exec-loop-handoff";
+        let create_status = Command::new("tmux")
+            .args([
+                "-L",
+                socket.as_str(),
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "bash --noprofile --norc",
+            ])
+            .status()
+            .expect("tmux test session should start");
+        assert!(create_status.success());
+
+        let pane_id = Command::new("tmux")
+            .args([
+                "-L",
+                socket.as_str(),
+                "display-message",
+                "-p",
+                "-t",
+                &format!("{session_name}:0.0"),
+                "#{pane_id}",
+            ])
+            .output()
+            .expect("pane id should resolve");
+        let pane_id = String::from_utf8_lossy(&pane_id.stdout).trim().to_string();
+        assert!(!pane_id.is_empty());
+
+        let adapter = TmuxLocalAttachAdapter {
+            config: TmuxLocalAttachConfig {
+                socket: Some(socket.clone()),
+                target: Some(pane_id.clone()),
+                poll_interval: Duration::from_millis(50),
+                idle_timeout: Duration::from_millis(250),
+                no_output_timeout: Duration::from_secs(10),
+            },
+        };
+        let (tx, rx) = channel();
+        let stream_handle = std::thread::spawn(move || {
+            adapter.run_new_thread_stream(
+                "/tmp",
+                r#"printf "approve? [y/N] "; read answer; printf "answer=%s\n" "$answer""#,
+                tx,
+            )
+        });
+        let mut events = Vec::new();
+        let mut saw_manual_handoff = false;
+
+        while !saw_manual_handoff {
+            let event = rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("handoff flow should emit prompt and status updates");
+            saw_manual_handoff = matches!(
+                &event,
+                ConversationStreamEvent::StatusUpdated { text }
+                    if text.contains(TMUX_MANUAL_HANDOFF_STATUS_PREFIX)
+            );
+            events.push(event);
+        }
+
+        match rx.recv_timeout(Duration::from_millis(700)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(ConversationStreamEvent::TurnCompleted { .. }) => {
+                panic!("manual handoff turn should not complete before operator input")
+            }
+            Ok(event) => events.push(event),
+            Err(error) => panic!("manual handoff wait failed unexpectedly: {error}"),
+        }
+
+        let answer_status = Command::new("tmux")
+            .args([
+                "-L",
+                socket.as_str(),
+                "send-keys",
+                "-t",
+                pane_id.as_str(),
+                "y",
+                "C-m",
+            ])
+            .status()
+            .expect("operator input should be relayed into pane");
+        assert!(answer_status.success());
+
+        loop {
+            let event = rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("manual handoff turn should settle after operator input");
+            let should_stop = matches!(&event, ConversationStreamEvent::TurnCompleted { .. });
+            events.push(event);
+            if should_stop {
+                break;
+            }
+        }
+
+        let _ = Command::new("tmux")
+            .args(["-L", socket.as_str(), "kill-server"])
+            .status();
+        let stream_result = stream_handle
+            .join()
+            .expect("stream worker thread should not panic");
+        stream_result.expect("manual handoff stream should settle cleanly");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ConversationStreamEvent::StatusUpdated { text }
+                if text.contains(TMUX_MANUAL_HANDOFF_STATUS_PREFIX)
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ConversationStreamEvent::AgentMessageCompleted { text, .. } if text.contains("answer=y")
+        )));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. })));
     }
 }
