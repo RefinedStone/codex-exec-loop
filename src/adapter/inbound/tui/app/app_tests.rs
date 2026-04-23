@@ -45,7 +45,9 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+use crate::domain::conversation::{
+    ConversationControlSupport, ConversationRuntimeControlTruth, ConversationSnapshot,
+};
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
@@ -58,9 +60,12 @@ struct FakeCodexAppServerPort {
     new_thread_calls: Mutex<Vec<(String, String)>>,
     hidden_planning_calls: Mutex<Vec<(String, String)>>,
     turn_calls: Mutex<Vec<(String, String)>>,
+    interrupt_requests: Mutex<Vec<Option<String>>>,
     new_thread_stream_behavior: Mutex<FakeStreamBehavior>,
     hidden_planning_stream_behavior: Mutex<FakeStreamBehavior>,
     turn_stream_behavior: Mutex<FakeStreamBehavior>,
+    interrupt_error: Mutex<Option<String>>,
+    runtime_control_truth: Mutex<ConversationRuntimeControlTruth>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -81,6 +86,13 @@ enum FakeStreamAttachmentEvent {
 }
 
 impl CodexAppServerPort for FakeCodexAppServerPort {
+    fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+        *self
+            .runtime_control_truth
+            .lock()
+            .expect("runtime-control-truth mutex poisoned")
+    }
+
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         Ok(AppServerStartupContext {
             launch_target_ok: true,
@@ -153,6 +165,23 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
                 .expect("turn stream behavior mutex poisoned")
                 .clone(),
         )
+    }
+
+    fn request_interrupt(&self, thread_id: Option<&str>) -> Result<()> {
+        self.interrupt_requests
+            .lock()
+            .expect("interrupt-request mutex poisoned")
+            .push(thread_id.map(str::to_string));
+        if let Some(error) = self
+            .interrupt_error
+            .lock()
+            .expect("interrupt-error mutex poisoned")
+            .clone()
+        {
+            Err(anyhow::anyhow!(error))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -378,6 +407,49 @@ fn fake_stream_behavior_can_omit_attachment_events() {
             .expect("terminal event should be emitted first when attachment is omitted"),
         ConversationStreamEvent::TurnCompleted { .. }
     ));
+}
+
+#[test]
+fn ctrl_c_requests_runtime_interrupt_for_running_turn() {
+    let (mut app, port) = make_test_app();
+    *port
+        .runtime_control_truth
+        .lock()
+        .expect("runtime-control-truth mutex poisoned") = ConversationRuntimeControlTruth::new(
+        ConversationControlSupport::ManualHandoff,
+        ConversationControlSupport::RuntimeNative,
+    );
+    let mut conversation = ConversationViewModel::new_draft_with_truth(
+        "/tmp/root".to_string(),
+        ConversationRuntimeControlTruth::new(
+            ConversationControlSupport::ManualHandoff,
+            ConversationControlSupport::RuntimeNative,
+        ),
+    );
+    conversation.record_thread_prepared(
+        "thread-7".to_string(),
+        "Thread 7".to_string(),
+        "/tmp/root".to_string(),
+    );
+    conversation.mark_turn_started("turn-7".to_string());
+    app.conversation_state = ConversationState::ready(conversation);
+
+    app.handle_ctrl_c();
+
+    assert_eq!(
+        *port
+            .interrupt_requests
+            .lock()
+            .expect("interrupt-request mutex poisoned"),
+        vec![Some("thread-7".to_string())]
+    );
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready after interrupt request");
+    };
+    assert_eq!(
+        conversation.status_text,
+        "runtime interrupt requested for thread-7; waiting for the active turn to settle"
+    );
 }
 
 #[derive(Debug, Clone, Default)]

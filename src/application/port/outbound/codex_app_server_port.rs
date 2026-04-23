@@ -30,6 +30,11 @@ pub trait CodexAppServerPort: Send + Sync {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()>;
+    fn request_interrupt(&self, _thread_id: Option<&str>) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "interrupt control is not exposed by codex app-server"
+        ))
+    }
 }
 
 impl<T> StartupProbePort for T
@@ -78,6 +83,10 @@ where
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         CodexAppServerPort::run_turn_stream(self, thread_id, prompt, event_sender)
+    }
+
+    fn request_interrupt(&self, thread_id: Option<&str>) -> Result<()> {
+        CodexAppServerPort::request_interrupt(self, thread_id)
     }
 }
 
@@ -245,6 +254,9 @@ mod tests {
         runtime_port
             .run_turn_stream("thread-123", "follow-up", turn_sender)
             .expect("turn stream should run");
+        let interrupt_error = runtime_port
+            .request_interrupt(Some("thread-123"))
+            .expect_err("interrupt should remain unsupported by default");
 
         assert_eq!(
             truth,
@@ -292,5 +304,9 @@ mod tests {
                 .expect("turn stream should emit a terminal event"),
             ConversationStreamEvent::TurnCompleted { .. }
         ));
+        assert_eq!(
+            interrupt_error.to_string(),
+            "interrupt control is not exposed by codex app-server"
+        );
     }
 }

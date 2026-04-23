@@ -105,6 +105,22 @@ pub(crate) fn interrupt_blocked_status_text(
     }
 }
 
+pub(crate) fn interrupt_requested_status_text(thread_id: Option<&str>) -> String {
+    match thread_id
+        .map(str::trim)
+        .filter(|thread_id| !thread_id.is_empty())
+    {
+        Some(thread_id) => format!(
+            "runtime interrupt requested for {thread_id}; waiting for the active turn to settle"
+        ),
+        None => "runtime interrupt requested; waiting for the active turn to settle".to_string(),
+    }
+}
+
+pub(crate) fn interrupt_request_failed_status_text(error: &str) -> String {
+    format!("runtime interrupt failed: {error}")
+}
+
 pub(crate) fn runtime_control_summary_text(truth: ConversationRuntimeControlTruth) -> String {
     format!(
         "approval: {}  |  interrupt: {}",
@@ -191,6 +207,7 @@ mod tests {
     use super::{
         approval_review_manual_client_action_notice, approval_review_status_text,
         approval_review_summary_text, attachment_runtime_notice, interrupt_blocked_status_text,
+        interrupt_request_failed_status_text, interrupt_requested_status_text,
         runtime_control_summary_text,
     };
     use crate::domain::conversation::{
@@ -233,6 +250,14 @@ mod tests {
         assert_eq!(
             interrupt_blocked_status_text(ConversationControlSupport::Unsupported),
             "turn still running; this runtime does not expose interrupt control in the shell"
+        );
+        assert_eq!(
+            interrupt_requested_status_text(Some("%3")),
+            "runtime interrupt requested for %3; waiting for the active turn to settle"
+        );
+        assert_eq!(
+            interrupt_request_failed_status_text("transport closed"),
+            "runtime interrupt failed: transport closed"
         );
         assert_eq!(
             runtime_control_summary_text(ConversationRuntimeControlTruth::new(

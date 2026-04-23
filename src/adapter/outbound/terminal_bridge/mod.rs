@@ -247,6 +247,16 @@ impl TmuxLocalAttachAdapter {
         Ok(())
     }
 
+    fn send_interrupt(&self, target: &str) -> Result<()> {
+        self.run_tmux(&[
+            "send-keys".to_string(),
+            "-t".to_string(),
+            target.to_string(),
+            "C-c".to_string(),
+        ])?;
+        Ok(())
+    }
+
     fn enable_pipe_capture(&self, target: &str) -> Result<TmuxPipeCapture> {
         let log_path = temp_file_path("codex-exec-loop-tmux-stream", "log");
         File::create(&log_path)
@@ -473,16 +483,16 @@ impl InteractiveTurnRuntimePort for TmuxLocalAttachAdapter {
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
         let target = self.resolve_turn_target(Some(thread_id))?;
         let transcript = sanitize_terminal_transcript(&self.capture_transcript(&target.pane_id)?);
-        let messages = (!transcript.trim().is_empty())
-            .then(|| {
-                vec![ConversationMessage::new(
-                    ConversationMessageKind::Agent,
-                    transcript.trim_end().to_string(),
-                    None,
-                    Some(format!("tmux-snapshot-{}", target.pane_id)),
-                )]
-            })
-            .unwrap_or_default();
+        let messages = if transcript.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                transcript.trim_end().to_string(),
+                None,
+                Some(format!("tmux-snapshot-{}", target.pane_id)),
+            )]
+        };
         Ok(ConversationSnapshot {
             thread_id: target.pane_id.clone(),
             title: format!("tmux {}", target.display_name),
@@ -527,6 +537,16 @@ impl InteractiveTurnRuntimePort for TmuxLocalAttachAdapter {
             TerminalBridgeAttachmentProfile::tmux_local_attach(),
         );
         self.run_stream_on_target(&target, prompt, &event_sender)
+    }
+
+    fn request_interrupt(&self, thread_id: Option<&str>) -> Result<()> {
+        let target = self.resolve_turn_target(thread_id)?;
+        self.send_interrupt(&target.pane_id).with_context(|| {
+            format!(
+                "failed to send interrupt to tmux pane {} ({})",
+                target.pane_id, target.display_name
+            )
+        })
     }
 }
 
@@ -624,7 +644,7 @@ fn sanitize_terminal_transcript(text: &str) -> String {
             match chars.peek().copied() {
                 Some('[') => {
                     chars.next();
-                    while let Some(candidate) = chars.next() {
+                    for candidate in chars.by_ref() {
                         if ('@'..='~').contains(&candidate) {
                             break;
                         }
@@ -634,7 +654,7 @@ fn sanitize_terminal_transcript(text: &str) -> String {
                 Some(']') => {
                     chars.next();
                     let mut previous = None;
-                    while let Some(candidate) = chars.next() {
+                    for candidate in chars.by_ref() {
                         if candidate == '\u{7}' || (previous == Some('\u{1b}') && candidate == '\\')
                         {
                             break;
@@ -734,7 +754,7 @@ fn temp_file_path(prefix: &str, extension: &str) -> PathBuf {
 mod tests {
     use std::process::Command;
     use std::sync::mpsc::channel;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{
         InteractiveTurnRuntimePort, TerminalBridgeMode, TmuxLocalAttachAdapter,
@@ -886,5 +906,112 @@ mod tests {
             event,
             ConversationStreamEvent::AgentMessageCompleted { text, .. } if text.contains("smoke-bridge")
         )));
+    }
+
+    #[test]
+    fn tmux_local_attach_interrupts_a_long_running_turn() {
+        if which::which("tmux").is_err() {
+            return;
+        }
+
+        let socket = format!(
+            "codex-exec-loop-test-{}",
+            super::unique_label("tmux-local-attach-interrupt")
+        );
+        let session_name = "codex-exec-loop-interrupt";
+        let create_status = Command::new("tmux")
+            .args([
+                "-L",
+                socket.as_str(),
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "bash --noprofile --norc",
+            ])
+            .status()
+            .expect("tmux test session should start");
+        assert!(create_status.success());
+
+        let pane_id = Command::new("tmux")
+            .args([
+                "-L",
+                socket.as_str(),
+                "display-message",
+                "-p",
+                "-t",
+                &format!("{session_name}:0.0"),
+                "#{pane_id}",
+            ])
+            .output()
+            .expect("pane id should resolve");
+        let pane_id = String::from_utf8_lossy(&pane_id.stdout).trim().to_string();
+        assert!(!pane_id.is_empty());
+
+        let adapter = TmuxLocalAttachAdapter {
+            config: TmuxLocalAttachConfig {
+                socket: Some(socket.clone()),
+                target: Some(pane_id.clone()),
+                poll_interval: Duration::from_millis(50),
+                idle_timeout: Duration::from_millis(250),
+                no_output_timeout: Duration::from_secs(10),
+            },
+        };
+        let (tx, rx) = channel();
+        let interrupt_adapter = adapter.clone();
+        let stream_started_at = Instant::now();
+        let stream_handle =
+            std::thread::spawn(move || adapter.run_new_thread_stream("/tmp", "sleep 30", tx));
+        let mut events = Vec::new();
+
+        loop {
+            let event = rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("turn should emit startup events before interrupt");
+            let saw_turn_started = matches!(&event, ConversationStreamEvent::TurnStarted { .. });
+            events.push(event);
+            if saw_turn_started {
+                break;
+            }
+        }
+
+        interrupt_adapter
+            .request_interrupt(Some(&pane_id))
+            .expect("interrupt request should succeed");
+
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(event) => {
+                    let should_stop = matches!(
+                        &event,
+                        ConversationStreamEvent::TurnCompleted { .. }
+                            | ConversationStreamEvent::Failed { .. }
+                    );
+                    events.push(event);
+                    if should_stop {
+                        break;
+                    }
+                }
+                Err(error) => panic!("timed out waiting for interrupted turn to settle: {error}"),
+            }
+        }
+
+        let _ = Command::new("tmux")
+            .args(["-L", socket.as_str(), "kill-server"])
+            .status();
+        let stream_result = stream_handle
+            .join()
+            .expect("stream worker thread should not panic");
+        stream_result.expect("interrupted stream should still settle cleanly");
+        assert!(stream_started_at.elapsed() < Duration::from_secs(5));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ConversationStreamEvent::ThreadPrepared { thread_id, .. } if thread_id == &pane_id
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. }))
+        );
     }
 }

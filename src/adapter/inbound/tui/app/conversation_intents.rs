@@ -29,6 +29,7 @@ pub(super) enum ConversationIntentEvent {
 #[derive(Debug, Clone)]
 pub(super) enum ConversationIntentEffect {
     ShowStatus { status_text: String },
+    RequestRuntimeInterrupt,
     OpenNewDraft,
     OpenSession { session: SessionSummary },
     ShowExitConfirmation,
@@ -70,9 +71,17 @@ pub(super) fn reduce_conversation_intents(
         }
         ConversationIntentEvent::CtrlCPressed => {
             if state.has_running_turn {
-                effects.push(ConversationIntentEffect::ShowStatus {
-                    status_text: interrupt_blocked_status_text(state.interrupt_support),
-                });
+                match state.interrupt_support {
+                    ConversationControlSupport::RuntimeNative => {
+                        effects.push(ConversationIntentEffect::RequestRuntimeInterrupt);
+                    }
+                    ConversationControlSupport::ManualHandoff
+                    | ConversationControlSupport::Unsupported => {
+                        effects.push(ConversationIntentEffect::ShowStatus {
+                            status_text: interrupt_blocked_status_text(state.interrupt_support),
+                        });
+                    }
+                }
             } else {
                 match state.mode {
                     ConversationIntentMode::Ready | ConversationIntentMode::Failed => {
@@ -179,6 +188,23 @@ mod tests {
             [ConversationIntentEffect::ShowStatus { status_text }]
                 if status_text
                     == "turn still running; this runtime does not expose interrupt control in the shell"
+        ));
+    }
+
+    #[test]
+    fn ctrl_c_while_turn_runs_requests_runtime_interrupt_when_supported() {
+        let reduced = reduce_conversation_intents(
+            ConversationIntentState {
+                has_running_turn: true,
+                mode: ConversationIntentMode::Ready,
+                interrupt_support: ConversationControlSupport::RuntimeNative,
+            },
+            ConversationIntentEvent::CtrlCPressed,
+        );
+
+        assert!(matches!(
+            reduced.effects.as_slice(),
+            [ConversationIntentEffect::RequestRuntimeInterrupt]
         ));
     }
 }

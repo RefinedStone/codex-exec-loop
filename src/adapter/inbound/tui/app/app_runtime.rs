@@ -1,6 +1,9 @@
 use std::sync::mpsc;
 use std::thread;
 
+use crate::adapter::inbound::tui::conversation_text::{
+    interrupt_request_failed_status_text, interrupt_requested_status_text,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
@@ -286,6 +289,19 @@ impl NativeTuiApp {
                     status_text,
                 });
             }
+            ConversationIntentEffect::RequestRuntimeInterrupt => {
+                let thread_id = self.current_interrupt_thread_id();
+                let status_text = match self
+                    .conversation_service
+                    .request_interrupt(thread_id.as_deref())
+                {
+                    Ok(()) => interrupt_requested_status_text(thread_id.as_deref()),
+                    Err(error) => interrupt_request_failed_status_text(&error.to_string()),
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
             ConversationIntentEffect::OpenNewDraft => {
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
                 self.reset_planner_worker_panel_state();
@@ -309,6 +325,14 @@ impl NativeTuiApp {
             ConversationIntentEffect::ShowExitConfirmation => {
                 self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
             }
+        }
+    }
+
+    fn current_interrupt_thread_id(&self) -> Option<String> {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => Some(conversation.thread_id.clone())
+                .filter(|thread_id| !thread_id.trim().is_empty()),
+            ConversationState::Loading | ConversationState::Failed(_) => None,
         }
     }
 

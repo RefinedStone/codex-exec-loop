@@ -1,6 +1,6 @@
 use std::sync::mpsc::Sender;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
@@ -20,4 +20,7 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()>;
+    fn request_interrupt(&self, _thread_id: Option<&str>) -> Result<()> {
+        Err(anyhow!("interrupt control is not exposed by this runtime"))
+    }
 }

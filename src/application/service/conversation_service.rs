@@ -47,4 +47,9 @@ impl ConversationService {
         self.interactive_turn_runtime_port
             .run_turn_stream(thread_id, prompt, event_sender)
     }
+
+    pub fn request_interrupt(&self, thread_id: Option<&str>) -> Result<()> {
+        self.interactive_turn_runtime_port
+            .request_interrupt(thread_id)
+    }
 }
