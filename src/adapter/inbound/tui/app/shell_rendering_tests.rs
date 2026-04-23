@@ -299,6 +299,30 @@ fn planning_manual_editor_matches_snapshot() {
     assert_snapshot!("planning_manual_editor", rendered);
 }
 
+#[test]
+fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    append_stable_history_message(
+        &mut app,
+        "previous transcript should remain visible in viewport replay mode",
+    );
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.record_turn_started("turn-1".to_string());
+    conversation.push_live_agent_delta(
+        "agent-1".to_string(),
+        Some("final_answer".to_string()),
+        "streaming reply still visible".to_string(),
+    );
+
+    let rendered = render_inline_snapshot(&mut app, 80, 24);
+
+    assert_snapshot!("inline_main_buffer_viewport_replay_streaming", rendered);
+}
+
 fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
     Terminal::with_options(
         TestBackend::new(width, height),

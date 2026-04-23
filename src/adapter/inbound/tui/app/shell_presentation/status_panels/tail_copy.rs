@@ -12,9 +12,9 @@ use super::super::{
     ConversationInputState, ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
     INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
     INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT, INLINE_TAIL_STATUS_DETAIL_LIMIT,
-    INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineShellCommandInput, NativeTuiApp,
-    ShellActionAvailability, ShellConversationState, ShellCorePresentationContext, StartupState,
-    auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
+    INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode, InlineShellCommandInput,
+    NativeTuiApp, ShellActionAvailability, ShellConversationState, ShellCorePresentationContext,
+    StartupState, auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
     inline_input_state_label, turn_status_label,
 };
 use super::plan_indicator::{current_plan_mode_indicator, plan_mode_prefixed_spans};
@@ -23,6 +23,8 @@ use super::tail_shared::{
     current_live_agent_lines, inline_thread_label, parallel_mode_alert_line,
     parallel_mode_summary_line,
 };
+use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
+use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 
 pub(super) fn build_inline_tail_lines_with_context(
     app: &NativeTuiApp,
@@ -144,6 +146,10 @@ pub(super) fn build_inline_tail_lines_with_context(
                 }
             }
             lines.extend(planner_panel_lines.into_iter().map(Line::from));
+            lines.extend(build_recent_transcript_summary_lines(
+                app.inline_history_render_mode,
+                conversation,
+            ));
 
             if let Some(live_agent_lines) = current_live_agent_lines(conversation) {
                 lines.extend(live_agent_lines);
@@ -162,6 +168,59 @@ pub(super) fn build_inline_tail_lines_with_context(
         app.shell_action_availability(),
     ));
     lines
+}
+
+fn build_recent_transcript_summary_lines(
+    render_mode: InlineHistoryRenderMode,
+    conversation: &ConversationViewModel,
+) -> Vec<Line<'static>> {
+    if !render_mode.mirrors_recent_transcript_in_tail() {
+        return Vec::new();
+    }
+
+    let recent_messages = recent_transcript_messages(conversation);
+    if recent_messages.is_empty() {
+        return Vec::new();
+    }
+
+    recent_messages
+        .into_iter()
+        .map(|message| {
+            let label = conversation_message_kind_label(message.kind, message.phase.as_deref())
+                .to_ascii_lowercase();
+            let summary = message
+                .text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| compact_inline_detail(line, INLINE_TAIL_NOTICE_DETAIL_LIMIT))
+                .unwrap_or_else(|| "(blank)".to_string());
+            Line::from(format!("recent {label}: {summary}"))
+        })
+        .collect()
+}
+
+fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&ConversationMessage> {
+    let mut recent_messages = conversation
+        .messages
+        .iter()
+        .rev()
+        .filter(|message| {
+            message.kind != ConversationMessageKind::Tool
+                && message.kind != ConversationMessageKind::Status
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    if recent_messages.is_empty() {
+        recent_messages = conversation
+            .messages
+            .iter()
+            .rev()
+            .filter(|message| message.kind != ConversationMessageKind::Tool)
+            .take(2)
+            .collect::<Vec<_>>();
+    }
+    recent_messages.reverse();
+    recent_messages
 }
 
 fn build_inline_startup_screen_lines_with_context(

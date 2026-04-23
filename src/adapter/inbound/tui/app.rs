@@ -50,6 +50,7 @@ const MAX_COMPOSER_HEIGHT: u16 = 8;
 const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
+const INLINE_HISTORY_RENDER_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_INLINE_HISTORY_MODE";
 
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
@@ -206,6 +207,58 @@ enum ActiveTurnPlanningSnapshot {
     CaptureFailed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineHistoryRenderMode {
+    HostScrollback,
+    ViewportReplay,
+}
+
+impl InlineHistoryRenderMode {
+    fn from_environment() -> Self {
+        Self::from_env_values(
+            std::env::var(INLINE_HISTORY_RENDER_MODE_ENV_VAR)
+                .ok()
+                .as_deref(),
+            std::env::var("WT_SESSION").ok().as_deref(),
+            std::env::var("WSL_DISTRO_NAME").ok().as_deref(),
+        )
+    }
+
+    fn from_env_values(
+        mode_value: Option<&str>,
+        windows_terminal_session: Option<&str>,
+        wsl_distro_name: Option<&str>,
+    ) -> Self {
+        let explicit_mode = mode_value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+        if let Some(explicit_mode) = explicit_mode {
+            return match explicit_mode.as_str() {
+                "viewport" | "viewport-replay" | "replay" | "mirror" => Self::ViewportReplay,
+                _ => Self::HostScrollback,
+            };
+        }
+
+        let inside_windows_terminal = windows_terminal_session
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let inside_wsl = wsl_distro_name
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+
+        if inside_windows_terminal && inside_wsl {
+            Self::ViewportReplay
+        } else {
+            Self::HostScrollback
+        }
+    }
+
+    fn mirrors_recent_transcript_in_tail(self) -> bool {
+        matches!(self, Self::ViewportReplay)
+    }
+}
+
 struct NativeTuiApp {
     shell_overlay: ShellOverlay,
     exit_confirmation_state: ExitConfirmationState,
@@ -233,6 +286,7 @@ struct NativeTuiApp {
     planner_visibility: PlannerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
+    inline_history_render_mode: InlineHistoryRenderMode,
     show_startup_ascii_art: bool,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
@@ -259,7 +313,7 @@ mod tests;
 
 #[cfg(test)]
 mod startup_ascii_art_env_tests {
-    use super::{PlannerVisibility, startup_ascii_art_enabled_from_value};
+    use super::{InlineHistoryRenderMode, PlannerVisibility, startup_ascii_art_enabled_from_value};
 
     #[test]
     fn startup_ascii_art_defaults_to_enabled() {
@@ -307,6 +361,50 @@ mod startup_ascii_art_env_tests {
         assert_eq!(
             PlannerVisibility::from_env_value(Some("verbose")),
             PlannerVisibility::Debug
+        );
+    }
+
+    #[test]
+    fn inline_history_render_mode_defaults_to_host_scrollback() {
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(None, None, None),
+            InlineHistoryRenderMode::HostScrollback
+        );
+    }
+
+    #[test]
+    fn inline_history_render_mode_detects_windows_terminal_wsl_combo() {
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), Some("Ubuntu")),
+            InlineHistoryRenderMode::ViewportReplay
+        );
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), None),
+            InlineHistoryRenderMode::HostScrollback
+        );
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(None, None, Some("Ubuntu")),
+            InlineHistoryRenderMode::HostScrollback
+        );
+    }
+
+    #[test]
+    fn inline_history_render_mode_supports_explicit_override() {
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(
+                Some("scrollback"),
+                Some("wt-session"),
+                Some("Ubuntu"),
+            ),
+            InlineHistoryRenderMode::HostScrollback
+        );
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(Some("viewport-replay"), None, None),
+            InlineHistoryRenderMode::ViewportReplay
+        );
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(Some("mirror"), None, None),
+            InlineHistoryRenderMode::ViewportReplay
         );
     }
 }

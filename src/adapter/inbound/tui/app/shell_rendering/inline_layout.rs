@@ -11,6 +11,7 @@ use super::super::{
 };
 
 const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
+const MAX_INLINE_REPLAY_TAIL_HEIGHT: u16 = 12;
 
 pub(super) fn build_inline_terminal_flow_layout(
     app: &NativeTuiApp,
@@ -19,7 +20,14 @@ pub(super) fn build_inline_terminal_flow_layout(
 ) -> Rc<[Rect]> {
     let tail_max_height =
         if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-            MAX_INLINE_TAIL_HEIGHT
+            if app
+                .inline_history_render_mode
+                .mirrors_recent_transcript_in_tail()
+            {
+                MAX_INLINE_REPLAY_TAIL_HEIGHT
+            } else {
+                MAX_INLINE_TAIL_HEIGHT
+            }
         } else {
             MAX_INLINE_INSPECTION_TAIL_HEIGHT
         };
