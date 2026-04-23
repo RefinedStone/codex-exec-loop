@@ -709,9 +709,7 @@
       "depends_on": [
         "terminal-bridge-primary-implementation-slice"
       ],
-      "blocked_by": [
-        "terminal-bridge-primary-implementation-slice"
-      ],
+      "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
@@ -730,9 +728,7 @@
       "depends_on": [
         "terminal-bridge-primary-implementation-slice"
       ],
-      "blocked_by": [
-        "terminal-bridge-primary-implementation-slice"
-      ],
+      "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
       "source_turn_id": null,
