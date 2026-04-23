@@ -176,9 +176,7 @@ impl ParallelModeDistributorService {
     }
 
     pub(super) fn process_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
-        self.recover_runtime_state(workspace_dir)?;
-        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
-            .map_err(|(_, detail)| detail.to_string())?;
+        let context = self.recover_runtime_state(workspace_dir)?;
         let mut records = context.distributor_queue_records.clone();
         let Some(head_index) = records
             .iter()
@@ -248,11 +246,16 @@ impl ParallelModeDistributorService {
         }))
     }
 
-    pub(super) fn recover_runtime_state(&self, workspace_dir: &str) -> Result<(), String> {
-        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
-            .map_err(|(_, detail)| detail.to_string())?;
+    pub(super) fn recover_runtime_state(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PoolRuntimeContext, String> {
+        let mut context =
+            load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+                .map_err(|(_, detail)| detail.to_string())?;
 
-        for mut record in context.distributor_queue_records.clone() {
+        for index in 0..context.distributor_queue_records.len() {
+            let mut record = context.distributor_queue_records[index].clone();
             if matches!(
                 record.queue_state,
                 ParallelModeQueueItemState::Idle
@@ -263,17 +266,18 @@ impl ParallelModeDistributorService {
                 continue;
             }
 
-            let matching_lease = matching_lease_for_queue_record(&context, &record);
+            let matching_lease = matching_lease_for_queue_record(&context, &record).cloned();
             if !Path::new(&record.worktree_path).exists() {
                 let _ = block_distributor_queue_record(
                     self.planning_authority.as_ref(),
                     &context.repo_root,
                     &context.pool_root,
-                    matching_lease,
+                    matching_lease.as_ref(),
                     &mut record,
                     "recovered after restart: source worktree is missing; distributor cannot continue"
                         .to_string(),
                 )?;
+                context.distributor_queue_records[index] = record;
                 continue;
             }
 
@@ -281,9 +285,10 @@ impl ParallelModeDistributorService {
                 recover_integrated_queue_record(
                     self.planning_authority.as_ref(),
                     &context,
-                    matching_lease,
+                    matching_lease.as_ref(),
                     &mut record,
                 )?;
+                context.distributor_queue_records[index] = record;
                 continue;
             }
 
@@ -298,13 +303,14 @@ impl ParallelModeDistributorService {
                         self.planning_authority.as_ref(),
                         &context.repo_root,
                         &context.pool_root,
-                        matching_lease,
+                        matching_lease.as_ref(),
                         &mut record,
                         format!(
                             "recovered after restart: pull request #{pr_number} is `{}` before integration",
                             pull_request.state
                         ),
                     )?;
+                    context.distributor_queue_records[index] = record;
                     continue;
                 }
                 if pull_request.is_draft {
@@ -312,12 +318,13 @@ impl ParallelModeDistributorService {
                         self.planning_authority.as_ref(),
                         &context.repo_root,
                         &context.pool_root,
-                        matching_lease,
+                        matching_lease.as_ref(),
                         &mut record,
                         format!(
                             "recovered after restart: pull request #{pr_number} is still a draft"
                         ),
                     )?;
+                    context.distributor_queue_records[index] = record;
                     continue;
                 }
                 write_distributor_queue_record(
@@ -327,9 +334,11 @@ impl ParallelModeDistributorService {
                     &record,
                 )?;
             }
+
+            context.distributor_queue_records[index] = record;
         }
 
-        Ok(())
+        Ok(context)
     }
 }
 

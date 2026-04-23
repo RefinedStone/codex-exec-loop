@@ -119,6 +119,11 @@ struct PoolRuntimeContext {
     distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
 }
 
+type PoolBoardWithContextResult = Result<
+    (PoolRuntimeContext, ParallelModePoolBoardSnapshot),
+    Box<(ParallelModePoolBoardSnapshot, String)>,
+>;
+
 #[derive(Debug, Clone)]
 struct WorkspaceSlotLeaseResolution {
     context: PoolRuntimeContext,
@@ -1225,60 +1230,91 @@ fn reconcile_pool_board(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> ParallelModePoolBoardSnapshot {
+    match reconcile_pool_board_and_context(planning_authority, workspace_dir) {
+        Ok((_, pool)) => pool,
+        Err(error) => {
+            let (pool, _) = *error;
+            pool
+        }
+    }
+}
+
+fn reconcile_pool_board_and_context(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> PoolBoardWithContextResult {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile failed / git repository is unavailable",
-            "repository inspection failed",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile failed / git repository is unavailable",
+                "repository inspection failed",
+            ),
+            "repository inspection failed".to_string(),
+        )));
     };
     let Some(canonical_repo_root) = detect_canonical_repo_root(planning_authority, workspace_dir)
     else {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile failed / canonical repository root is unavailable",
-            "canonical root inspection failed",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile failed / canonical repository root is unavailable",
+                "canonical root inspection failed",
+            ),
+            "canonical root inspection failed".to_string(),
+        )));
     };
     let Ok((_akra_head, created_akra_branch)) = ensure_akra_branch(&repo_root) else {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile blocked / `akra` baseline could not be created",
-            "`akra` is unavailable during reconcile",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile blocked / `akra` baseline could not be created",
+                "`akra` is unavailable during reconcile",
+            ),
+            "`akra` is unavailable during reconcile".to_string(),
+        )));
     };
 
     let pool_root = derive_default_pool_root(&canonical_repo_root);
     let pool_root_existed = pool_root.exists();
     if ensure_directory_exists(&pool_root).is_err() {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile failed / pool root could not be created",
-            "pool root creation failed",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile failed / pool root could not be created",
+                "pool root creation failed",
+            ),
+            "pool root creation failed".to_string(),
+        )));
     }
     let created_pool_root = !pool_root_existed;
     let Some(worktree_records) = load_worktree_records(&repo_root) else {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile failed / git worktree inventory could not be loaded",
-            "worktree list inspection failed",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile failed / git worktree inventory could not be loaded",
+                "worktree list inspection failed",
+            ),
+            "worktree list inspection failed".to_string(),
+        )));
     };
 
     let provisioned_slots = provision_missing_slots(&repo_root, &pool_root, &worktree_records);
     let Some(reloaded_worktree_records) = load_worktree_records(&repo_root) else {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile failed / git worktree inventory could not be reloaded",
-            "worktree list reload failed",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile failed / git worktree inventory could not be reloaded",
+                "worktree list reload failed",
+            ),
+            "worktree list reload failed".to_string(),
+        )));
     };
     let cleaned_slots = cleanup_reusable_slots(
         planning_authority,
@@ -1290,15 +1326,18 @@ fn reconcile_pool_board(
     let Ok(context) =
         load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
     else {
-        return build_blocked_pool_board(
-            planning_authority,
-            workspace_dir,
-            "reconcile failed / pool runtime state could not be loaded",
-            "pool runtime load failed",
-        );
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile failed / pool runtime state could not be loaded",
+                "pool runtime load failed",
+            ),
+            "pool runtime load failed".to_string(),
+        )));
     };
 
-    build_pool_board_from_context(
+    let pool = build_pool_board_from_context(
         &context,
         summarize_pool_reconcile_status(
             &build_pool_slots(&context),
@@ -1310,21 +1349,44 @@ fn reconcile_pool_board(
                 cleaned_slots,
             }),
         ),
-    )
+    );
+
+    Ok((context, pool))
 }
 
 fn inspect_pool_board(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> ParallelModePoolBoardSnapshot {
-    match load_pool_runtime_context(planning_authority, workspace_dir) {
-        Ok(context) => build_pool_board_from_context(
-            &context,
-            summarize_pool_reconcile_status(&build_pool_slots(&context), &context.pool_root, None),
-        ),
-        Err((reconcile_status, detail)) => {
-            build_blocked_pool_board(planning_authority, workspace_dir, reconcile_status, detail)
+    match inspect_pool_board_and_context(planning_authority, workspace_dir) {
+        Ok((_, pool)) => pool,
+        Err(error) => {
+            let (pool, _) = *error;
+            pool
         }
+    }
+}
+
+fn inspect_pool_board_and_context(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> PoolBoardWithContextResult {
+    match load_pool_runtime_context(planning_authority, workspace_dir) {
+        Ok(context) => {
+            let pool = build_pool_board_from_context(
+                &context,
+                summarize_pool_reconcile_status(
+                    &build_pool_slots(&context),
+                    &context.pool_root,
+                    None,
+                ),
+            );
+            Ok((context, pool))
+        }
+        Err((reconcile_status, detail)) => Err(Box::new((
+            build_blocked_pool_board(planning_authority, workspace_dir, reconcile_status, detail),
+            detail.to_string(),
+        ))),
     }
 }
 
