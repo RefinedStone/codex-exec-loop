@@ -160,10 +160,10 @@ enum WorkspaceBody {
     ResultOutput,
 }
 
-fn required_workspace_body<'a>(
-    workspace: &'a PlanningWorkspaceLoadRecord,
+fn required_workspace_body(
+    workspace: &PlanningWorkspaceLoadRecord,
     body: WorkspaceBody,
-) -> Result<&'a str> {
+) -> Result<&str> {
     match body {
         WorkspaceBody::TaskLedger => workspace
             .task_ledger_json

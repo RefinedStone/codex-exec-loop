@@ -23,10 +23,10 @@ impl NativeTuiApp {
 
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.current_workspace_directory();
-        if let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref() {
-            if snapshot.workspace_path == workspace_directory {
-                return snapshot.clone();
-            }
+        if let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref()
+            && snapshot.workspace_path == workspace_directory
+        {
+            return snapshot.clone();
         }
 
         self.parallel_mode_service().build_supervisor_snapshot(

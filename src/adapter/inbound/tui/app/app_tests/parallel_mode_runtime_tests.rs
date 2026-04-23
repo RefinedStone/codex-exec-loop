@@ -5,16 +5,16 @@ use std::time::Duration;
 
 use super::super::shell_runtime;
 use super::{
-    commit_active_planning_workspace_into_akra, current_git_branch, git_branch_exists,
-    install_ready_github_automation, make_test_app, merge_active_branch_into_akra,
-    ready_conversation, replace_active_planning_workspace_file, run_git,
-    sample_startup_diagnostics, AutoFollowupSubmitContext, ConversationRuntimeEvent,
-    ConversationState, PromptOrigin, StartupState, TempGitWorkspace,
+    AutoFollowupSubmitContext, ConversationRuntimeEvent, ConversationState, PromptOrigin,
+    StartupState, TempGitWorkspace, commit_active_planning_workspace_into_akra, current_git_branch,
+    git_branch_exists, install_ready_github_automation, make_test_app,
+    merge_active_branch_into_akra, ready_conversation, replace_active_planning_workspace_file,
+    run_git, sample_startup_diagnostics,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning::{
-    PlanningTaskHandoff, BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT,
+    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
 
@@ -152,11 +152,13 @@ fn parallel_mode_handoff_launch_uses_leased_slot_workspace_and_new_thread_stream
             .is_empty()
     });
 
-    assert!(codex_port
-        .turn_calls
-        .lock()
-        .expect("turn calls mutex poisoned")
-        .is_empty());
+    assert!(
+        codex_port
+            .turn_calls
+            .lock()
+            .expect("turn calls mutex poisoned")
+            .is_empty()
+    );
     let new_thread_calls = codex_port
         .new_thread_calls
         .lock()
@@ -207,7 +209,7 @@ fn leased_slot_success_completion_waits_for_official_refresh_before_cleanup() {
             ConversationStreamEvent::TurnCompleted {
                 turn_id: "planner-turn-1".to_string(),
                 changed_planning_file_paths: vec![
-                    ".codex-exec-loop/planning/task-ledger.json".to_string()
+                    ".codex-exec-loop/planning/task-ledger.json".to_string(),
                 ],
             },
         ];
@@ -447,7 +449,7 @@ fn parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return() {
             ConversationStreamEvent::TurnCompleted {
                 turn_id: "planner-turn-9".to_string(),
                 changed_planning_file_paths: vec![
-                    ".codex-exec-loop/planning/task-ledger.json".to_string()
+                    ".codex-exec-loop/planning/task-ledger.json".to_string(),
                 ],
             },
         ];
@@ -767,7 +769,7 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
             ConversationStreamEvent::TurnCompleted {
                 turn_id: "planner-turn-13".to_string(),
                 changed_planning_file_paths: vec![
-                    ".codex-exec-loop/planning/task-ledger.json".to_string()
+                    ".codex-exec-loop/planning/task-ledger.json".to_string(),
                 ],
             },
         ];

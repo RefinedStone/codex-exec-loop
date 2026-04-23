@@ -3,6 +3,9 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use chrono::{SecondsFormat, Utc};
 
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -36,20 +39,39 @@ pub struct PlanningProposalPromotionService {
     planning_prompt_service: PlanningPromptService,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
 
 impl PlanningProposalPromotionService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_prompt_service: PlanningPromptService,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_prompt_service,
+            planning_validation_service,
+            priority_queue_service,
+            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_prompt_service: PlanningPromptService,
+        planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_prompt_service,
             planning_validation_service,
             priority_queue_service,
+            planning_task_repository_port,
         }
     }
 
@@ -106,6 +128,14 @@ impl PlanningProposalPromotionService {
         committed_record.queue_snapshot_json = Some(next_queue_snapshot_json);
         self.planning_workspace_port
             .commit_planning_workspace_files(request.workspace_directory, &committed_record)?;
+        self.planning_task_repository_port
+            .commit_task_authority_snapshot(
+                request.workspace_directory,
+                PlanningTaskAuthorityCommit {
+                    task_ledger: &task_ledger,
+                    queue_snapshot: &next_queue_snapshot,
+                },
+            )?;
 
         let runtime_snapshot = self
             .planning_prompt_service
@@ -199,9 +229,9 @@ mod tests {
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
+    use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {

@@ -208,7 +208,9 @@ pub struct SessionService {
 
 impl SessionService {
     pub fn new(session_catalog_port: Arc<dyn SessionCatalogPort>) -> Self {
-        Self { session_catalog_port }
+        Self {
+            session_catalog_port,
+        }
     }
 
     pub fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {

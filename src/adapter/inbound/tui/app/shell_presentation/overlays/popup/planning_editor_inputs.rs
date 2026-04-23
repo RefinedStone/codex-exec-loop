@@ -4,6 +4,7 @@ use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEd
 use super::super::super::super::{FOOTER_NOTICE_DETAIL_LIMIT, compact_inline_detail};
 use super::copy::{PlanningDraftEditorIssueCopy, PlanningDraftEditorStatusCopy};
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_planning_draft_editor_status_copy<'a>(
     draft_name: &'a str,
     active_path: &'a str,

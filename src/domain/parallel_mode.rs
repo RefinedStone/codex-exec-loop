@@ -252,6 +252,7 @@ pub struct ParallelModeSlotLeaseSnapshot {
 }
 
 impl ParallelModeSlotLeaseSnapshot {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         slot_id: impl Into<String>,
         task_id: impl Into<String>,

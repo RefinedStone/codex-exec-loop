@@ -919,14 +919,25 @@ mod tests {
 
         let runtime_exports_root = repo.repo_root.join(".codex-exec-loop/runtime/exports");
         assert_eq!(
-            fs::read_to_string(runtime_exports_root.join("task-ledger.json"))
-                .expect("runtime task ledger export should exist"),
-            "{\"version\":1,\"tasks\":[]}\n"
+            serde_json::from_str::<serde_json::Value>(
+                &fs::read_to_string(runtime_exports_root.join("task-ledger.json"))
+                    .expect("runtime task ledger export should exist")
+            )
+            .expect("runtime task ledger export should parse"),
+            serde_json::json!({"version": 1, "tasks": []})
         );
         assert_eq!(
-            fs::read_to_string(runtime_exports_root.join("queue.snapshot.json"))
-                .expect("runtime queue export should exist"),
-            "{\"next_task\":null}\n"
+            serde_json::from_str::<serde_json::Value>(
+                &fs::read_to_string(runtime_exports_root.join("queue.snapshot.json"))
+                    .expect("runtime queue export should exist")
+            )
+            .expect("runtime queue export should parse"),
+            serde_json::json!({
+                "next_task": null,
+                "active_tasks": [],
+                "proposed_tasks": [],
+                "skipped_tasks": []
+            })
         );
         assert!(
             !repo.repo_root.join(DIRECTIONS_FILE_PATH).exists(),

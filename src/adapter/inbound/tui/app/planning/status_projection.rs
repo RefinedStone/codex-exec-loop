@@ -354,10 +354,10 @@ fn build_queue_framing_details_from_snapshot(
             compact_queue_task_summary(queue_head.task_title.as_str(), 1, 1, max_detail_len);
     }
 
-    if let Some(queue_summary) = snapshot.queue_summary() {
-        if let Some(parsed_details) = parse_queue_framing_details(queue_summary, max_detail_len) {
-            merge_queue_framing_details(&mut details, parsed_details);
-        }
+    if let Some(queue_summary) = snapshot.queue_summary()
+        && let Some(parsed_details) = parse_queue_framing_details(queue_summary, max_detail_len)
+    {
+        merge_queue_framing_details(&mut details, parsed_details);
     }
 
     if let Some(proposal_summary) = snapshot.proposal_summary() {

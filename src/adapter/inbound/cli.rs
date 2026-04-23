@@ -506,9 +506,11 @@ fn build_production_planning_services() -> PlanningServices {
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
+    let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
     PlanningServices::from_ports(
         Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
-        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        planning_authority.clone(),
+        planning_authority,
         Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
     )
 }

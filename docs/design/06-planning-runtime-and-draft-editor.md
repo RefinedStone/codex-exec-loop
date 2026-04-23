@@ -19,7 +19,7 @@ The operator-facing current contract lives in
 | --- | --- | --- |
 | `.codex-exec-loop/planning/directions.toml` | operator-owned through staged drafts | defines directions, detail-doc mapping, and queue-idle policy |
 | `.codex-exec-loop/planning/directions/<direction-id>.md` | operator-owned through staged drafts | long-form direction detail |
-| `.codex-exec-loop/planning/task-ledger.json` | shared operator/runtime contract | task source of truth |
+| `.codex-exec-loop/planning/task-ledger.json` | explicit import/review surface in git-backed mode | task ledger interchange artifact |
 | `.codex-exec-loop/planning/task-ledger.schema.json` | protected planning contract | task-ledger validation schema |
 | `.codex-exec-loop/planning/result-output.md` | protected planning contract | result-output guidance fragment |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | operator-owned through staged drafts | prompt used when queue-idle review is enabled |
@@ -34,6 +34,9 @@ The operator-facing current contract lives in
 
 - Accepted planning still follows `draft -> validate -> promote`; direct active-state mutation is
   not the primary authoring path.
+- In git-backed workspaces, accepted task authority lives in relational task tables behind the
+  application `PlanningTaskRepositoryPort`; tracked `task-ledger.json` is accepted only through an
+  explicit import or promoted draft.
 - Manual submit and auto follow-up both append the same accepted planning prompt fragment.
 - `queue.snapshot.json` is derived state only and is not treated as operator-authored source.
 - Proposed tasks do not enter the executable queue until they are promoted or otherwise moved into
@@ -65,6 +68,7 @@ The operator-facing current contract lives in
 
 - Application entrypoint: `src/application/service/planning`
 - Planning authority port: `src/application/port/outbound/planning_authority_port.rs`
-- Planning authority adapter: `src/adapter/outbound/sqlite_planning_authority_adapter.rs`
+- Planning task repository port: `src/application/port/outbound/planning_task_repository_port.rs`
+- Planning authority adapter: `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs`
 - TUI entrypoint: `src/adapter/inbound/tui/app/planning`
 - CLI lifecycle entrypoint: `src/adapter/inbound/cli.rs`

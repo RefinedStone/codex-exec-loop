@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -29,6 +30,7 @@ pub struct PlanningPromptService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,15 +294,31 @@ impl PlanningRuntimeSnapshot {
 }
 
 impl PlanningPromptService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_validation_service,
+            priority_queue_service,
+            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_validation_service,
             priority_queue_service,
+            planning_task_repository_port,
         }
     }
 
@@ -366,17 +384,24 @@ impl PlanningPromptService {
         let task_ledger = validation_result
             .task_ledger
             .expect("valid planning task ledger should be available");
-        let queue_snapshot = match self
-            .priority_queue_service
-            .build_snapshot(&directions, &task_ledger)
-        {
-            Ok(queue_snapshot) => queue_snapshot,
-            Err(error) => {
-                return Ok(PlanningRuntimeSnapshot::invalid(format!(
-                    "planning queue build failed: {error}"
-                ))
-                .with_workspace_present(workspace_present)
-                .with_plan_enabled(plan_enabled));
+        let task_authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?;
+        let queue_snapshot = if let Some(task_authority_snapshot) = task_authority_snapshot {
+            task_authority_snapshot.queue_snapshot
+        } else {
+            match self
+                .priority_queue_service
+                .build_snapshot(&directions, &task_ledger)
+            {
+                Ok(queue_snapshot) => queue_snapshot,
+                Err(error) => {
+                    return Ok(PlanningRuntimeSnapshot::invalid(format!(
+                        "planning queue build failed: {error}"
+                    ))
+                    .with_workspace_present(workspace_present)
+                    .with_plan_enabled(plan_enabled));
+                }
             }
         };
         let result_output_markdown = workspace_record

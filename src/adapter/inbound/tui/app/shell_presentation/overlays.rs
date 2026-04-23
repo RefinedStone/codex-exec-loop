@@ -13,9 +13,9 @@ mod option_lines;
 #[path = "overlays/popup.rs"]
 mod popup;
 
-pub(crate) use base::build_startup_banner_lines;
 #[cfg(test)]
 pub(crate) use base::build_conversation_shell_frame_view;
+pub(crate) use base::build_startup_banner_lines;
 pub(crate) use directions::{
     DirectionsMaintenanceOverlayView, build_directions_maintenance_overlay_view,
 };

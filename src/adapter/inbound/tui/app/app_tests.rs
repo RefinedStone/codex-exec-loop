@@ -23,6 +23,7 @@ use crate::adapter::inbound::tui::app::test_helpers::{
 use crate::adapter::outbound::app_server::{
     AppServerPlanningWorkerAdapter, PlanningThreadLauncher,
 };
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -30,6 +31,7 @@ use crate::application::port::outbound::codex_app_server_port::{
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityCommit;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -41,16 +43,19 @@ use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
+use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
+use crate::domain::planning::PlanningWorkspaceFiles;
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -250,6 +255,8 @@ fn emit_fake_attachment_event(
 
 fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
     let codex_port = Arc::new(FakeCodexAppServerPort::default());
+    let planning_authority =
+        Arc::new(crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::new());
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
@@ -257,7 +264,8 @@ fn make_test_app() -> (NativeTuiApp, Arc<FakeCodexAppServerPort>) {
         test_parallel_mode_service(),
         PlanningServices::from_ports(
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
-            Arc::new(crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::new()),
+            planning_authority.clone(),
+            planning_authority,
             Arc::new(AppServerPlanningWorkerAdapter::new(codex_port.clone())),
         ),
     );
@@ -710,10 +718,64 @@ fn seed_ready_candidate_planning_workspace(
 }
 
 fn replace_active_planning_workspace_file(workspace_dir: &str, relative_path: &str, body: &str) {
-    FilesystemPlanningWorkspaceAdapter::new()
+    let workspace_adapter = FilesystemPlanningWorkspaceAdapter::new();
+    workspace_adapter
         .replace_planning_workspace_file(workspace_dir, relative_path, Some(body))
         .expect("active planning workspace file should write");
+    if relative_path == TASK_LEDGER_FILE_PATH {
+        refresh_test_task_authority_projection(workspace_dir, &workspace_adapter);
+    }
     replace_candidate_planning_workspace_file(workspace_dir, relative_path, body);
+}
+
+fn refresh_test_task_authority_projection(
+    workspace_dir: &str,
+    workspace_adapter: &FilesystemPlanningWorkspaceAdapter,
+) {
+    let workspace = workspace_adapter
+        .load_planning_workspace_files(workspace_dir)
+        .expect("active planning workspace should load");
+    let validation_result =
+        PlanningValidationService::new().validate_workspace_files(PlanningWorkspaceFiles {
+            directions_toml: workspace
+                .directions_toml
+                .as_deref()
+                .expect("active directions should exist"),
+            task_ledger_json: workspace
+                .task_ledger_json
+                .as_deref()
+                .expect("active task ledger should exist"),
+            task_ledger_schema_json: workspace
+                .task_ledger_schema_json
+                .as_deref()
+                .expect("active task ledger schema should exist"),
+            result_output_markdown: workspace
+                .result_output_markdown
+                .as_deref()
+                .expect("active result output should exist"),
+        });
+    if !validation_result.is_valid() {
+        return;
+    }
+    let directions = validation_result
+        .directions
+        .as_ref()
+        .expect("valid planning should include directions");
+    let task_ledger = validation_result
+        .task_ledger
+        .as_ref()
+        .expect("valid planning should include task ledger");
+    let queue_snapshot = PriorityQueueService::new()
+        .build_snapshot(directions, task_ledger)
+        .expect("valid planning should build queue snapshot");
+    SqlitePlanningAuthorityAdapter::commit_task_authority_snapshot(
+        workspace_dir,
+        PlanningTaskAuthorityCommit {
+            task_ledger,
+            queue_snapshot: &queue_snapshot,
+        },
+    )
+    .expect("test task authority projection should commit");
 }
 
 fn replace_candidate_planning_workspace_file(workspace_dir: &str, relative_path: &str, body: &str) {

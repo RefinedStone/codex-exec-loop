@@ -13,6 +13,9 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
 };
+use crate::application::port::outbound::planning_task_repository_port::{
+    NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
@@ -97,18 +100,24 @@ impl PlanningFeature {
     pub fn from_ports(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_authority_port: Arc<dyn PlanningAuthorityPort>,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         planning_worker_port: Arc<dyn PlanningWorkerPort>,
     ) -> Self {
         let validation_service = PlanningValidationService::new();
         let priority_queue_service = PriorityQueueService::new();
-        let init_service = PlanningInitService::new(
+        let init_service = PlanningInitService::with_task_repository(
             planning_workspace_port.clone(),
             PlanningBootstrapService::new(),
             validation_service.clone(),
+            planning_task_repository_port.clone(),
+            priority_queue_service.clone(),
         );
-        let reset_service = PlanningResetService::new(
+        let reset_service = PlanningResetService::with_task_repository(
             planning_workspace_port.clone(),
             PlanningBootstrapService::new(),
+            planning_task_repository_port.clone(),
+            validation_service.clone(),
+            priority_queue_service.clone(),
         );
         let directions_service = PlanningDirectionsService::new(
             planning_workspace_port.clone(),
@@ -118,21 +127,24 @@ impl PlanningFeature {
             planning_workspace_port.clone(),
             validation_service.clone(),
         );
-        let task_ledger_apply_service = PlanningTaskLedgerApplyService::new(
+        let task_ledger_apply_service = PlanningTaskLedgerApplyService::with_task_repository(
             planning_workspace_port.clone(),
             validation_service.clone(),
             priority_queue_service.clone(),
+            planning_task_repository_port.clone(),
         );
-        let planning_prompt_service = PlanningPromptService::new(
+        let planning_prompt_service = PlanningPromptService::with_task_repository(
             planning_workspace_port.clone(),
             validation_service.clone(),
             priority_queue_service.clone(),
+            planning_task_repository_port.clone(),
         );
         let doctor_service = PlanningDoctorService::new(planning_prompt_service.clone());
-        let planning_reconciliation_service = PlanningReconciliationService::new(
+        let planning_reconciliation_service = PlanningReconciliationService::with_task_repository(
             planning_workspace_port.clone(),
             validation_service.clone(),
             priority_queue_service.clone(),
+            planning_task_repository_port.clone(),
         );
         let runtime_facade = PlanningRuntimeFacadeService::new(
             planning_prompt_service.clone(),
@@ -140,11 +152,12 @@ impl PlanningFeature {
             PlanningRuntimePolicyService::new(),
             TurnPromptAssemblyService::new(),
         );
-        let proposal_promotion = PlanningProposalPromotionService::new(
+        let proposal_promotion = PlanningProposalPromotionService::with_task_repository(
             planning_workspace_port,
             planning_prompt_service,
             validation_service,
             priority_queue_service,
+            planning_task_repository_port,
         );
 
         Self {
@@ -173,6 +186,7 @@ impl PlanningFeature {
         Self::from_ports(
             planning_workspace_port,
             Arc::new(NoopPlanningAuthorityPort::default()),
+            Arc::new(NoopPlanningTaskRepositoryPort),
             Arc::new(NoopPlanningWorkerPort),
         )
     }

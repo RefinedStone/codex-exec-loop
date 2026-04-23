@@ -16,6 +16,12 @@ const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/g
 
 pub struct GithubAutomationAdapter;
 
+impl Default for GithubAutomationAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GithubAutomationAdapter {
     pub fn new() -> Self {
         Self

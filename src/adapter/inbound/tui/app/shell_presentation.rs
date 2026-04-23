@@ -193,6 +193,7 @@ pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_i
 pub(super) use status_panels::InlineTailView;
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn build_shell_footer_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     plan_mode_indicator: status_panels::PlanModeIndicatorView,

@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -29,18 +32,35 @@ pub struct PlanningTaskLedgerApplyService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
 
 impl PlanningTaskLedgerApplyService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_validation_service,
+            priority_queue_service,
+            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_validation_service,
             priority_queue_service,
+            planning_task_repository_port,
         }
     }
 
@@ -93,6 +113,14 @@ impl PlanningTaskLedgerApplyService {
         committed_record.queue_snapshot_json = Some(queue_snapshot_json);
         self.planning_workspace_port
             .commit_planning_workspace_files(workspace_dir, &committed_record)?;
+        self.planning_task_repository_port
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )?;
 
         Ok(PlanningTrackedTaskLedgerApplyResult {
             applied_paths: vec![
@@ -135,10 +163,10 @@ enum WorkspaceBody {
     ResultOutput,
 }
 
-fn required_workspace_body<'a>(
-    workspace: &'a PlanningWorkspaceLoadRecord,
+fn required_workspace_body(
+    workspace: &PlanningWorkspaceLoadRecord,
     body: WorkspaceBody,
-) -> Result<&'a str> {
+) -> Result<&str> {
     match body {
         WorkspaceBody::Directions => workspace
             .directions_toml

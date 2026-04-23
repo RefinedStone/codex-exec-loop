@@ -214,9 +214,11 @@ fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
         env!("CARGO_PKG_VERSION"),
     ));
     let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
-        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        planning_authority.clone(),
+        planning_authority,
         Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
     );
     PlanningAdminFacadeService::from_planning(workspace_dir, planning, planning_workspace_port)

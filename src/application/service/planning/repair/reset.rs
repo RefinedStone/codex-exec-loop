@@ -2,17 +2,22 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
     RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
+use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{TaskLedgerDocument, TaskStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,16 +48,39 @@ pub struct PlanningWorkspaceResetResult {
 pub struct PlanningResetService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_bootstrap_service: PlanningBootstrapService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    planning_validation_service: PlanningValidationService,
+    priority_queue_service: PriorityQueueService,
 }
 
 impl PlanningResetService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_bootstrap_service: PlanningBootstrapService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_bootstrap_service,
+            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
+            PlanningValidationService::new(),
+            PriorityQueueService::new(),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_bootstrap_service: PlanningBootstrapService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_bootstrap_service,
+            planning_task_repository_port,
+            planning_validation_service,
+            priority_queue_service,
         }
     }
 
@@ -67,10 +95,10 @@ impl PlanningResetService {
             .build_artifacts_for_mode(PlanningBootstrapMode::Simple);
 
         match target {
-            PlanningResetTarget::Queue => self.reset_queue(workspace_dir, &bootstrap),
+            PlanningResetTarget::Queue => self.reset_queue(workspace_dir, &workspace, &bootstrap),
             PlanningResetTarget::Directions => {
                 self.ensure_directions_reset_is_safe(&workspace)?;
-                self.reset_directions(workspace_dir, &bootstrap)
+                self.reset_directions(workspace_dir, &workspace, &bootstrap)
             }
             PlanningResetTarget::All => self.reset_all(workspace_dir, &bootstrap),
         }
@@ -92,6 +120,7 @@ impl PlanningResetService {
     fn reset_queue(
         &self,
         workspace_dir: &str,
+        workspace: &PlanningWorkspaceLoadRecord,
         bootstrap: &PlanningBootstrapArtifacts,
     ) -> Result<PlanningWorkspaceResetResult> {
         self.planning_workspace_port
@@ -102,6 +131,13 @@ impl PlanningResetService {
             )?;
         self.planning_workspace_port
             .replace_planning_workspace_file(workspace_dir, QUEUE_SNAPSHOT_FILE_PATH, None)?;
+        self.commit_task_authority_from_bodies(
+            workspace_dir,
+            workspace.directions_toml.as_deref(),
+            Some(&bootstrap.task_ledger_json),
+            workspace.task_ledger_schema_json.as_deref(),
+            workspace.result_output_markdown.as_deref(),
+        )?;
 
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::Queue,
@@ -156,9 +192,17 @@ impl PlanningResetService {
     fn reset_directions(
         &self,
         workspace_dir: &str,
+        workspace: &PlanningWorkspaceLoadRecord,
         bootstrap: &PlanningBootstrapArtifacts,
     ) -> Result<PlanningWorkspaceResetResult> {
         self.reset_directions_side_artifacts(workspace_dir, bootstrap)?;
+        self.commit_task_authority_from_bodies(
+            workspace_dir,
+            Some(&bootstrap.directions_toml),
+            workspace.task_ledger_json.as_deref(),
+            workspace.task_ledger_schema_json.as_deref(),
+            workspace.result_output_markdown.as_deref(),
+        )?;
 
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::Directions,
@@ -200,6 +244,13 @@ impl PlanningResetService {
             )?;
         self.planning_workspace_port
             .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None)?;
+        self.commit_task_authority_from_bodies(
+            workspace_dir,
+            Some(&bootstrap.directions_toml),
+            Some(&bootstrap.task_ledger_json),
+            Some(&bootstrap.task_ledger_schema_json),
+            Some(&bootstrap.result_output_markdown),
+        )?;
 
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::All,
@@ -246,6 +297,63 @@ impl PlanningResetService {
             .replace_planning_workspace_file(workspace_dir, QUEUE_SNAPSHOT_FILE_PATH, None)?;
 
         Ok(())
+    }
+
+    fn commit_task_authority_from_bodies(
+        &self,
+        workspace_dir: &str,
+        directions_toml: Option<&str>,
+        task_ledger_json: Option<&str>,
+        task_ledger_schema_json: Option<&str>,
+        result_output_markdown: Option<&str>,
+    ) -> Result<()> {
+        let (
+            Some(directions_toml),
+            Some(task_ledger_json),
+            Some(task_ledger_schema_json),
+            Some(result_output_markdown),
+        ) = (
+            directions_toml,
+            task_ledger_json,
+            task_ledger_schema_json,
+            result_output_markdown,
+        )
+        else {
+            return self
+                .planning_task_repository_port
+                .clear_task_authority_snapshot(workspace_dir);
+        };
+        let validation_result = self.planning_validation_service.validate_workspace_files(
+            crate::domain::planning::PlanningWorkspaceFiles {
+                directions_toml,
+                task_ledger_json,
+                task_ledger_schema_json,
+                result_output_markdown,
+            },
+        );
+        if !validation_result.is_valid() {
+            return Ok(());
+        }
+        let directions = validation_result
+            .directions
+            .as_ref()
+            .ok_or_else(|| anyhow!("valid reset workspace did not include directions"))?;
+        let task_ledger = validation_result
+            .task_ledger
+            .as_ref()
+            .ok_or_else(|| anyhow!("valid reset workspace did not include task-ledger"))?;
+        let queue_snapshot = self
+            .priority_queue_service
+            .build_snapshot(directions, task_ledger)
+            .map_err(|error| anyhow!("valid reset queue build failed: {error}"))?;
+        self.planning_task_repository_port
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )
     }
 }
 

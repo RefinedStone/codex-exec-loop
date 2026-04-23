@@ -1085,6 +1085,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResult {
     PlanningReconciliationResult {
         notices: vec![message.clone()],
