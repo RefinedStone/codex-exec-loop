@@ -171,6 +171,15 @@ fn spawn_conversation_stream_worker(
             Ok(result) => observe_stream_completion(&request, saw_terminal_event, result),
             Err(payload) => observe_stream_panic(&request, saw_terminal_event, payload),
         };
+
+        if let Some(message) = observation.terminal_failure_message.as_ref() {
+            let _ = outer_tx.send(BackgroundMessage::ConversationStream(
+                ConversationStreamEvent::Failed {
+                    message: message.clone(),
+                },
+            ));
+        }
+
         let (notice, invalidate_supervisor_snapshot) = finalize_slot_lease_after_stream_completion(
             &parallel_mode_turn_service,
             &request,
@@ -186,11 +195,6 @@ fn spawn_conversation_stream_worker(
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }
 
-        if let Some(message) = observation.terminal_failure_message {
-            let _ = outer_tx.send(BackgroundMessage::ConversationStream(
-                ConversationStreamEvent::Failed { message },
-            ));
-        }
         if let Some(notice) = observation.runtime_notice {
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }

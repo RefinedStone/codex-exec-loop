@@ -378,6 +378,7 @@ mod tests {
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
             PlanningServices::from_workspace_port(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),

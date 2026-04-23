@@ -49,6 +49,7 @@ impl NativeTuiApp {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
+        parallel_mode_service: ParallelModeService,
         planning: PlanningServices,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
@@ -86,7 +87,7 @@ impl NativeTuiApp {
             session_service,
             conversation_service,
             turn_control_truth,
-            parallel_mode_service: ParallelModeService::new(),
+            parallel_mode_service,
             planning,
             active_turn_planning_capture: None,
             planner_worker_panel_state: super::PlannerWorkerPanelState::default(),

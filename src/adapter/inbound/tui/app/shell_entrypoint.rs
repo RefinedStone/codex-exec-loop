@@ -5,9 +5,14 @@ use anyhow::Result;
 
 use crate::adapter::outbound::app_server::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::app_server::CodexAppServerAdapter;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::github::GithubAutomationAdapter;
+use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -28,19 +33,27 @@ fn build_default_app() -> NativeTuiApp {
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> =
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()));
+    let planning_authority: Arc<dyn PlanningAuthorityPort> =
+        Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
+    let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
+        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
+    );
     let startup_service = StartupService::new(app_server_adapter.clone());
     let session_service = SessionService::new(app_server_adapter.clone());
     let conversation_service = ConversationService::new(app_server_adapter.clone());
     let planning = PlanningServices::from_ports(
-        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        planning_workspace_port,
+        planning_authority.clone(),
         planning_worker_port,
     );
+    let parallel_mode_service = ParallelModeService::new(planning_authority, github_automation);
     let mut app = NativeTuiApp::new(
         startup_service,
         session_service,
         conversation_service,
+        parallel_mode_service,
         planning,
     );
     let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -131,6 +144,7 @@ mod tests {
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
             PlanningServices::from_workspace_port(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),

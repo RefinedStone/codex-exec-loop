@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
 };
@@ -113,17 +112,6 @@ impl PlanningWorkerOrchestrationService {
     pub fn new(
         planning_worker_port: Arc<dyn PlanningWorkerPort>,
         runtime_facade: PlanningRuntimeFacadeService,
-    ) -> Self {
-        Self::with_planning_authority(
-            planning_worker_port,
-            runtime_facade,
-            Arc::new(SqlitePlanningAuthorityAdapter::new()),
-        )
-    }
-
-    pub fn with_planning_authority(
-        planning_worker_port: Arc<dyn PlanningWorkerPort>,
-        runtime_facade: PlanningRuntimeFacadeService,
         planning_authority: Arc<dyn PlanningAuthorityPort>,
     ) -> Self {
         Self {
@@ -205,7 +193,7 @@ impl PlanningWorkerOrchestrationService {
             request.latest_user_message,
             request.latest_main_reply,
             request.previous_handoff_task,
-            &request.contract,
+            request.contract,
         )
     }
 
@@ -492,7 +480,9 @@ mod tests {
         PlanningOfficialCompletionRefreshRequest, PlanningQueueRefreshMode,
         PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     };
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     };
@@ -701,6 +691,9 @@ mod tests {
             priority_queue_service,
         );
 
+        let planning_authority: Arc<dyn PlanningAuthorityPort> =
+            Arc::new(SqlitePlanningAuthorityAdapter::new());
+
         PlanningWorkerOrchestrationService::new(
             worker,
             PlanningRuntimeFacadeService::new(
@@ -709,6 +702,7 @@ mod tests {
                 PlanningRuntimePolicyService::new(),
                 TurnPromptAssemblyService::new(),
             ),
+            planning_authority,
         )
     }
 

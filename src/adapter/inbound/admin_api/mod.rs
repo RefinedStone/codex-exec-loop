@@ -15,11 +15,13 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
     PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
-    PlanningAdminOverview, PlanningAdminSessionView, PlanningResetTarget,
+    PlanningAdminOverview, PlanningAdminSessionView, PlanningResetTarget, PlanningServices,
 };
 
 const DEFAULT_PORT: u16 = 18442;
@@ -189,10 +191,7 @@ where
         .canonicalize()
         .context("failed to canonicalize current directory for admin server")?;
     let workspace_dir = workspace_dir.display().to_string();
-    let facade = Arc::new(PlanningAdminFacadeService::new(
-        workspace_dir,
-        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
-    ));
+    let facade = Arc::new(build_admin_facade(workspace_dir));
     let state = AdminAppState { facade };
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, args.port))
         .await
@@ -207,6 +206,20 @@ where
         .await
         .context("admin server exited unexpectedly")?;
     Ok(())
+}
+
+fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
+    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
+        "codex-exec-loop-native",
+        env!("CARGO_PKG_VERSION"),
+    ));
+    let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    let planning = PlanningServices::from_ports(
+        planning_workspace_port.clone(),
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
+    );
+    PlanningAdminFacadeService::from_planning(workspace_dir, planning, planning_workspace_port)
 }
 
 fn build_router(state: AdminAppState) -> Router {

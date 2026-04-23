@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
@@ -93,7 +92,9 @@ impl ParallelModeDistributorService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeDistributorQueueItem>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -159,11 +160,13 @@ impl ParallelModeDistributorService {
             updated_at: timestamp,
         };
         write_distributor_queue_record(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &record,
         )?;
         let _ = record_merge_queued_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -174,8 +177,8 @@ impl ParallelModeDistributorService {
 
     pub(super) fn process_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
         self.recover_runtime_state(workspace_dir)?;
-        let context =
-            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
         let mut records = context.distributor_queue_records.clone();
         let Some(head_index) = records
             .iter()
@@ -205,6 +208,7 @@ impl ParallelModeDistributorService {
         };
 
         process_distributor_queue_record(
+            self.planning_authority.as_ref(),
             &context.repo_root,
             &context.pool_root,
             head,
@@ -213,7 +217,7 @@ impl ParallelModeDistributorService {
     }
 
     fn inspect_snapshot(&self, workspace_dir: &str) -> ParallelModeDistributorSnapshot {
-        match load_pool_runtime_context(workspace_dir) {
+        match load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir) {
             Ok(context) => build_distributor_snapshot_from_context(&context),
             Err((_, detail)) => build_placeholder_distributor_snapshot(
                 "unavailable",
@@ -245,8 +249,8 @@ impl ParallelModeDistributorService {
     }
 
     pub(super) fn recover_runtime_state(&self, workspace_dir: &str) -> Result<(), String> {
-        let context =
-            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
 
         for mut record in context.distributor_queue_records.clone() {
             if matches!(
@@ -262,6 +266,7 @@ impl ParallelModeDistributorService {
             let matching_lease = matching_lease_for_queue_record(&context, &record);
             if !Path::new(&record.worktree_path).exists() {
                 let _ = block_distributor_queue_record(
+                    self.planning_authority.as_ref(),
                     &context.repo_root,
                     &context.pool_root,
                     matching_lease,
@@ -273,7 +278,12 @@ impl ParallelModeDistributorService {
             }
 
             if branch_is_integrated_into_akra(&context.repo_root, &record.branch_name) {
-                recover_integrated_queue_record(&context, matching_lease, &mut record)?;
+                recover_integrated_queue_record(
+                    self.planning_authority.as_ref(),
+                    &context,
+                    matching_lease,
+                    &mut record,
+                )?;
                 continue;
             }
 
@@ -285,6 +295,7 @@ impl ParallelModeDistributorService {
                 record.pull_request_url = Some(pull_request.url.clone());
                 if !pull_request.state.eq_ignore_ascii_case("open") {
                     let _ = block_distributor_queue_record(
+                        self.planning_authority.as_ref(),
                         &context.repo_root,
                         &context.pool_root,
                         matching_lease,
@@ -298,6 +309,7 @@ impl ParallelModeDistributorService {
                 }
                 if pull_request.is_draft {
                     let _ = block_distributor_queue_record(
+                        self.planning_authority.as_ref(),
                         &context.repo_root,
                         &context.pool_root,
                         matching_lease,
@@ -308,7 +320,12 @@ impl ParallelModeDistributorService {
                     )?;
                     continue;
                 }
-                write_distributor_queue_record(&context.repo_root, &context.pool_root, &record)?;
+                write_distributor_queue_record(
+                    self.planning_authority.as_ref(),
+                    &context.repo_root,
+                    &context.pool_root,
+                    &record,
+                )?;
             }
         }
 
@@ -333,6 +350,7 @@ fn matching_lease_for_queue_record<'a>(
 }
 
 fn recover_integrated_queue_record(
+    planning_authority: &dyn PlanningAuthorityPort,
     context: &PoolRuntimeContext,
     matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
     record: &mut ParallelModeDistributorQueueRecord,
@@ -342,11 +360,13 @@ fn recover_integrated_queue_record(
             let mut cleanup_pending_lease = lease.clone();
             cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
             write_slot_lease(
+                planning_authority,
                 &context.repo_root,
                 &context.pool_root,
                 &cleanup_pending_lease,
             )?;
             let _ = record_cleanup_pending_session_detail(
+                planning_authority,
                 &context.repo_root,
                 &context.pool_root,
                 &cleanup_pending_lease,
@@ -358,7 +378,12 @@ fn recover_integrated_queue_record(
             "recovered after restart: branch is already integrated into akra and slot cleanup completed"
                 .to_string();
         record.updated_at = current_timestamp();
-        write_distributor_queue_record(&context.repo_root, &context.pool_root, record)?;
+        write_distributor_queue_record(
+            planning_authority,
+            &context.repo_root,
+            &context.pool_root,
+            record,
+        )?;
         return Ok(());
     }
 
@@ -367,7 +392,12 @@ fn recover_integrated_queue_record(
         "recovered after restart: branch is already integrated into akra and cleanup is pending"
             .to_string();
     record.updated_at = current_timestamp();
-    write_distributor_queue_record(&context.repo_root, &context.pool_root, record)?;
+    write_distributor_queue_record(
+        planning_authority,
+        &context.repo_root,
+        &context.pool_root,
+        record,
+    )?;
     Ok(())
 }
 
@@ -627,16 +657,18 @@ fn find_distributor_queue_record_by_session_key(
 ) -> Option<ParallelModeDistributorQueueRecord> {
     queue_records
         .iter()
-        .cloned()
         .find(|record| record.session_key == session_key)
+        .cloned()
 }
 
 fn write_distributor_queue_record(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     record: &ParallelModeDistributorQueueRecord,
 ) -> Result<(), String> {
-    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(workspace_dir, record)
+    planning_authority
+        .upsert_runtime_distributor_queue_record(workspace_dir, record)
         .map_err(|error| {
             format!(
                 "failed to store distributor queue record `{}`: {error}",
@@ -667,6 +699,7 @@ fn write_distributor_queue_record(
 }
 
 fn process_distributor_queue_record(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     record: &mut ParallelModeDistributorQueueRecord,
@@ -674,6 +707,7 @@ fn process_distributor_queue_record(
 ) -> Result<Vec<String>, String> {
     if !Path::new(&record.worktree_path).exists() {
         return Ok(vec![block_distributor_queue_record(
+            planning_authority,
             workspace_dir,
             pool_root,
             None,
@@ -682,10 +716,11 @@ fn process_distributor_queue_record(
         )?]);
     }
 
-    let resolution = match resolve_workspace_slot_lease(&record.worktree_path) {
+    let resolution = match resolve_workspace_slot_lease(planning_authority, &record.worktree_path) {
         Ok(Some(resolution)) => resolution,
         Ok(None) => {
             return Ok(vec![block_distributor_queue_record(
+                planning_authority,
                 workspace_dir,
                 pool_root,
                 None,
@@ -695,6 +730,7 @@ fn process_distributor_queue_record(
         }
         Err(error) => {
             return Ok(vec![block_distributor_queue_record(
+                planning_authority,
                 workspace_dir,
                 pool_root,
                 None,
@@ -714,6 +750,7 @@ fn process_distributor_queue_record(
             | ParallelModeQueueItemState::Integrating
     ) {
         notices.push(distributor_push_source_branch(
+            planning_authority,
             &resolution,
             record,
             github_automation,
@@ -723,6 +760,7 @@ fn process_distributor_queue_record(
         }
 
         notices.push(distributor_ensure_pull_request(
+            planning_authority,
             &resolution,
             record,
             github_automation,
@@ -732,6 +770,7 @@ fn process_distributor_queue_record(
         }
 
         notices.push(distributor_check_pull_request_merge_readiness(
+            planning_authority,
             &resolution,
             record,
             github_automation,
@@ -741,6 +780,7 @@ fn process_distributor_queue_record(
         }
 
         notices.push(distributor_integrate_branch(
+            planning_authority,
             &resolution,
             record,
             github_automation,
@@ -750,12 +790,14 @@ fn process_distributor_queue_record(
         }
     }
 
-    let cleanup_notice = distributor_cleanup_integrated_slot(&resolution, record)?;
+    let cleanup_notice =
+        distributor_cleanup_integrated_slot(planning_authority, &resolution, record)?;
     notices.push(cleanup_notice);
     Ok(notices)
 }
 
 fn distributor_push_source_branch(
+    planning_authority: &dyn PlanningAuthorityPort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
@@ -765,6 +807,7 @@ fn distributor_push_source_branch(
     record.github_capabilities = Some(capabilities.clone());
     if !capabilities.push_ready() {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -783,11 +826,13 @@ fn distributor_push_source_branch(
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
     )?;
     let _ = record_pushing_session_detail(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -796,6 +841,7 @@ fn distributor_push_source_branch(
 
     if let Err(error) = github_automation.push_branch(&repo_root, &record.branch_name, false) {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -812,6 +858,7 @@ fn distributor_push_source_branch(
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -824,6 +871,7 @@ fn distributor_push_source_branch(
 }
 
 fn distributor_ensure_pull_request(
+    planning_authority: &dyn PlanningAuthorityPort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
@@ -840,6 +888,7 @@ fn distributor_ensure_pull_request(
             capabilities.gh_auth.summary()
         };
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -855,11 +904,13 @@ fn distributor_ensure_pull_request(
         "source branch pushed and pull request ensure is in progress".to_string();
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
     )?;
     let _ = record_pr_pending_session_detail(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -876,6 +927,7 @@ fn distributor_ensure_pull_request(
         Ok(pull_request) => pull_request,
         Err(error) => {
             return block_distributor_queue_record(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -896,6 +948,7 @@ fn distributor_ensure_pull_request(
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -908,12 +961,14 @@ fn distributor_ensure_pull_request(
 }
 
 fn distributor_check_pull_request_merge_readiness(
+    planning_authority: &dyn PlanningAuthorityPort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
 ) -> Result<String, String> {
     let Some(pr_number) = record.pull_request_number else {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -927,11 +982,13 @@ fn distributor_check_pull_request_merge_readiness(
         format!("pull request #{pr_number} is open and merge readiness is being checked");
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
     )?;
     let _ = record_merge_pending_session_detail(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -943,6 +1000,7 @@ fn distributor_check_pull_request_merge_readiness(
         Ok(pull_request) => pull_request,
         Err(error) => {
             return block_distributor_queue_record(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -955,6 +1013,7 @@ fn distributor_check_pull_request_merge_readiness(
     record.pull_request_url = Some(pull_request.url.clone());
     if !pull_request.state.eq_ignore_ascii_case("open") {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -967,6 +1026,7 @@ fn distributor_check_pull_request_merge_readiness(
     }
     if pull_request.is_draft {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -976,6 +1036,7 @@ fn distributor_check_pull_request_merge_readiness(
     }
     if pull_request.base_branch != AKRA_BRANCH {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -988,6 +1049,7 @@ fn distributor_check_pull_request_merge_readiness(
     }
     if pull_request.head_branch != record.branch_name {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -1005,6 +1067,7 @@ fn distributor_check_pull_request_merge_readiness(
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -1017,6 +1080,7 @@ fn distributor_check_pull_request_merge_readiness(
 }
 
 fn distributor_integrate_branch(
+    planning_authority: &dyn PlanningAuthorityPort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
@@ -1029,6 +1093,7 @@ fn distributor_integrate_branch(
     })?;
     if slot_status.has_pending_operation {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -1044,6 +1109,7 @@ fn distributor_integrate_branch(
         != Some(record.branch_name.as_str())
     {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -1063,6 +1129,7 @@ fn distributor_integrate_branch(
     })?;
     if current_head != record.commit_sha {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -1084,11 +1151,13 @@ fn distributor_integrate_branch(
     };
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
     )?;
     let _ = record_integrating_session_detail(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -1109,6 +1178,7 @@ fn distributor_integrate_branch(
             ],
         ) {
             return block_distributor_queue_record(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -1140,6 +1210,7 @@ fn distributor_integrate_branch(
             format!("branch rebased onto `{AKRA_BRANCH}` and is ready for local integration");
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             record,
@@ -1148,6 +1219,7 @@ fn distributor_integrate_branch(
             "branch rebased onto akra and is ready for local integration".to_string()
         });
         let _ = record_integrating_session_detail(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -1158,6 +1230,7 @@ fn distributor_integrate_branch(
             if let Err(error) = github_automation.push_branch(&repo_root, &record.branch_name, true)
             {
                 return block_distributor_queue_record(
+                    planning_authority,
                     &resolution.context.repo_root,
                     &resolution.context.pool_root,
                     Some(&resolution.lease),
@@ -1172,6 +1245,7 @@ fn distributor_integrate_branch(
                 "rebased branch force-pushed and ready for local integration".to_string();
             record.updated_at = current_timestamp();
             write_distributor_queue_record(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 record,
@@ -1181,6 +1255,7 @@ fn distributor_integrate_branch(
                 |provenance| format!("{provenance} / force-pushed and ready for local integration"),
             );
             let _ = record_integrating_session_detail(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 &resolution.lease,
@@ -1193,6 +1268,7 @@ fn distributor_integrate_branch(
             ["-C", worktree.as_str(), "branch", "-f", AKRA_BRANCH, "HEAD"],
         ) {
             return block_distributor_queue_record(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -1208,6 +1284,7 @@ fn distributor_integrate_branch(
     let repo_root = resolution.context.repo_root.clone();
     if let Err(error) = github_automation.push_integration_branch(&repo_root, AKRA_BRANCH) {
         return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -1220,6 +1297,7 @@ fn distributor_integrate_branch(
             Ok(pull_request) => pull_request,
             Err(error) => {
                 return block_distributor_queue_record(
+                    planning_authority,
                     &resolution.context.repo_root,
                     &resolution.context.pool_root,
                     Some(&resolution.lease),
@@ -1235,6 +1313,7 @@ fn distributor_integrate_branch(
             && let Err(error) = github_automation.close_pull_request(&repo_root, pr_number)
         {
             return block_distributor_queue_record(
+                planning_authority,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -1250,6 +1329,7 @@ fn distributor_integrate_branch(
             .to_string();
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -1264,6 +1344,7 @@ fn distributor_integrate_branch(
 }
 
 fn distributor_cleanup_integrated_slot(
+    planning_authority: &dyn PlanningAuthorityPort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
 ) -> Result<String, String> {
@@ -1271,11 +1352,13 @@ fn distributor_cleanup_integrated_slot(
         let mut cleanup_pending_lease = resolution.lease.clone();
         cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
         write_slot_lease(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &cleanup_pending_lease,
         )?;
         let _ = record_cleanup_pending_session_detail(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &cleanup_pending_lease,
@@ -1283,13 +1366,15 @@ fn distributor_cleanup_integrated_slot(
     }
 
     if !cleanup_slot(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease.slot_id,
         &resolution.workspace_path,
         &resolution.lease.branch_name,
     ) {
-        return Ok(block_distributor_queue_record(
+        return block_distributor_queue_record(
+            planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -1298,10 +1383,11 @@ fn distributor_cleanup_integrated_slot(
                 "slot `{}` cleanup failed after distributor delivery",
                 resolution.lease.slot_id
             ),
-        )?);
+        );
     }
 
     let _ = record_cleaned_session_detail(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -1312,6 +1398,7 @@ fn distributor_cleanup_integrated_slot(
             .to_string();
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
+        planning_authority,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -1324,6 +1411,7 @@ fn distributor_cleanup_integrated_slot(
 }
 
 fn block_distributor_queue_record(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: Option<&ParallelModeSlotLeaseSnapshot>,
@@ -1333,9 +1421,10 @@ fn block_distributor_queue_record(
     record.queue_state = ParallelModeQueueItemState::Blocked;
     record.integration_note = failure_detail.clone();
     record.updated_at = current_timestamp();
-    write_distributor_queue_record(workspace_dir, pool_root, record)?;
+    write_distributor_queue_record(planning_authority, workspace_dir, pool_root, record)?;
     if let Some(lease) = lease {
         let _ = record_distributor_failed_session_detail(
+            planning_authority,
             workspace_dir,
             pool_root,
             lease,

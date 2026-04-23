@@ -295,11 +295,11 @@ pub struct PlanningAdminFacadeService {
 }
 
 impl PlanningAdminFacadeService {
-    pub fn new(
+    pub fn from_planning(
         workspace_dir: impl Into<String>,
+        planning: PlanningServices,
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     ) -> Self {
-        let planning = PlanningServices::from_workspace_port(planning_workspace_port.clone());
         Self {
             workspace_dir: workspace_dir.into(),
             planning,
@@ -307,6 +307,14 @@ impl PlanningAdminFacadeService {
             planning_validation_service: PlanningValidationService::new(),
             priority_queue_service: PriorityQueueService::new(),
         }
+    }
+
+    pub fn new(
+        workspace_dir: impl Into<String>,
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+    ) -> Self {
+        let planning = PlanningServices::from_workspace_port(planning_workspace_port.clone());
+        Self::from_planning(workspace_dir, planning, planning_workspace_port)
     }
 
     pub fn workspace_dir(&self) -> &str {

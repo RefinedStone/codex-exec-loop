@@ -1,4 +1,16 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::github_automation_port::{
+    GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+};
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::domain::parallel_mode::{
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+};
 use crate::domain::planning::{
     PriorityQueueSkippedTask, PriorityQueueSnapshot, PriorityQueueTask, TaskStatus,
 };
@@ -81,5 +93,96 @@ pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
             }],
             skipped_tasks: Vec::new(),
         },
+    )
+}
+
+#[derive(Debug, Default)]
+struct TestGithubAutomationPort;
+
+impl GithubAutomationPort for TestGithubAutomationPort {
+    fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+        GithubAutomationCapabilities::new(
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Ready,
+                "test push remote ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhBinary,
+                ParallelModeCapabilityState::Ready,
+                "test gh binary ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhAuth,
+                ParallelModeCapabilityState::Ready,
+                "test gh auth ready",
+                None,
+            ),
+        )
+    }
+
+    fn push_branch(
+        &self,
+        _repo_root: &str,
+        _branch_name: &str,
+        _force_with_lease: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn ensure_pull_request(
+        &self,
+        _repo_root: &str,
+        base_branch: &str,
+        head_branch: &str,
+        _title: &str,
+        _body: &str,
+    ) -> Result<GithubAutomationPullRequest> {
+        Ok(GithubAutomationPullRequest::new(
+            1,
+            "https://github.com/RefinedStone/codex-exec-loop/pull/1",
+            "OPEN",
+            base_branch,
+            head_branch,
+            false,
+        ))
+    }
+
+    fn inspect_pull_request(
+        &self,
+        _repo_root: &str,
+        pr_number: u64,
+    ) -> Result<GithubAutomationPullRequest> {
+        Ok(GithubAutomationPullRequest::new(
+            pr_number,
+            format!("https://github.com/RefinedStone/codex-exec-loop/pull/{pr_number}"),
+            "OPEN",
+            "akra",
+            "akra-agent/slot-1/task",
+            false,
+        ))
+    }
+
+    fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn close_pull_request(&self, _repo_root: &str, _pr_number: u64) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) fn test_parallel_mode_service() -> ParallelModeService {
+    test_parallel_mode_service_with_github(Arc::new(TestGithubAutomationPort))
+}
+
+pub(crate) fn test_parallel_mode_service_with_github(
+    github_automation: Arc<dyn GithubAutomationPort>,
+) -> ParallelModeService {
+    ParallelModeService::new(
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        github_automation,
     )
 }

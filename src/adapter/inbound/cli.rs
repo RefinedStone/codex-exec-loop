@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
+use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
@@ -499,14 +501,25 @@ fn validate_workspace_path(workspace_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn build_production_planning_services() -> PlanningServices {
+    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
+        "codex-exec-loop-native",
+        env!("CARGO_PKG_VERSION"),
+    ));
+    PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
+    )
+}
+
 fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     let workspace_label = workspace_path.display().to_string();
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return DoctorReport::path_issue(workspace_label, issue);
     }
 
-    let planning =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let planning = build_production_planning_services();
     let report = planning
         .workspace
         .inspect_workspace(workspace_path.to_string_lossy().as_ref());
@@ -519,8 +532,7 @@ fn initialize_workspace(workspace_path: &Path) -> InitReport {
         return InitReport::path_issue(workspace_label, issue);
     }
 
-    let planning =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let planning = build_production_planning_services();
     match planning
         .workspace
         .initialize_simple_workspace(workspace_path.to_string_lossy().as_ref())
@@ -541,8 +553,7 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
         return ResetReport::path_issue(workspace_label, issue);
     }
 
-    let planning =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let planning = build_production_planning_services();
     match planning
         .workspace
         .reset_workspace(workspace_path.to_string_lossy().as_ref(), target)
@@ -558,8 +569,7 @@ fn apply_tracked_directions(workspace_path: &Path) -> DirectionsApplyReport {
         return DirectionsApplyReport::path_issue(workspace_label, issue);
     }
 
-    let planning =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let planning = build_production_planning_services();
     match planning
         .workspace
         .apply_tracked_directions(workspace_path.to_string_lossy().as_ref())
@@ -575,8 +585,7 @@ fn apply_tracked_task_ledger(workspace_path: &Path) -> QueueApplyReport {
         return QueueApplyReport::path_issue(workspace_label, issue);
     }
 
-    let planning =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let planning = build_production_planning_services();
     match planning
         .workspace
         .apply_tracked_task_ledger(workspace_path.to_string_lossy().as_ref())

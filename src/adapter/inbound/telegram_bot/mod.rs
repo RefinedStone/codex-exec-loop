@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
 use crate::application::port::outbound::telegram_bot_port::{
@@ -13,7 +15,8 @@ use crate::application::port::outbound::telegram_bot_port::{
     TelegramUpdate,
 };
 use crate::application::service::planning::{
-    PlanningAdminFacadeService, PlanningControlCommand, PlanningControlService, PlanningResetTarget,
+    PlanningAdminFacadeService, PlanningControlCommand, PlanningControlService,
+    PlanningResetTarget, PlanningServices,
 };
 
 const DEFAULT_POLL_TIMEOUT_SECONDS: u16 = 30;
@@ -49,10 +52,8 @@ where
         .canonicalize()
         .context("failed to canonicalize current directory for telegram bot")?;
     let workspace_dir = workspace_dir.display().to_string();
-    let control_service = PlanningControlService::new(Arc::new(PlanningAdminFacadeService::new(
-        workspace_dir.clone(),
-        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
-    )));
+    let control_service =
+        PlanningControlService::new(Arc::new(build_planning_admin_facade(workspace_dir.clone())));
     let runner = TelegramBotRunner::new(
         Arc::new(CurlTelegramBotAdapter::new(args.token)),
         control_service,
@@ -63,6 +64,20 @@ where
     );
     println!("telegram bot control listening for local workspace {workspace_dir}");
     runner.run()
+}
+
+fn build_planning_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
+    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
+        "codex-exec-loop-native",
+        env!("CARGO_PKG_VERSION"),
+    ));
+    let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    let planning = PlanningServices::from_ports(
+        planning_workspace_port.clone(),
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
+    );
+    PlanningAdminFacadeService::from_planning(workspace_dir, planning, planning_workspace_port)
 }
 
 fn parse_args<I>(args: I) -> Result<TelegramBotArgs>

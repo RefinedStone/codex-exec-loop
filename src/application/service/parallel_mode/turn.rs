@@ -302,8 +302,11 @@ fn should_mark_cleanup_pending_after_success(
 mod tests {
     use std::fs;
     use std::process::Command;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::github::GithubAutomationAdapter;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::parallel_mode::ParallelModeService;
 
@@ -367,6 +370,13 @@ mod tests {
         );
     }
 
+    fn test_parallel_mode_service() -> ParallelModeService {
+        ParallelModeService::new(
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+            Arc::new(GithubAutomationAdapter::new()),
+        )
+    }
+
     #[test]
     fn startup_failure_requests_unstarted_slot_release() {
         assert!(should_release_unstarted_slot_lease(false, true, true));
@@ -387,7 +397,7 @@ mod tests {
     #[test]
     fn turn_started_without_slot_lease_keeps_snapshot_steady() {
         let workspace = TempGitWorkspace::new("parallel-turn-no-lease");
-        let service = ParallelModeTurnService::new(ParallelModeService::new());
+        let service = ParallelModeTurnService::new(test_parallel_mode_service());
 
         let outcome = service.sync_stream_event(
             &workspace.root,
@@ -404,7 +414,7 @@ mod tests {
     #[test]
     fn thread_prepared_without_slot_lease_keeps_snapshot_steady() {
         let workspace = TempGitWorkspace::new("parallel-thread-prepared-no-lease");
-        let service = ParallelModeTurnService::new(ParallelModeService::new());
+        let service = ParallelModeTurnService::new(test_parallel_mode_service());
 
         let outcome = service.sync_stream_event(
             &workspace.root,
@@ -423,7 +433,7 @@ mod tests {
     #[test]
     fn official_completion_refreshing_failure_becomes_runtime_notice() {
         let workspace = create_temp_directory("parallel-turn-refresh-failure");
-        let service = ParallelModeTurnService::new(ParallelModeService::new());
+        let service = ParallelModeTurnService::new(test_parallel_mode_service());
 
         let notice = service.mark_official_completion_refreshing(&workspace);
 
@@ -436,7 +446,7 @@ mod tests {
     #[test]
     fn official_completion_finalize_surfaces_commit_ready_transition_failure() {
         let workspace = create_temp_directory("parallel-turn-commit-ready-failure");
-        let service = ParallelModeTurnService::new(ParallelModeService::new());
+        let service = ParallelModeTurnService::new(test_parallel_mode_service());
 
         let notices = service
             .finalize_official_completion_success(&workspace, "official ledger refresh succeeded");

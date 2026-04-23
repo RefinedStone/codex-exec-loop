@@ -1,3 +1,4 @@
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
@@ -5,9 +6,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
 };
 
-use super::distributor::{
-    ParallelModeDistributorQueueRecord, ParallelModeDistributorService,
-};
+use super::distributor::{ParallelModeDistributorQueueRecord, ParallelModeDistributorService};
 use super::{
     PoolRuntimeContext, build_assigned_session_detail, build_pool_board,
     default_ledger_refresh_outcome, default_supervisor_notice, default_validation_summary,
@@ -25,6 +24,7 @@ impl ParallelModeSupervisorService {
 
     pub(super) fn build_snapshot(
         &self,
+        planning_authority: &dyn PlanningAuthorityPort,
         workspace_dir: &str,
         mode_enabled: bool,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
@@ -34,15 +34,25 @@ impl ParallelModeSupervisorService {
         let workspace_path = readiness_snapshot
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
-        let pool = build_pool_board(workspace_dir, readiness_snapshot);
+        let pool = build_pool_board(planning_authority, workspace_dir, readiness_snapshot);
         let top_notice = supervisor_top_notice(&pool, mode_enabled, readiness_snapshot);
 
         ParallelModeSupervisorSnapshot::new(
             state,
             workspace_path,
             pool,
-            build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
-            build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
+            build_agent_roster(
+                planning_authority,
+                workspace_dir,
+                mode_enabled,
+                readiness_snapshot,
+            ),
+            build_supervisor_detail(
+                planning_authority,
+                workspace_dir,
+                mode_enabled,
+                readiness_snapshot,
+            ),
             distributor_service.build_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
             top_notice,
         )
@@ -50,6 +60,7 @@ impl ParallelModeSupervisorService {
 
     pub(super) fn reconcile_snapshot(
         &self,
+        planning_authority: &dyn PlanningAuthorityPort,
         workspace_dir: &str,
         mode_enabled: bool,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
@@ -61,9 +72,9 @@ impl ParallelModeSupervisorService {
             .unwrap_or_else(|| workspace_dir.to_string());
         let pool = match readiness_snapshot {
             Some(snapshot) if mode_enabled && snapshot.allows_parallel_mode() => {
-                reconcile_pool_board(workspace_dir)
+                reconcile_pool_board(planning_authority, workspace_dir)
             }
-            _ => build_pool_board(workspace_dir, readiness_snapshot),
+            _ => build_pool_board(planning_authority, workspace_dir, readiness_snapshot),
         };
         let top_notice = supervisor_top_notice(&pool, mode_enabled, readiness_snapshot);
 
@@ -71,8 +82,18 @@ impl ParallelModeSupervisorService {
             state,
             workspace_path,
             pool,
-            build_agent_roster(workspace_dir, mode_enabled, readiness_snapshot),
-            build_supervisor_detail(workspace_dir, mode_enabled, readiness_snapshot),
+            build_agent_roster(
+                planning_authority,
+                workspace_dir,
+                mode_enabled,
+                readiness_snapshot,
+            ),
+            build_supervisor_detail(
+                planning_authority,
+                workspace_dir,
+                mode_enabled,
+                readiness_snapshot,
+            ),
             distributor_service.build_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
             top_notice,
         )
@@ -108,23 +129,25 @@ fn build_placeholder_roster(
 }
 
 fn build_agent_roster(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     mode_enabled: bool,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
 ) -> ParallelModeAgentRosterSnapshot {
     match readiness_snapshot {
         Some(snapshot) if snapshot.allows_parallel_mode() => {
-            inspect_agent_roster(workspace_dir, mode_enabled)
+            inspect_agent_roster(planning_authority, workspace_dir, mode_enabled)
         }
         _ => build_placeholder_roster(mode_enabled, readiness_snapshot),
     }
 }
 
 fn inspect_agent_roster(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     mode_enabled: bool,
 ) -> ParallelModeAgentRosterSnapshot {
-    match load_pool_runtime_context(workspace_dir) {
+    match load_pool_runtime_context(planning_authority, workspace_dir) {
         Ok(context) => build_agent_roster_from_context(&context, mode_enabled),
         Err((_, detail)) => ParallelModeAgentRosterSnapshot::new(
             Vec::new(),
@@ -190,10 +213,10 @@ fn roster_state_label(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
 ) -> String {
-    if let Some(detail) = detail {
-        if let Some(label) = active_runtime_state_override(lease, detail) {
-            return label.to_string();
-        }
+    if let Some(detail) = detail
+        && let Some(label) = active_runtime_state_override(lease, detail)
+    {
+        return label.to_string();
     }
 
     match lease.state {
@@ -255,13 +278,14 @@ fn roster_latest_summary(
 }
 
 fn build_supervisor_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     mode_enabled: bool,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
 ) -> ParallelModeSupervisorDetailSnapshot {
     match readiness_snapshot {
         Some(snapshot) if snapshot.allows_parallel_mode() => {
-            inspect_supervisor_detail(workspace_dir, mode_enabled)
+            inspect_supervisor_detail(planning_authority, workspace_dir, mode_enabled)
         }
         Some(_) => ParallelModeSupervisorDetailSnapshot::new(
             None,
@@ -275,10 +299,11 @@ fn build_supervisor_detail(
 }
 
 fn inspect_supervisor_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     mode_enabled: bool,
 ) -> ParallelModeSupervisorDetailSnapshot {
-    match load_pool_runtime_context(workspace_dir) {
+    match load_pool_runtime_context(planning_authority, workspace_dir) {
         Ok(context) => build_supervisor_detail_from_context(&context, mode_enabled),
         Err((_, detail)) => ParallelModeSupervisorDetailSnapshot::new(
             None,
@@ -419,12 +444,10 @@ pub(super) fn selected_runtime_session_detail(
     if let Some(queue_head) = queue_records
         .iter()
         .find(|record| record.queue_state.is_active())
-    {
-        if let Some(detail) =
+        && let Some(detail) =
             session_detail_for_runtime_session(context, history, &queue_head.session_key)
-        {
-            return Some(detail);
-        }
+    {
+        return Some(detail);
     }
 
     let active_leases = sorted_active_leases(context);

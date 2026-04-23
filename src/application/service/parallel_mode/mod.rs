@@ -7,8 +7,6 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
-use crate::adapter::outbound::github::GithubAutomationAdapter;
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
@@ -33,9 +31,7 @@ pub(crate) mod distributor;
 pub(crate) mod supervisor;
 pub(crate) mod turn;
 
-use self::distributor::{
-    ParallelModeDistributorService, load_distributor_queue_records,
-};
+use self::distributor::{ParallelModeDistributorService, load_distributor_queue_records};
 use self::supervisor::ParallelModeSupervisorService;
 
 const AKRA_BRANCH: &str = "akra";
@@ -147,29 +143,11 @@ impl std::fmt::Debug for ParallelModeService {
     }
 }
 
-impl Default for ParallelModeService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ParallelModeService {
-    pub fn new() -> Self {
-        let planning_authority: Arc<dyn PlanningAuthorityPort> =
-            Arc::new(SqlitePlanningAuthorityAdapter::new());
-        Self {
-            distributor_service: ParallelModeDistributorService::with_planning_authority(
-                Arc::new(GithubAutomationAdapter::new()),
-                planning_authority.clone(),
-            ),
-            supervisor_service: ParallelModeSupervisorService::new(),
-            planning_authority,
-        }
-    }
-
-    pub fn with_github_automation(github_automation: Arc<dyn GithubAutomationPort>) -> Self {
-        let planning_authority: Arc<dyn PlanningAuthorityPort> =
-            Arc::new(SqlitePlanningAuthorityAdapter::new());
+    pub fn new(
+        planning_authority: Arc<dyn PlanningAuthorityPort>,
+        github_automation: Arc<dyn GithubAutomationPort>,
+    ) -> Self {
         Self {
             distributor_service: ParallelModeDistributorService::with_planning_authority(
                 github_automation,
@@ -184,7 +162,9 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<u64>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -284,6 +264,7 @@ impl ParallelModeService {
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
         self.supervisor_service.build_snapshot(
+            self.planning_authority.as_ref(),
             workspace_dir,
             mode_enabled,
             readiness_snapshot,
@@ -298,6 +279,7 @@ impl ParallelModeService {
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
         self.supervisor_service.reconcile_snapshot(
+            self.planning_authority.as_ref(),
             workspace_dir,
             mode_enabled,
             readiness_snapshot,
@@ -310,9 +292,9 @@ impl ParallelModeService {
         workspace_dir: &str,
         request: ParallelModeSlotLeaseRequest,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        let _ = reconcile_pool_board(workspace_dir);
-        let context =
-            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
 
         if context
             .slot_leases
@@ -379,12 +361,22 @@ impl ParallelModeService {
             current_timestamp(),
             None,
         );
-        if let Err(error) = write_slot_lease(&context.repo_root, &context.pool_root, &lease) {
+        if let Err(error) = write_slot_lease(
+            self.planning_authority.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease,
+        ) {
             let _ =
                 discard_unstarted_slot_branch(&context.repo_root, &slot_path, branch_name.as_str());
             return Err(error);
         }
-        let _ = record_assigned_session_detail(&context.repo_root, &context.pool_root, &lease);
+        let _ = record_assigned_session_detail(
+            self.planning_authority.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease,
+        );
 
         Ok(lease)
     }
@@ -395,8 +387,8 @@ impl ParallelModeService {
         slot_id: &str,
         agent_id: &str,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        let context =
-            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
         let mut lease = context
             .slot_leases
             .get(slot_id)
@@ -425,8 +417,18 @@ impl ParallelModeService {
         if lease.running_started_at.is_none() {
             lease.running_started_at = Some(current_timestamp());
         }
-        write_slot_lease(&context.repo_root, &context.pool_root, &lease)?;
-        let _ = record_running_session_detail(&context.repo_root, &context.pool_root, &lease);
+        write_slot_lease(
+            self.planning_authority.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease,
+        )?;
+        let _ = record_running_session_detail(
+            self.planning_authority.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease,
+        );
         Ok(lease)
     }
 
@@ -435,11 +437,14 @@ impl ParallelModeService {
         workspace_dir: &str,
         thread_id: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
 
         record_thread_prepared_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -454,8 +459,8 @@ impl ParallelModeService {
         slot_id: &str,
         agent_id: &str,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        let context =
-            load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
         let mut lease = context
             .slot_leases
             .get(slot_id)
@@ -492,9 +497,18 @@ impl ParallelModeService {
         }
 
         lease.state = ParallelModeSlotLeaseState::CleanupPending;
-        write_slot_lease(&context.repo_root, &context.pool_root, &lease)?;
-        let _ =
-            record_cleanup_pending_session_detail(&context.repo_root, &context.pool_root, &lease);
+        write_slot_lease(
+            self.planning_authority.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease,
+        )?;
+        let _ = record_cleanup_pending_session_detail(
+            self.planning_authority.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease,
+        );
         Ok(lease)
     }
 
@@ -502,7 +516,9 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
 
@@ -518,7 +534,9 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Leased {
@@ -540,6 +558,7 @@ impl ParallelModeService {
         }
 
         if !cleanup_slot(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease.slot_id,
@@ -552,6 +571,7 @@ impl ParallelModeService {
             ));
         }
         let _ = record_failed_start_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -569,7 +589,9 @@ impl ParallelModeService {
         validation_summary: Option<&str>,
         failure_context: Option<&str>,
     ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -602,13 +624,16 @@ impl ParallelModeService {
         );
 
         record_reported_complete_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
-            &completed_at,
-            &final_response_summary,
-            &validation_summary,
-            failure_context.as_deref(),
+            ReportedCompleteSessionDetailUpdate {
+                completed_at: &completed_at,
+                final_response_summary: &final_response_summary,
+                validation_summary: &validation_summary,
+                failure_context: failure_context.as_deref(),
+            },
         )?;
 
         Ok(Some(PlanningOfficialCompletionRefreshContract::new(
@@ -634,7 +659,9 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -642,6 +669,7 @@ impl ParallelModeService {
         }
 
         record_ledger_refreshing_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -654,7 +682,9 @@ impl ParallelModeService {
         workspace_dir: &str,
         ledger_refresh_outcome: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -662,6 +692,7 @@ impl ParallelModeService {
         }
 
         record_commit_ready_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -688,7 +719,9 @@ impl ParallelModeService {
         workspace_dir: &str,
         failure_detail: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -696,6 +729,7 @@ impl ParallelModeService {
         }
 
         record_official_completion_failed_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -708,7 +742,9 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state == ParallelModeSlotLeaseState::CleanupPending {
@@ -733,7 +769,9 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
-        let Some(resolution) = resolve_workspace_slot_lease(workspace_dir)? else {
+        let Some(resolution) =
+            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        else {
             return Ok(None);
         };
         if resolution.lease.state != ParallelModeSlotLeaseState::CleanupPending {
@@ -741,6 +779,7 @@ impl ParallelModeService {
         }
 
         if !cleanup_slot(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease.slot_id,
@@ -753,6 +792,7 @@ impl ParallelModeService {
             ));
         }
         let _ = record_cleaned_session_detail(
+            self.planning_authority.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -1151,12 +1191,16 @@ fn default_supervisor_notice(
 }
 
 fn build_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
 ) -> ParallelModePoolBoardSnapshot {
     match readiness_snapshot {
-        Some(snapshot) if snapshot.allows_parallel_mode() => inspect_pool_board(workspace_dir),
+        Some(snapshot) if snapshot.allows_parallel_mode() => {
+            inspect_pool_board(planning_authority, workspace_dir)
+        }
         Some(snapshot) => build_unavailable_pool_board(
+            planning_authority,
             workspace_dir,
             format!(
                 "reconcile blocked / readiness: {}",
@@ -1167,6 +1211,7 @@ fn build_pool_board(
             "supervisor gate",
         ),
         None => build_unavailable_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile pending / run readiness first",
             "not inspected",
@@ -1176,16 +1221,22 @@ fn build_pool_board(
     }
 }
 
-fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
+fn reconcile_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> ParallelModePoolBoardSnapshot {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile failed / git repository is unavailable",
             "repository inspection failed",
         );
     };
-    let Some(canonical_repo_root) = detect_canonical_repo_root(workspace_dir) else {
+    let Some(canonical_repo_root) = detect_canonical_repo_root(planning_authority, workspace_dir)
+    else {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile failed / canonical repository root is unavailable",
             "canonical root inspection failed",
@@ -1193,6 +1244,7 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
     };
     let Ok((_akra_head, created_akra_branch)) = ensure_akra_branch(&repo_root) else {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile blocked / `akra` baseline could not be created",
             "`akra` is unavailable during reconcile",
@@ -1203,6 +1255,7 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
     let pool_root_existed = pool_root.exists();
     if ensure_directory_exists(&pool_root).is_err() {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile failed / pool root could not be created",
             "pool root creation failed",
@@ -1211,6 +1264,7 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
     let created_pool_root = !pool_root_existed;
     let Some(worktree_records) = load_worktree_records(&repo_root) else {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile failed / git worktree inventory could not be loaded",
             "worktree list inspection failed",
@@ -1220,15 +1274,24 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
     let provisioned_slots = provision_missing_slots(&repo_root, &pool_root, &worktree_records);
     let Some(reloaded_worktree_records) = load_worktree_records(&repo_root) else {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile failed / git worktree inventory could not be reloaded",
             "worktree list reload failed",
         );
     };
-    let cleaned_slots = cleanup_reusable_slots(&repo_root, &pool_root, &reloaded_worktree_records);
+    let cleaned_slots = cleanup_reusable_slots(
+        planning_authority,
+        &repo_root,
+        &pool_root,
+        &reloaded_worktree_records,
+    );
 
-    let Ok(context) = load_pool_runtime_context_from_roots(&repo_root, &canonical_repo_root) else {
+    let Ok(context) =
+        load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
+    else {
         return build_blocked_pool_board(
+            planning_authority,
             workspace_dir,
             "reconcile failed / pool runtime state could not be loaded",
             "pool runtime load failed",
@@ -1250,14 +1313,17 @@ fn reconcile_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
     )
 }
 
-fn inspect_pool_board(workspace_dir: &str) -> ParallelModePoolBoardSnapshot {
-    match load_pool_runtime_context(workspace_dir) {
+fn inspect_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> ParallelModePoolBoardSnapshot {
+    match load_pool_runtime_context(planning_authority, workspace_dir) {
         Ok(context) => build_pool_board_from_context(
             &context,
             summarize_pool_reconcile_status(&build_pool_slots(&context), &context.pool_root, None),
         ),
         Err((reconcile_status, detail)) => {
-            build_blocked_pool_board(workspace_dir, reconcile_status, detail)
+            build_blocked_pool_board(planning_authority, workspace_dir, reconcile_status, detail)
         }
     }
 }
@@ -1312,6 +1378,7 @@ fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
 }
 
 fn load_pool_runtime_context(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Result<PoolRuntimeContext, (&'static str, &'static str)> {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
@@ -1320,26 +1387,29 @@ fn load_pool_runtime_context(
             "repository inspection failed",
         ));
     };
-    let Some(canonical_repo_root) = detect_canonical_repo_root(workspace_dir) else {
+    let Some(canonical_repo_root) = detect_canonical_repo_root(planning_authority, workspace_dir)
+    else {
         return Err((
             "reconcile failed / canonical repository root is unavailable",
             "canonical root inspection failed",
         ));
     };
 
-    load_pool_runtime_context_from_roots(&repo_root, &canonical_repo_root).map_err(|detail| {
-        (
-            "reconcile failed / pool runtime state could not be loaded",
-            detail,
-        )
-    })
+    load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
+        .map_err(|detail| {
+            (
+                "reconcile failed / pool runtime state could not be loaded",
+                detail,
+            )
+        })
 }
 
 fn resolve_workspace_slot_lease(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
-    let context =
-        load_pool_runtime_context(workspace_dir).map_err(|(_, detail)| detail.to_string())?;
+    let context = load_pool_runtime_context(planning_authority, workspace_dir)
+        .map_err(|(_, detail)| detail.to_string())?;
     let workspace_path = canonicalize_best_effort(Path::new(&context.repo_root));
     let Some(current_branch) = current_branch_name(&workspace_path) else {
         return Err(format!(
@@ -1385,6 +1455,7 @@ fn resolve_workspace_slot_lease(
 }
 
 fn load_pool_runtime_context_from_roots(
+    planning_authority: &dyn PlanningAuthorityPort,
     repo_root: &str,
     canonical_repo_root: &Path,
 ) -> Result<PoolRuntimeContext, &'static str> {
@@ -1395,7 +1466,8 @@ fn load_pool_runtime_context_from_roots(
         return Err("worktree list inspection failed");
     };
     let pool_root = derive_default_pool_root(canonical_repo_root);
-    let runtime_projections = load_runtime_projection_snapshot(repo_root, &pool_root);
+    let runtime_projections =
+        load_runtime_projection_snapshot(planning_authority, repo_root, &pool_root);
 
     Ok(PoolRuntimeContext {
         repo_root: repo_root.to_string(),
@@ -1411,10 +1483,11 @@ fn load_pool_runtime_context_from_roots(
 }
 
 fn load_runtime_projection_snapshot(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
 ) -> PlanningAuthorityRuntimeProjectionSnapshot {
-    SqlitePlanningAuthorityAdapter::new()
+    planning_authority
         .load_runtime_projections(workspace_dir)
         .unwrap_or_else(|_| {
             let (slot_leases, invalid_slot_leases) = read_slot_leases(pool_root);
@@ -1497,12 +1570,14 @@ fn provision_missing_slots(
 }
 
 fn cleanup_reusable_slots(
+    planning_authority: &dyn PlanningAuthorityPort,
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
 ) -> usize {
     let mut cleaned_slots = 0;
-    let slot_leases = load_runtime_projection_snapshot(repo_root, pool_root).slot_leases;
+    let slot_leases =
+        load_runtime_projection_snapshot(planning_authority, repo_root, pool_root).slot_leases;
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -1534,7 +1609,14 @@ fn cleanup_reusable_slots(
         if !cleanup_ready {
             continue;
         }
-        if cleanup_slot(repo_root, pool_root, &slot_id, &slot_path, branch_name) {
+        if cleanup_slot(
+            planning_authority,
+            repo_root,
+            pool_root,
+            &slot_id,
+            &slot_path,
+            branch_name,
+        ) {
             cleaned_slots += 1;
         }
     }
@@ -1561,6 +1643,7 @@ fn branch_is_cleanup_ready(repo_root: &str, branch_name: &str) -> bool {
 }
 
 fn cleanup_slot(
+    planning_authority: &dyn PlanningAuthorityPort,
     repo_root: &str,
     pool_root: &Path,
     slot_id: &str,
@@ -1598,7 +1681,7 @@ fn cleanup_slot(
     if !command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name]) {
         return false;
     }
-    if !remove_slot_lease(repo_root, pool_root, slot_id) {
+    if !remove_slot_lease(planning_authority, repo_root, pool_root, slot_id) {
         return false;
     }
 
@@ -1606,13 +1689,14 @@ fn cleanup_slot(
 }
 
 fn build_unavailable_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     reconcile_status: impl Into<String>,
     branch_name: &str,
     worktree_label: &str,
     owner_label: &str,
 ) -> ParallelModePoolBoardSnapshot {
-    let pool_root_label = derive_pool_root_label(workspace_dir);
+    let pool_root_label = derive_pool_root_label(planning_authority, workspace_dir);
     let slots = (1..=DEFAULT_POOL_SIZE)
         .map(|slot_number| {
             ParallelModePoolSlotSnapshot::new(
@@ -1629,11 +1713,12 @@ fn build_unavailable_pool_board(
 }
 
 fn build_blocked_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     reconcile_status: impl Into<String>,
     detail: &str,
 ) -> ParallelModePoolBoardSnapshot {
-    let pool_root_label = derive_pool_root_label(workspace_dir);
+    let pool_root_label = derive_pool_root_label(planning_authority, workspace_dir);
     let slots = (1..=DEFAULT_POOL_SIZE)
         .map(|slot_number| {
             ParallelModePoolSlotSnapshot::new(
@@ -1979,9 +2064,9 @@ fn orphan_agent_branch_without_lease_detail(
     parts.join(" / ")
 }
 
-fn find_non_merged_orphan_slot_branch<'a>(
-    slots: &'a [ParallelModePoolSlotSnapshot],
-) -> Option<&'a ParallelModePoolSlotSnapshot> {
+fn find_non_merged_orphan_slot_branch(
+    slots: &[ParallelModePoolSlotSnapshot],
+) -> Option<&ParallelModePoolSlotSnapshot> {
     slots.iter().find(|slot| {
         slot.state == ParallelModePoolSlotState::Blocked
             && slot.owner_label == "operator recovery"
@@ -2005,13 +2090,21 @@ fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> Str
     )
 }
 
-fn detect_canonical_repo_root(workspace_dir: &str) -> Option<PathBuf> {
-    detect_git_repo_root(workspace_dir)?;
-    Some(SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir))
+fn detect_canonical_repo_root(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Option<PathBuf> {
+    planning_authority
+        .resolve_authority_location(workspace_dir)
+        .ok()
+        .map(|location| PathBuf::from(location.canonical_repo_root))
 }
 
-fn derive_pool_root_label(workspace_dir: &str) -> String {
-    detect_canonical_repo_root(workspace_dir)
+fn derive_pool_root_label(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> String {
+    detect_canonical_repo_root(planning_authority, workspace_dir)
         .map(|canonical_repo_root| {
             let pool_root = derive_default_pool_root(&canonical_repo_root);
             display_pool_path(&canonical_repo_root, &pool_root)
@@ -2263,11 +2356,13 @@ fn read_slot_leases(
 }
 
 fn write_slot_lease(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<(), String> {
-    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(workspace_dir, lease)
+    planning_authority
+        .upsert_runtime_slot_lease(workspace_dir, lease)
         .map_err(|error| format!("failed to store slot lease `{}`: {error}", lease.slot_id))?;
 
     let leases_root = slot_leases_root(pool_root);
@@ -2287,8 +2382,16 @@ fn write_slot_lease(
         .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
 }
 
-fn remove_slot_lease(workspace_dir: &str, pool_root: &Path, slot_id: &str) -> bool {
-    if SqlitePlanningAuthorityAdapter::remove_runtime_slot_lease(workspace_dir, slot_id).is_err() {
+fn remove_slot_lease(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    slot_id: &str,
+) -> bool {
+    if planning_authority
+        .remove_runtime_slot_lease(workspace_dir, slot_id)
+        .is_err()
+    {
         return false;
     }
     let lease_path = slot_lease_file_path(pool_root, slot_id);
@@ -2530,410 +2633,523 @@ fn build_assigned_session_detail(
 }
 
 fn record_assigned_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     let detail = build_assigned_session_detail(lease);
-    write_agent_session_detail_record(workspace_dir, pool_root, &detail)?;
+    write_agent_session_detail_record(planning_authority, workspace_dir, pool_root, &detail)?;
     Ok(detail)
 }
 
 fn record_thread_prepared_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     thread_id: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.thread_id = Some(thread_id.to_string());
-        detail.state_label = "starting".to_string();
-        detail.completion_state_label = "in_progress".to_string();
-        let summary = format!("thread prepared for the leased session / thread: {thread_id}");
-        detail.latest_summary = summary.clone();
-        detail.updated_at = timestamp.clone();
-        push_session_history(&mut detail, "starting", timestamp, summary);
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.thread_id = Some(thread_id.to_string());
+            detail.state_label = "starting".to_string();
+            detail.completion_state_label = "in_progress".to_string();
+            let summary = format!("thread prepared for the leased session / thread: {thread_id}");
+            detail.latest_summary = summary.clone();
+            detail.updated_at = timestamp.clone();
+            push_session_history(&mut detail, "starting", timestamp, summary);
+            detail
+        },
+    )
 }
 
 fn record_running_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = lease
-            .running_started_at
-            .clone()
-            .unwrap_or_else(current_timestamp);
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "running".to_string();
-        detail.completion_state_label = "in_progress".to_string();
-        detail.latest_summary = "agent session entered the running state".to_string();
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "running",
-            timestamp,
-            "agent session entered the running state".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = lease
+                .running_started_at
+                .clone()
+                .unwrap_or_else(current_timestamp);
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "running".to_string();
+            detail.completion_state_label = "in_progress".to_string();
+            detail.latest_summary = "agent session entered the running state".to_string();
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "running",
+                timestamp,
+                "agent session entered the running state".to_string(),
+            );
+            detail
+        },
+    )
+}
+
+struct ReportedCompleteSessionDetailUpdate<'a> {
+    completed_at: &'a str,
+    final_response_summary: &'a str,
+    validation_summary: &'a str,
+    failure_context: Option<&'a str>,
 }
 
 fn record_reported_complete_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
-    completed_at: &str,
-    final_response_summary: &str,
-    validation_summary: &str,
-    failure_context: Option<&str>,
+    update: ReportedCompleteSessionDetailUpdate<'_>,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "reported_complete".to_string();
-        detail.completion_state_label = "reported_complete".to_string();
-        detail.latest_summary = final_response_summary.to_string();
-        detail.validation_summary = validation_summary.to_string();
-        detail.ledger_refresh_outcome =
-            "completion reported; official ledger refresh is pending".to_string();
-        detail.distributor_outcome = None;
-        detail.updated_at = completed_at.to_string();
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "reported_complete".to_string();
+            detail.completion_state_label = "reported_complete".to_string();
+            detail.latest_summary = update.final_response_summary.to_string();
+            detail.validation_summary = update.validation_summary.to_string();
+            detail.ledger_refresh_outcome =
+                "completion reported; official ledger refresh is pending".to_string();
+            detail.distributor_outcome = None;
+            detail.updated_at = update.completed_at.to_string();
 
-        let history_summary = failure_context.map_or_else(
-            || final_response_summary.to_string(),
-            |context| format!("{final_response_summary} / context: {context}"),
-        );
-        push_session_history(
-            &mut detail,
-            "reported_complete",
-            completed_at.to_string(),
-            history_summary,
-        );
-        detail
-    })
+            let history_summary = update.failure_context.map_or_else(
+                || update.final_response_summary.to_string(),
+                |context| format!("{} / context: {context}", update.final_response_summary),
+            );
+            push_session_history(
+                &mut detail,
+                "reported_complete",
+                update.completed_at.to_string(),
+                history_summary,
+            );
+            detail
+        },
+    )
 }
 
 fn record_ledger_refreshing_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "ledger_refreshing".to_string();
-        detail.completion_state_label = "ledger_refreshing".to_string();
-        detail.latest_summary =
-            "completion reported and hidden planning worker is refreshing the ledger".to_string();
-        detail.ledger_refresh_outcome =
-            "hidden planning worker is refreshing the official task ledger".to_string();
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "ledger_refreshing",
-            timestamp,
-            "hidden planning worker is refreshing the official task ledger".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "ledger_refreshing".to_string();
+            detail.completion_state_label = "ledger_refreshing".to_string();
+            detail.latest_summary =
+                "completion reported and hidden planning worker is refreshing the ledger"
+                    .to_string();
+            detail.ledger_refresh_outcome =
+                "hidden planning worker is refreshing the official task ledger".to_string();
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "ledger_refreshing",
+                timestamp,
+                "hidden planning worker is refreshing the official task ledger".to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_commit_ready_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     ledger_refresh_outcome: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "commit_ready".to_string();
-        detail.completion_state_label = "commit_ready".to_string();
-        detail.latest_summary =
-            "official ledger refresh accepted the completion report".to_string();
-        detail.ledger_refresh_outcome = ledger_refresh_outcome.trim().to_string();
-        detail.distributor_outcome =
-            Some("commit-ready result is waiting for distributor integration".to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "commit_ready",
-            timestamp,
-            "official ledger refresh accepted the completion report".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "commit_ready".to_string();
+            detail.completion_state_label = "commit_ready".to_string();
+            detail.latest_summary =
+                "official ledger refresh accepted the completion report".to_string();
+            detail.ledger_refresh_outcome = ledger_refresh_outcome.trim().to_string();
+            detail.distributor_outcome =
+                Some("commit-ready result is waiting for distributor integration".to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "commit_ready",
+                timestamp,
+                "official ledger refresh accepted the completion report".to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_merge_queued_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "merge_queued".to_string();
-        detail.completion_state_label = "merge_queued".to_string();
-        detail.latest_summary =
-            "commit-ready result accepted into the distributor queue".to_string();
-        detail.distributor_outcome =
-            Some("distributor accepted the result and queued it for GitHub delivery".to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "merge_queued",
-            timestamp,
-            "distributor accepted the result and queued it for GitHub delivery".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "merge_queued".to_string();
+            detail.completion_state_label = "merge_queued".to_string();
+            detail.latest_summary =
+                "commit-ready result accepted into the distributor queue".to_string();
+            detail.distributor_outcome = Some(
+                "distributor accepted the result and queued it for GitHub delivery".to_string(),
+            );
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "merge_queued",
+                timestamp,
+                "distributor accepted the result and queued it for GitHub delivery".to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_pushing_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "pushing".to_string();
-        detail.completion_state_label = "merge_queued".to_string();
-        detail.latest_summary = summary.trim().to_string();
-        detail.distributor_outcome = Some(summary.trim().to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "pushing",
-            timestamp,
-            summary.trim().to_string(),
-        );
-        detail
-    })
-}
-
-fn record_pr_pending_session_detail(
-    workspace_dir: &str,
-    pool_root: &Path,
-    lease: &ParallelModeSlotLeaseSnapshot,
-    summary: &str,
-) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "pr_pending".to_string();
-        detail.completion_state_label = "merge_queued".to_string();
-        detail.latest_summary = summary.trim().to_string();
-        detail.distributor_outcome = Some(summary.trim().to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "pr_pending",
-            timestamp,
-            summary.trim().to_string(),
-        );
-        detail
-    })
-}
-
-fn record_merge_pending_session_detail(
-    workspace_dir: &str,
-    pool_root: &Path,
-    lease: &ParallelModeSlotLeaseSnapshot,
-    summary: &str,
-) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "merge_pending".to_string();
-        detail.completion_state_label = "merge_queued".to_string();
-        detail.latest_summary = summary.trim().to_string();
-        detail.distributor_outcome = Some(summary.trim().to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "merge_pending",
-            timestamp,
-            summary.trim().to_string(),
-        );
-        detail
-    })
-}
-
-fn record_integrating_session_detail(
-    workspace_dir: &str,
-    pool_root: &Path,
-    lease: &ParallelModeSlotLeaseSnapshot,
-    summary: &str,
-) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "integrating".to_string();
-        detail.completion_state_label = "merge_queued".to_string();
-        detail.latest_summary = summary.trim().to_string();
-        detail.distributor_outcome = Some(summary.trim().to_string());
-        detail.updated_at = timestamp.clone();
-        if let Some(last_entry) = detail.history.last_mut()
-            && last_entry.state_label == "integrating"
-        {
-            last_entry.timestamp = timestamp;
-            last_entry.summary = summary.trim().to_string();
-        } else {
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "pushing".to_string();
+            detail.completion_state_label = "merge_queued".to_string();
+            detail.latest_summary = summary.trim().to_string();
+            detail.distributor_outcome = Some(summary.trim().to_string());
+            detail.updated_at = timestamp.clone();
             push_session_history(
                 &mut detail,
-                "integrating",
+                "pushing",
                 timestamp,
                 summary.trim().to_string(),
             );
-        }
-        detail
-    })
+            detail
+        },
+    )
+}
+
+fn record_pr_pending_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    summary: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "pr_pending".to_string();
+            detail.completion_state_label = "merge_queued".to_string();
+            detail.latest_summary = summary.trim().to_string();
+            detail.distributor_outcome = Some(summary.trim().to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "pr_pending",
+                timestamp,
+                summary.trim().to_string(),
+            );
+            detail
+        },
+    )
+}
+
+fn record_merge_pending_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    summary: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "merge_pending".to_string();
+            detail.completion_state_label = "merge_queued".to_string();
+            detail.latest_summary = summary.trim().to_string();
+            detail.distributor_outcome = Some(summary.trim().to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "merge_pending",
+                timestamp,
+                summary.trim().to_string(),
+            );
+            detail
+        },
+    )
+}
+
+fn record_integrating_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    summary: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "integrating".to_string();
+            detail.completion_state_label = "merge_queued".to_string();
+            detail.latest_summary = summary.trim().to_string();
+            detail.distributor_outcome = Some(summary.trim().to_string());
+            detail.updated_at = timestamp.clone();
+            if let Some(last_entry) = detail.history.last_mut()
+                && last_entry.state_label == "integrating"
+            {
+                last_entry.timestamp = timestamp;
+                last_entry.summary = summary.trim().to_string();
+            } else {
+                push_session_history(
+                    &mut detail,
+                    "integrating",
+                    timestamp,
+                    summary.trim().to_string(),
+                );
+            }
+            detail
+        },
+    )
 }
 
 fn record_distributor_failed_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     failure_detail: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "failed".to_string();
-        detail.completion_state_label = "failed".to_string();
-        detail.latest_summary = "distributor delivery failed".to_string();
-        detail.distributor_outcome = Some(failure_detail.trim().to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "failed",
-            timestamp,
-            failure_detail.trim().to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "failed".to_string();
+            detail.completion_state_label = "failed".to_string();
+            detail.latest_summary = "distributor delivery failed".to_string();
+            detail.distributor_outcome = Some(failure_detail.trim().to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "failed",
+                timestamp,
+                failure_detail.trim().to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_official_completion_failed_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     failure_detail: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "failed".to_string();
-        detail.completion_state_label = "failed".to_string();
-        detail.latest_summary = "official completion refresh failed".to_string();
-        detail.ledger_refresh_outcome = failure_detail.trim().to_string();
-        detail.distributor_outcome = Some(
-            "not queued for distributor integration because official refresh failed".to_string(),
-        );
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "failed",
-            timestamp,
-            failure_detail.trim().to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "failed".to_string();
+            detail.completion_state_label = "failed".to_string();
+            detail.latest_summary = "official completion refresh failed".to_string();
+            detail.ledger_refresh_outcome = failure_detail.trim().to_string();
+            detail.distributor_outcome = Some(
+                "not queued for distributor integration because official refresh failed"
+                    .to_string(),
+            );
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "failed",
+                timestamp,
+                failure_detail.trim().to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_cleanup_pending_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "cleanup_pending".to_string();
-        detail.completion_state_label = "merged".to_string();
-        detail.latest_summary =
-            "agent branch is merged into akra and awaiting slot cleanup".to_string();
-        detail.distributor_outcome =
-            Some("branch is merged into akra and the slot is awaiting cleanup".to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "merged",
-            timestamp.clone(),
-            "branch is integrated into akra".to_string(),
-        );
-        push_session_history(
-            &mut detail,
-            "cleanup_pending",
-            timestamp,
-            "slot is waiting for cleanup before it can be reused".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "cleanup_pending".to_string();
+            detail.completion_state_label = "merged".to_string();
+            detail.latest_summary =
+                "agent branch is merged into akra and awaiting slot cleanup".to_string();
+            detail.distributor_outcome =
+                Some("branch is merged into akra and the slot is awaiting cleanup".to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "merged",
+                timestamp.clone(),
+                "branch is integrated into akra".to_string(),
+            );
+            push_session_history(
+                &mut detail,
+                "cleanup_pending",
+                timestamp,
+                "slot is waiting for cleanup before it can be reused".to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_cleaned_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "cleaned".to_string();
-        detail.completion_state_label = "cleaned".to_string();
-        detail.latest_summary =
-            "merged session cleaned up and the slot returned to the idle pool".to_string();
-        detail.distributor_outcome =
-            Some("branch merged into akra and the slot returned to idle".to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "cleaned",
-            timestamp,
-            "slot cleaned and returned to the idle pool".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "cleaned".to_string();
+            detail.completion_state_label = "cleaned".to_string();
+            detail.latest_summary =
+                "merged session cleaned up and the slot returned to the idle pool".to_string();
+            detail.distributor_outcome =
+                Some("branch merged into akra and the slot returned to idle".to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "cleaned",
+                timestamp,
+                "slot cleaned and returned to the idle pool".to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn record_failed_start_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(workspace_dir, pool_root, lease, |current| {
-        let timestamp = current_timestamp();
-        let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-        detail.state_label = "failed".to_string();
-        detail.completion_state_label = "aborted".to_string();
-        detail.latest_summary =
-            "launch failed before the session reached the running state".to_string();
-        detail.distributor_outcome =
-            Some("not queued for distributor work; slot returned to idle".to_string());
-        detail.updated_at = timestamp.clone();
-        push_session_history(
-            &mut detail,
-            "failed",
-            timestamp.clone(),
-            "launch failed before the session reached the running state".to_string(),
-        );
-        push_session_history(
-            &mut detail,
-            "cleaned",
-            timestamp,
-            "slot cleaned and returned to the idle pool after launch failure".to_string(),
-        );
-        detail
-    })
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "failed".to_string();
+            detail.completion_state_label = "aborted".to_string();
+            detail.latest_summary =
+                "launch failed before the session reached the running state".to_string();
+            detail.distributor_outcome =
+                Some("not queued for distributor work; slot returned to idle".to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "failed",
+                timestamp.clone(),
+                "launch failed before the session reached the running state".to_string(),
+            );
+            push_session_history(
+                &mut detail,
+                "cleaned",
+                timestamp,
+                "slot cleaned and returned to the idle pool after launch failure".to_string(),
+            );
+            detail
+        },
+    )
 }
 
 fn push_session_history(
@@ -2960,6 +3176,7 @@ fn push_session_history(
 }
 
 fn update_agent_session_detail_record<F>(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -2973,7 +3190,7 @@ where
     let session_key = lease_session_key(lease);
     let current = read_agent_session_detail_record(pool_root, &session_key);
     let detail = mutate(current);
-    write_agent_session_detail_record(workspace_dir, pool_root, &detail)?;
+    write_agent_session_detail_record(planning_authority, workspace_dir, pool_root, &detail)?;
     Ok(detail)
 }
 
@@ -3013,18 +3230,19 @@ fn read_agent_session_detail_record(
 }
 
 fn write_agent_session_detail_record(
+    planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     pool_root: &Path,
     detail: &ParallelModeAgentSessionDetailSnapshot,
 ) -> Result<(), String> {
-    SqlitePlanningAuthorityAdapter::upsert_runtime_session_detail(workspace_dir, detail).map_err(
-        |error| {
+    planning_authority
+        .upsert_runtime_session_detail(workspace_dir, detail)
+        .map_err(|error| {
             format!(
                 "failed to store agent session detail `{}`: {error}",
                 detail.session_key
             )
-        },
-    )?;
+        })?;
 
     let history_dir = agent_session_history_dir(pool_root);
     ensure_directory_exists(&history_dir)
@@ -3164,7 +3382,6 @@ fn run_command_with_stdin<const N: usize>(
     let trimmed = stdout.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
-
 
 #[cfg(test)]
 mod tests;

@@ -798,6 +798,7 @@ fn make_test_app() -> NativeTuiApp {
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
+        super::test_helpers::test_parallel_mode_service(),
         PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
     );
     app.show_startup_ascii_art = false;
