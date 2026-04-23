@@ -384,25 +384,28 @@ impl PlanningPromptService {
         let task_ledger = validation_result
             .task_ledger
             .expect("valid planning task ledger should be available");
-        let task_authority_snapshot = self
+        let stored_queue_snapshot = self
             .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)?;
-        let queue_snapshot = if let Some(task_authority_snapshot) = task_authority_snapshot {
-            task_authority_snapshot.queue_snapshot
-        } else {
-            match self
-                .priority_queue_service
-                .build_snapshot(&directions, &task_ledger)
-            {
-                Ok(queue_snapshot) => queue_snapshot,
-                Err(error) => {
-                    return Ok(PlanningRuntimeSnapshot::invalid(format!(
-                        "planning queue build failed: {error}"
-                    ))
-                    .with_workspace_present(workspace_present)
-                    .with_plan_enabled(plan_enabled));
-                }
+            .load_task_authority_snapshot(workspace_dir)?
+            .map(|snapshot| snapshot.queue_snapshot);
+        let current_queue_snapshot = match self
+            .priority_queue_service
+            .build_snapshot(&directions, &task_ledger)
+        {
+            Ok(queue_snapshot) => queue_snapshot,
+            Err(error) => {
+                return Ok(PlanningRuntimeSnapshot::invalid(format!(
+                    "planning queue build failed: {error}"
+                ))
+                .with_workspace_present(workspace_present)
+                .with_plan_enabled(plan_enabled));
             }
+        };
+        let queue_snapshot = match stored_queue_snapshot {
+            Some(stored_queue_snapshot) if stored_queue_snapshot == current_queue_snapshot => {
+                stored_queue_snapshot
+            }
+            _ => current_queue_snapshot,
         };
         let result_output_markdown = workspace_record
             .result_output_markdown
@@ -772,6 +775,9 @@ mod tests {
     use anyhow::Result;
 
     use super::{PlanningPromptService, PlanningRuntimeWorkspaceStatus};
+    use crate::application::port::outbound::planning_task_repository_port::{
+        PlanningTaskAuthorityCommit, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
@@ -784,10 +790,39 @@ mod tests {
         TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
     use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::{
+        PriorityQueueSnapshot, PriorityQueueTask, TaskLedgerDocument, TaskStatus,
+    };
 
     #[derive(Default)]
     struct FakePlanningWorkspacePort {
         load_record: PlanningWorkspaceLoadRecord,
+    }
+
+    #[derive(Default)]
+    struct FakePlanningTaskRepositoryPort {
+        snapshot: Option<PlanningTaskAuthoritySnapshot>,
+    }
+
+    impl PlanningTaskRepositoryPort for FakePlanningTaskRepositoryPort {
+        fn load_task_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn commit_task_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+            _commit: PlanningTaskAuthorityCommit<'_>,
+        ) -> Result<()> {
+            unreachable!("task authority commits are not used in planning prompt service tests")
+        }
+
+        fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+            unreachable!("task authority clears are not used in planning prompt service tests")
+        }
     }
 
     impl PlanningWorkspacePort for FakePlanningWorkspacePort {
@@ -901,6 +936,20 @@ mod tests {
             Arc::new(FakePlanningWorkspacePort { load_record }),
             PlanningValidationService::new(),
             PriorityQueueService::new(),
+        )
+    }
+
+    fn sample_service_with_task_repository(
+        load_record: PlanningWorkspaceLoadRecord,
+        snapshot: PlanningTaskAuthoritySnapshot,
+    ) -> PlanningPromptService {
+        PlanningPromptService::with_task_repository(
+            Arc::new(FakePlanningWorkspacePort { load_record }),
+            PlanningValidationService::new(),
+            PriorityQueueService::new(),
+            Arc::new(FakePlanningTaskRepositoryPort {
+                snapshot: Some(snapshot),
+            }),
         )
     }
 
@@ -1158,6 +1207,75 @@ state = "paused"
             "task-1"
         );
         assert!(result.has_actionable_queue_head());
+    }
+
+    #[test]
+    fn stored_queue_snapshot_is_rebuilt_when_current_directions_change() {
+        let bootstrap_artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+        let task_ledger_json = r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-1",
+      "direction_id": "example-direction",
+      "title": "Implement the next slice",
+      "description": "Move the planning work forward.",
+      "status": "ready",
+      "base_priority": 8,
+      "dynamic_priority_delta": 2,
+      "priority_reason": "user requested this next",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "user",
+      "source_turn_id": null,
+      "updated_at": "2026-04-09T09:00:00Z"
+    }
+  ]
+}"#;
+        let task_ledger =
+            serde_json::from_str::<TaskLedgerDocument>(task_ledger_json).expect("ledger parses");
+        let stored_queue_task = PriorityQueueTask {
+            rank: 1,
+            task_id: "task-1".to_string(),
+            direction_id: "example-direction".to_string(),
+            direction_title: "Old direction title".to_string(),
+            task_title: "Implement the next slice".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 10,
+            updated_at: "2026-04-09T09:00:00Z".to_string(),
+            rank_reasons: vec!["stale".to_string()],
+        };
+
+        let result = sample_service_with_task_repository(
+            PlanningWorkspaceLoadRecord {
+                directions_toml: Some(bootstrap_artifacts.directions_toml),
+                task_ledger_json: Some(task_ledger_json.to_string()),
+                task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
+                queue_snapshot_json: None,
+                result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
+            },
+            PlanningTaskAuthoritySnapshot {
+                task_ledger,
+                queue_snapshot: PriorityQueueSnapshot {
+                    next_task: Some(stored_queue_task.clone()),
+                    active_tasks: vec![stored_queue_task],
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: Vec::new(),
+                },
+            },
+        )
+        .load_runtime_snapshot("/tmp/workspace")
+        .expect("planning runtime snapshot should load");
+
+        assert_eq!(
+            result
+                .queue_head()
+                .expect("queue head should be rebuilt")
+                .direction_title,
+            "Example direction"
+        );
     }
 
     #[test]

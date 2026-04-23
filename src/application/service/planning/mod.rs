@@ -123,9 +123,11 @@ impl PlanningFeature {
             planning_workspace_port.clone(),
             validation_service.clone(),
         );
-        let directions_apply_service = PlanningDirectionsApplyService::new(
+        let directions_apply_service = PlanningDirectionsApplyService::with_task_repository(
             planning_workspace_port.clone(),
             validation_service.clone(),
+            priority_queue_service.clone(),
+            planning_task_repository_port.clone(),
         );
         let task_ledger_apply_service = PlanningTaskLedgerApplyService::with_task_repository(
             planning_workspace_port.clone(),

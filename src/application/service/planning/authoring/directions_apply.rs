@@ -1,13 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
+#[cfg(test)]
+use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::DIRECTIONS_FILE_PATH;
+use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, PlanningWorkspaceFiles,
 };
@@ -28,16 +34,35 @@ impl PlanningTrackedDirectionsApplyResult {
 pub struct PlanningDirectionsApplyService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
+    priority_queue_service: PriorityQueueService,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
 
 impl PlanningDirectionsApplyService {
+    #[cfg(test)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_validation_service: PlanningValidationService,
     ) -> Self {
+        Self::with_task_repository(
+            planning_workspace_port,
+            planning_validation_service,
+            PriorityQueueService::new(),
+            Arc::new(NoopPlanningTaskRepositoryPort),
+        )
+    }
+
+    pub fn with_task_repository(
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> Self {
         Self {
             planning_workspace_port,
             planning_validation_service,
+            priority_queue_service,
+            planning_task_repository_port,
         }
     }
 
@@ -86,6 +111,18 @@ impl PlanningDirectionsApplyService {
                 validation_report: validation_result.report,
             });
         }
+        let directions = validation_result
+            .directions
+            .as_ref()
+            .expect("valid tracked directions should include directions");
+        let task_ledger = validation_result
+            .task_ledger
+            .as_ref()
+            .expect("valid tracked directions should include task ledger");
+        let queue_snapshot = self
+            .priority_queue_service
+            .build_snapshot(directions, task_ledger)
+            .context("failed to rebuild planning queue after tracked directions apply")?;
 
         self.planning_workspace_port
             .replace_planning_workspace_file(
@@ -102,6 +139,15 @@ impl PlanningDirectionsApplyService {
         }
         applied_paths.sort();
         applied_paths.dedup();
+
+        self.planning_task_repository_port
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )?;
 
         Ok(PlanningTrackedDirectionsApplyResult {
             applied_paths,

@@ -251,11 +251,9 @@ impl SqlitePlanningAuthorityAdapter {
         let has_stale_task_documents = raw_active_document(&connection, TASK_LEDGER_FILE_PATH)?
             .is_some()
             || raw_active_document(&connection, QUEUE_SNAPSHOT_FILE_PATH)?.is_some();
-        if existing_snapshot
-            == Some(PlanningTaskAuthoritySnapshot {
-                task_ledger: commit.task_ledger.clone(),
-                queue_snapshot: commit.queue_snapshot.clone(),
-            })
+        if let Some(existing_snapshot) = existing_snapshot
+            && existing_snapshot.task_ledger == *commit.task_ledger
+            && existing_snapshot.queue_snapshot == *commit.queue_snapshot
             && !has_stale_task_documents
         {
             return Ok(());
@@ -388,7 +386,7 @@ impl SqlitePlanningAuthorityAdapter {
             remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
             true
         } else if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
-            if let Some(task_ledger) = load_task_ledger_from_transaction(&transaction)? {
+            if let Some(task_ledger) = load_task_ledger_from_connection(&transaction)? {
                 replace_task_authority_tables(&transaction, &task_ledger, &empty_queue_snapshot())?;
                 remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
                 true
@@ -1054,7 +1052,8 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
                 task_id TEXT NOT NULL,
                 item_kind TEXT NOT NULL,
                 content_json TEXT NOT NULL,
-                PRIMARY KEY (bucket, rank, task_id)
+                PRIMARY KEY (bucket, rank, task_id),
+                FOREIGN KEY (task_id) REFERENCES planning_tasks(task_id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_status_priority_updated
@@ -1305,47 +1304,6 @@ fn load_task_ledger_from_connection(connection: &Connection) -> Result<Option<Ta
     let version = read_metadata_i64_connection(connection, TASK_LEDGER_VERSION_METADATA_KEY)?
         .unwrap_or(i64::from(PLANNING_FORMAT_VERSION)) as u32;
     let mut statement = connection
-        .prepare(
-            "SELECT task_id, content_json
-             FROM planning_tasks
-             ORDER BY task_order ASC, task_id ASC",
-        )
-        .context("failed to read planning task rows")?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .context("failed to iterate planning task rows")?;
-    let mut tasks = Vec::new();
-    for row in rows {
-        let (task_id, content_json) = row.context("failed to decode planning task row")?;
-        tasks.push(
-            serde_json::from_str(&content_json)
-                .with_context(|| format!("failed to deserialize planning task row `{task_id}`"))?,
-        );
-    }
-
-    Ok(Some(TaskLedgerDocument { version, tasks }))
-}
-
-fn load_task_ledger_from_transaction(
-    transaction: &rusqlite::Transaction<'_>,
-) -> Result<Option<TaskLedgerDocument>> {
-    let Some(version_value) = transaction
-        .query_row(
-            "SELECT value FROM authority_metadata WHERE key = ?1",
-            params![TASK_LEDGER_VERSION_METADATA_KEY],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .context("failed to inspect planning task authority metadata")?
-    else {
-        return Ok(None);
-    };
-    let version = version_value
-        .parse::<u32>()
-        .unwrap_or(PLANNING_FORMAT_VERSION);
-    let mut statement = transaction
         .prepare(
             "SELECT task_id, content_json
              FROM planning_tasks
@@ -1627,19 +1585,25 @@ fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
         .context("failed to read authority-store schema version")
 }
 
+fn parsed_schema_version(connection: &Connection) -> Result<Option<i64>> {
+    Ok(load_schema_version(connection)?.and_then(|value| value.parse::<i64>().ok()))
+}
+
 fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
     let metadata_exists = table_exists(connection, "authority_metadata")?;
     if !metadata_exists {
         return Ok(());
     }
 
-    if let Some(schema_version) = load_schema_version(connection)? {
-        let parsed = schema_version.parse::<i64>().ok();
-        if !matches!(parsed, Some(4) | Some(AUTHORITY_STORE_SCHEMA_VERSION)) {
-            return Err(anyhow!(
-                "unsupported authority-store schema version: {schema_version}"
-            ));
-        }
+    if let Some(schema_version) = load_schema_version(connection)?
+        && !matches!(
+            schema_version.parse::<i64>().ok(),
+            Some(4) | Some(AUTHORITY_STORE_SCHEMA_VERSION)
+        )
+    {
+        return Err(anyhow!(
+            "unsupported authority-store schema version: {schema_version}"
+        ));
     }
 
     Ok(())
@@ -1662,7 +1626,9 @@ fn read_metadata_i64_connection(connection: &Connection, key: &str) -> Result<Op
 }
 
 fn backfill_task_authority_from_active_documents(connection: &mut Connection) -> Result<()> {
+    let schema_version = parsed_schema_version(connection)?;
     if read_metadata_string_connection(connection, TASK_LEDGER_VERSION_METADATA_KEY)?.is_some() {
+        record_current_schema_version_if_needed(connection, schema_version)?;
         return Ok(());
     }
     if connection
@@ -1671,14 +1637,24 @@ fn backfill_task_authority_from_active_documents(connection: &mut Connection) ->
         .context("failed to inspect existing planning task rows")?
         .is_some()
     {
+        record_current_schema_version_if_needed(connection, schema_version)?;
+        return Ok(());
+    }
+    if schema_version.is_some_and(|version| version >= AUTHORITY_STORE_SCHEMA_VERSION) {
         return Ok(());
     }
 
     let Some(task_ledger_json) = raw_active_document(connection, TASK_LEDGER_FILE_PATH)? else {
+        record_current_schema_version_if_needed(connection, schema_version)?;
         return Ok(());
     };
-    let task_ledger = serde_json::from_str::<TaskLedgerDocument>(&task_ledger_json)
-        .with_context(|| format!("failed to backfill `{TASK_LEDGER_FILE_PATH}`"))?;
+    let task_ledger = match serde_json::from_str::<TaskLedgerDocument>(&task_ledger_json) {
+        Ok(task_ledger) => task_ledger,
+        Err(_) => {
+            record_current_schema_version_if_needed(connection, schema_version)?;
+            return Ok(());
+        }
+    };
     let queue_snapshot = match raw_active_document(connection, QUEUE_SNAPSHOT_FILE_PATH)? {
         Some(queue_snapshot_json) => parse_queue_snapshot_export(&queue_snapshot_json),
         None => empty_queue_snapshot(),
@@ -1688,9 +1664,36 @@ fn backfill_task_authority_from_active_documents(connection: &mut Connection) ->
         .transaction()
         .context("failed to open task authority backfill transaction")?;
     replace_task_authority_tables(&transaction, &task_ledger, &queue_snapshot)?;
+    upsert_metadata(
+        &transaction,
+        "schema_version",
+        &AUTHORITY_STORE_SCHEMA_VERSION.to_string(),
+    )?;
     transaction
         .commit()
         .context("failed to commit task authority backfill transaction")?;
+    Ok(())
+}
+
+fn record_current_schema_version_if_needed(
+    connection: &mut Connection,
+    schema_version: Option<i64>,
+) -> Result<()> {
+    if schema_version.is_some_and(|version| version >= AUTHORITY_STORE_SCHEMA_VERSION) {
+        return Ok(());
+    }
+
+    let transaction = connection
+        .transaction()
+        .context("failed to open authority-store schema migration transaction")?;
+    upsert_metadata(
+        &transaction,
+        "schema_version",
+        &AUTHORITY_STORE_SCHEMA_VERSION.to_string(),
+    )?;
+    transaction
+        .commit()
+        .context("failed to commit authority-store schema migration transaction")?;
     Ok(())
 }
 
@@ -2473,7 +2476,7 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::SqlitePlanningAuthorityAdapter;
+    use super::{AUTHORITY_STORE_SCHEMA_VERSION, SqlitePlanningAuthorityAdapter};
     use crate::application::port::outbound::planning_authority_port::{
         PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
     };
@@ -3071,6 +3074,79 @@ mod tests {
             .expect("planning queue projection rows should be readable");
         assert_eq!(stored_task_count, 1);
         assert_eq!(active_projection_count, 1);
+        let schema_version = connection
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("schema version should be readable");
+        assert_eq!(schema_version, AUTHORITY_STORE_SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn legacy_invalid_task_ledger_blob_does_not_block_authority_open() {
+        let repo = TempGitRepo::new("authority-task-backfill-invalid");
+        let location = SqlitePlanningAuthorityAdapter::new()
+            .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
+            .expect("authority location should resolve");
+        let runtime_dir = Path::new(&location.runtime_dir);
+        fs::create_dir_all(runtime_dir).expect("runtime dir should exist");
+        let connection =
+            Connection::open(&location.authority_store_path).expect("authority store should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE authority_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE active_documents (
+                    relative_path TEXT PRIMARY KEY,
+                    content TEXT NOT NULL
+                );
+                "#,
+            )
+            .expect("legacy authority store should initialize");
+        connection
+            .execute(
+                "INSERT INTO authority_metadata (key, value) VALUES ('schema_version', '4')",
+                [],
+            )
+            .expect("legacy schema version should insert");
+        connection
+            .execute(
+                "INSERT INTO active_documents (relative_path, content) VALUES (?1, ?2)",
+                [TASK_LEDGER_FILE_PATH, "{\"version\":1,\"tasks\":["],
+            )
+            .expect("legacy invalid task ledger should insert");
+        drop(connection);
+
+        let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+        )
+        .expect("active workspace should still load");
+
+        assert_eq!(
+            loaded.task_ledger_json.as_deref(),
+            Some("{\"version\":1,\"tasks\":[")
+        );
+        let connection =
+            Connection::open(&location.authority_store_path).expect("authority store should open");
+        let stored_task_count = connection
+            .query_row("SELECT COUNT(*) FROM planning_tasks", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("planning task rows should be readable");
+        let schema_version = connection
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("schema version should be readable");
+        assert_eq!(stored_task_count, 0);
+        assert_eq!(schema_version, AUTHORITY_STORE_SCHEMA_VERSION.to_string());
     }
 
     #[test]
