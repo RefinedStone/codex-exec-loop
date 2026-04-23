@@ -273,29 +273,10 @@ impl PlanningReconciliationService {
         request: ProtectedFileRestoreRequest<'_>,
         result: &mut PlanningReconciliationResult,
     ) -> Result<String> {
-        if !request.changed {
+        if !request.changed || request.current_body == request.execution_snapshot_body {
             return Ok(request
                 .current_body
                 .or(request.execution_snapshot_body)
-                .unwrap_or_default()
-                .to_string());
-        }
-
-        if request.current_body == request.execution_snapshot_body {
-            return Ok(request
-                .current_body
-                .or(request.execution_snapshot_body)
-                .unwrap_or_default()
-                .to_string());
-        }
-
-        if request.current_body.is_none() && request.execution_snapshot_body.is_none() {
-            return Ok(String::new());
-        }
-
-        if request.current_body.is_none() {
-            return Ok(request
-                .execution_snapshot_body
                 .unwrap_or_default()
                 .to_string());
         }
@@ -1439,6 +1420,46 @@ mod tests {
                 .archived_candidate_path
                 .as_deref()
                 .is_some()
+        );
+        assert_eq!(result.queue_snapshot_action, None);
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn deleted_directions_are_restored_from_execution_snapshot() {
+        let workspace_dir = create_temp_workspace("planning-reconcile-directions-delete");
+        let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
+        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
+        fs::remove_file(planning_dir.join("directions.toml"))
+            .expect("directions should be deleted to simulate protected-file removal");
+
+        let result = service()
+            .reconcile_after_turn(
+                &workspace_dir,
+                "turn-delete-directions",
+                &[DIRECTIONS_FILE_PATH.to_string()],
+                &execution_snapshot,
+            )
+            .expect("reconciliation should succeed");
+
+        let restored_directions = fs::read_to_string(planning_dir.join("directions.toml"))
+            .expect("deleted directions should be restored");
+
+        assert_eq!(
+            restored_directions,
+            execution_snapshot
+                .directions_toml
+                .expect("execution snapshot should keep the accepted directions")
+        );
+        assert_eq!(result.restored_protected_files.len(), 1);
+        assert_eq!(
+            result.restored_protected_files[0].relative_path,
+            DIRECTIONS_FILE_PATH
+        );
+        assert_eq!(
+            result.restored_protected_files[0].archived_candidate_path,
+            None
         );
         assert_eq!(result.queue_snapshot_action, None);
 

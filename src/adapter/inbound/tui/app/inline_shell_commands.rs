@@ -83,7 +83,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to open the planning queue inspection.",
         execution_status: Some("opened planning queue inspection"),
-        requires_argument: true,
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Directions,

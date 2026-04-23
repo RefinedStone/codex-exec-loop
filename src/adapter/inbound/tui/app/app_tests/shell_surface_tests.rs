@@ -186,6 +186,33 @@ fn automation_inline_command_opens_overlay() {
 }
 
 #[test]
+fn queue_inline_command_opens_overlay_from_palette_selection() {
+    let (app, _) = make_test_app();
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    runtime.app_mut().push_input_character(':');
+    runtime.app_mut().push_input_character('q');
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Queue);
+    assert!(conversation.input_buffer.is_empty());
+    assert!(
+        conversation
+            .status_text
+            .contains("opened planning queue inspection")
+    );
+}
+
+#[test]
 fn parallel_inline_command_opens_supersession_overlay() {
     let (app, _) = make_test_app();
     let mut runtime = shell_runtime::ShellRuntime::new(app);
