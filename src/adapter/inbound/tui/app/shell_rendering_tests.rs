@@ -2,15 +2,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui::backend::TestBackend;
-use ratatui::layout::Position;
-use ratatui::style::Color;
+use insta::assert_snapshot;
 use ratatui::Terminal;
 use ratatui::TerminalOptions;
 use ratatui::Viewport;
+use ratatui::backend::TestBackend;
+use ratatui::layout::Position;
+use ratatui::style::Color;
 
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
+use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
@@ -57,9 +59,11 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
     .with_debug_detail("planner temp session: refresh / refresh ok");
 
     let without_debug = format_conversation_lines(std::slice::from_ref(&message));
-    assert!(!without_debug
-        .iter()
-        .any(|line| line.to_string().contains("planner temp session")));
+    assert!(
+        !without_debug
+            .iter()
+            .any(|line| line.to_string().contains("planner temp session"))
+    );
 
     let with_debug = format_conversation_lines_with_debug(&[message], true);
     let detail_line = with_debug
@@ -253,6 +257,48 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
     assert!(rendered.contains("Proposals"));
 }
 
+#[test]
+fn inline_main_buffer_ready_shell_matches_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    let rendered = render_inline_snapshot(&mut app, 80, 24);
+
+    assert_snapshot!("inline_main_buffer_ready_shell", rendered);
+}
+
+#[test]
+fn queue_overlay_matches_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+        "Planning Context\nQueue Summary",
+        "Queue Summary",
+    ));
+    app.shell_overlay = ShellOverlay::Queue;
+
+    let rendered = render_shell_snapshot(&mut app, 96, 28);
+
+    assert_snapshot!("queue_overlay", rendered);
+}
+
+#[test]
+fn planning_manual_editor_matches_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning_init_overlay_ui_state.open_manual_editor();
+    app.planning_draft_editor_ui_state
+        .open_session(sample_planning_editor_session());
+
+    let rendered = render_shell_snapshot(&mut app, 96, 28);
+
+    assert_snapshot!("planning_manual_editor", rendered);
+}
+
 fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
     Terminal::with_options(
         TestBackend::new(width, height),
@@ -261,6 +307,22 @@ fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
         },
     )
     .expect("inline test terminal")
+}
+
+fn render_inline_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
+    let mut terminal = inline_terminal(width, height);
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+    format!("{}", terminal.backend())
+}
+
+fn render_shell_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
+        .expect("shell render succeeds");
+    format!("{}", terminal.backend())
 }
 
 #[test]
