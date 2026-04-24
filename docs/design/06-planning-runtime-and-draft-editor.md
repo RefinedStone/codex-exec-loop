@@ -85,8 +85,8 @@ the planning workspace is missing, intake is rejected with guidance to open `:di
 `:planning`. Intake is allowed while planning automation is off, but it does not turn automation on.
 
 Task ids use `task-user-<UTC timestamp>-<prompt hash>` with a numeric suffix on collision. The
-timestamp must be UTC and the hash must be derived from the normalized prompt, not from generated
-preview text.
+timestamp must be UTC in compact sortable `YYYYMMDDTHHMMSSZ` form, and the hash must be derived from
+the normalized prompt, not from generated preview text.
 
 The task-authority commit must be revision-aware. The intake service loads a planning revision with
 the ledger and queue snapshot, validates against that view, and commits with compare-and-commit

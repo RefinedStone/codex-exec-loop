@@ -93,8 +93,9 @@ Direction selection is:
 
 The title is a compact deterministic summary of the normalized prompt. The description preserves the
 operator prompt in readable form. The task id is
-`task-user-<UTC timestamp>-<prompt hash>`, with `-2`, `-3`, and so on when a collision is found
-during validation or retry.
+`task-user-<UTC timestamp>-<prompt hash>`, where `<UTC timestamp>` uses compact sortable
+`YYYYMMDDTHHMMSSZ` form. Add `-2`, `-3`, and so on when a collision is found during validation or
+retry.
 
 LLM output, hidden-session output, and future planner adapters may only return this structured draft.
 They must not write SQL, mutate `task-ledger.json`, update `queue.snapshot.json`, or generate runtime
@@ -110,7 +111,9 @@ rejects:
 - no active direction
 - unknown or inactive direction
 - blank title or description
-- invalid priority bounds
+- invalid priority bounds: runtime intake accepts `base_priority` from `0` through `100`,
+  `dynamic_priority_delta` from `-100` through `100`, and an effective combined priority from `0`
+  through `100`
 - duplicate task id
 - dependency or blocker ids that do not exist
 - dependency or blocker self-reference
