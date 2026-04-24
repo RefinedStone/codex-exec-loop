@@ -34,6 +34,8 @@ docs are deep dives, and which docs are history only.
 - [plan/27-runtime-task-intake-design.md](plan/27-runtime-task-intake-design.md): runtime `:task` intake design
 - [plan/28-reference-codex-tui-rendering-research.md](plan/28-reference-codex-tui-rendering-research.md): reference Codex TUI rendering research for scrollback, resize, and
   live-tail durability
+- [plan/29-terminal-ui-testing-methodology.md](plan/29-terminal-ui-testing-methodology.md): benchmark-derived terminal UI testing method for native shell
+  rendering work
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): supporting hotspot map, current hotspot order, and refactor ordering input
 
 ## Release Delta
@@ -73,6 +75,7 @@ docs are deep dives, and which docs are history only.
 - `docs/plan/21-*` through `docs/plan/26-*` hold the active terminal-agent bridge research and
   seam baseline.
 - `docs/plan/28-*` holds the current reference-Codex TUI rendering research for the native shell.
+- `docs/plan/29-*` holds the benchmark-derived terminal UI testing methodology for the native shell.
 - `docs/supersession/` is the current-contract hub, not a historical side archive.
 - `docs/plan/` holds runbooks, active roadmap, and historical design audits.
 - Use `docs/plan/20-*` with `docs/plan/17-*` when a task touches a named hotspot; the roadmap explains why and the debt map fixes the current order.
