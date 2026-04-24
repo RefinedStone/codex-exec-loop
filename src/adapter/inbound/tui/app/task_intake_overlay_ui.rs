@@ -2,8 +2,9 @@ use crate::application::service::planning::{
     PlanningTaskIntakeCommitResult, PlanningTaskIntakeProposal,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum TaskIntakeOverlayStep {
+    #[default]
     Prompt,
     Preview,
 }
@@ -15,12 +16,6 @@ pub(super) struct TaskIntakeOverlayUiState {
     commit_result: Option<PlanningTaskIntakeCommitResult>,
     error: Option<String>,
     step: TaskIntakeOverlayStep,
-}
-
-impl Default for TaskIntakeOverlayStep {
-    fn default() -> Self {
-        Self::Prompt
-    }
 }
 
 impl TaskIntakeOverlayUiState {
