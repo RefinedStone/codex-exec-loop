@@ -355,14 +355,14 @@ if [[ -z "${token}" ]]; then
   exit 1
 fi
 
-if command -v gh >/dev/null 2>&1; then
-  GH_TOKEN="${token}" GH_HOST=github.com exec gh "$@"
-fi
-
 if [[ "${1-}" == "review-reply" ]]; then
   shift
   reply_review_comment_with_api "$@"
   exit 0
+fi
+
+if command -v gh >/dev/null 2>&1; then
+  GH_TOKEN="${token}" GH_HOST=github.com exec gh "$@"
 fi
 
 case "${1-}:${2-}" in
