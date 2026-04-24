@@ -248,8 +248,11 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        let current_revision =
-            read_metadata_i64_connection(&connection, "planning_revision")?.unwrap_or(0);
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open task authority commit transaction")?;
+        let current_revision = read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0);
         if let Some(observed_revision) = commit.observed_planning_revision
             && observed_revision != current_revision
         {
@@ -258,10 +261,10 @@ impl SqlitePlanningAuthorityAdapter {
                 current_planning_revision: current_revision,
             });
         }
-        let existing_snapshot = load_task_authority_snapshot_from_connection(&connection)?;
-        let has_stale_task_documents = raw_active_document(&connection, TASK_LEDGER_FILE_PATH)?
+        let existing_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        let has_stale_task_documents = raw_active_document(&transaction, TASK_LEDGER_FILE_PATH)?
             .is_some()
-            || raw_active_document(&connection, QUEUE_SNAPSHOT_FILE_PATH)?.is_some();
+            || raw_active_document(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?.is_some();
         if let Some(existing_snapshot) = existing_snapshot
             && existing_snapshot.task_ledger == *commit.task_ledger
             && existing_snapshot.queue_snapshot == *commit.queue_snapshot
@@ -272,9 +275,6 @@ impl SqlitePlanningAuthorityAdapter {
             });
         }
 
-        let transaction = connection
-            .transaction()
-            .context("failed to open task authority commit transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
         replace_task_authority_tables(&transaction, commit.task_ledger, commit.queue_snapshot)?;
         remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
@@ -2497,7 +2497,7 @@ mod tests {
         PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
     };
     use crate::application::port::outbound::planning_task_repository_port::{
-        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+        PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
     use crate::application::service::planning::shared::contract::{
@@ -3010,6 +3010,51 @@ mod tests {
             fs::read_to_string(queue_snapshot_export_path(&repo.repo_root))
                 .expect("queue snapshot export should exist")
                 .contains("\"task_id\": \"task-1\"")
+        );
+    }
+
+    #[test]
+    fn task_repository_commit_rejects_stale_observed_revision() {
+        let repo = TempGitRepo::new("authority-task-repository-conflict");
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+        let task_ledger = parse_task_ledger(&task_ledger_with_ready_task_json());
+        let queue_snapshot = parse_queue_snapshot(&queue_snapshot_with_ready_task_json());
+        let first_result = adapter
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger: &task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )
+            .expect("initial task authority should commit");
+        let PlanningTaskAuthorityCommitResult::Committed { planning_revision } = first_result
+        else {
+            panic!("initial commit should not conflict");
+        };
+        assert_eq!(planning_revision, 1);
+
+        let mut stale_task_ledger = task_ledger.clone();
+        stale_task_ledger.tasks[0].title = "Stale writer update".to_string();
+        let stale_result = adapter
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: Some(0),
+                    task_ledger: &stale_task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )
+            .expect("stale task authority commit should return a conflict");
+
+        assert_eq!(
+            stale_result,
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: 0,
+                current_planning_revision: 1,
+            }
         );
     }
 

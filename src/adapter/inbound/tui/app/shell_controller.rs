@@ -416,10 +416,12 @@ impl NativeTuiApp {
     }
 
     fn handle_task_intake_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('u') {
+            self.task_intake_overlay_ui_state.clear_prompt();
+            return true;
+        }
+
         if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
-            if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('u') {
-                self.task_intake_overlay_ui_state.clear_prompt();
-            }
             return true;
         }
 

@@ -57,7 +57,10 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Min(8),
+            Constraint::Length(inline_section_height(
+                &command_lines,
+                command_lines.len().saturating_add(1).min(u16::MAX as usize) as u16,
+            )),
             Constraint::Length(inline_section_height(&key_lines, 4)),
         ])
         .split(area);

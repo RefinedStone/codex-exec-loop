@@ -710,7 +710,7 @@ fn stable_short_hash(value: &str) -> String {
 }
 
 fn increment_suffix(suffix: Option<u32>) -> Option<u32> {
-    Some(suffix.unwrap_or(1) + 1)
+    Some(suffix.unwrap_or(0) + 1)
 }
 
 fn build_preview_lines(draft: &PlanningTaskIntakeDraft) -> Vec<String> {
@@ -744,7 +744,7 @@ mod tests {
     use super::{
         LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator,
         PlanningTaskIntakeGenerationRequest, PlanningTaskIntakeRequest,
-        PlanningTaskIntakeValidationService,
+        PlanningTaskIntakeValidationService, increment_suffix,
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig, TaskActor,
@@ -857,5 +857,11 @@ mod tests {
             .validate_draft(&existing_request, &invalid_priority, &directions, &ledger)
             .expect_err("priority should reject");
         assert_eq!(priority.code, "invalid_priority");
+    }
+
+    #[test]
+    fn increment_suffix_starts_with_one() {
+        assert_eq!(increment_suffix(None), Some(1));
+        assert_eq!(increment_suffix(Some(1)), Some(2));
     }
 }
