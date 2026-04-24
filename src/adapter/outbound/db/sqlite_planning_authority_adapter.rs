@@ -13,7 +13,8 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot,
+    PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
@@ -244,9 +245,19 @@ impl SqlitePlanningAuthorityAdapter {
     pub(crate) fn commit_task_authority_snapshot(
         workspace_dir: &str,
         commit: PlanningTaskAuthorityCommit<'_>,
-    ) -> Result<()> {
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
+        let current_revision =
+            read_metadata_i64_connection(&connection, "planning_revision")?.unwrap_or(0);
+        if let Some(observed_revision) = commit.observed_planning_revision
+            && observed_revision != current_revision
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: observed_revision,
+                current_planning_revision: current_revision,
+            });
+        }
         let existing_snapshot = load_task_authority_snapshot_from_connection(&connection)?;
         let has_stale_task_documents = raw_active_document(&connection, TASK_LEDGER_FILE_PATH)?
             .is_some()
@@ -256,7 +267,9 @@ impl SqlitePlanningAuthorityAdapter {
             && existing_snapshot.queue_snapshot == *commit.queue_snapshot
             && !has_stale_task_documents
         {
-            return Ok(());
+            return Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: current_revision,
+            });
         }
 
         let transaction = connection
@@ -266,13 +279,13 @@ impl SqlitePlanningAuthorityAdapter {
         replace_task_authority_tables(&transaction, commit.task_ledger, commit.queue_snapshot)?;
         remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
         remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-        bump_planning_revision(&transaction)?;
+        let planning_revision = bump_planning_revision(&transaction)?;
         transaction
             .commit()
             .context("failed to commit task authority transaction")?;
 
         refresh_runtime_exports(&location)?;
-        Ok(())
+        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
     }
 
     pub(crate) fn clear_task_authority_snapshot(workspace_dir: &str) -> Result<()> {
@@ -982,7 +995,7 @@ impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
         &self,
         workspace_dir: &str,
         commit: PlanningTaskAuthorityCommit<'_>,
-    ) -> Result<()> {
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
         Self::commit_task_authority_snapshot(workspace_dir, commit)
     }
 
@@ -1278,7 +1291,10 @@ fn load_task_authority_snapshot_from_connection(
     };
     let queue_snapshot =
         load_queue_snapshot_from_connection(connection)?.unwrap_or_else(empty_queue_snapshot);
+    let planning_revision =
+        read_metadata_i64_connection(connection, "planning_revision")?.unwrap_or(0);
     Ok(Some(PlanningTaskAuthoritySnapshot {
+        planning_revision,
         task_ledger,
         queue_snapshot,
     }))
@@ -2150,10 +2166,10 @@ fn remove_active_documents(
     Ok(deleted_rows > 0)
 }
 
-fn bump_planning_revision(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+fn bump_planning_revision(transaction: &rusqlite::Transaction<'_>) -> Result<i64> {
     let next_revision = read_metadata_i64(transaction, "planning_revision")?.unwrap_or(0) + 1;
     upsert_metadata(transaction, "planning_revision", &next_revision.to_string())?;
-    Ok(())
+    Ok(next_revision)
 }
 
 fn read_metadata_i64(transaction: &rusqlite::Transaction<'_>, key: &str) -> Result<Option<i64>> {
@@ -2972,6 +2988,7 @@ mod tests {
             .commit_task_authority_snapshot(
                 workspace_dir,
                 PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
                     task_ledger: &task_ledger,
                     queue_snapshot: &queue_snapshot,
                 },
