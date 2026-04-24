@@ -986,6 +986,43 @@ mod tests {
     }
 
     #[test]
+    fn agent_message_completion_updates_existing_history_item_without_duplicate() {
+        let mut state = sample_active_turn_conversation();
+        state.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "first completed text",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        state.refresh_conversation_lines();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(
+                ConversationStreamEvent::AgentMessageCompleted {
+                    item_id: "agent-1".to_string(),
+                    phase: Some("final_answer".to_string()),
+                    text: "replacement completed text".to_string(),
+                },
+            ),
+        );
+
+        let matching_messages = reduced
+            .state
+            .messages
+            .iter()
+            .filter(|message| message.item_id.as_deref() == Some("agent-1"))
+            .collect::<Vec<_>>();
+        assert_eq!(matching_messages.len(), 1);
+        assert_eq!(matching_messages[0].text, "replacement completed text");
+        assert!(reduced.state.live_agent_message.is_none());
+        assert_eq!(
+            reduced.state.cached_conversation_lines,
+            format_conversation_lines(&reduced.state.messages)
+        );
+    }
+
+    #[test]
     fn turn_completed_carries_command_activity_into_last_turn_summary() {
         let mut state = sample_active_turn_conversation();
         state.turn_activity.current_turn_command_count = 1;
@@ -1084,6 +1121,44 @@ mod tests {
             ConversationMessageKind::Status
         );
         assert_eq!(reduced.state.messages[1].text, "stream exploded");
+    }
+
+    #[test]
+    fn stream_failure_flushes_live_agent_output_before_failure_status() {
+        let mut state = sample_active_turn_conversation();
+        state.live_agent_message = Some(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "partial answer before failure",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed {
+                message: "stream exploded".to_string(),
+            }),
+        );
+
+        assert!(reduced.state.live_agent_message.is_none());
+        assert_eq!(reduced.state.messages.len(), 2);
+        assert_eq!(
+            reduced.state.messages[0].kind,
+            ConversationMessageKind::Agent
+        );
+        assert_eq!(
+            reduced.state.messages[0].text,
+            "partial answer before failure"
+        );
+        assert_eq!(
+            reduced.state.messages[1].kind,
+            ConversationMessageKind::Status
+        );
+        assert_eq!(reduced.state.messages[1].text, "stream exploded");
+        assert_eq!(
+            reduced.state.cached_conversation_lines,
+            format_conversation_lines(&reduced.state.messages)
+        );
     }
 
     #[test]

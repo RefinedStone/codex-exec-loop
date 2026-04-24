@@ -638,6 +638,57 @@ mod tests {
     }
 
     #[test]
+    fn history_sync_for_empty_thread_clears_remembered_history_without_insert() {
+        let mut terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        let mut state = InlineHistoryState {
+            rendered_lines: vec![
+                Line::from("User:"),
+                Line::from("  old prompt"),
+                Line::from(""),
+                Line::from("Agent:"),
+                Line::from("  old answer"),
+            ],
+        };
+
+        assert!(!state.sync(&mut terminal, &[]).unwrap());
+        assert!(state.rendered_lines.is_empty());
+
+        let next_thread_lines = vec![Line::from("Status:"), Line::from("  new thread loaded")];
+        assert_eq!(state.pending_lines(&next_thread_lines), next_thread_lines);
+    }
+
+    #[test]
+    fn host_history_sync_keeps_live_agent_delta_out_of_inserted_history() {
+        let mut terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        let mut app = make_test_app();
+        app.show_startup_ascii_art = false;
+        app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+        append_history_message(&mut app, "committed answer belongs in host history");
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.record_turn_started("turn-1".to_string());
+        conversation.push_live_agent_delta(
+            "agent-live".to_string(),
+            Some("final_answer".to_string()),
+            "live answer stays in tail".to_string(),
+        );
+        let mut runtime = ShellRuntime::new(app);
+        let mut inline_viewport = InlineViewportState::default();
+
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+        let inserted_history = tui_testkit::screen_text(&terminal);
+        assert!(inserted_history.contains("committed answer belongs in host history"));
+        assert!(!inserted_history.contains("live answer stays in tail"));
+
+        draw_test_frame(&mut terminal, &mut runtime);
+        let live_frame = tui_testkit::screen_text(&terminal);
+        assert!(live_frame.contains("live answer stays in tail"));
+    }
+
+    #[test]
     fn viewport_replay_sync_skips_host_scrollback_insertions() {
         let mut replay_terminal =
             tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
