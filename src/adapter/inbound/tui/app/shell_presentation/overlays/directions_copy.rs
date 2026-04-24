@@ -1,17 +1,9 @@
-use super::super::super::{Color, DetailDocConfirmChoice, Line, Modifier, Span, Style};
+use super::super::super::{AkraTheme, DetailDocConfirmChoice, Line};
 use super::super::option_lines::overlay_option_line;
 use super::DirectionsMaintenanceOverlayView;
 
 fn directions_title_line(suffix: &'static str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "Directions Maintenance",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(suffix),
-    ])
+    AkraTheme::title_line("Directions Maintenance", suffix)
 }
 
 pub(super) fn build_overview_overlay_view(

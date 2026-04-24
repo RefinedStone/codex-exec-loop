@@ -6,7 +6,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::{
-    MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, NativeTuiApp, ShellOverlay,
+    AkraTheme, MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, NativeTuiApp, ShellOverlay,
     build_conversation_scroll_offset,
 };
 
@@ -95,7 +95,10 @@ pub(super) fn render_inline_section(
     trim: bool,
 ) {
     let section_layout = split_inline_section(area);
-    frame.render_widget(Paragraph::new(vec![title]), section_layout[0]);
+    frame.render_widget(
+        Paragraph::new(vec![title.style(AkraTheme::title())]),
+        section_layout[0],
+    );
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), section_layout[1]);
 }
 
@@ -129,7 +132,10 @@ pub(super) fn render_inline_scrolled_section(
     scroll_offset: u16,
 ) {
     let section_layout = split_inline_section(area);
-    frame.render_widget(Paragraph::new(vec![title]), section_layout[0]);
+    frame.render_widget(
+        Paragraph::new(vec![title.style(AkraTheme::title())]),
+        section_layout[0],
+    );
     frame.render_widget(
         Paragraph::new(lines)
             .scroll((scroll_offset, 0))

@@ -3,6 +3,8 @@ use super::super::super::planning::build_planner_panel_lines;
 #[cfg(test)]
 use super::super::super::planning::status_projection::build_planning_status_surface_projection;
 #[cfg(test)]
+use super::super::AkraTheme;
+#[cfg(test)]
 use super::super::prompt_composer::build_input_lines_with_context;
 #[cfg(test)]
 use super::super::shell_copy::{
@@ -24,8 +26,6 @@ use super::super::{
 use super::super::{Line, NativeTuiApp, ShellCorePresentationContext, startup_ascii_art_lines};
 #[cfg(test)]
 use ratatui::layout::{Constraint, Direction, Layout};
-#[cfg(test)]
-use ratatui::widgets::{Block, Borders};
 
 pub(crate) fn build_startup_banner_lines(
     app: &NativeTuiApp,
@@ -134,7 +134,7 @@ pub(crate) fn build_conversation_shell_frame_view(
             Constraint::Length(input_height),
         ])
         .split(area);
-    let transcript_inner = Block::default().borders(Borders::ALL).inner(layout[1]);
+    let transcript_inner = AkraTheme::panel_inner(layout[1]);
 
     let transcript_view = build_transcript_panel_view(
         app,

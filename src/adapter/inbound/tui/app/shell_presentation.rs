@@ -34,33 +34,11 @@ const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
 const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
 const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
 const STARTUP_ASCII_ART_DEFAULT: &str = r#"
-.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
-
-.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
-
-
-
-      .:       .::
-     .: ::     .::
-    .:  .::    .::  .::.: .:::   .::
-   .::   .::   .:: .::  .::    .::  .::
-  .:::::: .::  .:.::    .::   .::   .::
- .::       .:: .:: .::  .::   .::   .::
-.::         .::.::  .::.:::     .:: .:::
-
-    .::::
-  .::    .::
-.::       .::.::  .::   .::    .::  .::   .::
-.::       .::.::  .:: .:   .:: .::  .:: .:   .::
-.::       .::.::  .::.::::: .::.::  .::.::::: .::
-  .:: .: .:: .::  .::.:        .::  .::.:
-    .:: ::     .::.::  .::::     .::.::  .::::
-         .:
-
-
-.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
-
-.::::::.::::::.::::::.::::::.::::::.::::::.::::::.::::::
+    _    _  __ ____    _
+   / \  | |/ /|  _ \  / \
+  / _ \ | ' / | |_) |/ _ \
+ / ___ \| . \ |  _ </ ___ \
+/_/   \_\_|\_\|_| \_\_/   \_\
 "#;
 
 #[cfg(test)]
@@ -330,7 +308,7 @@ pub(super) fn format_conversation_lines_with_debug(
             for detail_line in debug_detail.lines() {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", expand_tui_tabs(detail_line)),
-                    Style::default().fg(Color::Gray),
+                    AkraTheme::muted(),
                 )));
             }
         }
@@ -455,14 +433,9 @@ fn build_working_line(
     Some(Line::from(vec![
         Span::styled(
             "◦ Working".to_string(),
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::BOLD),
+            AkraTheme::muted().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!(" ({elapsed} • {detail})"),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!(" ({elapsed} • {detail})"), AkraTheme::subtle()),
     ]))
 }
 
@@ -572,19 +545,19 @@ fn inline_input_state_label(input_state: ConversationInputState) -> &'static str
 pub(super) fn input_state_style(input_state: ConversationInputState) -> Style {
     match input_state {
         ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => {
-            Style::default().fg(Color::Green)
+            AkraTheme::success()
         }
-        ConversationInputState::SubmittingTurn => Style::default().fg(Color::Yellow),
-        ConversationInputState::StreamingTurn => Style::default().fg(Color::Cyan),
+        ConversationInputState::SubmittingTurn => AkraTheme::warning(),
+        ConversationInputState::StreamingTurn => AkraTheme::accent(),
     }
 }
 
 fn label_style(kind: ConversationMessageKind) -> Style {
     match kind {
-        ConversationMessageKind::User => Style::default().fg(Color::Yellow),
-        ConversationMessageKind::Agent => Style::default().fg(Color::Cyan),
+        ConversationMessageKind::User => AkraTheme::shortcut(),
+        ConversationMessageKind::Agent => AkraTheme::brand(),
         ConversationMessageKind::Tool => Style::default().fg(Color::Magenta),
-        ConversationMessageKind::Status => Style::default().fg(Color::Gray),
+        ConversationMessageKind::Status => AkraTheme::muted(),
     }
 }
 

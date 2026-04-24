@@ -1,6 +1,6 @@
 use crate::application::service::planning::DirectionsMaintenanceDirectionSummary;
 
-use super::super::super::{Color, Line, Modifier, Span, Style};
+use super::super::super::{AkraTheme, Line, Modifier, Span, Style};
 
 pub(super) struct DetailDocSelectionProjection {
     pub(super) option_lines: Vec<Line<'static>>,
@@ -22,9 +22,9 @@ pub(super) fn build_detail_doc_selection_projection(
                 let selected =
                     selected_direction.is_some_and(|candidate| candidate.id == direction.id);
                 let style = if selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    AkraTheme::selected()
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default()
                 };
                 let marker = if selected { ">>" } else { "  " };
                 Line::from(vec![

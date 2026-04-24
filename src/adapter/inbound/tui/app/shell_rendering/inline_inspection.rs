@@ -1,6 +1,5 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
@@ -14,7 +13,8 @@ use super::super::shell_presentation::{
     build_startup_overlay_view, build_supersession_overlay_view, build_task_intake_overlay_view,
 };
 use super::super::{
-    DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
+    AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep,
+    ShellOverlay,
 };
 use super::inline_layout::{
     clamp_scroll_offset, inline_section_height, render_inline_scrolled_section,
@@ -582,12 +582,7 @@ fn draw_inline_session_list_panel(
             .into_iter()
             .map(|item| ListItem::new(item.lines)),
     )
-    .highlight_style(
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+    .highlight_style(AkraTheme::selected())
     .highlight_symbol(">> ");
 
     app.session_overlay_ui_state
@@ -625,12 +620,7 @@ fn draw_inline_automation_list_panel(
             .into_iter()
             .map(|item| ListItem::new(item.lines)),
     )
-    .highlight_style(
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+    .highlight_style(AkraTheme::selected())
     .highlight_symbol(">> ");
 
     app.followup_overlay_ui_state

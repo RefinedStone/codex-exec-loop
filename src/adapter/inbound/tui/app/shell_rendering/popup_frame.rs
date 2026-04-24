@@ -1,4 +1,4 @@
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 #[cfg(test)]
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -16,7 +16,7 @@ use super::super::shell_presentation::{
     build_planning_init_overlay_view, build_session_overlay_view, build_startup_overlay_view,
     build_supersession_overlay_view,
 };
-use super::super::{Frame, Line};
+use super::super::{AkraTheme, Frame, Line};
 #[cfg(test)]
 use super::super::{NativeTuiApp, ShellOverlay};
 #[cfg(test)]
@@ -39,7 +39,7 @@ pub(super) fn draw_exit_confirmation(frame: &mut Frame<'_>) {
         Line::from(""),
         Line::from("y: exit    n: stay"),
     ])
-    .block(Block::default().borders(Borders::ALL).title("Confirm Exit"))
+    .block(AkraTheme::panel_block("Confirm Exit"))
     .wrap(Wrap { trim: true });
 
     frame.render_widget(popup, popup_area);
@@ -70,32 +70,28 @@ pub(super) fn draw_framed_conversation_shell(
     } = shell_frame_view;
 
     let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title(shell_title))
+        .block(AkraTheme::panel_block(shell_title))
         .wrap(Wrap { trim: true });
     frame.render_widget(header, header_area);
 
     let conversation = Paragraph::new(transcript_view.lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(transcript_view.title),
-        )
+        .block(AkraTheme::panel_block(transcript_view.title))
         .scroll((transcript_view.scroll_offset, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(conversation, transcript_area);
 
     let footer = Paragraph::new(footer_lines)
-        .block(Block::default().borders(Borders::ALL).title(status_title))
+        .block(AkraTheme::panel_block(status_title))
         .wrap(Wrap { trim: true });
     frame.render_widget(footer, footer_area);
 
     let input = Paragraph::new(input_lines)
-        .block(Block::default().borders(Borders::ALL).title(input_title))
+        .block(AkraTheme::panel_block(input_title))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, input_area);
 
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        let input_content_area = Block::default().borders(Borders::ALL).inner(input_area);
+        let input_content_area = AkraTheme::panel_inner(input_area);
         set_cursor_if_visible(
             frame,
             input_content_area,
@@ -130,31 +126,30 @@ pub(super) fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Diagnostics"));
+    let header = Paragraph::new(header_lines).block(AkraTheme::panel_block("Diagnostics"));
     frame.render_widget(header, layout[0]);
 
     frame.render_widget(
         Paragraph::new(summary_lines)
-            .block(Block::default().borders(Borders::ALL).title("Startup"))
+            .block(AkraTheme::panel_block("Startup"))
             .wrap(Wrap { trim: true }),
         layout[1],
     );
 
     frame.render_widget(
-        List::new(check_lines).block(Block::default().borders(Borders::ALL).title("Checks")),
+        List::new(check_lines).block(AkraTheme::panel_block("Checks")),
         layout[2],
     );
 
     frame.render_widget(
         Paragraph::new(warning_lines)
-            .block(Block::default().borders(Borders::ALL).title("Warnings"))
+            .block(AkraTheme::panel_block("Warnings"))
             .wrap(Wrap { trim: true }),
         layout[3],
     );
 
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[4],
     );
 }
@@ -184,8 +179,7 @@ pub(super) fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Sessions"));
+    let header = Paragraph::new(header_lines).block(AkraTheme::panel_block("Sessions"));
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -198,17 +192,13 @@ pub(super) fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp
 
     frame.render_widget(
         Paragraph::new(warning_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Session Warnings"),
-            )
+            .block(AkraTheme::panel_block("Session Warnings"))
             .wrap(Wrap { trim: true }),
         layout[2],
     );
 
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[3],
     );
 }
@@ -242,13 +232,12 @@ pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiAp
         .split(popup_area);
 
     frame.render_widget(
-        Paragraph::new(header_lines)
-            .block(Block::default().borders(Borders::ALL).title("Supersession")),
+        Paragraph::new(header_lines).block(AkraTheme::panel_block("Supersession")),
         layout[0],
     );
     frame.render_widget(
         Paragraph::new(summary_lines)
-            .block(Block::default().borders(Borders::ALL).title("Summary"))
+            .block(AkraTheme::panel_block("Summary"))
             .wrap(Wrap { trim: true }),
         layout[1],
     );
@@ -275,44 +264,36 @@ pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiAp
 
     frame.render_widget(
         Paragraph::new(capability_lines)
-            .block(Block::default().borders(Borders::ALL).title("Capabilities"))
+            .block(AkraTheme::panel_block("Capabilities"))
             .wrap(Wrap { trim: false }),
         left_layout[0],
     );
     frame.render_widget(
         Paragraph::new(pool_lines)
-            .block(Block::default().borders(Borders::ALL).title("Pool Board"))
+            .block(AkraTheme::panel_block("Pool Board"))
             .wrap(Wrap { trim: false }),
         left_layout[1],
     );
     frame.render_widget(
         Paragraph::new(roster_lines)
-            .block(Block::default().borders(Borders::ALL).title("Agent Roster"))
+            .block(AkraTheme::panel_block("Agent Roster"))
             .wrap(Wrap { trim: false }),
         left_layout[2],
     );
     frame.render_widget(
         Paragraph::new(detail_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Selected Detail"),
-            )
+            .block(AkraTheme::panel_block("Selected Detail"))
             .wrap(Wrap { trim: false }),
         right_layout[0],
     );
     frame.render_widget(
         Paragraph::new(distributor_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Distributor / Queue"),
-            )
+            .block(AkraTheme::panel_block("Distributor / Queue"))
             .wrap(Wrap { trim: false }),
         right_layout[1],
     );
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[3],
     );
 }
@@ -342,8 +323,7 @@ pub(super) fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
         ])
         .split(popup_area);
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Automation"));
+    let header = Paragraph::new(header_lines).block(AkraTheme::panel_block("Automation"));
     frame.render_widget(header, layout[0]);
 
     let content_layout = Layout::default()
@@ -362,7 +342,7 @@ pub(super) fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
     draw_automation_list_panel(frame, content_layout[0], app, list_view);
     frame.render_widget(
         Paragraph::new(preview_lines)
-            .block(Block::default().borders(Borders::ALL).title("Preview"))
+            .block(AkraTheme::panel_block("Preview"))
             .scroll((preview_scroll, 0))
             .wrap(Wrap { trim: false }),
         content_layout[1],
@@ -370,17 +350,13 @@ pub(super) fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTui
 
     frame.render_widget(
         Paragraph::new(status_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Auto Follow-Up State"),
-            )
+            .block(AkraTheme::panel_block("Auto Follow-Up State"))
             .wrap(Wrap { trim: false }),
         layout[2],
     );
 
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[3],
     );
 }
@@ -417,30 +393,29 @@ pub(super) fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut Native
         .split(popup_area);
 
     frame.render_widget(
-        Paragraph::new(header_lines)
-            .block(Block::default().borders(Borders::ALL).title("Planning")),
+        Paragraph::new(header_lines).block(AkraTheme::panel_block("Planning")),
         layout[0],
     );
     frame.render_widget(
         Paragraph::new(summary_lines)
-            .block(Block::default().borders(Borders::ALL).title("Summary"))
+            .block(AkraTheme::panel_block("Summary"))
             .wrap(Wrap { trim: true }),
         layout[1],
     );
     frame.render_widget(
         Paragraph::new(option_lines)
-            .block(Block::default().borders(Borders::ALL).title("Options"))
+            .block(AkraTheme::panel_block("Options"))
             .wrap(Wrap { trim: false }),
         layout[2],
     );
     frame.render_widget(
         Paragraph::new(status_lines)
-            .block(Block::default().borders(Borders::ALL).title("Status"))
+            .block(AkraTheme::panel_block("Status"))
             .wrap(Wrap { trim: true }),
         layout[3],
     );
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[4],
     );
 }
@@ -480,8 +455,7 @@ pub(super) fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mu
         .split(popup_area);
 
     frame.render_widget(
-        Paragraph::new(header_lines)
-            .block(Block::default().borders(Borders::ALL).title("Planning")),
+        Paragraph::new(header_lines).block(AkraTheme::panel_block("Planning")),
         layout[0],
     );
 
@@ -492,30 +466,28 @@ pub(super) fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mu
 
     frame.render_widget(
         Paragraph::new(file_lines)
-            .block(Block::default().borders(Borders::ALL).title("Files"))
+            .block(AkraTheme::panel_block("Files"))
             .wrap(Wrap { trim: false }),
         content_layout[0],
     );
     frame.render_widget(
         Paragraph::new(editor_lines)
-            .block(Block::default().borders(Borders::ALL).title(editor_title))
+            .block(AkraTheme::panel_block(editor_title))
             .scroll((editor_scroll, 0))
             .wrap(Wrap { trim: false }),
         content_layout[1],
     );
-    let editor_content_area = Block::default()
-        .borders(Borders::ALL)
-        .inner(content_layout[1]);
+    let editor_content_area = AkraTheme::panel_inner(content_layout[1]);
     set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
 
     frame.render_widget(
         Paragraph::new(status_lines)
-            .block(Block::default().borders(Borders::ALL).title("Status"))
+            .block(AkraTheme::panel_block("Status"))
             .wrap(Wrap { trim: false }),
         layout[2],
     );
     frame.render_widget(
-        Paragraph::new(key_lines).block(Block::default().borders(Borders::ALL).title("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[3],
     );
 }

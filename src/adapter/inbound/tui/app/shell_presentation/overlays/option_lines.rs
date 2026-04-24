@@ -1,4 +1,4 @@
-use super::super::{Color, Line, Span, Style};
+use super::super::{AkraTheme, Line, Span, Style};
 
 pub(crate) fn overlay_option_line(
     shortcut: &str,
@@ -8,9 +8,9 @@ pub(crate) fn overlay_option_line(
     disabled: bool,
 ) -> Line<'static> {
     let style = match (disabled, selected) {
-        (true, _) => Style::default().fg(Color::DarkGray),
-        (false, true) => Style::default().fg(Color::Black).bg(Color::Cyan),
-        (false, false) => Style::default().fg(Color::White),
+        (true, _) => AkraTheme::subtle(),
+        (false, true) => AkraTheme::selected(),
+        (false, false) => Style::default(),
     };
     let marker = if selected { ">>" } else { "  " };
 

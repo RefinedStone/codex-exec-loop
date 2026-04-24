@@ -22,11 +22,11 @@ skipped tasks: 1 / blocked by tasks: task-2(in_progress)
 
 
 
+
+
+
 Keys
 Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: automation controls
-startup: startup ready  |  sessions: ready to load  |  gh: off
-workspace: /tmp/root
-diagnostics: codex ok  |  app-server ok  |  account ok
-attachment: provider-launched  |  recovery: provider-thread-id
-conversation
-first reply appears here after you send the opening prompt
+Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
+>
+prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help
