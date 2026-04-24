@@ -310,6 +310,7 @@ impl PlanningInitService {
                 .commit_task_authority_snapshot(
                     workspace_dir,
                     PlanningTaskAuthorityCommit {
+                        observed_planning_revision: None,
                         task_ledger,
                         queue_snapshot: &queue_snapshot,
                     },
@@ -586,10 +587,12 @@ impl PlanningInitService {
             .commit_task_authority_snapshot(
                 workspace_dir,
                 PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
                     task_ledger,
                     queue_snapshot: &queue_snapshot,
                 },
             )
+            .map(|_| ())
     }
 }
 

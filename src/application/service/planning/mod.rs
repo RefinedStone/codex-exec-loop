@@ -35,6 +35,7 @@ use self::repair::doctor::PlanningDoctorService;
 use self::repair::reconciliation::PlanningReconciliationService;
 use self::repair::reset::PlanningResetService;
 use self::runtime::facade::PlanningRuntimeFacadeService;
+use self::runtime::intake::PlanningTaskIntakeService;
 use self::runtime::policy::PlanningRuntimePolicyService;
 use self::runtime::prompt::PlanningPromptService;
 use self::runtime::validation::PlanningValidationService;
@@ -77,6 +78,11 @@ pub use self::runtime::facade::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     PlanningRuntimeSummaryRequest, PlanningTaskHandoff,
+};
+pub use self::runtime::intake::{
+    LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator, PlanningTaskIntakeCommitResult,
+    PlanningTaskIntakeDraft, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
+    PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
 };
 pub use self::runtime::policy::PlanningAutoFollowBlockReason;
 pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
@@ -154,6 +160,12 @@ impl PlanningFeature {
             PlanningRuntimePolicyService::new(),
             TurnPromptAssemblyService::new(),
         );
+        let task_intake = PlanningTaskIntakeService::new(
+            planning_workspace_port.clone(),
+            planning_task_repository_port.clone(),
+            validation_service.clone(),
+            priority_queue_service.clone(),
+        );
         let proposal_promotion = PlanningProposalPromotionService::with_task_repository(
             planning_workspace_port,
             planning_prompt_service,
@@ -171,7 +183,7 @@ impl PlanningFeature {
                 directions_apply_service,
                 task_ledger_apply_service,
             ),
-            runtime: PlanningRuntimeUseCases::new(runtime_facade.clone()),
+            runtime: PlanningRuntimeUseCases::new(runtime_facade.clone(), task_intake),
             worker: PlanningWorkerUseCases::new(
                 directions_service,
                 PlanningWorkerOrchestrationService::new(
@@ -361,11 +373,18 @@ impl PlanningWorkspaceUseCases {
 #[derive(Clone)]
 pub struct PlanningRuntimeUseCases {
     runtime_facade: PlanningRuntimeFacadeService,
+    task_intake: PlanningTaskIntakeService,
 }
 
 impl PlanningRuntimeUseCases {
-    pub(crate) fn new(runtime_facade: PlanningRuntimeFacadeService) -> Self {
-        Self { runtime_facade }
+    pub(crate) fn new(
+        runtime_facade: PlanningRuntimeFacadeService,
+        task_intake: PlanningTaskIntakeService,
+    ) -> Self {
+        Self {
+            runtime_facade,
+            task_intake,
+        }
     }
 
     pub fn build_manual_prompt(
@@ -417,6 +436,20 @@ impl PlanningRuntimeUseCases {
     pub fn load_runtime_snapshot_or_invalid(&self, workspace_dir: &str) -> PlanningRuntimeSnapshot {
         self.runtime_facade
             .load_runtime_snapshot_or_invalid(workspace_dir)
+    }
+
+    pub fn prepare_task_intake(
+        &self,
+        request: PlanningTaskIntakeRequest,
+    ) -> anyhow::Result<PlanningTaskIntakeProposal> {
+        self.task_intake.prepare_task_intake(request)
+    }
+
+    pub fn commit_task_intake(
+        &self,
+        proposal: &PlanningTaskIntakeProposal,
+    ) -> anyhow::Result<PlanningTaskIntakeCommitResult> {
+        self.task_intake.commit_task_intake(proposal)
     }
 
     pub fn load_execution_snapshot(

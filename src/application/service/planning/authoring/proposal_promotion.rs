@@ -132,6 +132,7 @@ impl PlanningProposalPromotionService {
             .commit_task_authority_snapshot(
                 request.workspace_directory,
                 PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
                     task_ledger: &task_ledger,
                     queue_snapshot: &next_queue_snapshot,
                 },

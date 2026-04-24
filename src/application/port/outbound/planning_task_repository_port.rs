@@ -4,14 +4,27 @@ use crate::domain::planning::{PriorityQueueSnapshot, TaskLedgerDocument};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskAuthoritySnapshot {
+    pub planning_revision: i64,
     pub task_ledger: TaskLedgerDocument,
     pub queue_snapshot: PriorityQueueSnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningTaskAuthorityCommit<'a> {
+    pub observed_planning_revision: Option<i64>,
     pub task_ledger: &'a TaskLedgerDocument,
     pub queue_snapshot: &'a PriorityQueueSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningTaskAuthorityCommitResult {
+    Committed {
+        planning_revision: i64,
+    },
+    Conflict {
+        observed_planning_revision: i64,
+        current_planning_revision: i64,
+    },
 }
 
 pub trait PlanningTaskRepositoryPort: Send + Sync {
@@ -24,7 +37,7 @@ pub trait PlanningTaskRepositoryPort: Send + Sync {
         &self,
         workspace_dir: &str,
         commit: PlanningTaskAuthorityCommit<'_>,
-    ) -> Result<()>;
+    ) -> Result<PlanningTaskAuthorityCommitResult>;
 
     fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> Result<()>;
 }
@@ -43,9 +56,11 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
     fn commit_task_authority_snapshot(
         &self,
         _workspace_dir: &str,
-        _commit: PlanningTaskAuthorityCommit<'_>,
-    ) -> Result<()> {
-        Ok(())
+        commit: PlanningTaskAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision: commit.observed_planning_revision.unwrap_or(0),
+        })
     }
 
     fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {

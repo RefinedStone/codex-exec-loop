@@ -776,7 +776,8 @@ mod tests {
 
     use super::{PlanningPromptService, PlanningRuntimeWorkspaceStatus};
     use crate::application::port::outbound::planning_task_repository_port::{
-        PlanningTaskAuthorityCommit, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+        PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+        PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
     };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -816,7 +817,7 @@ mod tests {
             &self,
             _workspace_dir: &str,
             _commit: PlanningTaskAuthorityCommit<'_>,
-        ) -> Result<()> {
+        ) -> Result<PlanningTaskAuthorityCommitResult> {
             unreachable!("task authority commits are not used in planning prompt service tests")
         }
 
@@ -1257,6 +1258,7 @@ state = "paused"
                 result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
             },
             PlanningTaskAuthoritySnapshot {
+                planning_revision: 1,
                 task_ledger,
                 queue_snapshot: PriorityQueueSnapshot {
                     next_task: Some(stored_queue_task.clone()),
