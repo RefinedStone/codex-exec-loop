@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -116,12 +118,24 @@ pub(super) fn buffer_text(buffer: &Buffer) -> String {
 }
 
 pub(super) fn vt100_contents_from_buffer(buffer: &Buffer) -> String {
-    let bytes = buffer_text(buffer).replace('\n', "\r\n");
-    trim_line_end_padding(&vt100_contents(
-        buffer.area.width,
-        buffer.area.height,
-        bytes.as_bytes(),
-    ))
+    if buffer.area.width == 0 {
+        return String::new();
+    }
+
+    let mut screen = Vt100Screen::new(buffer.area.width, buffer.area.height);
+    for (index, row) in buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .enumerate()
+    {
+        for cell in row {
+            screen.process(cell.symbol().as_bytes());
+        }
+        if index + 1 < buffer.area.height as usize {
+            screen.process(b"\r\n");
+        }
+    }
+    trim_line_end_padding(&screen.contents())
 }
 
 fn trim_line_end_padding(text: &str) -> String {
@@ -191,18 +205,21 @@ impl Vt100Screen {
 
     pub(super) fn scrollback_rows(&mut self) -> Vec<String> {
         let normal_offset = self.parser.screen().scrollback();
-        let mut rows = Vec::new();
-        let mut offset = 1;
-        loop {
+        self.parser.screen_mut().set_scrollback(0);
+        let mut rows = VecDeque::from(self.rows());
+
+        for offset in 1.. {
             self.parser.screen_mut().set_scrollback(offset);
             if self.parser.screen().scrollback() != offset {
                 break;
             }
-            rows = self.rows();
-            offset += 1;
+            if let Some(top_row) = self.parser.screen().rows(0, self.width).next() {
+                rows.push_front(top_row);
+            }
         }
+
         self.parser.screen_mut().set_scrollback(normal_offset);
-        rows
+        rows.into_iter().collect()
     }
 }
 

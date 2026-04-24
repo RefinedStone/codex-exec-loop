@@ -317,12 +317,12 @@ pub(super) fn format_conversation_lines_with_debug(
             label_style(message.kind),
         )));
         for text_line in message.text.lines() {
-            lines.push(Line::from(format!("  {text_line}")));
+            lines.push(Line::from(format!("  {}", expand_tui_tabs(text_line))));
         }
         if show_debug_details && let Some(debug_detail) = message.debug_detail.as_deref() {
             for detail_line in debug_detail.lines() {
                 lines.push(Line::from(Span::styled(
-                    format!("  {detail_line}"),
+                    format!("  {}", expand_tui_tabs(detail_line)),
                     Style::default().fg(Color::Gray),
                 )));
             }
@@ -339,6 +339,10 @@ pub(super) fn format_conversation_lines_with_debug(
     }
 
     lines
+}
+
+fn expand_tui_tabs(text: &str) -> String {
+    text.replace('\t', "    ")
 }
 
 fn compact_inline_detail(text: &str, max_len: usize) -> String {

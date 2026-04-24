@@ -141,13 +141,10 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         inline_terminal.history.remember(&current_lines);
         InlineHistorySyncResult::default()
     };
-    inline_terminal.record_history_sync(&current_lines, history_sync);
     if history_sync.inserted() {
-        inline_terminal.invalidate_back_buffer(terminal);
+        inline_terminal.invalidate_back_buffer();
     }
 
-    let terminal_size = terminal.size()?;
-    inline_terminal.record_terminal_size(terminal_size);
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
         runtime.app_mut(),
         terminal_size.width,
@@ -292,15 +289,26 @@ impl<B: std::fmt::Display> std::fmt::Display for InlineTerminalBackend<B> {
     }
 }
 
-#[derive(Default)]
 struct InlineTerminalState {
     history: InlineHistoryState,
     last_tail_frame: Option<InlineTailFrameSignature>,
     last_known_screen_size: Option<Size>,
     viewport_area: Option<Rect>,
-    visible_history_rows: u16,
     back_buffer_trustworthy: bool,
     insert_mode: HistoryInsertionMode,
+}
+
+impl Default for InlineTerminalState {
+    fn default() -> Self {
+        Self {
+            history: InlineHistoryState::default(),
+            last_tail_frame: None,
+            last_known_screen_size: None,
+            viewport_area: None,
+            back_buffer_trustworthy: true,
+            insert_mode: HistoryInsertionMode::default(),
+        }
+    }
 }
 
 impl InlineTerminalState {
@@ -309,25 +317,8 @@ impl InlineTerminalState {
         self.viewport_area = Some(inline_viewport_area(terminal_size));
     }
 
-    fn record_history_sync(
-        &mut self,
-        current_lines: &[Line<'static>],
-        sync_result: InlineHistorySyncResult,
-    ) {
-        if current_lines.is_empty() {
-            self.visible_history_rows = 0;
-            return;
-        }
-
-        self.visible_history_rows = self
-            .visible_history_rows
-            .saturating_add(sync_result.inserted_rows);
-    }
-
-    fn invalidate_back_buffer<B: Backend>(&mut self, terminal: &mut Terminal<B>) {
+    fn invalidate_back_buffer(&mut self) {
         self.back_buffer_trustworthy = false;
-        terminal.swap_buffers();
-        terminal.swap_buffers();
     }
 
     fn mark_frame_drawn(&mut self, terminal_size: Size) {
@@ -351,7 +342,8 @@ impl InlineTerminalState {
             terminal_height,
             lines: build_inline_tail_view(app, terminal_width).lines,
         };
-        let should_draw = self.last_tail_frame.as_ref() != Some(&next_signature);
+        let should_draw =
+            !self.back_buffer_trustworthy || self.last_tail_frame.as_ref() != Some(&next_signature);
         self.last_tail_frame = Some(next_signature);
         should_draw
     }
@@ -454,14 +446,20 @@ struct TerminalRestoreGuard;
 impl TerminalRestoreGuard {
     fn activate() -> Result<Self> {
         enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        if let Err(error) = execute!(stdout, event::EnableFocusChange) {
+            let _ = disable_raw_mode();
+            return Err(error.into());
+        }
         Ok(Self)
     }
 }
 
 impl Drop for TerminalRestoreGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
         let mut stdout = io::stdout();
+        let _ = execute!(stdout, event::DisableFocusChange);
+        let _ = disable_raw_mode();
         let _ = execute!(stdout, MoveToNextLine(1));
         let _ = execute!(stdout, Show);
     }
@@ -720,6 +718,7 @@ mod tests {
                 Line::from(""),
                 Line::from("Agent:"),
                 Line::from("  old answer"),
+                Line::from(""),
             ],
         };
 
@@ -801,7 +800,6 @@ mod tests {
             inline_terminal.insert_mode,
             HistoryInsertionMode::StandardScrollRegion
         );
-        assert!(inline_terminal.visible_history_rows > 0);
         assert!(!inline_terminal.back_buffer_trustworthy);
 
         draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);

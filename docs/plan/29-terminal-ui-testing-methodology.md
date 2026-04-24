@@ -81,6 +81,10 @@ Required cases:
 - `ViewportReplay` does not write committed history to host scrollback
 - `ViewportReplay` is explicit-only and keeps inline viewport positioning
 - `80x24 -> 80x8 -> 80x24` leaves no duplicate live tail, stale rows, or misplaced prompt
+- Windows resize mitigation means suppressing inline viewport append side effects during
+  `Terminal::autoresize` and final `Terminal::draw`; see
+  [28-reference-codex-tui-rendering-research.md](28-reference-codex-tui-rendering-research.md)
+  for the failure mode.
 - draw-time `Terminal::draw` autoresize cannot append the live tail into host scrollback
 - overlay open/close resets live-tail redraw cache
 - hidden tail skips redundant frames but redraws on width and height changes
@@ -190,12 +194,12 @@ Add small helpers before adding broad tests.
 Recommended fixtures:
 
 - `make_test_app()` for deterministic startup and conversation state
-- `append_committed_message()` for stable transcript setup
-- `push_live_delta()` for live-tail setup
-- `draw_frame(width, height, mode)` for single-frame snapshots
+- `append_agent_history_message()` for stable transcript setup
+- `set_live_agent_message()` or `push_live_agent_delta()` for live-tail setup
+- `render_inline_snapshot(app, width, height)` for single-frame snapshots
 - `draw_resize_sequence([(w, h), ...], mode)` for resize regressions
-- `terminal_screen_text()` and `terminal_scrollback_text()` for terminal backend inspection
-- `drain_pending_history()` for frontend history insertion tests
+- `screen_text()` and `inline_scrollback_text()` for terminal backend inspection
+- `sync_inline_viewport()` for frontend history insertion tests
 
 The fixture should expose the ownership boundary. If a test must reach through many unrelated app
 fields, the production boundary is probably too broad.
@@ -226,6 +230,8 @@ The next rendering PR should add these before or with the fix:
 5. Clear/thread switch empties pending and remembered history state before the next draw.
 6. Draw-time autoresize between viewport sync and frame render does not move the live tail into
    host scrollback.
+7. Split `shell_rendering_tests.rs` once snapshot, terminal primitive, or runtime scheduling
+   failures need different fixtures or owners.
 
 These are the minimum guardrails for the known disappearing conversation and resize drift bugs.
 

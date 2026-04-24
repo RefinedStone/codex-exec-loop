@@ -213,7 +213,7 @@ impl NativeTuiApp {
     }
 
     pub(super) fn execute_pending_task_intake_command_if_ready(&mut self) -> bool {
-        let Some(command_input) = self.pending_task_intake_command.clone() else {
+        let Some(command_input) = self.pending_task_intake_command.take() else {
             return false;
         };
         let command_still_buffered = matches!(
@@ -225,11 +225,9 @@ impl NativeTuiApp {
                         == Some(&command_input)
         );
         if !command_still_buffered {
-            self.pending_task_intake_command = None;
             return false;
         }
 
-        self.pending_task_intake_command = None;
         self.execute_inline_shell_command_input(command_input);
         true
     }

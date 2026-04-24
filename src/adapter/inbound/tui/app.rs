@@ -230,16 +230,10 @@ impl InlineHistoryRenderMode {
             std::env::var(INLINE_HISTORY_RENDER_MODE_ENV_VAR)
                 .ok()
                 .as_deref(),
-            std::env::var("WT_SESSION").ok().as_deref(),
-            cfg!(windows),
         )
     }
 
-    fn from_env_values(
-        mode_value: Option<&str>,
-        _windows_terminal_session: Option<&str>,
-        _running_on_windows: bool,
-    ) -> Self {
+    fn from_env_values(mode_value: Option<&str>) -> Self {
         let explicit_mode = mode_value
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -374,7 +368,7 @@ mod startup_ascii_art_env_tests {
     #[test]
     fn inline_history_render_mode_defaults_to_host_scrollback() {
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, None, false),
+            InlineHistoryRenderMode::from_env_values(None),
             InlineHistoryRenderMode::HostScrollback
         );
     }
@@ -382,15 +376,7 @@ mod startup_ascii_art_env_tests {
     #[test]
     fn inline_history_render_mode_keeps_host_scrollback_for_windows_by_default() {
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), false),
-            InlineHistoryRenderMode::HostScrollback
-        );
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, None, true),
-            InlineHistoryRenderMode::HostScrollback
-        );
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, None, false),
+            InlineHistoryRenderMode::from_env_values(None),
             InlineHistoryRenderMode::HostScrollback
         );
     }
@@ -398,15 +384,15 @@ mod startup_ascii_art_env_tests {
     #[test]
     fn inline_history_render_mode_supports_explicit_override() {
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("scrollback"), Some("wt-session"), true),
+            InlineHistoryRenderMode::from_env_values(Some("scrollback")),
             InlineHistoryRenderMode::HostScrollback
         );
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("viewport-replay"), None, false),
+            InlineHistoryRenderMode::from_env_values(Some("viewport-replay")),
             InlineHistoryRenderMode::ViewportReplay
         );
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("mirror"), None, false),
+            InlineHistoryRenderMode::from_env_values(Some("mirror")),
             InlineHistoryRenderMode::ViewportReplay
         );
     }

@@ -77,6 +77,25 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
 }
 
 #[test]
+fn transcript_formatting_expands_tabs_in_content_and_debug_detail() {
+    let message = ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "let\tok = true;",
+        Some("final_answer".to_string()),
+        None,
+    )
+    .with_debug_detail("phase\tfinal");
+
+    let lines = format_conversation_lines_with_debug(&[message], true)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(lines.contains(&"  let    ok = true;".to_string()));
+    assert!(lines.contains(&"  phase    final".to_string()));
+}
+
+#[test]
 fn inline_main_buffer_rendering_avoids_box_borders() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
@@ -394,7 +413,7 @@ fn vt100_markdown_code_block_shell_matches_snapshot() {
 
     assert_snapshot!("vt100_markdown_code_block_shell", rendered);
     assert!(rendered.contains("let ok = true;"));
-    assert!(rendered.contains("```"));
+    assert_eq!(rendered.matches("```").count(), 2);
 }
 
 #[test]

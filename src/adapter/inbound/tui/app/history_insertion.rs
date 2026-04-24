@@ -3,7 +3,8 @@ use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::text::Line;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -54,17 +55,19 @@ impl HistoryInsertionAdapter {
         terminal: &mut Terminal<B>,
         lines: &[Line<'static>],
     ) -> Result<(), B::Error> {
-        let buffer = rendered_history_buffer(terminal.size()?.width, lines);
-        if buffer.area.width == 0 || buffer.area.height == 0 {
+        let width = terminal.size()?.width;
+        let height = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
+        if width == 0 || height == 0 {
             return Ok(());
         }
 
         let cursor = terminal.get_cursor_position()?;
         let result = match self.mode {
             HistoryInsertionMode::StandardScrollRegion => {
-                insert_with_standard_scroll_region(terminal, lines, buffer.area.height)
+                insert_with_standard_scroll_region(terminal, lines, height)
             }
             HistoryInsertionMode::NewlineFallback => {
+                let buffer = rendered_history_buffer(width, lines);
                 insert_with_newline_fallback(terminal, &buffer)
             }
         };
@@ -79,9 +82,7 @@ fn insert_with_standard_scroll_region<B: Backend>(
     height: u16,
 ) -> Result<(), B::Error> {
     terminal.insert_before(height, |buffer| {
-        Paragraph::new(lines.to_vec())
-            .wrap(Wrap { trim: false })
-            .render(buffer.area, buffer);
+        history_paragraph(lines).render(buffer.area, buffer);
     })
 }
 
@@ -130,21 +131,11 @@ fn restore_cursor<B: Backend>(
 }
 
 pub(super) fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -> usize {
-    if width == 0 {
+    if width == 0 || lines.is_empty() {
         return 0;
     }
 
-    lines
-        .iter()
-        .map(|line| {
-            let line_width = line.width();
-            if line_width == 0 {
-                1
-            } else {
-                line_width.div_ceil(width as usize)
-            }
-        })
-        .sum()
+    rendered_history_height(width, lines)
 }
 
 pub(super) fn rendered_history_buffer(width: u16, lines: &[Line<'static>]) -> Buffer {
@@ -160,10 +151,58 @@ pub(super) fn rendered_history_buffer(width: u16, lines: &[Line<'static>]) -> Bu
         return buffer;
     }
 
-    Paragraph::new(lines.to_vec())
-        .wrap(Wrap { trim: false })
-        .render(buffer.area, &mut buffer);
+    history_paragraph(lines).render(buffer.area, &mut buffer);
     buffer
+}
+
+fn history_paragraph(lines: &[Line<'static>]) -> Paragraph<'static> {
+    Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false })
+}
+
+fn rendered_history_height(width: u16, lines: &[Line<'static>]) -> usize {
+    let capacity = conservative_history_row_capacity(lines).saturating_add(1);
+    let probe_height = capacity.min(u16::MAX as usize) as u16;
+    let mut probe_lines = lines.to_vec();
+    probe_lines.push(sentinel_line());
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width,
+        height: probe_height,
+    };
+    let mut buffer = Buffer::empty(area);
+    history_paragraph(&probe_lines).render(area, &mut buffer);
+
+    for y in 0..probe_height {
+        if (0..width).any(|x| {
+            let cell = &buffer[(x, y)];
+            cell.fg == sentinel_fg() && cell.bg == sentinel_bg()
+        }) {
+            return y as usize;
+        }
+    }
+
+    probe_height as usize
+}
+
+fn conservative_history_row_capacity(lines: &[Line<'static>]) -> usize {
+    lines.iter().map(|line| line.width().max(1)).sum::<usize>()
+}
+
+fn sentinel_line() -> Line<'static> {
+    Line::from(Span::styled("X", sentinel_style()))
+}
+
+fn sentinel_style() -> Style {
+    Style::default().fg(sentinel_fg()).bg(sentinel_bg())
+}
+
+fn sentinel_fg() -> Color {
+    Color::Indexed(255)
+}
+
+fn sentinel_bg() -> Color {
+    Color::Indexed(254)
 }
 
 #[cfg(test)]
@@ -225,6 +264,17 @@ mod tests {
         assert!(text.contains("ple.test/rea"), "{text:?}");
         assert!(text.contains("lly/long/pa"), "{text:?}");
         assert!(text.contains("wide"), "{text:?}");
+    }
+
+    #[test]
+    fn rendered_history_rows_follow_paragraph_word_wrapping() {
+        let lines = vec![Line::from("aa aa aa")];
+
+        let buffer = rendered_history_buffer(4, &lines);
+        let text = tui_testkit::buffer_text(&buffer);
+
+        assert_eq!(count_rendered_history_rows(&lines, 4), 3);
+        assert_eq!(text, "aa  \naa  \naa  ");
     }
 
     #[test]

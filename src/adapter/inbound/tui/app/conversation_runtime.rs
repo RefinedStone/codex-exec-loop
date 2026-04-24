@@ -1007,14 +1007,12 @@ mod tests {
             ),
         );
 
-        let matching_messages = reduced
-            .state
-            .messages
-            .iter()
-            .filter(|message| message.item_id.as_deref() == Some("agent-1"))
-            .collect::<Vec<_>>();
-        assert_eq!(matching_messages.len(), 1);
-        assert_eq!(matching_messages[0].text, "replacement completed text");
+        assert_eq!(reduced.state.messages.len(), 1);
+        assert_eq!(
+            reduced.state.messages[0].item_id.as_deref(),
+            Some("agent-1")
+        );
+        assert_eq!(reduced.state.messages[0].text, "replacement completed text");
         assert!(reduced.state.live_agent_message.is_none());
         assert_eq!(
             reduced.state.cached_conversation_lines,
