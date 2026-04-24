@@ -387,7 +387,9 @@ mod tests {
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::domain::conversation::ConversationSnapshot;
+    use crate::domain::conversation::{
+        ConversationMessage, ConversationMessageKind, ConversationSnapshot,
+    };
     use crate::domain::github_review::{
         GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
     };
@@ -892,6 +894,35 @@ mod tests {
 
         runtime.handle_terminal_event(Event::Resize(120, 40));
 
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn resize_event_leaves_transcript_state_unchanged() {
+        let mut runtime = make_test_runtime();
+        let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state
+        else {
+            panic!("expected ready conversation state");
+        };
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "completed history stays committed".to_string(),
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+        conversation.refresh_conversation_lines();
+        conversation.input_buffer = "buffered prompt".to_string();
+        let expected_lines = conversation.cached_conversation_lines.clone();
+
+        runtime.take_redraw_request();
+        runtime.handle_terminal_event(Event::Resize(120, 40));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.cached_conversation_lines, expected_lines);
+        assert_eq!(conversation.input_buffer, "buffered prompt");
+        assert_eq!(conversation.messages.len(), 1);
         assert!(runtime.take_redraw_request());
     }
 

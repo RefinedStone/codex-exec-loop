@@ -82,6 +82,8 @@ mod github_polling;
 mod history_insertion;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
+#[path = "app/inline_terminal_adapter.rs"]
+mod inline_terminal_adapter;
 #[path = "app/parallel_mode.rs"]
 mod parallel_mode;
 #[path = "app/planner_debug_preview.rs"]

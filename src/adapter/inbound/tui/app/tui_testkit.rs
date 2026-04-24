@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
-use super::ratatui_frontend::{InlineTerminalBackend, terminal_options_for_render_mode};
+use super::inline_terminal_adapter::{InlineTerminalBackend, terminal_options_for_render_mode};
 use super::shell_rendering::draw;
 use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationState,

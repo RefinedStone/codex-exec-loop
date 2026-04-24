@@ -116,5 +116,8 @@ fn render_inline_live_transcript(
 }
 
 #[cfg(test)]
+#[path = "shell_rendering_contract_tests.rs"]
+mod contract_tests;
+#[cfg(test)]
 #[path = "shell_rendering_tests.rs"]
 mod tests;
