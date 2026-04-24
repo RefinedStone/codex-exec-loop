@@ -21,6 +21,7 @@ docs are deep dives, and which docs are history only.
 - [design/01-current-product-state.md](design/01-current-product-state.md): product identity and surface map
 - [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): operator-visible shell flow
 - [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md): planning/runtime implementation detail
+- [design/07-tui-layered-architecture-and-aesthetic-contract.md](design/07-tui-layered-architecture-and-aesthetic-contract.md): TUI layer ownership, Akra visual contract, and LLM editing guardrails
 
 ## Active Roadmap
 
@@ -70,6 +71,7 @@ docs are deep dives, and which docs are history only.
 - `docs/supersession/remaining-work.md` tracks unfinished, lightly validated, or intentionally
   deferred work.
 - `docs/design/` holds deep technical explanation and boundary rules.
+- `docs/design/07-*` holds the current TUI layer and visual contract for native shell changes.
 - `docs/releases/` holds tagged or branch release deltas only.
 - `docs/plan/20-*` holds the context-first roadmap for the current cycle.
 - `docs/plan/21-*` through `docs/plan/26-*` hold the active terminal-agent bridge research and

@@ -1,17 +1,17 @@
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 
-use super::super::{ConversationState, NativeTuiApp};
+use super::super::{AkraTheme, ConversationState, NativeTuiApp};
 
 #[derive(Clone, Copy)]
 pub(in super::super) struct PlanModeIndicatorView {
     primary_label: &'static str,
     detail_label: Option<&'static str>,
-    color: Color,
+    style: Style,
 }
 
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
@@ -44,10 +44,7 @@ pub(super) fn plan_mode_prefixed_spans(
     indicator: PlanModeIndicatorView,
 ) -> Vec<Span<'static>> {
     let mut spans = vec![Span::raw(leading_text), Span::raw("  |  ")];
-    spans.push(Span::styled(
-        indicator.primary_label,
-        Style::default().fg(indicator.color),
-    ));
+    spans.push(Span::styled(indicator.primary_label, indicator.style));
     if let Some(detail_label) = indicator.detail_label {
         spans.push(Span::raw(format!(" / {detail_label}")));
     }
@@ -59,13 +56,13 @@ fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Plan
         return PlanModeIndicatorView {
             primary_label: "Plan off",
             detail_label: None,
-            color: Color::Red,
+            style: AkraTheme::danger(),
         };
     }
 
     PlanModeIndicatorView {
         primary_label: "Plan on",
         detail_label: Some(plan_runtime_substate_label(snapshot)),
-        color: Color::Blue,
+        style: AkraTheme::accent(),
     }
 }

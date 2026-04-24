@@ -57,6 +57,7 @@ Keep mapping logic in adapters, not domain models.
 - Do not use `use super::*;` or `use super::super::*;` in app runtime, controller, presentation, or planning modules. Import only the symbols the file actually uses.
 - Do not rely on parent-module wildcard imports for child modules. Child modules should import their own dependencies explicitly so they remain readable in isolation.
 - Keep rendering, presentation projection/builders, controller/event handling, and long integration-style tests in separate files when practical.
+- For native shell visual work, follow `docs/design/07-tui-layered-architecture-and-aesthetic-contract.md` before editing: state, controller, projection/copy, theme/chrome, rendering/layout, and terminal adapter concerns must stay separate.
 - Split broad shell tests by concern such as planning, session browser, follow-up overlay, or shell surface behavior instead of growing one monolithic test file.
 - Treat mixed-responsibility files as design debt even when they still compile cleanly. If one file owns storage writes, recovery, status wording, and operator policy together, split it before adding more behavior.
 
@@ -72,6 +73,7 @@ Keep mapping logic in adapters, not domain models.
 - Use official Codex interfaces first: `codex app-server`, then `codex exec` or `codex exec resume` only when the task still requires them.
 - Keep commits small and milestone-based.
 - Keep TUI PRs to one primary contract at a time: reducer/runtime, terminal primitive, frame scheduling, or visual snapshot.
+- Keep Akra TUI styling behind `AkraTheme`; run `bash scripts/check_tui_layering.sh` when touching native shell visual or presentation code.
 - If a TUI bug is being fixed, start by adding the reproducer test or validation capture in the same PR.
 - For TUI changes, include a screenshot or short terminal capture in the PR when practical.
 - For terminal-affecting TUI PRs, run the focused cargo commands from `docs/plan/29-terminal-ui-testing-methodology.md` and record at least `Windows Terminal / PowerShell / inline` plus `Windows Terminal / WSL bash / inline` with `scripts/capture_native_validation.sh` or `.ps1`.

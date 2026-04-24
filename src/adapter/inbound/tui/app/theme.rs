@@ -48,6 +48,10 @@ impl AkraTheme {
             .add_modifier(Modifier::BOLD)
     }
 
+    pub(super) fn tool() -> Style {
+        Style::default().fg(Color::Magenta)
+    }
+
     pub(super) fn selected() -> Style {
         Style::default()
             .fg(Color::Black)

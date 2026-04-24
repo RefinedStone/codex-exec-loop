@@ -558,7 +558,7 @@ fn label_style(kind: ConversationMessageKind) -> Style {
     match kind {
         ConversationMessageKind::User => AkraTheme::shortcut(),
         ConversationMessageKind::Agent => AkraTheme::brand(),
-        ConversationMessageKind::Tool => Style::default().fg(Color::Magenta),
+        ConversationMessageKind::Tool => AkraTheme::tool(),
         ConversationMessageKind::Status => AkraTheme::muted(),
     }
 }
