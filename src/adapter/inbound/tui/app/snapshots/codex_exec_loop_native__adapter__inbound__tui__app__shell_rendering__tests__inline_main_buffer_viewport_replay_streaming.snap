@@ -1,5 +1,6 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+assertion_line: 327
 expression: rendered
 ---
 "thread: new draft  |  turn: working  |  auto: on/idle  |  done: 0/3  |  in:     "
@@ -9,9 +10,9 @@ expression: rendered
 "queue: inactive                                                                 "
 "◦ Working (0s • turn running / interrupt unsupported)                           "
 "planning: stale  |  queue: next task: rank 1 / terminal-brid...                 "
-"now: Land the first tmux local-attach adap...  |  next: none                    "
-"proposed: none  |  blocked: Normalize entry docs, hotspot order, ... (direction "
-"context-first-architecture-...) (+37 more)                                      "
+"now: Implement shell planning status  |  next: Trim legacy shell code           "
+"proposed: none  |  blocked: Follow blocked review thread (blocked by tasks:     "
+"task-2(in_progress))                                                            "
 "recent codex: previous transcript should remain vis...                          "
 "live: Codex                                                                     "
 "  streaming reply still visible                                                 "

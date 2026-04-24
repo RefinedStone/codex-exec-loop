@@ -11,6 +11,7 @@ use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
 };
+use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
     PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -19,6 +20,7 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningRuntimeUseCases;
 use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
 use crate::application::service::planning::runtime::facade::PlanningRuntimeFacadeService;
+use crate::application::service::planning::runtime::intake::PlanningTaskIntakeService;
 use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
 use crate::application::service::planning::runtime::prompt::PlanningPromptService;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
@@ -166,20 +168,29 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
 
 fn planning_runtime() -> PlanningRuntimeUseCases {
     let port = Arc::new(FakePlanningWorkspacePort);
-    PlanningRuntimeUseCases::new(PlanningRuntimeFacadeService::new(
+    let validation_service = PlanningValidationService::new();
+    let priority_queue_service = PriorityQueueService::new();
+    let runtime_facade = PlanningRuntimeFacadeService::new(
         PlanningPromptService::new(
             port.clone(),
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
+            validation_service.clone(),
+            priority_queue_service.clone(),
         ),
         PlanningReconciliationService::new(
-            port,
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
+            port.clone(),
+            validation_service.clone(),
+            priority_queue_service.clone(),
         ),
         PlanningRuntimePolicyService::new(),
         TurnPromptAssemblyService::new(),
-    ))
+    );
+    let task_intake = PlanningTaskIntakeService::new(
+        port,
+        Arc::new(NoopPlanningTaskRepositoryPort),
+        validation_service,
+        priority_queue_service,
+    );
+    PlanningRuntimeUseCases::new(runtime_facade, task_intake)
 }
 
 #[test]

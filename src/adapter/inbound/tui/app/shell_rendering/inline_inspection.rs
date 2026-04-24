@@ -7,10 +7,11 @@ use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use super::super::shell_presentation::{
     AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, SupersessionOverlayView, build_automation_overlay_view,
-    build_directions_maintenance_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, build_supersession_overlay_view,
+    StartupOverlayView, SupersessionOverlayView, TaskIntakeOverlayView,
+    build_automation_overlay_view, build_directions_maintenance_overlay_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view, build_task_intake_overlay_view,
 };
 use super::super::{
     DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
@@ -40,6 +41,7 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
+        ShellOverlay::TaskIntake => draw_inline_task_intake_inspection(frame, inspection_area, app),
     }
 }
 
@@ -371,6 +373,46 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
     render_inline_section(frame, layout[2], Line::from("Queue"), content_lines, false);
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+
+fn draw_inline_task_intake_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_task_intake_overlay_view(app);
+    let TaskIntakeOverlayView {
+        header_lines,
+        prompt_lines,
+        preview_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&prompt_lines, 5)),
+            Constraint::Min(7),
+            Constraint::Length(inline_section_height(&status_lines, 4)),
+            Constraint::Length(inline_section_height(&key_lines, 3)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Task Intake / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Prompt"), prompt_lines, false);
+    render_inline_section(
+        frame,
+        layout[2],
+        Line::from("Preview"),
+        preview_lines,
+        false,
+    );
+    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {

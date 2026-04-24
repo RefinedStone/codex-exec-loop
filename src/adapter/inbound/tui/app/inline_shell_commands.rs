@@ -7,6 +7,7 @@ pub(crate) enum InlineShellCommand {
     Sessions,
     Queue,
     Directions,
+    Task,
     Stop,
     Automation,
     Doctor,
@@ -42,7 +43,7 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 const RESET_USAGE: &str =
@@ -91,6 +92,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":directions"],
         suggestion_detail: "directions maintenance",
         buffered_hint: "Press Enter to review or edit planning directions.",
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Task,
+        primary_name: ":task",
+        aliases: &[":task"],
+        suggestion_detail: "task intake",
+        buffered_hint: "Press Enter to draft a runtime planning task.",
         execution_status: None,
         requires_argument: false,
     },
@@ -229,6 +239,10 @@ impl InlineShellCommandInput {
                 Some(value) => format!(
                     "Press Enter to apply `:directions {value}`. Supported arguments: apply."
                 ),
+                None => self.command.spec().buffered_hint.to_string(),
+            },
+            InlineShellCommand::Task => match self.argument() {
+                Some(value) => format!("Press Enter to preview a runtime task for `{value}`."),
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::Queue => match self.argument() {
@@ -410,6 +424,7 @@ impl InlineShellCommand {
             | InlineShellCommand::Sessions
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
+            | InlineShellCommand::Task
             | InlineShellCommand::Stop
             | InlineShellCommand::Automation
             | InlineShellCommand::Doctor
@@ -536,6 +551,11 @@ mod tests {
                 ":directions apply",
                 Some((InlineShellCommand::Directions, Some("apply"))),
             ),
+            (":task", Some((InlineShellCommand::Task, None))),
+            (
+                ":task add a release checklist",
+                Some((InlineShellCommand::Task, Some("add a release checklist"))),
+            ),
             (":stop", Some((InlineShellCommand::Stop, None))),
             (":auto", Some((InlineShellCommand::Automation, None))),
             (":automation", Some((InlineShellCommand::Automation, None))),
@@ -606,6 +626,7 @@ mod tests {
                 InlineShellCommand::Sessions,
                 InlineShellCommand::Queue,
                 InlineShellCommand::Directions,
+                InlineShellCommand::Task,
                 InlineShellCommand::Stop,
                 InlineShellCommand::Automation,
                 InlineShellCommand::Doctor,
@@ -650,7 +671,7 @@ mod tests {
         );
         assert_eq!(
             InlineShellCommand::suggestions(":t"),
-            vec![InlineShellCommand::MaxAutoTurns]
+            vec![InlineShellCommand::Task, InlineShellCommand::MaxAutoTurns]
         );
     }
 
@@ -672,7 +693,7 @@ mod tests {
     fn palette_state_keeps_selected_command_when_input_refines() {
         let mut state = InlineShellCommandPaletteState::default();
         state.sync_to_input(":", None);
-        assert!(state.move_selection(9));
+        assert!(state.move_selection(10));
         assert_eq!(
             state.selected_command(),
             Some(InlineShellCommand::PlanningInit)
@@ -696,6 +717,7 @@ mod tests {
         assert_eq!(InlineShellCommand::Parallel.completion_text(), ":parallel");
         assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
         assert_eq!(InlineShellCommand::Init.completion_text(), ":init");
+        assert_eq!(InlineShellCommand::Task.completion_text(), ":task");
         assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
         assert_eq!(
             InlineShellCommand::MaxAutoTurns.completion_text(),
@@ -879,6 +901,7 @@ mod tests {
             (":doctor", None),
             (":init", None),
             (":planning", None),
+            (":task", None),
             (":reset queue", None),
             (":turns 5", None),
         ];

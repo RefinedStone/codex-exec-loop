@@ -21,6 +21,9 @@ mod queue_refresh;
 #[path = "planning_runtime_tests/guard_and_buffering.rs"]
 mod guard_and_buffering;
 
+#[path = "planning_runtime_tests/task_intake.rs"]
+mod task_intake;
+
 fn open_planning_simple_review(app: &mut NativeTuiApp) {
     sync_draft_conversation_to_startup_workspace(app);
     app.execute_inline_shell_command_input(

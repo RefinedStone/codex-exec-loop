@@ -12,9 +12,10 @@ use super::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeEvent, ConversationState,
     ConversationViewModel, DirectionsMaintenanceOverlayStep, InlineShellCommandInput, NativeTuiApp,
     PlannerWorkerStatus, PlanningInitOverlayStep, PromptOrigin, ShellActionAvailability,
-    ShellOverlay, StartupState, TurnActivityState, build_automation_overlay_view,
-    build_automation_preview_lines, build_automation_status_lines, build_inline_tail_lines,
-    build_planning_init_overlay_view, build_ready_input_lines, format_conversation_lines,
+    ShellOverlay, StartupState, TaskIntakeOverlayStep, TurnActivityState,
+    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
+    build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
+    format_conversation_lines,
 };
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, test_parallel_mode_service,

@@ -106,6 +106,9 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state.reset();
                 self.planning_draft_editor_ui_state.reset();
             }
+            ShellOverlay::TaskIntake => {
+                self.task_intake_overlay_ui_state.reset();
+            }
             _ => {}
         }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
@@ -129,6 +132,7 @@ impl NativeTuiApp {
             InlineShellCommand::Directions => {
                 self.handle_directions_shell_command(command_input.argument())
             }
+            InlineShellCommand::Task => self.handle_task_shell_command(command_input.argument()),
             InlineShellCommand::Stop => self.stop_post_turn_automation(),
             InlineShellCommand::Automation => self.show_automation_overlay(),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
@@ -168,6 +172,67 @@ impl NativeTuiApp {
             });
         }
         self.clear_input_buffer();
+    }
+
+    fn handle_task_shell_command(&mut self, prompt: Option<&str>) {
+        self.task_intake_overlay_ui_state.open(prompt);
+        self.dispatch_shell_chrome(ShellChromeEvent::TaskIntakeOverlayShown);
+        if prompt.is_some_and(|value| !value.trim().is_empty()) {
+            self.preview_task_intake_prompt();
+        }
+    }
+
+    fn preview_task_intake_prompt(&mut self) {
+        let prompt = self
+            .task_intake_overlay_ui_state
+            .prompt_buffer()
+            .trim()
+            .to_string();
+        let request = PlanningTaskIntakeRequest {
+            workspace_directory: self.planning_workspace_directory(),
+            raw_prompt: prompt,
+            active_turn_id: self.active_task_intake_turn_id(),
+            requested_direction_id: None,
+            observed_planning_revision: None,
+        };
+        match self.planning.runtime.prepare_task_intake(request) {
+            Ok(proposal) => self.task_intake_overlay_ui_state.show_preview(proposal),
+            Err(error) => self
+                .task_intake_overlay_ui_state
+                .show_error(error.to_string()),
+        }
+    }
+
+    fn commit_task_intake_preview(&mut self) {
+        let Some(proposal) = self.task_intake_overlay_ui_state.proposal().cloned() else {
+            self.task_intake_overlay_ui_state
+                .show_error("Preview a task before committing it.");
+            return;
+        };
+
+        match self.planning.runtime.commit_task_intake(&proposal) {
+            Ok(result) => {
+                let committed_task_id = result.committed_task_id.clone();
+                self.task_intake_overlay_ui_state
+                    .record_commit_result(result);
+                self.refresh_ready_conversation_planning_runtime_snapshot();
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("task accepted into planning queue: {committed_task_id}"),
+                });
+                self.task_intake_overlay_ui_state.reset();
+                self.show_queue_overlay();
+            }
+            Err(error) => self
+                .task_intake_overlay_ui_state
+                .show_error(format!("Task commit failed: {error}")),
+        }
+    }
+
+    fn active_task_intake_turn_id(&self) -> Option<String> {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => conversation.active_turn_id.clone(),
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        }
     }
 
     pub(super) fn push_input_character(&mut self, character: char) {
@@ -330,6 +395,10 @@ impl NativeTuiApp {
             return true;
         }
 
+        if self.shell_overlay == ShellOverlay::TaskIntake {
+            return self.handle_task_intake_overlay_key(key);
+        }
+
         if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
             return self.handle_directions_overlay_key(key);
         }
@@ -339,6 +408,36 @@ impl NativeTuiApp {
         }
 
         self.handle_session_overlay_key(key);
+        true
+    }
+
+    fn handle_task_intake_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
+            if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('u') {
+                self.task_intake_overlay_ui_state.clear_prompt();
+            }
+            return true;
+        }
+
+        match self.task_intake_overlay_ui_state.step() {
+            TaskIntakeOverlayStep::Prompt => match key.code {
+                KeyCode::Enter => self.preview_task_intake_prompt(),
+                KeyCode::Backspace => self.task_intake_overlay_ui_state.pop_character(),
+                KeyCode::Char(character) => {
+                    self.task_intake_overlay_ui_state.push_character(character)
+                }
+                _ => {}
+            },
+            TaskIntakeOverlayStep::Preview => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.commit_task_intake_preview(),
+                KeyCode::Char('n') | KeyCode::Char('N') => self.close_shell_overlay(),
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    self.task_intake_overlay_ui_state.return_to_editing()
+                }
+                _ => {}
+            },
+        }
+
         true
     }
 
