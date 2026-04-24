@@ -5,11 +5,19 @@ This file is the current contract for inline mode on `prerelease`.
 ## Durable Facts
 
 - inline mode is the only frontend
-- host terminal scrollback is the primary history surface
+- host terminal scrollback is the canonical history surface
 - viewport replay is an explicit diagnostic fallback, not an automatic OS or terminal default
 - committed transcript history is appended into scrollback separately from live-tail updates
 - the live tail is the only place that owns the active prompt, transient streaming text, and compact notices
 - `thread_id` and `turn_id` come from `codex app-server` and stay out of routine operator copy
+
+## Terminal Ownership
+
+- `NativeTuiApp` owns transcript, live-turn, prompt, and overlay state only
+- terminal viewport bookkeeping lives below the app in the inline terminal adapter
+- the inline terminal adapter owns viewport size, cursor recovery, pending history flush, and back-buffer invalidation policy
+- one inline draw transaction runs in this order: autoresize or cursor repair, pending history flush, viewport clear or invalidate, then live frame draw
+- raw scroll, newline fallback insertion, and viewport clear always invalidate the adapter's back-buffer trust before the next frame draw
 
 ## Prompt And Streaming
 

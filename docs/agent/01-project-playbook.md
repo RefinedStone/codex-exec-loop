@@ -71,5 +71,8 @@ Keep mapping logic in adapters, not domain models.
 
 - Use official Codex interfaces first: `codex app-server`, then `codex exec` or `codex exec resume` only when the task still requires them.
 - Keep commits small and milestone-based.
+- Keep TUI PRs to one primary contract at a time: reducer/runtime, terminal primitive, frame scheduling, or visual snapshot.
+- If a TUI bug is being fixed, start by adding the reproducer test or validation capture in the same PR.
 - For TUI changes, include a screenshot or short terminal capture in the PR when practical.
+- For terminal-affecting TUI PRs, run the focused cargo commands from `docs/plan/29-terminal-ui-testing-methodology.md` and record at least `Windows Terminal / PowerShell / inline` plus `Windows Terminal / WSL bash / inline` with `scripts/capture_native_validation.sh` or `.ps1`.
 - Keep backlog, rollout notes, and long-lived design detail in `docs/`, not in agent files.

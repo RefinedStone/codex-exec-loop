@@ -138,6 +138,15 @@ Every TUI rendering PR should state which rows it touches.
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
 | Terminal fallback | standard and fallback insertion modes each update viewport state correctly |
 
+## One-Contract PR Rule
+
+TUI PRs should stay reviewable by contract owner.
+
+- one PR should have one primary contract: reducer or runtime, terminal primitive, frame scheduling, or visual snapshot
+- the PR description should name the touched rows or contract explicitly
+- bug-fix PRs should add a reproducer test or capture before the implementation change
+- changes that materially modify `shell_rendering`, `ratatui_frontend` or the inline terminal adapter, and `shell_runtime` together are hardening slices and should say so directly in the PR body
+
 ## Manual Validation Matrix
 
 Automated tests cannot prove every terminal emulator behavior. Use manual captures for terminal
@@ -148,8 +157,8 @@ Minimum matrix:
 - Linux terminal without multiplexer
 - tmux
 - Zellij
-- Windows Terminal
-- WSL inside Windows Terminal
+- Windows Terminal / PowerShell / inline
+- Windows Terminal / WSL bash / inline
 
 Optional but valuable:
 
@@ -209,11 +218,19 @@ fields, the production boundary is probably too broad.
 Before merging a terminal rendering change:
 
 - run focused unit and snapshot tests for the touched layer
+- run the default focused commands for this repo when the terminal adapter, frame transaction, or reducer boundary changes:
+  `cargo test shell_runtime`
+  `cargo test inline_terminal_adapter`
+  `cargo test history_insertion`
+  `cargo test shell_rendering`
 - run `cargo fmt`
 - run `cargo test` when touching reducers, frontend, or terminal adapter behavior
 - run `cargo clippy --all-targets --all-features -D warnings` when touching shared TUI/runtime code
 - include manual terminal evidence when the change alters escape sequences, viewport mode, or
-  clear/scrollback behavior
+  clear or scrollback behavior
+- use `scripts/capture_native_validation.sh` or `scripts/capture_native_validation.ps1` for terminal-affecting PRs and attach at least these required rows:
+  Windows Terminal / PowerShell / inline
+  Windows Terminal / WSL bash / inline
 
 Docs-only research does not require Rust tests, but implementation PRs should not rely on manual
 validation alone.
