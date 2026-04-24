@@ -16,10 +16,9 @@ use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::text::Line;
 
-use ratatui::widgets::{Paragraph, Widget, Wrap};
-
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
+use super::history_insertion::{HistoryInsertionAdapter, HistoryInsertionMode};
 use super::shell_presentation::{
     build_inline_tail_view, build_startup_banner_lines, format_conversation_lines_with_debug,
 };
@@ -109,12 +108,16 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     runtime: &mut ShellRuntime,
     inline_viewport: &mut InlineViewportState,
 ) -> Result<bool, B::Error> {
-    let render_mode = runtime.app_mut().inline_history_render_mode;
+    let app = runtime.app_mut();
+    let render_mode = app.inline_history_render_mode;
+    let insert_mode = app.history_insert_mode;
     autoresize_inline_viewport(terminal)?;
-    let current_lines = current_inline_history_lines(runtime.app_mut());
+    let current_lines = current_inline_history_lines(app);
     let writes_host_scrollback = render_mode.writes_host_scrollback();
     let history_inserted = if writes_host_scrollback {
-        inline_viewport.history.sync(terminal, &current_lines)?
+        inline_viewport
+            .history
+            .sync(terminal, &current_lines, insert_mode)?
     } else {
         inline_viewport.history.remember(&current_lines);
         false
@@ -313,11 +316,12 @@ impl InlineHistoryState {
         &mut self,
         terminal: &mut Terminal<B>,
         current_lines: &[Line<'static>],
+        insert_mode: HistoryInsertionMode,
     ) -> Result<bool, B::Error> {
         let pending_lines = self.pending_lines(current_lines);
         let inserted = !pending_lines.is_empty();
         if !pending_lines.is_empty() {
-            insert_inline_history_lines(terminal, &pending_lines)?;
+            HistoryInsertionAdapter::new(insert_mode).insert(terminal, &pending_lines)?;
         }
         self.remember(current_lines);
         Ok(inserted)
@@ -362,49 +366,6 @@ impl InlineHistoryState {
     }
 }
 
-fn insert_inline_history_lines<B: Backend>(
-    terminal: &mut Terminal<B>,
-    lines: &[Line<'static>],
-) -> Result<(), B::Error> {
-    if lines.is_empty() {
-        return Ok(());
-    }
-
-    let width = terminal.size()?.width;
-    if width == 0 {
-        return Ok(());
-    }
-
-    let height = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
-    if height == 0 {
-        return Ok(());
-    }
-
-    terminal.insert_before(height, |buffer| {
-        Paragraph::new(lines.to_vec())
-            .wrap(Wrap { trim: false })
-            .render(buffer.area, buffer);
-    })
-}
-
-fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -> usize {
-    if width == 0 {
-        return 0;
-    }
-
-    lines
-        .iter()
-        .map(|line| {
-            let line_width = line.width();
-            if line_width == 0 {
-                1
-            } else {
-                line_width.div_ceil(width as usize)
-            }
-        })
-        .sum()
-}
-
 struct TerminalRestoreGuard;
 
 impl TerminalRestoreGuard {
@@ -434,8 +395,8 @@ mod tests {
 
     use super::super::tui_testkit;
     use super::{
-        InlineHistoryState, InlineTerminalBackend, InlineViewportState, ShellRuntime,
-        current_inline_history_lines, draw_inline_frame, sync_inline_viewport,
+        HistoryInsertionMode, InlineHistoryState, InlineTerminalBackend, InlineViewportState,
+        ShellRuntime, current_inline_history_lines, draw_inline_frame, sync_inline_viewport,
         terminal_options_for_render_mode,
     };
     use crate::adapter::inbound::tui::app::{
@@ -623,8 +584,24 @@ mod tests {
             Line::from(""),
         ];
 
-        assert!(state.sync(&mut terminal, &current_lines).unwrap());
-        assert!(!state.sync(&mut terminal, &current_lines).unwrap());
+        assert!(
+            state
+                .sync(
+                    &mut terminal,
+                    &current_lines,
+                    HistoryInsertionMode::StandardScrollRegion,
+                )
+                .unwrap()
+        );
+        assert!(
+            !state
+                .sync(
+                    &mut terminal,
+                    &current_lines,
+                    HistoryInsertionMode::StandardScrollRegion,
+                )
+                .unwrap()
+        );
 
         let appended_lines = vec![
             Line::from("User:"),
@@ -634,7 +611,15 @@ mod tests {
             Line::from("  first answer"),
             Line::from(""),
         ];
-        assert!(state.sync(&mut terminal, &appended_lines).unwrap());
+        assert!(
+            state
+                .sync(
+                    &mut terminal,
+                    &appended_lines,
+                    HistoryInsertionMode::StandardScrollRegion,
+                )
+                .unwrap()
+        );
     }
 
     #[test]
@@ -651,7 +636,15 @@ mod tests {
             ],
         };
 
-        assert!(!state.sync(&mut terminal, &[]).unwrap());
+        assert!(
+            !state
+                .sync(
+                    &mut terminal,
+                    &[],
+                    HistoryInsertionMode::StandardScrollRegion,
+                )
+                .unwrap()
+        );
         assert!(state.rendered_lines.is_empty());
 
         let next_thread_lines = vec![Line::from("Status:"), Line::from("  new thread loaded")];

@@ -52,6 +52,7 @@ const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
 const INLINE_HISTORY_RENDER_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_INLINE_HISTORY_MODE";
+const HISTORY_INSERT_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_HISTORY_INSERT_MODE";
 
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
@@ -77,6 +78,8 @@ mod followup_controls;
 mod followup_overlay_ui;
 #[path = "app/github_polling.rs"]
 mod github_polling;
+#[path = "app/history_insertion.rs"]
+mod history_insertion;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
 #[path = "app/parallel_mode.rs"]
@@ -148,6 +151,7 @@ use followup_overlay_ui::{
     FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
 use github_polling::GithubReviewPollingState;
+use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
 use planning::{PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
@@ -289,6 +293,7 @@ struct NativeTuiApp {
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     inline_history_render_mode: InlineHistoryRenderMode,
+    history_insert_mode: HistoryInsertionMode,
     show_startup_ascii_art: bool,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
