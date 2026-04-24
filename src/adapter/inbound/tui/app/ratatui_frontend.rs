@@ -99,12 +99,17 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<(), B::Error> {
+    if !inline_terminal.back_buffer_trustworthy {
+        terminal.clear()?;
+    }
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(true);
+    let mut drawn_viewport_area = Rect::default();
     let result = terminal
         .draw(|frame| {
             let frame_area = frame.area();
+            drawn_viewport_area = frame_area;
             let app = runtime.app_mut();
             prepare_render_state(app, ShellFrontendMode::InlineMainBuffer, frame_area);
             draw(frame, app, ShellFrontendMode::InlineMainBuffer);
@@ -115,7 +120,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
         .set_resize_append_lines_suppressed(false);
     result?;
     let terminal_size = terminal.size()?;
-    inline_terminal.mark_frame_drawn(terminal_size);
+    inline_terminal.mark_frame_drawn(terminal_size, drawn_viewport_area);
     Ok(())
 }
 
@@ -129,8 +134,17 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     let insert_mode = app.history_insert_mode;
     autoresize_inline_viewport(terminal)?;
     let terminal_size = terminal.size()?;
-    inline_terminal.record_terminal_size(terminal_size);
+    let viewport_area = current_viewport_area(terminal);
+    inline_terminal.record_terminal_viewport(terminal_size, viewport_area);
     inline_terminal.insert_mode = insert_mode;
+    let visible_history_adjusted = inline_terminal.history.fit_visible_rows_to_viewport(
+        terminal,
+        terminal_size,
+        viewport_area,
+    )?;
+    if visible_history_adjusted {
+        inline_terminal.invalidate_back_buffer();
+    }
     let current_lines = current_inline_history_lines(app);
     let writes_host_scrollback = render_mode.writes_host_scrollback();
     let history_sync = if writes_host_scrollback {
@@ -144,13 +158,19 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     if history_sync.inserted() {
         inline_terminal.invalidate_back_buffer();
     }
+    let viewport_area = current_viewport_area(terminal);
+    inline_terminal.record_terminal_viewport(terminal_size, viewport_area);
 
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
         runtime.app_mut(),
-        terminal_size.width,
-        terminal_size.height,
+        viewport_area.width,
+        viewport_area.height,
     );
-    Ok(history_sync.inserted() || tail_frame_changed)
+    Ok(visible_history_adjusted || history_sync.inserted() || tail_frame_changed)
+}
+
+fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {
+    terminal.get_frame().area()
 }
 
 fn autoresize_inline_viewport<B: InlineResizeBackend>(
@@ -312,17 +332,17 @@ impl Default for InlineTerminalState {
 }
 
 impl InlineTerminalState {
-    fn record_terminal_size(&mut self, terminal_size: Size) {
+    fn record_terminal_viewport(&mut self, terminal_size: Size, viewport_area: Rect) {
         self.last_known_screen_size = Some(terminal_size);
-        self.viewport_area = Some(inline_viewport_area(terminal_size));
+        self.viewport_area = Some(viewport_area);
     }
 
     fn invalidate_back_buffer(&mut self) {
         self.back_buffer_trustworthy = false;
     }
 
-    fn mark_frame_drawn(&mut self, terminal_size: Size) {
-        self.record_terminal_size(terminal_size);
+    fn mark_frame_drawn(&mut self, terminal_size: Size, viewport_area: Rect) {
+        self.record_terminal_viewport(terminal_size, viewport_area);
         self.back_buffer_trustworthy = true;
     }
 
@@ -349,16 +369,6 @@ impl InlineTerminalState {
     }
 }
 
-fn inline_viewport_area(terminal_size: Size) -> Rect {
-    let height = INLINE_VIEWPORT_HEIGHT.min(terminal_size.height);
-    Rect {
-        x: 0,
-        y: terminal_size.height.saturating_sub(height),
-        width: terminal_size.width,
-        height,
-    }
-}
-
 #[derive(Clone, PartialEq, Eq)]
 struct InlineTailFrameSignature {
     terminal_width: u16,
@@ -369,6 +379,7 @@ struct InlineTailFrameSignature {
 #[derive(Default)]
 struct InlineHistoryState {
     rendered_lines: Vec<Line<'static>>,
+    visible_history_rows: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -385,6 +396,27 @@ impl InlineHistorySyncResult {
 const MIN_SHIFTED_HISTORY_OVERLAP: usize = 8;
 
 impl InlineHistoryState {
+    fn fit_visible_rows_to_viewport<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        terminal_size: Size,
+        viewport_area: Rect,
+    ) -> Result<bool, B::Error> {
+        let viewport_top = viewport_area.top();
+        if self.visible_history_rows <= viewport_top {
+            return Ok(false);
+        }
+
+        let overflow_rows = self.visible_history_rows - viewport_top;
+        terminal.backend_mut().set_cursor_position(Position {
+            x: 0,
+            y: terminal_size.height.saturating_sub(1),
+        })?;
+        terminal.backend_mut().append_lines(overflow_rows)?;
+        self.visible_history_rows = viewport_top;
+        Ok(true)
+    }
+
     fn sync<B: Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -392,11 +424,28 @@ impl InlineHistoryState {
         insert_mode: HistoryInsertionMode,
     ) -> Result<InlineHistorySyncResult, B::Error> {
         let pending_lines = self.pending_lines(current_lines);
-        let width = terminal.size()?.width;
+        let terminal_size = terminal.size()?;
+        let width = terminal_size.width;
         let inserted_rows =
             count_rendered_history_rows(&pending_lines, width).min(u16::MAX as usize) as u16;
         if !pending_lines.is_empty() {
-            HistoryInsertionAdapter::new(insert_mode).insert(terminal, &pending_lines)?;
+            HistoryInsertionAdapter::new(insert_mode).insert(
+                terminal,
+                &pending_lines,
+                self.visible_history_rows,
+            )?;
+        }
+        let viewport_top_after_insert = terminal.get_frame().area().top();
+        if current_lines.is_empty() {
+            self.visible_history_rows = 0;
+        } else if inserted_rows > 0 {
+            self.visible_history_rows = if pending_lines.len() == current_lines.len() {
+                inserted_rows.min(viewport_top_after_insert)
+            } else {
+                self.visible_history_rows
+                    .saturating_add(inserted_rows)
+                    .min(viewport_top_after_insert)
+            };
         }
         self.remember(current_lines);
         Ok(InlineHistorySyncResult { inserted_rows })
@@ -470,16 +519,16 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use ratatui::backend::TestBackend;
-    use ratatui::layout::{Rect, Size};
+    use ratatui::backend::{Backend, TestBackend};
+    use ratatui::layout::Size;
     use ratatui::text::Line;
     use ratatui::{Terminal, Viewport};
 
     use super::super::tui_testkit;
     use super::{
-        HistoryInsertionMode, InlineHistoryState, InlineTerminalBackend, InlineTerminalState,
-        ShellRuntime, current_inline_history_lines, draw_inline_frame, draw_inline_transaction,
-        sync_inline_viewport, terminal_options_for_render_mode,
+        HistoryInsertionMode, InlineHistoryState, InlineResizeBackend, InlineTerminalBackend,
+        InlineTerminalState, ShellRuntime, current_inline_history_lines, draw_inline_frame,
+        draw_inline_transaction, sync_inline_viewport, terminal_options_for_render_mode,
     };
     use crate::adapter::inbound::tui::app::{
         ConversationMessage, ConversationMessageKind, ConversationState, INLINE_VIEWPORT_HEIGHT,
@@ -506,6 +555,7 @@ mod tests {
                 Line::from("  first prompt"),
                 Line::from(""),
             ],
+            visible_history_rows: 0,
         };
         let current_lines = vec![
             Line::from("User:"),
@@ -536,6 +586,7 @@ mod tests {
                 Line::from("  old thread"),
                 Line::from(""),
             ],
+            visible_history_rows: 0,
         };
         let current_lines = vec![
             Line::from("Status:"),
@@ -554,6 +605,7 @@ mod tests {
             rendered_lines: (0..MAX_CONVERSATION_HISTORY_LINES)
                 .map(|idx| Line::from(format!("line {idx}")))
                 .collect(),
+            visible_history_rows: 0,
         };
         let current_lines = (3..MAX_CONVERSATION_HISTORY_LINES + 3)
             .map(|idx| Line::from(format!("line {idx}")))
@@ -577,6 +629,7 @@ mod tests {
             rendered_lines: (0..MAX_CONVERSATION_HISTORY_LINES - 10)
                 .map(|idx| Line::from(format!("line {idx}")))
                 .collect(),
+            visible_history_rows: 0,
         };
         let current_lines = (10..MAX_CONVERSATION_HISTORY_LINES + 10)
             .map(|idx| Line::from(format!("line {idx}")))
@@ -605,6 +658,7 @@ mod tests {
                 Line::from("Status:"),
                 Line::from("  completed"),
             ],
+            visible_history_rows: 0,
         };
         let current_lines = vec![
             Line::from("Status:"),
@@ -635,6 +689,7 @@ mod tests {
                 Line::from("  old tail"),
                 Line::from(""),
             ],
+            visible_history_rows: 0,
         };
         let current_lines = vec![
             Line::from("Status:"),
@@ -720,6 +775,7 @@ mod tests {
                 Line::from("  old answer"),
                 Line::from(""),
             ],
+            visible_history_rows: 6,
         };
 
         assert!(
@@ -759,7 +815,7 @@ mod tests {
         let mut inline_viewport = InlineTerminalState::default();
 
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
-        let inserted_history = tui_testkit::screen_text(&terminal);
+        let inserted_history = tui_testkit::inline_terminal_history_text(&terminal);
         assert!(inserted_history.contains("committed answer belongs in host history"));
         assert!(!inserted_history.contains("live answer stays in tail"));
 
@@ -774,6 +830,7 @@ mod tests {
             tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
         let mut app = make_test_app();
         app.show_startup_ascii_art = false;
+        app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
         append_history_message(&mut app, "history insert should invalidate diff state");
         let mut runtime = ShellRuntime::new(app);
         let mut inline_terminal = InlineTerminalState::default();
@@ -789,12 +846,7 @@ mod tests {
         );
         assert_eq!(
             inline_terminal.viewport_area,
-            Some(Rect {
-                x: 0,
-                y: 8,
-                width: 80,
-                height: 16
-            })
+            Some(terminal.get_frame().area())
         );
         assert_eq!(
             inline_terminal.insert_mode,
@@ -829,7 +881,10 @@ mod tests {
         draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
 
         assert!(inline_terminal.back_buffer_trustworthy);
-        assert!(tui_testkit::screen_text(&terminal).contains("newline fallback committed history"));
+        assert!(
+            tui_testkit::inline_terminal_history_text(&terminal)
+                .contains("newline fallback committed history")
+        );
     }
 
     #[test]
@@ -854,14 +909,96 @@ mod tests {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("draw transaction");
 
+        let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
+        assert!(terminal_history.contains("committed history in transaction"));
         let screen_text = tui_testkit::screen_text(&terminal);
-        assert!(screen_text.contains("committed history in transaction"));
         assert!(screen_text.contains("live tail in same transaction"));
         assert!(inline_terminal.back_buffer_trustworthy);
         assert!(
             !tui_testkit::inline_scrollback_text(&terminal)
                 .contains("live tail in same transaction")
         );
+    }
+
+    #[test]
+    fn vt100_terminal_app_preserves_newline_fallback_history_after_live_resize() {
+        let mut terminal = tui_testkit::inline_history_vt100_terminal(
+            InlineHistoryRenderMode::HostScrollback,
+            80,
+            24,
+        );
+        let mut app = make_test_app();
+        app.show_startup_ascii_art = false;
+        app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+        app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+        append_user_history_message(&mut app, "HISTORY_MARKER_ONE user prompt");
+        append_history_message(&mut app, "HISTORY_MARKER_TWO committed answer");
+        append_user_history_message(&mut app, "HISTORY_MARKER_THREE follow-up prompt");
+        append_history_message(&mut app, "HISTORY_MARKER_FOUR committed answer");
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.record_turn_started("turn-1".to_string());
+        conversation.push_live_agent_delta(
+            "agent-live".to_string(),
+            Some("final_answer".to_string()),
+            "LIVE_MARKER_FIVE streaming answer".to_string(),
+        );
+        let mut runtime = ShellRuntime::new(app);
+        let mut inline_terminal = InlineTerminalState::default();
+
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("initial vt100 draw transaction");
+        let terminal_history_before_completion =
+            tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+        assert!(
+            terminal_history_before_completion.contains("HISTORY_MARKER_TWO"),
+            "committed history should be in terminal app history before live completion: {terminal_history_before_completion:?}"
+        );
+        let host_scrollback_before_completion =
+            tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+        assert!(
+            !host_scrollback_before_completion.contains("LIVE_MARKER_FIVE"),
+            "live streaming rows must not be flushed into host scrollback before completion: {host_scrollback_before_completion:?}"
+        );
+
+        let app = runtime.app_mut();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should stay in a ready conversation state");
+        };
+        assert!(conversation.complete_live_agent_message(
+            "agent-live".to_string(),
+            Some("final_answer".to_string()),
+            "LIVE_MARKER_FIVE final answer".to_string(),
+        ));
+
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("completion vt100 draw transaction");
+        tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 80, 8);
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("short vt100 draw transaction");
+        tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 80, 24);
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("restored vt100 draw transaction");
+
+        let terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+        for marker in [
+            "HISTORY_MARKER_ONE",
+            "HISTORY_MARKER_TWO",
+            "HISTORY_MARKER_THREE",
+            "HISTORY_MARKER_FOUR",
+            "LIVE_MARKER_FIVE",
+        ] {
+            assert!(
+                terminal_history.contains(marker),
+                "terminal app history lost {marker} after live commit and resize:\n{terminal_history}"
+            );
+            assert_eq!(
+                terminal_history.matches(marker).count(),
+                1,
+                "terminal app history duplicated {marker} after live commit and resize:\n{terminal_history}"
+            );
+        }
     }
 
     #[test]
@@ -904,7 +1041,10 @@ mod tests {
             sync_inline_viewport(&mut host_terminal, &mut host_runtime, &mut host_viewport)
                 .unwrap()
         );
-        assert!(tui_testkit::screen_text(&host_terminal).contains("history should be inserted"));
+        assert!(
+            tui_testkit::inline_terminal_history_text(&host_terminal)
+                .contains("history should be inserted")
+        );
     }
 
     #[test]
@@ -1109,24 +1249,32 @@ mod tests {
         assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
     }
 
-    fn draw_test_frame(
-        terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
+    fn draw_test_frame<B>(
+        terminal: &mut Terminal<InlineTerminalBackend<B>>,
         runtime: &mut ShellRuntime,
         inline_terminal: &mut InlineTerminalState,
-    ) {
+    ) where
+        InlineTerminalBackend<B>: InlineResizeBackend,
+        <InlineTerminalBackend<B> as Backend>::Error: std::fmt::Debug,
+    {
         draw_inline_frame(terminal, runtime, inline_terminal).expect("draw test frame");
     }
 
     fn append_history_message(app: &mut NativeTuiApp, text: &str) {
+        append_message(app, ConversationMessageKind::Agent, text);
+    }
+
+    fn append_user_history_message(app: &mut NativeTuiApp, text: &str) {
+        append_message(app, ConversationMessageKind::User, text);
+    }
+
+    fn append_message(app: &mut NativeTuiApp, kind: ConversationMessageKind, text: &str) {
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("test app should start in a ready conversation state");
         };
-        conversation.messages.push(ConversationMessage::new(
-            ConversationMessageKind::Agent,
-            text.to_string(),
-            None,
-            None,
-        ));
+        conversation
+            .messages
+            .push(ConversationMessage::new(kind, text.to_string(), None, None));
         conversation.refresh_conversation_lines();
     }
 

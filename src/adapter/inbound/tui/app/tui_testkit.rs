@@ -1,7 +1,10 @@
 use std::collections::VecDeque;
+use std::fmt;
+use std::io::{self, Write};
 
-use ratatui::backend::{Backend, TestBackend};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use super::ratatui_frontend::{InlineTerminalBackend, terminal_options_for_render_mode};
@@ -39,12 +42,32 @@ pub(super) fn inline_history_terminal(
     .expect("inline history test terminal")
 }
 
+pub(super) fn inline_history_vt100_terminal(
+    render_mode: InlineHistoryRenderMode,
+    width: u16,
+    height: u16,
+) -> Terminal<InlineTerminalBackend<Vt100Backend>> {
+    Terminal::with_options(
+        InlineTerminalBackend::new(Vt100Backend::new(width, height)),
+        terminal_options_for_render_mode(render_mode),
+    )
+    .expect("inline vt100 history test terminal")
+}
+
 pub(super) fn resize_terminal(terminal: &mut Terminal<TestBackend>, width: u16, height: u16) {
     terminal.backend_mut().resize(width, height);
 }
 
 pub(super) fn resize_inline_history_terminal(
     terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
+    width: u16,
+    height: u16,
+) {
+    terminal.backend_mut().inner_mut().resize(width, height);
+}
+
+pub(super) fn resize_inline_history_vt100_terminal(
+    terminal: &mut Terminal<InlineTerminalBackend<Vt100Backend>>,
     width: u16,
     height: u16,
 ) {
@@ -102,6 +125,44 @@ pub(super) fn inline_scrollback_text(
     terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
 ) -> String {
     buffer_text(terminal.backend().inner().scrollback())
+}
+
+pub(super) fn inline_terminal_history_text(
+    terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
+) -> String {
+    let scrollback = inline_scrollback_text(terminal);
+    let screen = screen_text(terminal);
+    if scrollback.trim().is_empty() {
+        screen
+    } else {
+        format!("{scrollback}\n{screen}")
+    }
+}
+
+pub(super) fn inline_vt100_scrollback_text(
+    terminal: &mut Terminal<InlineTerminalBackend<Vt100Backend>>,
+) -> String {
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .scrollback_rows()
+        .into_iter()
+        .map(|row| row.trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(super) fn inline_vt100_host_scrollback_text(
+    terminal: &mut Terminal<InlineTerminalBackend<Vt100Backend>>,
+) -> String {
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .host_scrollback_rows()
+        .into_iter()
+        .map(|row| row.trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) fn buffer_text(buffer: &Buffer) -> String {
@@ -229,9 +290,177 @@ pub(super) fn vt100_contents(width: u16, height: u16, bytes: &[u8]) -> String {
     screen.contents()
 }
 
+pub(super) struct Vt100Backend {
+    backend: CrosstermBackend<vt100::Parser>,
+    width: u16,
+    height: u16,
+}
+
+impl Vt100Backend {
+    pub(super) fn new(width: u16, height: u16) -> Self {
+        crossterm::style::force_color_output(true);
+        Self {
+            backend: CrosstermBackend::new(vt100::Parser::new(
+                height,
+                width,
+                DEFAULT_VT100_SCROLLBACK_ROWS,
+            )),
+            width,
+            height,
+        }
+    }
+
+    pub(super) fn resize(&mut self, width: u16, height: u16) {
+        self.width = width;
+        self.height = height;
+        self.backend
+            .writer_mut()
+            .screen_mut()
+            .set_size(height, width);
+    }
+
+    fn parser(&self) -> &vt100::Parser {
+        self.backend.writer()
+    }
+
+    fn parser_mut(&mut self) -> &mut vt100::Parser {
+        self.backend.writer_mut()
+    }
+
+    pub(super) fn scrollback_rows(&mut self) -> Vec<String> {
+        let normal_offset = self.parser().screen().scrollback();
+        self.parser_mut().screen_mut().set_scrollback(0);
+        let mut rows = VecDeque::from(self.rows());
+
+        for offset in 1.. {
+            self.parser_mut().screen_mut().set_scrollback(offset);
+            if self.parser().screen().scrollback() != offset {
+                break;
+            }
+            if let Some(top_row) = self.parser().screen().rows(0, self.width).next() {
+                rows.push_front(top_row);
+            }
+        }
+
+        self.parser_mut().screen_mut().set_scrollback(normal_offset);
+        rows.into_iter().collect()
+    }
+
+    pub(super) fn host_scrollback_rows(&mut self) -> Vec<String> {
+        let normal_offset = self.parser().screen().scrollback();
+        let mut rows = VecDeque::new();
+
+        for offset in 1.. {
+            self.parser_mut().screen_mut().set_scrollback(offset);
+            if self.parser().screen().scrollback() != offset {
+                break;
+            }
+            if let Some(top_row) = self.parser().screen().rows(0, self.width).next() {
+                rows.push_front(top_row);
+            }
+        }
+
+        self.parser_mut().screen_mut().set_scrollback(normal_offset);
+        rows.into_iter().collect()
+    }
+
+    fn rows(&self) -> Vec<String> {
+        self.parser().screen().rows(0, self.width).collect()
+    }
+}
+
+impl Write for Vt100Backend {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.backend.writer_mut().write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.backend.writer_mut().flush()
+    }
+}
+
+impl fmt::Display for Vt100Backend {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.parser().screen().contents())
+    }
+}
+
+impl Backend for Vt100Backend {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.backend.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        self.backend.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.backend.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        Ok(self.parser().screen().cursor_position().into())
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        self.backend.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        self.backend.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+        self.backend.clear_region(clear_type)
+    }
+
+    fn append_lines(&mut self, line_count: u16) -> io::Result<()> {
+        self.backend.append_lines(line_count)
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        Ok(Size::new(self.width, self.height))
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        Ok(WindowSize {
+            columns_rows: Size::new(self.width, self.height),
+            pixels: Size::new(self.width.saturating_mul(8), self.height.saturating_mul(16)),
+        })
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.backend.writer_mut().flush()
+    }
+
+    fn scroll_region_up(
+        &mut self,
+        region: std::ops::Range<u16>,
+        line_count: u16,
+    ) -> io::Result<()> {
+        self.backend.scroll_region_up(region, line_count)
+    }
+
+    fn scroll_region_down(
+        &mut self,
+        region: std::ops::Range<u16>,
+        line_count: u16,
+    ) -> io::Result<()> {
+        self.backend.scroll_region_down(region, line_count)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Vt100Screen, resize_terminal, shell_terminal, vt100_contents};
+    use std::io::Write;
+
+    use super::{Vt100Backend, Vt100Screen, resize_terminal, shell_terminal, vt100_contents};
+    use ratatui::backend::Backend;
 
     #[test]
     fn vt100_contents_tracks_visible_screen_text() {
@@ -271,5 +500,44 @@ mod tests {
         let size = terminal.size().expect("test terminal size");
         assert_eq!(size.width, 12);
         assert_eq!(size.height, 4);
+    }
+
+    #[test]
+    fn vt100_backend_tracks_cursor_scrollback_and_resize() {
+        let mut backend = Vt100Backend::new(10, 2);
+
+        backend.write_all(b"one\r\ntwo\r\nthree").unwrap();
+        assert!(backend.to_string().contains("three"));
+        assert!(
+            backend
+                .scrollback_rows()
+                .iter()
+                .any(|row| row.contains("one"))
+        );
+
+        backend.resize(12, 3);
+        let size = backend.size().expect("vt100 backend size");
+        assert_eq!(size.width, 12);
+        assert_eq!(size.height, 3);
+    }
+
+    #[test]
+    fn vt100_backend_append_lines_scrolls_top_row_into_host_scrollback() {
+        let mut backend = Vt100Backend::new(10, 2);
+        let buffer = ratatui::buffer::Buffer::with_lines(["history"]);
+
+        backend
+            .draw((0..7).map(|x| (x, 0, &buffer[(x, 0)])))
+            .expect("draw top row");
+        backend
+            .set_cursor_position(ratatui::layout::Position { x: 0, y: 1 })
+            .expect("move cursor");
+        backend.append_lines(1).expect("append line");
+
+        let scrollback = backend.host_scrollback_rows().join("\n");
+        assert!(
+            scrollback.contains("history"),
+            "expected drawn row in host scrollback: {scrollback:?}"
+        );
     }
 }
