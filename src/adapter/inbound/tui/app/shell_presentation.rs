@@ -19,8 +19,6 @@ const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
 const FOOTER_PLANNING_DETAIL_LIMIT: usize = 56;
 #[cfg(test)]
 const FOOTER_AUTO_FOLLOW_DETAIL_LIMIT: usize = 28;
-const INLINE_LIVE_AGENT_DETAIL_LIMIT: usize = 72;
-const INLINE_LIVE_AGENT_MAX_CONTENT_LINES: usize = 2;
 const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
 #[cfg(test)]
 const FOOTER_MODE_LABEL_LIMIT: usize = 16;

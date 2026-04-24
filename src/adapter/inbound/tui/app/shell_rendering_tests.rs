@@ -342,17 +342,19 @@ fn vt100_streaming_shell_matches_snapshot() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(
         &mut app,
-        "streaming delta should stay in the live tail until completion",
+        "streaming delta should stay in the transcript until completion",
     );
 
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
 
     assert_eq!(
         rendered
-            .matches("streaming delta should stay in the live tail until completion")
+            .matches("streaming delta should stay in the transcript until completion")
             .count(),
         1
     );
+    assert!(rendered.contains("Codex:"));
+    assert!(!rendered.contains("live: Codex"));
     assert!(!rendered.contains("ghost"));
     assert_snapshot!("vt100_streaming_shell", rendered);
 }
@@ -366,17 +368,19 @@ fn vt100_viewport_replay_streaming_matches_snapshot() {
         &mut app,
         "viewport replay transcript remains anchored",
     );
-    tui_testkit::set_live_agent_message(&mut app, "viewport replay live tail remains separate");
+    tui_testkit::set_live_agent_message(&mut app, "viewport replay stream remains separate");
 
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
 
     assert_eq!(rendered.matches("viewport replay transcript").count(), 1);
     assert_eq!(
         rendered
-            .matches("viewport replay live tail remains separate")
+            .matches("viewport replay stream remains separate")
             .count(),
         1
     );
+    assert!(rendered.contains("Codex:"));
+    assert!(!rendered.contains("live: Codex"));
     assert_snapshot!("vt100_viewport_replay_streaming", rendered);
 }
 

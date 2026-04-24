@@ -2,31 +2,15 @@ use ratatui::text::Line;
 
 use super::super::ConversationViewModel;
 use super::super::{
-    INLINE_LIVE_AGENT_DETAIL_LIMIT, INLINE_LIVE_AGENT_MAX_CONTENT_LINES,
     INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, NativeTuiApp,
-    compact_inline_detail,
+    compact_inline_detail, format_conversation_lines,
 };
-use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
 
 pub(super) fn current_live_agent_lines(
     conversation: &ConversationViewModel,
 ) -> Option<Vec<Line<'static>>> {
     let message = conversation.live_agent_message.as_ref()?;
-    let label = conversation_message_kind_label(message.kind, message.phase.as_deref());
-    let content_lines = message.text.lines().collect::<Vec<_>>();
-    let start_index = content_lines
-        .len()
-        .saturating_sub(INLINE_LIVE_AGENT_MAX_CONTENT_LINES);
-    let mut lines = vec![Line::from(format!("live: {label}"))];
-
-    for line in content_lines.into_iter().skip(start_index) {
-        lines.push(Line::from(format!(
-            "  {}",
-            compact_live_agent_line(line, INLINE_LIVE_AGENT_DETAIL_LIMIT)
-        )));
-    }
-
-    Some(lines)
+    Some(format_conversation_lines(std::slice::from_ref(message)))
 }
 
 pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
@@ -170,15 +154,4 @@ pub(super) fn inline_thread_label(conversation: &ConversationViewModel) -> Strin
     }
 
     compact_inline_detail(&conversation.title, INLINE_TAIL_THREAD_LABEL_LIMIT)
-}
-
-fn compact_live_agent_line(text: &str, max_len: usize) -> String {
-    let rendered = text.replace('\t', "    ");
-    if rendered.chars().count() <= max_len {
-        return rendered;
-    }
-
-    let keep = max_len.saturating_sub(3);
-    let truncated = rendered.chars().take(keep).collect::<String>();
-    format!("{truncated}...")
 }

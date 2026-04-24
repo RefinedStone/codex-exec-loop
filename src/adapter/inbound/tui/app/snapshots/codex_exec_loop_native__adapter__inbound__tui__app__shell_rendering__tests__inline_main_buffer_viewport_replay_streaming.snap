@@ -1,6 +1,5 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
-assertion_line: 327
 expression: rendered
 ---
 "thread: new draft  |  turn: working  |  auto: on/idle  |  done: 0/20  |  in:    "
@@ -14,11 +13,11 @@ expression: rendered
 "proposed: none  |  blocked: Follow blocked review thread (blocked by tasks:     "
 "task-2(in_progress))                                                            "
 "recent codex: previous transcript should remain vis...                          "
-"live: Codex                                                                     "
+"Codex:                                                                          "
 "  streaming reply still visible                                                 "
+"                                                                                "
 ">                                                                               "
 "prompt: turn running  |  type now, Enter when idle                              "
-"                                                                                "
 "                                                                                "
 "                                                                                "
 "                                                                                "

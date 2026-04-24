@@ -117,7 +117,18 @@ pub(super) fn buffer_text(buffer: &Buffer) -> String {
 
 pub(super) fn vt100_contents_from_buffer(buffer: &Buffer) -> String {
     let bytes = buffer_text(buffer).replace('\n', "\r\n");
-    vt100_contents(buffer.area.width, buffer.area.height, bytes.as_bytes())
+    trim_line_end_padding(&vt100_contents(
+        buffer.area.width,
+        buffer.area.height,
+        bytes.as_bytes(),
+    ))
+}
+
+fn trim_line_end_padding(text: &str) -> String {
+    text.lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
