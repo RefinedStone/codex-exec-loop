@@ -230,8 +230,8 @@ impl InlineHistoryRenderMode {
 
     fn from_env_values(
         mode_value: Option<&str>,
-        windows_terminal_session: Option<&str>,
-        running_on_windows: bool,
+        _windows_terminal_session: Option<&str>,
+        _running_on_windows: bool,
     ) -> Self {
         let explicit_mode = mode_value
             .map(str::trim)
@@ -244,14 +244,7 @@ impl InlineHistoryRenderMode {
             };
         }
 
-        let inside_windows_terminal = windows_terminal_session
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        if inside_windows_terminal || running_on_windows {
-            Self::ViewportReplay
-        } else {
-            Self::HostScrollback
-        }
+        Self::HostScrollback
     }
 
     fn mirrors_recent_transcript_in_tail(self) -> bool {
@@ -378,18 +371,14 @@ mod startup_ascii_art_env_tests {
     }
 
     #[test]
-    fn inline_history_render_mode_detects_windows_terminals() {
+    fn inline_history_render_mode_keeps_host_scrollback_for_windows_by_default() {
         assert_eq!(
             InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), false),
-            InlineHistoryRenderMode::ViewportReplay
-        );
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), false),
-            InlineHistoryRenderMode::ViewportReplay
+            InlineHistoryRenderMode::HostScrollback
         );
         assert_eq!(
             InlineHistoryRenderMode::from_env_values(None, None, true),
-            InlineHistoryRenderMode::ViewportReplay
+            InlineHistoryRenderMode::HostScrollback
         );
         assert_eq!(
             InlineHistoryRenderMode::from_env_values(None, None, false),

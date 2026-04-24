@@ -6,6 +6,7 @@ This file is the current contract for inline mode on `prerelease`.
 
 - inline mode is the only frontend
 - host terminal scrollback is the primary history surface
+- viewport replay is an explicit diagnostic fallback, not an automatic OS or terminal default
 - committed transcript history is appended into scrollback separately from live-tail updates
 - the live tail is the only place that owns the active prompt, transient streaming text, and compact notices
 - `thread_id` and `turn_id` come from `codex app-server` and stay out of routine operator copy

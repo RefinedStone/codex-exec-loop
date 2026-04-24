@@ -59,11 +59,12 @@ Current behavior:
 
 - `InlineHistoryRenderMode::HostScrollback` is the default. It inserts completed history lines above
   a `Viewport::Inline(INLINE_VIEWPORT_HEIGHT)` viewport via `terminal.insert_before(...)`.
-- `InlineHistoryRenderMode::ViewportReplay` is selected automatically for Windows or `WT_SESSION`,
-  or explicitly through `CODEX_EXEC_LOOP_INLINE_HISTORY_MODE`. In this mode the app remembers
-  history, skips host scrollback insertion, keeps `Viewport::Inline(...)` so the shell remains
-  anchored below the invoking prompt, and suppresses Ratatui's resize-time `append_lines` call so
-  stale frame rows are not pushed into scrollback during resize.
+- `InlineHistoryRenderMode::ViewportReplay` is available only through the explicit
+  `CODEX_EXEC_LOOP_INLINE_HISTORY_MODE` override. In this mode the app remembers history, skips host
+  scrollback insertion, and keeps `Viewport::Inline(...)` so the shell remains anchored below the
+  invoking prompt.
+- Resize calls suppress Ratatui's inline-viewport `append_lines` side effect in every render mode so
+  live prompt or status rows are not pushed into scrollback during shrink/restore.
 - `sync_inline_viewport()` calls `terminal.autoresize()`, computes the current logical history
   lines, inserts only the pending suffix in host-scrollback mode, and asks whether the live tail
   signature changed.
@@ -93,9 +94,8 @@ top of the terminal instead of staying below the invoking prompt. Keeping the in
 suppressing resize-time `append_lines` avoids that regression, but it still does not create durable
 scrollback history. The tail mirrors only a bounded recent transcript, so older lines disappearing
 from the visible terminal is expected unless the app adds its own scrollable transcript viewport.
-The automatic Windows and Windows Terminal switch therefore changes the product contract: one
-environment preserves history in terminal scrollback, another shows only a replay window plus live
-tail.
+For that reason, viewport replay must stay an explicit diagnostic fallback instead of an invisible
+Windows or Windows Terminal default.
 
 ### Resize Drift
 
@@ -135,9 +135,9 @@ Adopt these ideas before adding more presentation features:
    viewport.
 
 4. Treat viewport replay as a different product mode, not an invisible OS workaround.
-   If Windows Terminal needs replay mode, it needs an explicit scrollable transcript surface or a
-   clear limitation that only recent transcript lines are visible. Otherwise users will keep seeing
-   "lost" conversation history that is actually mode behavior.
+   If a terminal needs replay mode, it needs an explicit scrollable transcript surface or a clear
+   limitation that only recent transcript lines are visible. Otherwise users will keep seeing "lost"
+   conversation history that is actually mode behavior.
 
 5. Handle resize with cursor-aware viewport repair.
    On size change, query cursor position if possible, adjust viewport origin when the host moved the
@@ -171,10 +171,9 @@ Adopt these ideas before adding more presentation features:
    Replace direct `Terminal::insert_before` calls with an explicit history insertion path that can
    select standard, Zellij, or future Windows fallback behavior.
 
-5. Revisit automatic `ViewportReplay`.
-   Do not use fullscreen as an invisible Windows workaround; it breaks inline shell positioning.
-   Replay mode still needs an owned scrollable transcript viewport or an explicit diagnostic
-   contract before it remains the automatic Windows behavior.
+5. Keep `ViewportReplay` explicit.
+   Do not use fullscreen or OS detection as an invisible workaround; fullscreen breaks inline shell
+   positioning, and automatic replay breaks the durable-history contract.
 
 6. Validate manually against the target matrix.
    Use Linux terminal, tmux, Zellij, Windows Terminal, WSL inside Windows Terminal, and macOS

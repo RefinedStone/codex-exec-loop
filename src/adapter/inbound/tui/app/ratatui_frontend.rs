@@ -98,7 +98,7 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     inline_viewport: &mut InlineViewportState,
 ) -> io::Result<bool> {
     let render_mode = runtime.app_mut().inline_history_render_mode;
-    autoresize_for_render_mode(terminal, render_mode)?;
+    autoresize_inline_viewport(terminal)?;
     let current_lines = current_inline_history_lines(runtime.app_mut());
     let writes_host_scrollback = render_mode.writes_host_scrollback();
     let history_inserted = if writes_host_scrollback {
@@ -117,15 +117,12 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     Ok(history_inserted || tail_frame_changed)
 }
 
-fn autoresize_for_render_mode<B: InlineResizeBackend>(
+fn autoresize_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
-    render_mode: InlineHistoryRenderMode,
 ) -> io::Result<()> {
-    let suppress_resize_append_lines =
-        matches!(render_mode, InlineHistoryRenderMode::ViewportReplay);
     terminal
         .backend_mut()
-        .set_resize_append_lines_suppressed(suppress_resize_append_lines);
+        .set_resize_append_lines_suppressed(true);
     let result = terminal.autoresize();
     terminal
         .backend_mut()
@@ -678,12 +675,32 @@ mod tests {
 
     #[test]
     fn viewport_replay_resize_does_not_push_tail_into_scrollback() {
-        let mut terminal =
-            test_terminal_for_render_mode(InlineHistoryRenderMode::ViewportReplay, 80, 24);
+        assert_resize_sequence_does_not_leak_live_tail(
+            InlineHistoryRenderMode::ViewportReplay,
+            "resize replay should stay in the active viewport",
+        );
+    }
+
+    #[test]
+    fn host_scrollback_resize_does_not_push_tail_into_scrollback() {
+        assert_resize_sequence_does_not_leak_live_tail(
+            InlineHistoryRenderMode::HostScrollback,
+            "resize host history stays committed",
+        );
+    }
+
+    fn assert_resize_sequence_does_not_leak_live_tail(
+        render_mode: InlineHistoryRenderMode,
+        history_message: &str,
+    ) {
+        let mut terminal = test_terminal_for_render_mode(render_mode, 80, 24);
         let mut app = make_test_app();
         app.show_startup_ascii_art = false;
-        app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
-        append_history_message(&mut app, "resize replay should stay in the active viewport");
+        app.inline_history_render_mode = render_mode;
+        if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+            conversation.input_buffer = "live prompt must not move to scrollback".to_string();
+        }
+        append_history_message(&mut app, history_message);
         let mut runtime = ShellRuntime::new(app);
         let mut inline_viewport = InlineViewportState::default();
 
@@ -694,10 +711,30 @@ mod tests {
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
         draw_test_frame(&mut terminal, &mut runtime);
 
+        terminal.backend_mut().inner_mut().resize(80, 24);
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+        draw_test_frame(&mut terminal, &mut runtime);
+
         let scrollback_text = buffer_text(terminal.backend().inner().scrollback());
         assert!(
-            scrollback_text.trim().is_empty(),
-            "viewport replay should not leak status or transcript rows into scrollback after resize: {scrollback_text:?}"
+            !scrollback_text.contains("live prompt must not move to scrollback"),
+            "{render_mode:?} should not leak live prompt rows into scrollback after resize: {scrollback_text:?}"
+        );
+        assert!(
+            !scrollback_text.contains("thread: new draft"),
+            "{render_mode:?} should not leak live status rows into scrollback after resize: {scrollback_text:?}"
+        );
+        let screen_text = format!("{}", terminal.backend());
+        assert!(
+            screen_text.contains("> live prompt must not move to scrollback"),
+            "{render_mode:?} should keep the active prompt visible after shrink/restore: {screen_text:?}"
+        );
+        assert_eq!(
+            screen_text
+                .matches("> live prompt must not move to scrollback")
+                .count(),
+            1,
+            "{render_mode:?} should not duplicate the active prompt after shrink/restore: {screen_text:?}"
         );
     }
 

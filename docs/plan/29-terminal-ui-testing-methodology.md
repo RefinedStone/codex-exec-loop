@@ -79,7 +79,7 @@ Required cases:
 
 - `HostScrollback` uses inline viewport and writes new committed history to host scrollback
 - `ViewportReplay` does not write committed history to host scrollback
-- `ViewportReplay` uses fullscreen viewport while it remains the Windows resize mitigation
+- `ViewportReplay` is explicit-only and keeps inline viewport positioning
 - `80x24 -> 80x8 -> 80x24` leaves no duplicate live tail, stale rows, or misplaced prompt
 - overlay open/close resets live-tail redraw cache
 - hidden tail skips redundant frames but redraws on width and height changes
@@ -125,7 +125,7 @@ Every TUI rendering PR should state which rows it touches.
 | Area | Required automated proof |
 | --- | --- |
 | Host scrollback history | pending suffix insert, shifted window insert, no duplicate replay |
-| Viewport replay | no host scrollback insert, visible recent transcript, fullscreen viewport contract |
+| Viewport replay | explicit-only fallback, no host scrollback insert, visible recent transcript, inline viewport contract |
 | Resize | shrink/restore frame sequence with no stale rows or duplicated live tail |
 | Clear/reset | pending history dropped, viewport reset, fresh header redraw |
 | Thread/session switch | old transcript and deferred history cannot leak into new thread |
@@ -217,8 +217,8 @@ validation alone.
 
 The next rendering PR should add these before or with the fix:
 
-1. `ViewportReplay` uses fullscreen viewport and does not leak rows into test backend scrollback
-   during shrink/restore.
+1. `ViewportReplay` stays explicit-only, keeps inline viewport positioning, and does not leak rows
+   into test backend scrollback during shrink/restore.
 2. `HostScrollback` appends only new pending history lines after a completed turn.
 3. History window shift inserts only the new suffix once `MAX_CONVERSATION_HISTORY_LINES` is hit.
 4. Overlay open after a taller live tail clears stale rows.
