@@ -66,19 +66,7 @@ fn run_event_loop(
         if runtime.take_redraw_request() {
             let should_draw = sync_inline_viewport(terminal, runtime, inline_viewport)?;
             if should_draw {
-                let terminal_size = terminal.size()?;
-                prepare_render_state(
-                    runtime.app_mut(),
-                    ShellFrontendMode::InlineMainBuffer,
-                    ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height),
-                );
-                terminal.draw(|frame| {
-                    draw(
-                        frame,
-                        runtime.app_mut(),
-                        ShellFrontendMode::InlineMainBuffer,
-                    )
-                })?;
+                draw_inline_frame(terminal, runtime)?;
             }
         }
 
@@ -90,6 +78,27 @@ fn run_event_loop(
     }
 
     Ok(())
+}
+
+fn draw_inline_frame<B: InlineResizeBackend>(
+    terminal: &mut Terminal<B>,
+    runtime: &mut ShellRuntime,
+) -> io::Result<()> {
+    terminal
+        .backend_mut()
+        .set_resize_append_lines_suppressed(true);
+    let result = terminal
+        .draw(|frame| {
+            let frame_area = frame.area();
+            let app = runtime.app_mut();
+            prepare_render_state(app, ShellFrontendMode::InlineMainBuffer, frame_area);
+            draw(frame, app, ShellFrontendMode::InlineMainBuffer);
+        })
+        .map(|_| ());
+    terminal
+        .backend_mut()
+        .set_resize_append_lines_suppressed(false);
+    result
 }
 
 fn sync_inline_viewport<B: InlineResizeBackend>(
@@ -412,19 +421,17 @@ mod tests {
     use anyhow::Result;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
     use ratatui::text::Line;
     use ratatui::{Terminal, Viewport};
 
-    use super::super::shell_rendering::{draw, prepare_render_state};
     use super::{
         InlineHistoryState, InlineTerminalBackend, InlineViewportState, ShellRuntime,
-        current_inline_history_lines, sync_inline_viewport, terminal_options_for_render_mode,
+        current_inline_history_lines, draw_inline_frame, sync_inline_viewport,
+        terminal_options_for_render_mode,
     };
     use crate::adapter::inbound::tui::app::{
         ConversationMessage, ConversationMessageKind, ConversationState, INLINE_VIEWPORT_HEIGHT,
         InlineHistoryRenderMode, MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp, PlannerVisibility,
-        ShellFrontendMode,
     };
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -689,6 +696,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn draw_internal_resize_does_not_push_tail_into_scrollback() {
+        assert_draw_internal_resize_does_not_leak_live_tail(
+            InlineHistoryRenderMode::HostScrollback,
+            "host history before draw-time resize",
+        );
+        assert_draw_internal_resize_does_not_leak_live_tail(
+            InlineHistoryRenderMode::ViewportReplay,
+            "replay history before draw-time resize",
+        );
+    }
+
     fn assert_resize_sequence_does_not_leak_live_tail(
         render_mode: InlineHistoryRenderMode,
         history_message: &str,
@@ -715,6 +734,39 @@ mod tests {
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
         draw_test_frame(&mut terminal, &mut runtime);
 
+        assert_no_live_tail_leak(&terminal, render_mode);
+    }
+
+    fn assert_draw_internal_resize_does_not_leak_live_tail(
+        render_mode: InlineHistoryRenderMode,
+        history_message: &str,
+    ) {
+        let mut terminal = test_terminal_for_render_mode(render_mode, 80, 24);
+        let mut app = make_test_app();
+        app.show_startup_ascii_art = false;
+        app.inline_history_render_mode = render_mode;
+        if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+            conversation.input_buffer = "live prompt must not move to scrollback".to_string();
+        }
+        append_history_message(&mut app, history_message);
+        let mut runtime = ShellRuntime::new(app);
+        let mut inline_viewport = InlineViewportState::default();
+
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+        draw_test_frame(&mut terminal, &mut runtime);
+
+        terminal.backend_mut().inner_mut().resize(80, 8);
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+        terminal.backend_mut().inner_mut().resize(80, 12);
+        draw_test_frame(&mut terminal, &mut runtime);
+
+        assert_no_live_tail_leak(&terminal, render_mode);
+    }
+
+    fn assert_no_live_tail_leak(
+        terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
+        render_mode: InlineHistoryRenderMode,
+    ) {
         let scrollback_text = buffer_text(terminal.backend().inner().scrollback());
         assert!(
             !scrollback_text.contains("live prompt must not move to scrollback"),
@@ -841,21 +893,7 @@ mod tests {
         terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
         runtime: &mut ShellRuntime,
     ) {
-        let terminal_size = terminal.size().expect("terminal size");
-        prepare_render_state(
-            runtime.app_mut(),
-            ShellFrontendMode::InlineMainBuffer,
-            Rect::new(0, 0, terminal_size.width, terminal_size.height),
-        );
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    runtime.app_mut(),
-                    ShellFrontendMode::InlineMainBuffer,
-                )
-            })
-            .expect("draw test frame");
+        draw_inline_frame(terminal, runtime).expect("draw test frame");
     }
 
     fn buffer_text(buffer: &Buffer) -> String {

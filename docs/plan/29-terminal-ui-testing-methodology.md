@@ -81,6 +81,7 @@ Required cases:
 - `ViewportReplay` does not write committed history to host scrollback
 - `ViewportReplay` is explicit-only and keeps inline viewport positioning
 - `80x24 -> 80x8 -> 80x24` leaves no duplicate live tail, stale rows, or misplaced prompt
+- draw-time `Terminal::draw` autoresize cannot append the live tail into host scrollback
 - overlay open/close resets live-tail redraw cache
 - hidden tail skips redundant frames but redraws on width and height changes
 - frame invalidation forces a full repaint after terminal-side scrolling
@@ -223,6 +224,8 @@ The next rendering PR should add these before or with the fix:
 3. History window shift inserts only the new suffix once `MAX_CONVERSATION_HISTORY_LINES` is hit.
 4. Overlay open after a taller live tail clears stale rows.
 5. Clear/thread switch empties pending and remembered history state before the next draw.
+6. Draw-time autoresize between viewport sync and frame render does not move the live tail into
+   host scrollback.
 
 These are the minimum guardrails for the known disappearing conversation and resize drift bugs.
 
