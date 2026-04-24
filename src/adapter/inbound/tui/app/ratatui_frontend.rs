@@ -21,27 +21,34 @@ use super::shell_presentation::{
 use super::shell_rendering::{draw, prepare_render_state};
 use super::shell_runtime::ShellRuntime;
 use super::{
-    ConversationState, INLINE_VIEWPORT_HEIGHT, MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp,
-    ShellFrontendMode,
+    ConversationState, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode,
+    MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp, ShellFrontendMode,
 };
 
 pub(super) fn run(mut runtime: ShellRuntime) -> Result<()> {
     let _restore_guard = TerminalRestoreGuard::activate()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut inline_viewport = InlineViewportState::default();
-    let mut terminal = build_terminal(backend)?;
+    let render_mode = runtime.app_mut().inline_history_render_mode;
+    let mut terminal = build_terminal(backend, render_mode)?;
     run_event_loop(&mut terminal, &mut runtime, &mut inline_viewport)
 }
 
 fn build_terminal(
     backend: CrosstermBackend<io::Stdout>,
+    render_mode: InlineHistoryRenderMode,
 ) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
-        },
-    )
+    Terminal::with_options(backend, terminal_options_for_render_mode(render_mode))
+}
+
+fn terminal_options_for_render_mode(render_mode: InlineHistoryRenderMode) -> TerminalOptions {
+    let viewport = match render_mode {
+        InlineHistoryRenderMode::HostScrollback => Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+        // Viewport replay owns transcript history in the main buffer; ratatui's
+        // inline viewport can push stale frame rows into scrollback on resize.
+        InlineHistoryRenderMode::ViewportReplay => Viewport::Fullscreen,
+    };
+    TerminalOptions { viewport }
 }
 
 fn run_event_loop(
@@ -288,16 +295,20 @@ mod tests {
 
     use anyhow::Result;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use ratatui::text::Line;
-    use ratatui::{Terminal, TerminalOptions, Viewport};
+    use ratatui::{Terminal, Viewport};
 
+    use super::super::shell_rendering::{draw, prepare_render_state};
     use super::{
         InlineHistoryState, InlineViewportState, ShellRuntime, current_inline_history_lines,
-        sync_inline_viewport,
+        sync_inline_viewport, terminal_options_for_render_mode,
     };
     use crate::adapter::inbound::tui::app::{
         ConversationMessage, ConversationMessageKind, ConversationState, INLINE_VIEWPORT_HEIGHT,
         InlineHistoryRenderMode, MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp, PlannerVisibility,
+        ShellFrontendMode,
     };
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -535,6 +546,43 @@ mod tests {
     }
 
     #[test]
+    fn viewport_replay_uses_fullscreen_viewport_to_avoid_inline_resize_scrollback() {
+        assert_eq!(
+            terminal_options_for_render_mode(InlineHistoryRenderMode::ViewportReplay).viewport,
+            Viewport::Fullscreen
+        );
+        assert_eq!(
+            terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback).viewport,
+            Viewport::Inline(INLINE_VIEWPORT_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn viewport_replay_resize_does_not_push_tail_into_scrollback() {
+        let mut terminal =
+            test_terminal_for_render_mode(InlineHistoryRenderMode::ViewportReplay, 80, 24);
+        let mut app = make_test_app();
+        app.show_startup_ascii_art = false;
+        app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+        append_history_message(&mut app, "resize replay should stay in the active viewport");
+        let mut runtime = ShellRuntime::new(app);
+        let mut inline_viewport = InlineViewportState::default();
+
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+        draw_test_frame(&mut terminal, &mut runtime);
+
+        terminal.backend_mut().resize(80, 8);
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+        draw_test_frame(&mut terminal, &mut runtime);
+
+        let scrollback_text = buffer_text(terminal.backend().scrollback());
+        assert!(
+            scrollback_text.trim().is_empty(),
+            "viewport replay should not leak status or transcript rows into scrollback after resize: {scrollback_text:?}"
+        );
+    }
+
+    #[test]
     fn hidden_inline_tail_skips_redundant_frame_draws() {
         let app = make_test_app();
         let mut inline_viewport = InlineViewportState::default();
@@ -615,13 +663,50 @@ mod tests {
     }
 
     fn test_inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+        test_terminal_for_render_mode(InlineHistoryRenderMode::HostScrollback, width, height)
+    }
+
+    fn test_terminal_for_render_mode(
+        render_mode: InlineHistoryRenderMode,
+        width: u16,
+        height: u16,
+    ) -> Terminal<TestBackend> {
         Terminal::with_options(
             TestBackend::new(width, height),
-            TerminalOptions {
-                viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
-            },
+            terminal_options_for_render_mode(render_mode),
         )
         .expect("inline test terminal")
+    }
+
+    fn draw_test_frame(terminal: &mut Terminal<TestBackend>, runtime: &mut ShellRuntime) {
+        let terminal_size = terminal.size().expect("terminal size");
+        prepare_render_state(
+            runtime.app_mut(),
+            ShellFrontendMode::InlineMainBuffer,
+            Rect::new(0, 0, terminal_size.width, terminal_size.height),
+        );
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    runtime.app_mut(),
+                    ShellFrontendMode::InlineMainBuffer,
+                )
+            })
+            .expect("draw test frame");
+    }
+
+    fn buffer_text(buffer: &Buffer) -> String {
+        if buffer.area.width == 0 {
+            return String::new();
+        }
+
+        buffer
+            .content
+            .chunks(buffer.area.width as usize)
+            .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn append_history_message(app: &mut NativeTuiApp, text: &str) {
