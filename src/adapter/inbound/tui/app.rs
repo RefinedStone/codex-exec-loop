@@ -17,6 +17,7 @@ use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
+use crate::application::service::planning::PlanningTaskIntakeRequest;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -108,6 +109,8 @@ mod shell_presentation;
 mod shell_rendering;
 #[path = "app/shell_runtime.rs"]
 mod shell_runtime;
+#[path = "app/task_intake_overlay_ui.rs"]
+mod task_intake_overlay_ui;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;
@@ -163,6 +166,7 @@ use shell_presentation::{
     build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
     build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
 };
+use task_intake_overlay_ui::{TaskIntakeOverlayStep, TaskIntakeOverlayUiState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AutoFollowupSubmitContext {
@@ -274,6 +278,7 @@ struct NativeTuiApp {
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
+    task_intake_overlay_ui_state: TaskIntakeOverlayUiState,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,
     session_service: SessionService,

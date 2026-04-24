@@ -45,6 +45,14 @@ pub(crate) struct QueueOverlayView {
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
+pub(crate) struct TaskIntakeOverlayView {
+    pub(crate) header_lines: Vec<Line<'static>>,
+    pub(crate) prompt_lines: Vec<Line<'static>>,
+    pub(crate) preview_lines: Vec<Line<'static>>,
+    pub(crate) status_lines: Vec<Line<'static>>,
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
 pub(crate) struct PlanningInitOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) summary_lines: Vec<Line<'static>>,

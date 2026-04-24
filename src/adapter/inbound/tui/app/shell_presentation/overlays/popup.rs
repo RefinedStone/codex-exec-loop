@@ -6,6 +6,8 @@ mod planning;
 mod queue;
 #[path = "popup/supersession.rs"]
 mod supersession;
+#[path = "popup/task_intake.rs"]
+mod task_intake;
 #[path = "popup/views.rs"]
 mod views;
 
@@ -15,7 +17,9 @@ pub(crate) use planning::{
 };
 pub(crate) use queue::{build_automation_overlay_view, build_queue_overlay_view};
 pub(crate) use supersession::build_supersession_overlay_view;
+pub(crate) use task_intake::build_task_intake_overlay_view;
 pub(crate) use views::{
     AutomationOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
     QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
+    TaskIntakeOverlayView,
 };
