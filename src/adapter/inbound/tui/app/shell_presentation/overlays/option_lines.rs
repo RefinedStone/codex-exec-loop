@@ -1,5 +1,4 @@
 use super::super::{Color, Line, Span, Style};
-use ratatui::prelude::Stylize;
 
 pub(crate) fn overlay_option_line(
     shortcut: &str,

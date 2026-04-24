@@ -114,6 +114,9 @@ mod task_intake_overlay_ui;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;
+#[cfg(test)]
+#[path = "app/tui_testkit.rs"]
+mod tui_testkit;
 #[path = "app/turn_submission_runtime.rs"]
 mod turn_submission_runtime;
 

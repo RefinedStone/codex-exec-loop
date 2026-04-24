@@ -1,0 +1,218 @@
+use ratatui::backend::{Backend, TestBackend};
+use ratatui::buffer::Buffer;
+use ratatui::{Terminal, TerminalOptions, Viewport};
+
+use super::ratatui_frontend::{InlineTerminalBackend, terminal_options_for_render_mode};
+use super::shell_rendering::draw;
+use super::{
+    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationState,
+    INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, ShellFrontendMode,
+};
+
+const DEFAULT_VT100_SCROLLBACK_ROWS: usize = 256;
+
+pub(super) fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+    Terminal::with_options(
+        TestBackend::new(width, height),
+        TerminalOptions {
+            viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+        },
+    )
+    .expect("inline test terminal")
+}
+
+pub(super) fn shell_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+    Terminal::new(TestBackend::new(width, height)).expect("test terminal")
+}
+
+pub(super) fn inline_history_terminal(
+    render_mode: InlineHistoryRenderMode,
+    width: u16,
+    height: u16,
+) -> Terminal<InlineTerminalBackend<TestBackend>> {
+    Terminal::with_options(
+        InlineTerminalBackend::new(TestBackend::new(width, height)),
+        terminal_options_for_render_mode(render_mode),
+    )
+    .expect("inline history test terminal")
+}
+
+pub(super) fn resize_terminal(terminal: &mut Terminal<TestBackend>, width: u16, height: u16) {
+    terminal.backend_mut().resize(width, height);
+}
+
+pub(super) fn resize_inline_history_terminal(
+    terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
+    width: u16,
+    height: u16,
+) {
+    terminal.backend_mut().inner_mut().resize(width, height);
+}
+
+pub(super) fn render_inline_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
+    let mut terminal = inline_terminal(width, height);
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+    screen_text(&terminal)
+}
+
+pub(super) fn render_shell_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
+    let mut terminal = shell_terminal(width, height);
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
+        .expect("shell render succeeds");
+    screen_text(&terminal)
+}
+
+pub(super) fn screen_text<B>(terminal: &Terminal<B>) -> String
+where
+    B: Backend + std::fmt::Display,
+{
+    format!("{}", terminal.backend())
+}
+
+pub(super) fn inline_scrollback_text(
+    terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
+) -> String {
+    buffer_text(terminal.backend().inner().scrollback())
+}
+
+pub(super) fn buffer_text(buffer: &Buffer) -> String {
+    if buffer.area.width == 0 {
+        return String::new();
+    }
+
+    buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        text.to_string(),
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+    conversation.refresh_conversation_lines();
+}
+
+pub(super) fn set_live_agent_message(app: &mut NativeTuiApp, text: &str) {
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.input_state = ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-1".to_string());
+    conversation.active_turn_started_at = Some(std::time::Instant::now());
+    conversation.live_agent_message = Some(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        text.to_string(),
+        Some("final_answer".to_string()),
+        Some("agent-1".to_string()),
+    ));
+}
+
+pub(super) struct Vt100Screen {
+    parser: vt100::Parser,
+    width: u16,
+}
+
+impl Vt100Screen {
+    pub(super) fn new(width: u16, height: u16) -> Self {
+        Self {
+            parser: vt100::Parser::new(height, width, DEFAULT_VT100_SCROLLBACK_ROWS),
+            width,
+        }
+    }
+
+    pub(super) fn process(&mut self, bytes: &[u8]) {
+        self.parser.process(bytes);
+    }
+
+    pub(super) fn resize(&mut self, width: u16, height: u16) {
+        self.width = width;
+        self.parser.screen_mut().set_size(height, width);
+    }
+
+    pub(super) fn contents(&self) -> String {
+        self.parser.screen().contents()
+    }
+
+    pub(super) fn rows(&self) -> Vec<String> {
+        self.parser.screen().rows(0, self.width).collect()
+    }
+
+    pub(super) fn scrollback_rows(&mut self) -> Vec<String> {
+        let normal_offset = self.parser.screen().scrollback();
+        let mut rows = Vec::new();
+        let mut offset = 1;
+        loop {
+            self.parser.screen_mut().set_scrollback(offset);
+            if self.parser.screen().scrollback() != offset {
+                break;
+            }
+            rows = self.rows();
+            offset += 1;
+        }
+        self.parser.screen_mut().set_scrollback(normal_offset);
+        rows
+    }
+}
+
+pub(super) fn vt100_contents(width: u16, height: u16, bytes: &[u8]) -> String {
+    let mut screen = Vt100Screen::new(width, height);
+    screen.process(bytes);
+    screen.contents()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Vt100Screen, resize_terminal, shell_terminal, vt100_contents};
+
+    #[test]
+    fn vt100_contents_tracks_visible_screen_text() {
+        assert_eq!(vt100_contents(12, 3, b"ready\nshell"), "ready\n     shell");
+    }
+
+    #[test]
+    fn vt100_screen_can_resize_between_frames() {
+        let mut screen = Vt100Screen::new(12, 3);
+        screen.process(b"first line");
+        screen.resize(20, 3);
+        screen.process(b"\r\nsecond line");
+
+        assert!(screen.contents().contains("second line"));
+        assert_eq!(screen.rows().len(), 3);
+    }
+
+    #[test]
+    fn vt100_screen_exposes_scrollback_view() {
+        let mut screen = Vt100Screen::new(10, 2);
+        screen.process(b"one\r\ntwo\r\nthree");
+
+        assert!(
+            screen
+                .scrollback_rows()
+                .iter()
+                .any(|row| row.contains("one"))
+        );
+    }
+
+    #[test]
+    fn ratatui_test_backend_resize_is_shared() {
+        let mut terminal = shell_terminal(10, 2);
+
+        resize_terminal(&mut terminal, 12, 4);
+
+        let size = terminal.size().expect("test terminal size");
+        assert_eq!(size.width, 12);
+        assert_eq!(size.height, 4);
+    }
+}

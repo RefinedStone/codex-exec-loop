@@ -15,6 +15,7 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::text::Line;
+
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
@@ -48,7 +49,9 @@ fn build_terminal(
     )
 }
 
-fn terminal_options_for_render_mode(render_mode: InlineHistoryRenderMode) -> TerminalOptions {
+pub(super) fn terminal_options_for_render_mode(
+    render_mode: InlineHistoryRenderMode,
+) -> TerminalOptions {
     let viewport = match render_mode {
         InlineHistoryRenderMode::HostScrollback => Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
         InlineHistoryRenderMode::ViewportReplay => Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
@@ -83,7 +86,7 @@ fn run_event_loop(
 fn draw_inline_frame<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
-) -> io::Result<()> {
+) -> Result<(), B::Error> {
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(true);
@@ -105,7 +108,7 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_viewport: &mut InlineViewportState,
-) -> io::Result<bool> {
+) -> Result<bool, B::Error> {
     let render_mode = runtime.app_mut().inline_history_render_mode;
     autoresize_inline_viewport(terminal)?;
     let current_lines = current_inline_history_lines(runtime.app_mut());
@@ -128,7 +131,7 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
 
 fn autoresize_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
-) -> io::Result<()> {
+) -> Result<(), B::Error> {
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(true);
@@ -160,13 +163,13 @@ trait InlineResizeBackend: Backend {
     fn set_resize_append_lines_suppressed(&mut self, suppressed: bool);
 }
 
-struct InlineTerminalBackend<B> {
+pub(super) struct InlineTerminalBackend<B> {
     inner: B,
     suppress_resize_append_lines: bool,
 }
 
 impl<B> InlineTerminalBackend<B> {
-    fn new(inner: B) -> Self {
+    pub(super) fn new(inner: B) -> Self {
         Self {
             inner,
             suppress_resize_append_lines: false,
@@ -174,12 +177,12 @@ impl<B> InlineTerminalBackend<B> {
     }
 
     #[cfg(test)]
-    fn inner(&self) -> &B {
+    pub(super) fn inner(&self) -> &B {
         &self.inner
     }
 
     #[cfg(test)]
-    fn inner_mut(&mut self) -> &mut B {
+    pub(super) fn inner_mut(&mut self) -> &mut B {
         &mut self.inner
     }
 }
@@ -191,61 +194,67 @@ impl<B: Backend> InlineResizeBackend for InlineTerminalBackend<B> {
 }
 
 impl<B: Backend> Backend for InlineTerminalBackend<B> {
-    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    type Error = B::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
         self.inner.draw(content)
     }
 
-    fn append_lines(&mut self, n: u16) -> io::Result<()> {
+    fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
         if self.suppress_resize_append_lines {
             return Ok(());
         }
         self.inner.append_lines(n)
     }
 
-    fn hide_cursor(&mut self) -> io::Result<()> {
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
         self.inner.hide_cursor()
     }
 
-    fn show_cursor(&mut self) -> io::Result<()> {
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
         self.inner.show_cursor()
     }
 
-    fn get_cursor_position(&mut self) -> io::Result<Position> {
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
         self.inner.get_cursor_position()
     }
 
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
         self.inner.set_cursor_position(position)
     }
 
-    fn clear(&mut self) -> io::Result<()> {
+    fn clear(&mut self) -> Result<(), Self::Error> {
         self.inner.clear()
     }
 
-    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
         self.inner.clear_region(clear_type)
     }
 
-    fn size(&self) -> io::Result<Size> {
+    fn size(&self) -> Result<Size, Self::Error> {
         self.inner.size()
     }
 
-    fn window_size(&mut self) -> io::Result<ratatui::backend::WindowSize> {
+    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
         self.inner.window_size()
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> Result<(), Self::Error> {
         self.inner.flush()
     }
 
-    fn scroll_region_up(&mut self, region: Range<u16>, line_count: u16) -> io::Result<()> {
+    fn scroll_region_up(&mut self, region: Range<u16>, line_count: u16) -> Result<(), Self::Error> {
         self.inner.scroll_region_up(region, line_count)
     }
 
-    fn scroll_region_down(&mut self, region: Range<u16>, line_count: u16) -> io::Result<()> {
+    fn scroll_region_down(
+        &mut self,
+        region: Range<u16>,
+        line_count: u16,
+    ) -> Result<(), Self::Error> {
         self.inner.scroll_region_down(region, line_count)
     }
 }
@@ -304,7 +313,7 @@ impl InlineHistoryState {
         &mut self,
         terminal: &mut Terminal<B>,
         current_lines: &[Line<'static>],
-    ) -> io::Result<bool> {
+    ) -> Result<bool, B::Error> {
         let pending_lines = self.pending_lines(current_lines);
         let inserted = !pending_lines.is_empty();
         if !pending_lines.is_empty() {
@@ -356,7 +365,7 @@ impl InlineHistoryState {
 fn insert_inline_history_lines<B: Backend>(
     terminal: &mut Terminal<B>,
     lines: &[Line<'static>],
-) -> io::Result<()> {
+) -> Result<(), B::Error> {
     if lines.is_empty() {
         return Ok(());
     }
@@ -420,10 +429,10 @@ mod tests {
 
     use anyhow::Result;
     use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
     use ratatui::text::Line;
     use ratatui::{Terminal, Viewport};
 
+    use super::super::tui_testkit;
     use super::{
         InlineHistoryState, InlineTerminalBackend, InlineViewportState, ShellRuntime,
         current_inline_history_lines, draw_inline_frame, sync_inline_viewport,
@@ -605,7 +614,8 @@ mod tests {
 
     #[test]
     fn history_sync_reports_insertions_that_need_viewport_redraw() {
-        let mut terminal = test_inline_terminal(80, 24);
+        let mut terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
         let mut state = InlineHistoryState::default();
         let current_lines = vec![
             Line::from("User:"),
@@ -629,7 +639,8 @@ mod tests {
 
     #[test]
     fn viewport_replay_sync_skips_host_scrollback_insertions() {
-        let mut replay_terminal = test_inline_terminal(80, 24);
+        let mut replay_terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
         let mut replay_app = make_test_app();
         replay_app.show_startup_ascii_art = false;
         replay_app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
@@ -649,11 +660,12 @@ mod tests {
             .unwrap()
         );
         assert!(
-            !format!("{}", replay_terminal.backend())
+            !tui_testkit::screen_text(&replay_terminal)
                 .contains("history should not be inserted in replay mode")
         );
 
-        let mut host_terminal = test_inline_terminal(80, 24);
+        let mut host_terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
         let mut host_app = make_test_app();
         host_app.show_startup_ascii_art = false;
         host_app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -665,7 +677,7 @@ mod tests {
             sync_inline_viewport(&mut host_terminal, &mut host_runtime, &mut host_viewport)
                 .unwrap()
         );
-        assert!(format!("{}", host_terminal.backend()).contains("history should be inserted"));
+        assert!(tui_testkit::screen_text(&host_terminal).contains("history should be inserted"));
     }
 
     #[test]
@@ -712,7 +724,7 @@ mod tests {
         render_mode: InlineHistoryRenderMode,
         history_message: &str,
     ) {
-        let mut terminal = test_terminal_for_render_mode(render_mode, 80, 24);
+        let mut terminal = tui_testkit::inline_history_terminal(render_mode, 80, 24);
         let mut app = make_test_app();
         app.show_startup_ascii_art = false;
         app.inline_history_render_mode = render_mode;
@@ -726,11 +738,11 @@ mod tests {
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
         draw_test_frame(&mut terminal, &mut runtime);
 
-        terminal.backend_mut().inner_mut().resize(80, 8);
+        tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 8);
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
         draw_test_frame(&mut terminal, &mut runtime);
 
-        terminal.backend_mut().inner_mut().resize(80, 24);
+        tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 24);
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
         draw_test_frame(&mut terminal, &mut runtime);
 
@@ -741,7 +753,7 @@ mod tests {
         render_mode: InlineHistoryRenderMode,
         history_message: &str,
     ) {
-        let mut terminal = test_terminal_for_render_mode(render_mode, 80, 24);
+        let mut terminal = tui_testkit::inline_history_terminal(render_mode, 80, 24);
         let mut app = make_test_app();
         app.show_startup_ascii_art = false;
         app.inline_history_render_mode = render_mode;
@@ -755,9 +767,9 @@ mod tests {
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
         draw_test_frame(&mut terminal, &mut runtime);
 
-        terminal.backend_mut().inner_mut().resize(80, 8);
+        tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 8);
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
-        terminal.backend_mut().inner_mut().resize(80, 12);
+        tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 12);
         draw_test_frame(&mut terminal, &mut runtime);
 
         assert_no_live_tail_leak(&terminal, render_mode);
@@ -767,7 +779,7 @@ mod tests {
         terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
         render_mode: InlineHistoryRenderMode,
     ) {
-        let scrollback_text = buffer_text(terminal.backend().inner().scrollback());
+        let scrollback_text = tui_testkit::inline_scrollback_text(terminal);
         assert!(
             !scrollback_text.contains("live prompt must not move to scrollback"),
             "{render_mode:?} should not leak live prompt rows into scrollback after resize: {scrollback_text:?}"
@@ -776,7 +788,7 @@ mod tests {
             !scrollback_text.contains("thread: new draft"),
             "{render_mode:?} should not leak live status rows into scrollback after resize: {scrollback_text:?}"
         );
-        let screen_text = format!("{}", terminal.backend());
+        let screen_text = tui_testkit::screen_text(terminal);
         assert!(
             screen_text.contains("> live prompt must not move to scrollback"),
             "{render_mode:?} should keep the active prompt visible after shrink/restore: {screen_text:?}"
@@ -870,43 +882,11 @@ mod tests {
         assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
     }
 
-    fn test_inline_terminal(
-        width: u16,
-        height: u16,
-    ) -> Terminal<InlineTerminalBackend<TestBackend>> {
-        test_terminal_for_render_mode(InlineHistoryRenderMode::HostScrollback, width, height)
-    }
-
-    fn test_terminal_for_render_mode(
-        render_mode: InlineHistoryRenderMode,
-        width: u16,
-        height: u16,
-    ) -> Terminal<InlineTerminalBackend<TestBackend>> {
-        Terminal::with_options(
-            InlineTerminalBackend::new(TestBackend::new(width, height)),
-            terminal_options_for_render_mode(render_mode),
-        )
-        .expect("inline test terminal")
-    }
-
     fn draw_test_frame(
         terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
         runtime: &mut ShellRuntime,
     ) {
         draw_inline_frame(terminal, runtime).expect("draw test frame");
-    }
-
-    fn buffer_text(buffer: &Buffer) -> String {
-        if buffer.area.width == 0 {
-            return String::new();
-        }
-
-        buffer
-            .content
-            .chunks(buffer.area.width as usize)
-            .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     fn append_history_message(app: &mut NativeTuiApp, text: &str) {

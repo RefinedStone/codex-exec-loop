@@ -1,15 +1,13 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use insta::assert_snapshot;
 use ratatui::Terminal;
-use ratatui::TerminalOptions;
-use ratatui::Viewport;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 use ratatui::style::Color;
 
+use super::super::tui_testkit;
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
@@ -80,15 +78,18 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
 
 #[test]
 fn inline_main_buffer_rendering_avoids_box_borders() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    append_stable_history_message(&mut app, "stable history should stay above the live region");
+    tui_testkit::append_agent_history_message(
+        &mut app,
+        "stable history should stay above the live region",
+    );
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(!rendered.contains("Shell / Ctrl+t new draft"));
     assert!(!rendered.contains("Transcript /"));
@@ -105,15 +106,15 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 
 #[test]
 fn inline_main_buffer_tail_starts_at_top_of_viewport_after_history() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    append_stable_history_message(&mut app, "latest reply should stay in scrollback");
+    tui_testkit::append_agent_history_message(&mut app, "latest reply should stay in scrollback");
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
     let first_non_empty_line = rendered
         .lines()
         .find(|line| !line.trim().is_empty())
@@ -125,7 +126,7 @@ fn inline_main_buffer_tail_starts_at_top_of_viewport_after_history() {
 
 #[test]
 fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = true;
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -134,7 +135,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
@@ -149,20 +150,9 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 
 #[test]
 fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        panic!("test app should start in a ready conversation state");
-    };
-    conversation.input_state = ConversationInputState::StreamingTurn;
-    conversation.active_turn_id = Some("turn-1".to_string());
-    conversation.active_turn_started_at = Some(std::time::Instant::now() - Duration::from_secs(5));
-    conversation.live_agent_message = Some(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "ghost line should disappear".to_string(),
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
+    tui_testkit::set_live_agent_message(&mut app, "ghost line should disappear");
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -180,27 +170,16 @@ fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("second inline render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(!rendered.contains("ghost line should disappear"));
 }
 
 #[test]
 fn inline_main_buffer_clears_stale_tail_rows_when_overlay_opens() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        panic!("test app should start in a ready conversation state");
-    };
-    conversation.input_state = ConversationInputState::StreamingTurn;
-    conversation.active_turn_id = Some("turn-1".to_string());
-    conversation.active_turn_started_at = Some(std::time::Instant::now() - Duration::from_secs(5));
-    conversation.live_agent_message = Some(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        "overlay ghost line should disappear".to_string(),
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
+    tui_testkit::set_live_agent_message(&mut app, "overlay ghost line should disappear");
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -220,14 +199,14 @@ fn inline_main_buffer_clears_stale_tail_rows_when_overlay_opens() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("overlay inline render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(!rendered.contains("overlay ghost line should disappear"));
 }
 
 #[test]
 fn inline_render_positions_cursor_on_empty_prompt_line() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
@@ -242,16 +221,19 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
 #[test]
 fn inline_queue_overlay_rendering_shows_compact_sections() {
-    let mut terminal = inline_terminal(80, 24);
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    append_stable_history_message(&mut app, "stable history stays visible above the queue");
+    tui_testkit::append_agent_history_message(
+        &mut app,
+        "stable history stays visible above the queue",
+    );
     app.shell_overlay = ShellOverlay::Queue;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("queue render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Ready Queue"));
     assert!(rendered.contains("Proposals"));
@@ -262,7 +244,7 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
-    let rendered = render_inline_snapshot(&mut app, 80, 24);
+    let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
     assert_snapshot!("inline_main_buffer_ready_shell", rendered);
 }
@@ -280,7 +262,7 @@ fn queue_overlay_matches_snapshot() {
     ));
     app.shell_overlay = ShellOverlay::Queue;
 
-    let rendered = render_shell_snapshot(&mut app, 96, 28);
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
     assert_snapshot!("queue_overlay", rendered);
 }
@@ -294,7 +276,7 @@ fn planning_manual_editor_matches_snapshot() {
     app.planning_draft_editor_ui_state
         .open_session(sample_planning_editor_session());
 
-    let rendered = render_shell_snapshot(&mut app, 96, 28);
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
     assert_snapshot!("planning_manual_editor", rendered);
 }
@@ -304,7 +286,7 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
-    append_stable_history_message(
+    tui_testkit::append_agent_history_message(
         &mut app,
         "previous transcript should remain visible in viewport replay mode",
     );
@@ -322,35 +304,9 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
         "streaming reply still visible".to_string(),
     );
 
-    let rendered = render_inline_snapshot(&mut app, 80, 24);
+    let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
     assert_snapshot!("inline_main_buffer_viewport_replay_streaming", rendered);
-}
-
-fn inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
-    Terminal::with_options(
-        TestBackend::new(width, height),
-        TerminalOptions {
-            viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
-        },
-    )
-    .expect("inline test terminal")
-}
-
-fn render_inline_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
-    let mut terminal = inline_terminal(width, height);
-    terminal
-        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
-        .expect("inline render succeeds");
-    format!("{}", terminal.backend())
-}
-
-fn render_shell_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
-    terminal
-        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
-        .expect("shell render succeeds");
-    format!("{}", terminal.backend())
 }
 
 #[test]
@@ -364,7 +320,7 @@ fn inline_startup_inspection_replaces_transcript_panel() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline inspection render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Diagnostics / inline inspection"));
     assert!(rendered.contains("Checks"));
@@ -393,7 +349,7 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline session inspection render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Recent Sessions / inline inspection"));
     assert!(rendered.contains("Threads"));
@@ -420,7 +376,7 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline attach-only session inspection render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("catalog tier: attach-only"));
     assert!(rendered.contains("session listing is unsupported"));
@@ -438,7 +394,7 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline followup inspection render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Automation Controls / inline inspection"));
     assert!(rendered.contains("Automation"));
@@ -459,7 +415,7 @@ fn inline_help_inspection_renders_command_help() {
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline help inspection render succeeds");
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Shell Commands / inline inspection"));
     assert!(rendered.contains(":diag"));
@@ -486,7 +442,7 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline supersession inspection render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Supersession / inline inspection"));
     assert!(rendered.contains("Capabilities"));
@@ -503,7 +459,10 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
 fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    append_stable_history_message(&mut app, "parallel summary should render in the live shell");
+    tui_testkit::append_agent_history_message(
+        &mut app,
+        "parallel summary should render in the live shell",
+    );
     app.parallel_mode_enabled = true;
     app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -584,7 +543,7 @@ fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline planning inspection render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Planning / inline inspection"));
     assert!(rendered.contains("simple mode"));
@@ -608,7 +567,7 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline planning editor render succeeds");
 
-    let rendered = format!("{}", terminal.backend());
+    let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Planning Draft"));
     assert!(rendered.contains("Files"));
@@ -919,19 +878,6 @@ fn sample_parallel_mode_snapshot(
         ],
         Some("planning: degraded / cause: planning workspace is healthy / next action: review the readiness panel".to_string()),
     )
-}
-
-fn append_stable_history_message(app: &mut NativeTuiApp, text: &str) {
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        panic!("test app should start in a ready conversation state");
-    };
-    conversation.messages.push(ConversationMessage::new(
-        ConversationMessageKind::Agent,
-        text.to_string(),
-        Some("final_answer".to_string()),
-        Some("agent-1".to_string()),
-    ));
-    conversation.refresh_conversation_lines();
 }
 
 fn sample_planning_editor_session() -> PlanningDraftEditorSession {
