@@ -44,6 +44,57 @@ The operator-facing current contract lives in
 - Builtin `next-task` uses the accepted queue head only.
 - Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
 
+## Runtime Task Intake
+
+Runtime task intake is the narrow operator path for adding one user-authored task while the shell is
+already running. It is intentionally separate from broad planning authoring: `:planning` remains the
+staged-draft surface, while `:task` creates a single validated task mutation against the accepted
+task authority.
+
+The TUI exposes the intake as `:task`. `:task <prompt>` opens a preview for that prompt immediately;
+plain `:task` opens an intake overlay with a prompt editor. The overlay shows title, direction,
+status, priority, and a description excerpt, then accepts only `Y` to commit, `N` or `Esc` to cancel,
+and `E` to return to prompt editing. The command remains available during a streaming turn, queue
+evaluation, and automation-stopped state. A committed runtime task never interrupts an existing
+`in_progress` task; it enters as a normal `ready` candidate for the next queue selection.
+
+The intake authority flow is:
+
+1. TUI prompt input becomes a `PlanningTaskIntakeRequest`.
+2. `PlanningTaskDraftGenerator` converts the prompt into one `PlanningTaskIntakeDraft`.
+3. `PlanningTaskIntakeValidationService` validates the draft shape, selected direction, task id,
+   priority, and dependency references.
+4. The service appends the accepted task to the current ledger, then runs the existing
+   `PlanningValidationService` and `PriorityQueueService` over the full ledger and direction catalog.
+5. `PlanningTaskRepositoryPort` commits the accepted ledger and rebuilt queue projection in one
+   revision-aware task-authority mutation.
+6. Git-backed workspaces export `.codex-exec-loop/runtime/exports/task-ledger.json` and
+   `.codex-exec-loop/runtime/exports/queue.snapshot.json` from the committed store revision.
+
+LLM or hidden-session output is never allowed to write SQL, tracked JSON, or runtime exports
+directly. It may only implement `PlanningTaskDraftGenerator` and return a structured
+`PlanningTaskIntakeDraft`; the same validation helper and accepted mutation path must handle every
+generator.
+
+The v1 generator is `LocalPromptTaskDraftGenerator`. It derives a stable title and description from
+the operator prompt, sets `status=ready`, `created_by=user`, `last_updated_by=user`,
+`base_priority=80`, `dynamic_priority_delta=0`, empty dependency and blocker lists, and
+`source_turn_id` from the active turn when present. The default direction is `general-workstream`
+when it is active; otherwise it uses the first active direction. If no active direction exists, or if
+the planning workspace is missing, intake is rejected with guidance to open `:directions` or
+`:planning`. Intake is allowed while planning automation is off, but it does not turn automation on.
+
+Task ids use `task-user-<UTC timestamp>-<prompt hash>` with a numeric suffix on collision. The
+timestamp must be UTC and the hash must be derived from the normalized prompt, not from generated
+preview text.
+
+The task-authority commit must be revision-aware. The intake service loads a planning revision with
+the ledger and queue snapshot, validates against that view, and commits with compare-and-commit
+semantics. If another accepted planning mutation lands first, user intake reloads the latest
+snapshot, regenerates any colliding id suffix, revalidates, and retries within a bounded loop. Queue
+refresh or export work that was computed from a stale revision must not overwrite a newer intake
+task.
+
 ## Protection And Recovery Rules
 
 - `directions.toml`, `task-ledger.schema.json`, `result-output.md`, and `queue.snapshot.json` are protected during automated execution.

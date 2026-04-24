@@ -18,6 +18,7 @@ directions behavior on the current branch.
 | Sessions | `Ctrl+o`, `:sessions` | resumes prior threads with current-work context |
 | Automation | `Ctrl+f`, `:auto` | edits stop rules, preview, and planner visibility |
 | Queue | `:queue` | shows the current queue task, proposed tasks, and skip framing |
+| Task Intake | `:task` | adds one validated user task to the accepted queue without opening draft authoring |
 | Planning | `:planning` | stages or reopens planning authoring flows |
 | Directions | `:directions` | maintains direction-side artifacts and queue-idle supporting files |
 | Parallel | `:parallel on` | opens the supersession readiness gate, supervisor board, and worker pool flow |
@@ -34,6 +35,7 @@ Accepted planning stays on the `draft -> validate -> promote` contract.
 | `:reset directions` | rewrites direction-side defaults and removes generated supporting artifacts |
 | `:reset all` | replaces the full planning scaffold and clears derived queue state |
 | `:planning on|off` | toggles plan execution without deleting the workspace |
+| `:task [prompt]` | opens runtime task intake, previews one user task, then commits it as accepted `ready` work |
 
 Key artifacts:
 
@@ -51,6 +53,9 @@ Queue behavior:
 
 - Builtin `next-task` and post-turn automation use the accepted queue head only.
 - Proposed tasks stay visible but are not executable queue items yet.
+- Runtime task intake creates accepted `ready` tasks through a structured draft, validation, and
+  revision-safe commit path; LLM output may only produce `TaskDraft` data and must not write SQL or
+  JSON authority surfaces directly.
 - When the queue is valid but idle, behavior follows `[queue_idle]` in `directions.toml`.
 - `:directions` keeps direction detail docs and queue-idle prompt editing subordinate to the same
   staged-draft authoring model.
