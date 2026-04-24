@@ -213,6 +213,34 @@ fn queue_inline_command_opens_overlay_from_palette_selection() {
 }
 
 #[test]
+fn help_inline_command_opens_command_help_overlay() {
+    let (app, _) = make_test_app();
+    let mut runtime = shell_runtime::ShellRuntime::new(app);
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    for character in ":help".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Help);
+    assert!(conversation.input_buffer.is_empty());
+    assert!(
+        conversation
+            .status_text
+            .contains("opened shell command help")
+    );
+}
+
+#[test]
 fn parallel_inline_command_opens_supersession_overlay() {
     let (app, _) = make_test_app();
     let mut runtime = shell_runtime::ShellRuntime::new(app);

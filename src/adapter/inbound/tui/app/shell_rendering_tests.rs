@@ -450,6 +450,29 @@ fn inline_followup_inspection_renders_preview_inside_shell_frame() {
 }
 
 #[test]
+fn inline_help_inspection_renders_command_help() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_overlay = ShellOverlay::Help;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline help inspection render succeeds");
+    let rendered = format!("{}", terminal.backend());
+
+    assert!(rendered.contains("Shell Commands / inline inspection"));
+    assert!(rendered.contains(":diag"));
+    assert!(rendered.contains("diagnostics"));
+    assert!(rendered.contains(":turns <n|infinite>"));
+    assert!(rendered.contains("set max auto turns"));
+    assert!(rendered.contains("Esc/Ctrl+C: close"));
+    assert!(!rendered.contains("Shell commands: :diag  :parallel"));
+    assert!(!rendered.contains("Transcript /"));
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
 fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();

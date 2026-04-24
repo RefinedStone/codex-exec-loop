@@ -5,13 +5,13 @@ use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::super::shell_presentation::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, OverlayListView,
+    AutomationOverlayView, DirectionsMaintenanceOverlayView, HelpOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
     StartupOverlayView, SupersessionOverlayView, TaskIntakeOverlayView,
     build_automation_overlay_view, build_directions_maintenance_overlay_view,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    build_supersession_overlay_view, build_task_intake_overlay_view,
+    build_help_overlay_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view, build_supersession_overlay_view, build_task_intake_overlay_view,
 };
 use super::super::{
     DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
@@ -33,6 +33,7 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::Supersession => {
             draw_inline_supersession_inspection(frame, inspection_area, app)
         }
+        ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area),
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
         ShellOverlay::DirectionsMaintenance => {
             draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
@@ -43,6 +44,39 @@ pub(super) fn draw_inline_shell_inspection(
         }
         ShellOverlay::TaskIntake => draw_inline_task_intake_inspection(frame, inspection_area, app),
     }
+}
+
+fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
+    let HelpOverlayView {
+        header_lines,
+        command_lines,
+        key_lines,
+    } = build_help_overlay_view();
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        Line::from("Shell Commands / inline inspection"),
+        body_lines,
+        true,
+    );
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Commands"),
+        command_lines,
+        false,
+    );
+    render_inline_section(frame, layout[2], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_inline_directions_maintenance_inspection(

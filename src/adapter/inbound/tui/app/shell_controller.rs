@@ -156,7 +156,7 @@ impl NativeTuiApp {
                 });
             }
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
-            InlineShellCommand::Help => {}
+            InlineShellCommand::Help => self.show_help_overlay(),
         }
 
         let status_text = match command_input.command() {
@@ -172,6 +172,10 @@ impl NativeTuiApp {
             });
         }
         self.clear_input_buffer();
+    }
+
+    fn show_help_overlay(&mut self) {
+        self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
     }
 
     fn handle_task_shell_command(&mut self, prompt: Option<&str>) {

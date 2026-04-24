@@ -4,6 +4,9 @@ mod base;
 #[path = "overlays/directions.rs"]
 mod directions;
 
+#[path = "overlays/help.rs"]
+mod help;
+
 #[path = "overlays/list_projection.rs"]
 mod list_projection;
 
@@ -19,6 +22,7 @@ pub(crate) use base::build_startup_banner_lines;
 pub(crate) use directions::{
     DirectionsMaintenanceOverlayView, build_directions_maintenance_overlay_view,
 };
+pub(crate) use help::{HelpOverlayView, build_help_overlay_view};
 pub(crate) use list_projection::{OverlayListEntryView, OverlayListView};
 pub(crate) use popup::{
     AutomationOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,

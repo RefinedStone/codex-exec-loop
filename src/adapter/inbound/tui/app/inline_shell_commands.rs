@@ -43,6 +43,13 @@ struct InlineShellCommandSpec {
     requires_argument: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineShellCommandHelpEntry {
+    pub(crate) usage: &'static str,
+    pub(crate) detail: &'static str,
+}
+
+#[cfg(test)]
 const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
@@ -181,8 +188,8 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":help",
         aliases: &[":help"],
         suggestion_detail: "command help",
-        buffered_hint: "Press Enter to show the available shell commands.",
-        execution_status: Some(COMMAND_LIST_LINE),
+        buffered_hint: "Press Enter to open shell command help.",
+        execution_status: Some("opened shell command help"),
         requires_argument: false,
     },
 ];
@@ -430,6 +437,36 @@ impl InlineShellCommand {
             | InlineShellCommand::Doctor
             | InlineShellCommand::Init
             | InlineShellCommand::PlanningInit
+            | InlineShellCommand::NewDraft
+            | InlineShellCommand::Help => self.command_name(),
+        }
+    }
+
+    pub(crate) fn help_entries() -> Vec<InlineShellCommandHelpEntry> {
+        INLINE_SHELL_COMMAND_SPECS
+            .iter()
+            .map(|spec| InlineShellCommandHelpEntry {
+                usage: spec.command.help_usage(),
+                detail: spec.suggestion_detail,
+            })
+            .collect()
+    }
+
+    fn help_usage(self) -> &'static str {
+        match self {
+            InlineShellCommand::Parallel => ":parallel [on|off]",
+            InlineShellCommand::Queue => ":queue [apply]",
+            InlineShellCommand::Directions => ":directions [apply]",
+            InlineShellCommand::Task => ":task [prompt]",
+            InlineShellCommand::PlanningInit => ":planning [on|off|doctor]",
+            InlineShellCommand::Reset => ":reset <queue|directions|all>",
+            InlineShellCommand::MaxAutoTurns => ":turns <n|infinite>",
+            InlineShellCommand::Diagnostics
+            | InlineShellCommand::Sessions
+            | InlineShellCommand::Stop
+            | InlineShellCommand::Automation
+            | InlineShellCommand::Doctor
+            | InlineShellCommand::Init
             | InlineShellCommand::NewDraft
             | InlineShellCommand::Help => self.command_name(),
         }
@@ -749,13 +786,28 @@ mod tests {
     }
 
     #[test]
-    fn help_status_reuses_command_list_line() {
+    fn help_status_uses_short_overlay_status() {
         let help = InlineShellCommandInput::parse(":help").expect("help command should parse");
 
         assert_eq!(
             help.execution_status().as_deref(),
-            Some(InlineShellCommand::command_list_line())
+            Some("opened shell command help")
         );
+    }
+
+    #[test]
+    fn help_entries_use_renderable_command_forms() {
+        let rendered = InlineShellCommand::help_entries()
+            .iter()
+            .map(|entry| format!("{} - {}", entry.usage, entry.detail))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(":diag - diagnostics"));
+        assert!(rendered.contains(":parallel [on|off] - parallel mode"));
+        assert!(rendered.contains(":turns <n|infinite> - set max auto turns"));
+        assert!(rendered.contains(":help - command help"));
+        assert!(!rendered.contains(InlineShellCommand::command_list_line()));
     }
 
     #[test]
