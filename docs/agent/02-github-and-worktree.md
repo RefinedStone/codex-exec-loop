@@ -6,7 +6,12 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 
 - Set repo-local commit identity before the first commit in a worktree: `git config user.name RefinedStone` and `git config user.email chem.en.9273@gmail.com`.
 - Keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`.
-- Prefer the repo-local `.git/refinedstone-credentials`.
+- Prefer the repo-local `.git/refinedstone-credentials`; linked worktrees should read this through
+  `git rev-parse --git-common-dir`, not only their worktree-specific git dir.
+- Configure repo-local Git credentials to use that file for push-capable commands:
+  `git config credential.helper ""`,
+  `git config credential.username RefinedStone`, and
+  `git config --add credential.helper "store --file=$(git rev-parse --path-format=absolute --git-common-dir)/refinedstone-credentials"`.
 - If another `credential.helper` is inherited, override it in this repo's local `.git/config` only.
 - Before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`.
 - Use `bash scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies.

@@ -13,12 +13,22 @@ if [[ -z "${git_dir}" ]]; then
   exit 1
 fi
 
+git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+
 find_credential_file() {
   local repo_credential_file
   repo_credential_file="${git_dir}/refinedstone-credentials"
   if [[ -f "${repo_credential_file}" ]]; then
     printf '%s\n' "${repo_credential_file}"
     return 0
+  fi
+
+  if [[ -n "${git_common_dir}" && "${git_common_dir}" != "${git_dir}" ]]; then
+    repo_credential_file="${git_common_dir}/refinedstone-credentials"
+    if [[ -f "${repo_credential_file}" ]]; then
+      printf '%s\n' "${repo_credential_file}"
+      return 0
+    fi
   fi
 
   while IFS= read -r windows_credential_file; do

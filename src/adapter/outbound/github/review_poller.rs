@@ -113,6 +113,18 @@ impl GithubReviewPollerAdapter {
         Ok(PathBuf::from(git_dir))
     }
 
+    fn resolve_git_common_dir(repo_root: &Path) -> Result<PathBuf> {
+        let git_common_dir = Self::run_git_command(
+            repo_root,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        if git_common_dir.is_empty() {
+            bail!("resolved empty git common dir from {}", repo_root.display());
+        }
+
+        Ok(PathBuf::from(git_common_dir))
+    }
+
     fn resolve_repository_full_name(repo_root: &Path) -> Result<String> {
         let origin_url = Self::run_git_command(repo_root, &["remote", "get-url", "origin"])?;
         Self::parse_repository_full_name(&origin_url)
@@ -175,13 +187,21 @@ impl GithubReviewPollerAdapter {
                 .with_context(|| format!("failed to read {}", credential_path.display()));
         }
 
+        let common_credential_path =
+            Self::resolve_git_common_dir(repo_root)?.join("refinedstone-credentials");
+        if common_credential_path != credential_path && common_credential_path.is_file() {
+            return Self::read_first_non_empty_line(&common_credential_path)
+                .with_context(|| format!("failed to read {}", common_credential_path.display()));
+        }
+
         if let Some(credential_line) = Self::find_windows_refinedstone_credential_line()? {
             return Ok(credential_line);
         }
 
         bail!(
-            "missing {} and no Windows RefinedStone credential was found in the current user's home directory",
-            credential_path.display()
+            "missing {} and {} and no Windows RefinedStone credential was found in the current user's home directory",
+            credential_path.display(),
+            common_credential_path.display()
         );
     }
 
