@@ -102,27 +102,21 @@ impl GithubReviewPollerAdapter {
     }
 
     fn resolve_git_dir(repo_root: &Path) -> Result<PathBuf> {
-        let git_dir = Self::run_git_command(
-            repo_root,
-            &["rev-parse", "--path-format=absolute", "--git-dir"],
-        )?;
-        if git_dir.is_empty() {
-            bail!("resolved empty git dir from {}", repo_root.display());
-        }
-
-        Ok(PathBuf::from(git_dir))
+        Self::resolve_git_path(repo_root, "--git-dir", "git dir")
     }
 
     fn resolve_git_common_dir(repo_root: &Path) -> Result<PathBuf> {
-        let git_common_dir = Self::run_git_command(
-            repo_root,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )?;
-        if git_common_dir.is_empty() {
-            bail!("resolved empty git common dir from {}", repo_root.display());
+        Self::resolve_git_path(repo_root, "--git-common-dir", "git common dir")
+    }
+
+    fn resolve_git_path(repo_root: &Path, flag: &str, label: &str) -> Result<PathBuf> {
+        let path =
+            Self::run_git_command(repo_root, &["rev-parse", "--path-format=absolute", flag])?;
+        if path.is_empty() {
+            bail!("resolved empty {label} from {}", repo_root.display());
         }
 
-        Ok(PathBuf::from(git_common_dir))
+        Ok(PathBuf::from(path))
     }
 
     fn resolve_repository_full_name(repo_root: &Path) -> Result<String> {
@@ -198,10 +192,18 @@ impl GithubReviewPollerAdapter {
             return Ok(credential_line);
         }
 
+        let missing_paths = if credential_path == common_credential_path {
+            credential_path.display().to_string()
+        } else {
+            format!(
+                "{} and {}",
+                credential_path.display(),
+                common_credential_path.display()
+            )
+        };
+
         bail!(
-            "missing {} and {} and no Windows RefinedStone credential was found in the current user's home directory",
-            credential_path.display(),
-            common_credential_path.display()
+            "missing {missing_paths} and no Windows RefinedStone credential was found in the current user's home directory"
         );
     }
 
