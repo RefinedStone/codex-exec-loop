@@ -9,7 +9,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
 use ratatui::TerminalOptions;
 use ratatui::Viewport;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -80,20 +80,31 @@ fn run_event_loop(
     Ok(())
 }
 
-fn sync_inline_viewport(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+fn sync_inline_viewport<B: Backend>(
+    terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_viewport: &mut InlineViewportState,
 ) -> io::Result<bool> {
+    terminal.autoresize()?;
     let current_lines = current_inline_history_lines(runtime.app_mut());
-    inline_viewport.history.sync(terminal, &current_lines)?;
+    let writes_host_scrollback = runtime
+        .app_mut()
+        .inline_history_render_mode
+        .writes_host_scrollback();
+    let history_inserted = if writes_host_scrollback {
+        inline_viewport.history.sync(terminal, &current_lines)?
+    } else {
+        inline_viewport.history.remember(&current_lines);
+        false
+    };
 
     let terminal_size = terminal.size()?;
-    Ok(inline_viewport.should_draw_inline_frame(
+    let tail_frame_changed = inline_viewport.should_draw_inline_frame(
         runtime.app_mut(),
         terminal_size.width,
         terminal_size.height,
-    ))
+    );
+    Ok(history_inserted || tail_frame_changed)
 }
 
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -157,17 +168,22 @@ struct InlineHistoryState {
 const MIN_SHIFTED_HISTORY_OVERLAP: usize = 8;
 
 impl InlineHistoryState {
-    fn sync(
+    fn sync<B: Backend>(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        terminal: &mut Terminal<B>,
         current_lines: &[Line<'static>],
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         let pending_lines = self.pending_lines(current_lines);
+        let inserted = !pending_lines.is_empty();
         if !pending_lines.is_empty() {
             insert_inline_history_lines(terminal, &pending_lines)?;
         }
+        self.remember(current_lines);
+        Ok(inserted)
+    }
+
+    fn remember(&mut self, current_lines: &[Line<'static>]) {
         self.rendered_lines = current_lines.to_vec();
-        Ok(())
     }
 
     fn pending_lines(&self, current_lines: &[Line<'static>]) -> Vec<Line<'static>> {
@@ -205,8 +221,8 @@ impl InlineHistoryState {
     }
 }
 
-fn insert_inline_history_lines(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+fn insert_inline_history_lines<B: Backend>(
+    terminal: &mut Terminal<B>,
     lines: &[Line<'static>],
 ) -> io::Result<()> {
     if lines.is_empty() {
@@ -271,12 +287,17 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
+    use ratatui::backend::TestBackend;
     use ratatui::text::Line;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
 
-    use super::{InlineHistoryState, InlineViewportState, current_inline_history_lines};
+    use super::{
+        InlineHistoryState, InlineViewportState, ShellRuntime, current_inline_history_lines,
+        sync_inline_viewport,
+    };
     use crate::adapter::inbound::tui::app::{
-        ConversationMessage, ConversationMessageKind, ConversationState,
-        MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp, PlannerVisibility,
+        ConversationMessage, ConversationMessageKind, ConversationState, INLINE_VIEWPORT_HEIGHT,
+        InlineHistoryRenderMode, MAX_CONVERSATION_HISTORY_LINES, NativeTuiApp, PlannerVisibility,
     };
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -449,6 +470,71 @@ mod tests {
     }
 
     #[test]
+    fn history_sync_reports_insertions_that_need_viewport_redraw() {
+        let mut terminal = test_inline_terminal(80, 24);
+        let mut state = InlineHistoryState::default();
+        let current_lines = vec![
+            Line::from("User:"),
+            Line::from("  first prompt"),
+            Line::from(""),
+        ];
+
+        assert!(state.sync(&mut terminal, &current_lines).unwrap());
+        assert!(!state.sync(&mut terminal, &current_lines).unwrap());
+
+        let appended_lines = vec![
+            Line::from("User:"),
+            Line::from("  first prompt"),
+            Line::from(""),
+            Line::from("Agent:"),
+            Line::from("  first answer"),
+            Line::from(""),
+        ];
+        assert!(state.sync(&mut terminal, &appended_lines).unwrap());
+    }
+
+    #[test]
+    fn viewport_replay_sync_skips_host_scrollback_insertions() {
+        let mut replay_terminal = test_inline_terminal(80, 24);
+        let mut replay_app = make_test_app();
+        replay_app.show_startup_ascii_art = false;
+        replay_app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+        append_history_message(
+            &mut replay_app,
+            "history should not be inserted in replay mode",
+        );
+        let mut replay_runtime = ShellRuntime::new(replay_app);
+        let mut replay_viewport = InlineViewportState::default();
+
+        assert!(
+            sync_inline_viewport(
+                &mut replay_terminal,
+                &mut replay_runtime,
+                &mut replay_viewport
+            )
+            .unwrap()
+        );
+        assert!(
+            !format!("{}", replay_terminal.backend())
+                .contains("history should not be inserted in replay mode")
+        );
+
+        let mut host_terminal = test_inline_terminal(80, 24);
+        let mut host_app = make_test_app();
+        host_app.show_startup_ascii_art = false;
+        host_app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+        append_history_message(&mut host_app, "history should be inserted in host mode");
+        let mut host_runtime = ShellRuntime::new(host_app);
+        let mut host_viewport = InlineViewportState::default();
+
+        assert!(
+            sync_inline_viewport(&mut host_terminal, &mut host_runtime, &mut host_viewport)
+                .unwrap()
+        );
+        assert!(format!("{}", host_terminal.backend()).contains("history should be inserted"));
+    }
+
+    #[test]
     fn hidden_inline_tail_skips_redundant_frame_draws() {
         let app = make_test_app();
         let mut inline_viewport = InlineViewportState::default();
@@ -526,6 +612,29 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
+    }
+
+    fn test_inline_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+        Terminal::with_options(
+            TestBackend::new(width, height),
+            TerminalOptions {
+                viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+            },
+        )
+        .expect("inline test terminal")
+    }
+
+    fn append_history_message(app: &mut NativeTuiApp, text: &str) {
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            text.to_string(),
+            None,
+            None,
+        ));
+        conversation.refresh_conversation_lines();
     }
 
     struct FakeCodexAppServerPort;

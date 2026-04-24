@@ -225,13 +225,15 @@ impl InlineHistoryRenderMode {
                 .as_deref(),
             std::env::var("WT_SESSION").ok().as_deref(),
             std::env::var("WSL_DISTRO_NAME").ok().as_deref(),
+            cfg!(windows),
         )
     }
 
     fn from_env_values(
         mode_value: Option<&str>,
         windows_terminal_session: Option<&str>,
-        wsl_distro_name: Option<&str>,
+        _wsl_distro_name: Option<&str>,
+        running_on_windows: bool,
     ) -> Self {
         let explicit_mode = mode_value
             .map(str::trim)
@@ -247,11 +249,7 @@ impl InlineHistoryRenderMode {
         let inside_windows_terminal = windows_terminal_session
             .map(str::trim)
             .is_some_and(|value| !value.is_empty());
-        let inside_wsl = wsl_distro_name
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-
-        if inside_windows_terminal && inside_wsl {
+        if inside_windows_terminal || running_on_windows {
             Self::ViewportReplay
         } else {
             Self::HostScrollback
@@ -260,6 +258,10 @@ impl InlineHistoryRenderMode {
 
     fn mirrors_recent_transcript_in_tail(self) -> bool {
         matches!(self, Self::ViewportReplay)
+    }
+
+    fn writes_host_scrollback(self) -> bool {
+        matches!(self, Self::HostScrollback)
     }
 }
 
@@ -372,23 +374,32 @@ mod startup_ascii_art_env_tests {
     #[test]
     fn inline_history_render_mode_defaults_to_host_scrollback() {
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, None, None),
+            InlineHistoryRenderMode::from_env_values(None, None, None, false),
             InlineHistoryRenderMode::HostScrollback
         );
     }
 
     #[test]
-    fn inline_history_render_mode_detects_windows_terminal_wsl_combo() {
+    fn inline_history_render_mode_detects_windows_terminals() {
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), Some("Ubuntu")),
+            InlineHistoryRenderMode::from_env_values(
+                None,
+                Some("wt-session"),
+                Some("Ubuntu"),
+                false,
+            ),
             InlineHistoryRenderMode::ViewportReplay
         );
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), None),
-            InlineHistoryRenderMode::HostScrollback
+            InlineHistoryRenderMode::from_env_values(None, Some("wt-session"), None, false),
+            InlineHistoryRenderMode::ViewportReplay
         );
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None, None, Some("Ubuntu")),
+            InlineHistoryRenderMode::from_env_values(None, None, None, true),
+            InlineHistoryRenderMode::ViewportReplay
+        );
+        assert_eq!(
+            InlineHistoryRenderMode::from_env_values(None, None, Some("Ubuntu"), false),
             InlineHistoryRenderMode::HostScrollback
         );
     }
@@ -400,16 +411,23 @@ mod startup_ascii_art_env_tests {
                 Some("scrollback"),
                 Some("wt-session"),
                 Some("Ubuntu"),
+                true,
             ),
             InlineHistoryRenderMode::HostScrollback
         );
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("viewport-replay"), None, None),
+            InlineHistoryRenderMode::from_env_values(Some("viewport-replay"), None, None, false),
             InlineHistoryRenderMode::ViewportReplay
         );
         assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("mirror"), None, None),
+            InlineHistoryRenderMode::from_env_values(Some("mirror"), None, None, false),
             InlineHistoryRenderMode::ViewportReplay
         );
+    }
+
+    #[test]
+    fn viewport_replay_does_not_write_host_scrollback() {
+        assert!(InlineHistoryRenderMode::HostScrollback.writes_host_scrollback());
+        assert!(!InlineHistoryRenderMode::ViewportReplay.writes_host_scrollback());
     }
 }
