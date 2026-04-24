@@ -7,14 +7,14 @@ pub(super) fn build_shell_header_lines_with_context(
     match context.conversation_state {
         ShellConversationState::Loading => vec![
             Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
+                Span::styled("Conversation Shell", AkraTheme::title()),
                 Span::raw(" / loading thread"),
             ]),
             Line::from(thread_history_loading_header_line()),
         ],
         ShellConversationState::Ready(conversation) => vec![
             Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Cyan)),
+                Span::styled("Conversation Shell", AkraTheme::title()),
                 Span::raw(" / "),
                 Span::raw(conversation.title.clone()),
             ]),
@@ -40,7 +40,7 @@ pub(super) fn build_shell_header_lines_with_context(
         ],
         ShellConversationState::Failed(message) => vec![
             Line::from(vec![
-                Span::styled("Conversation Shell", Style::default().fg(Color::Red)),
+                Span::styled("Conversation Shell", AkraTheme::danger()),
                 Span::raw(" / failed"),
             ]),
             Line::from(message.to_string()),
@@ -117,8 +117,8 @@ fn startup_state_style_for_availability(
     shell_action_availability: ShellActionAvailability,
 ) -> Style {
     match shell_action_availability {
-        ShellActionAvailability::Ready => Style::default().fg(Color::Green),
-        ShellActionAvailability::Pending => Style::default().fg(Color::Yellow),
-        ShellActionAvailability::Blocked => Style::default().fg(Color::Red),
+        ShellActionAvailability::Ready => AkraTheme::success(),
+        ShellActionAvailability::Pending => AkraTheme::warning(),
+        ShellActionAvailability::Blocked => AkraTheme::danger(),
     }
 }

@@ -1,5 +1,5 @@
 use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
-use super::super::super::super::{Color, Line, Modifier, PlanningValidationSeverity, Span, Style};
+use super::super::super::super::{AkraTheme, Line, PlanningValidationSeverity};
 
 pub(super) struct PlanningExistingWorkspaceCopy {
     pub(super) workspace_directory: String,
@@ -41,25 +41,9 @@ pub(super) struct PlanningDraftEditorStatusCopy<'a> {
 }
 
 pub(super) fn planning_setup_title_line(suffix: &'static str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "Planning Setup",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(suffix),
-    ])
+    AkraTheme::title_line("Planning Setup", suffix)
 }
 
 pub(super) fn planning_draft_title_line(suffix: &'static str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "Planning Draft",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(suffix),
-    ])
+    AkraTheme::title_line("Planning Draft", suffix)
 }

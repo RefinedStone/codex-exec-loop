@@ -1,20 +1,10 @@
-use super::super::super::{
-    Color, Line, Modifier, NativeTuiApp, Span, Style, TaskIntakeOverlayStep,
-};
+use super::super::super::{AkraTheme, Line, NativeTuiApp, Span, TaskIntakeOverlayStep};
 use super::TaskIntakeOverlayView;
 
 pub(crate) fn build_task_intake_overlay_view(app: &NativeTuiApp) -> TaskIntakeOverlayView {
     let state = &app.task_intake_overlay_ui_state;
     let header_lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Task Intake",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" / runtime planning"),
-        ]),
+        AkraTheme::title_line("Task Intake", " / runtime planning"),
         Line::from("Draft one ready task for the accepted planning queue."),
     ];
     let prompt_lines = if state.prompt_buffer().trim().is_empty() {
@@ -45,7 +35,7 @@ pub(crate) fn build_task_intake_overlay_view(app: &NativeTuiApp) -> TaskIntakeOv
     let mut status_lines = Vec::new();
     if let Some(error) = state.error() {
         status_lines.push(Line::from(vec![
-            Span::styled("error: ", Style::default().fg(Color::Red)),
+            Span::styled("error: ", AkraTheme::danger()),
             Span::raw(error.to_string()),
         ]));
     } else if let Some(result) = state.commit_result() {

@@ -1,4 +1,4 @@
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 
 use super::super::capability_copy::{
     startup_attachment_summary_line, startup_diagnostics_summary_line,
@@ -9,13 +9,13 @@ use super::super::planning::build_planner_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
-    ConversationInputState, ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
+    AkraTheme, ConversationInputState, ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
     INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
     INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT, INLINE_TAIL_STATUS_DETAIL_LIMIT,
     INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode, InlineShellCommandInput,
     NativeTuiApp, ShellActionAvailability, ShellConversationState, ShellCorePresentationContext,
-    StartupState, auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
-    inline_input_state_label, turn_status_label,
+    ShellOverlay, StartupState, auto_follow_prompt_status_line, build_working_line,
+    compact_inline_detail, inline_input_state_label, turn_status_label,
 };
 use super::plan_indicator::{current_plan_mode_indicator, plan_mode_prefixed_spans};
 use super::tail_shared::{
@@ -43,7 +43,11 @@ pub(super) fn build_inline_tail_lines_with_context(
     let planner_panel_lines = build_planner_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
 
     if context.startup_screen_is_active() {
-        let mut lines = build_inline_startup_screen_lines_with_context(context);
+        let mut lines = if app.shell_overlay == ShellOverlay::Hidden {
+            build_inline_startup_screen_lines_with_context(context)
+        } else {
+            build_inline_startup_overlay_tail_lines_with_context(context)
+        };
         lines.extend(build_inline_tail_prompt_lines_with_context(
             context,
             app.shell_action_availability(),
@@ -223,12 +227,16 @@ fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&Conv
 fn build_inline_startup_screen_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(format!(
-        "startup: {}  |  sessions: {}  |  gh: {}",
-        context.shell_action_availability.status_text(),
-        context.recent_session_status_label.as_str(),
-        context.github_review_polling_status_label.as_str(),
-    ))];
+    let mut lines = startup_masthead_lines();
+    lines.push(Line::from(vec![
+        ratatui::text::Span::styled("Akra", AkraTheme::brand()),
+        ratatui::text::Span::raw(format!(
+            "  |  Workflows: {}  |  Queues: {}  |  Observability: {}",
+            startup_axis_status(context.shell_action_availability),
+            context.recent_session_status_label.as_str(),
+            context.github_review_polling_status_label.as_str(),
+        )),
+    ]));
 
     match context.startup_state {
         StartupState::Idle => {
@@ -282,6 +290,50 @@ fn build_inline_startup_screen_lines_with_context(
 
     lines.push(Line::from(""));
     lines
+}
+
+fn build_inline_startup_overlay_tail_lines_with_context(
+    context: &ShellCorePresentationContext<'_>,
+) -> Vec<Line<'static>> {
+    vec![Line::from(vec![
+        ratatui::text::Span::styled("Akra", AkraTheme::brand()),
+        ratatui::text::Span::raw(format!(
+            "  |  Workflows: {}  |  Queues: {}  |  Observability: {}",
+            startup_axis_status(context.shell_action_availability),
+            context.recent_session_status_label.as_str(),
+            context.github_review_polling_status_label.as_str(),
+        )),
+    ])]
+}
+
+fn startup_masthead_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled("    _    _  __ ____    _", AkraTheme::brand())),
+        Line::from(Span::styled(
+            "   / \\  | |/ /|  _ \\  / \\",
+            AkraTheme::brand(),
+        )),
+        Line::from(Span::styled(
+            "  / _ \\ | ' / | |_) |/ _ \\",
+            AkraTheme::brand(),
+        )),
+        Line::from(Span::styled(
+            " / ___ \\| . \\ |  _ </ ___ \\",
+            AkraTheme::brand(),
+        )),
+        Line::from(Span::styled(
+            "/_/   \\_\\_|\\_\\|_| \\_\\_/   \\_\\",
+            AkraTheme::brand(),
+        )),
+    ]
+}
+
+fn startup_axis_status(shell_action_availability: ShellActionAvailability) -> &'static str {
+    match shell_action_availability {
+        ShellActionAvailability::Ready => "ready",
+        ShellActionAvailability::Pending => "pending",
+        ShellActionAvailability::Blocked => "blocked",
+    }
 }
 
 fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {

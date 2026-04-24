@@ -14,6 +14,9 @@ version = 1
 
 
 
+
+
+
 Status
 staged draft: bootstrap-test
 current file: .codex-exec-loop/planning/directions.toml (1/3)
@@ -24,9 +27,6 @@ controls: Tab/BackTab switches files  |  arrows move the cursor
 controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word
 controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning
 controls: Esc/Ctrl+C closes this surface
-startup: startup ready  |  sessions: ready to load  |  gh: off
-workspace: /tmp/root
-diagnostics: codex ok  |  app-server ok  |  account ok
-attachment: provider-launched  |  recovery: provider-thread-id
-conversation
-first reply appears here after you send the opening prompt
+Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
+>
+prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help

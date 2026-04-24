@@ -1,11 +1,11 @@
 use super::super::planner_debug_preview::build_debug_preview_lines;
-use super::super::{ConversationState, NativeTuiApp};
+use super::super::{AkraTheme, ConversationState, NativeTuiApp};
 use super::status_projection::{
     build_planning_followup_surface_projection, compact_queue_framing_summary,
 };
 use crate::application::service::planning::PlanningRuntimePreviewRequest;
 use crate::domain::text::compact_whitespace_detail;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 const AUTOMATION_WARNING_DETAIL_LIMIT: usize = 32;
@@ -162,20 +162,13 @@ fn append_multiline_debug_block(lines: &mut Vec<Line<'static>>, block: Option<&s
 }
 
 fn planner_debug_header_line(label: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        label.to_string(),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    ))
+    Line::from(Span::styled(label.to_string(), AkraTheme::title()))
 }
 
 fn planner_debug_section_header_line(label: &str) -> Line<'static> {
     Line::from(Span::styled(
         label.to_string(),
-        Style::default()
-            .fg(Color::Gray)
-            .add_modifier(Modifier::BOLD),
+        AkraTheme::muted().add_modifier(Modifier::BOLD),
     ))
 }
 
@@ -313,7 +306,7 @@ pub(crate) fn build_automation_status_lines(app: &NativeTuiApp) -> Vec<Line<'sta
                         conversation.warning_summary(AUTOMATION_WARNING_DETAIL_LIMIT),
                     ),
                 },
-                Style::default().fg(Color::Yellow),
+                AkraTheme::warning(),
             )));
 
             lines

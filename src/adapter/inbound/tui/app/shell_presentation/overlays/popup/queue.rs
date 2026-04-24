@@ -1,23 +1,15 @@
 use super::super::super::{
-    Color, ConversationState, Line, Modifier, NativeTuiApp, PriorityQueueSkippedTask,
-    PriorityQueueTask, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
-    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, Span, Style,
-    build_automation_key_lines, build_automation_list_view, build_automation_preview_lines,
-    build_automation_status_lines, compact_whitespace_detail,
+    AkraTheme, ConversationState, Line, NativeTuiApp, PriorityQueueSkippedTask, PriorityQueueTask,
+    QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
+    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, build_automation_key_lines,
+    build_automation_list_view, build_automation_preview_lines, build_automation_status_lines,
+    compact_whitespace_detail,
 };
 use super::{AutomationOverlayView, QueueOverlayView};
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     let header_lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Planning Queue",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" / shell inspection"),
-        ]),
+        AkraTheme::title_line("Planning Queue", " / shell inspection"),
         Line::from("Review the next actionable work without opening raw planning files."),
     ];
 
@@ -175,15 +167,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
 pub(crate) fn build_automation_overlay_view(app: &NativeTuiApp) -> AutomationOverlayView {
     AutomationOverlayView {
         header_lines: vec![
-            Line::from(vec![
-                Span::styled(
-                    "Automation Controls",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" / shell inspection"),
-            ]),
+            AkraTheme::title_line("Automation Controls", " / shell inspection"),
             Line::from("Inspect planning-driven automation before the next auto-follow turn."),
         ],
         list_view: build_automation_list_view(app),

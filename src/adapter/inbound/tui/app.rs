@@ -119,6 +119,8 @@ mod task_intake_overlay_ui;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;
+#[path = "app/theme.rs"]
+mod theme;
 #[cfg(test)]
 #[path = "app/tui_testkit.rs"]
 mod tui_testkit;
@@ -176,6 +178,7 @@ use shell_presentation::{
     build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
 };
 use task_intake_overlay_ui::{TaskIntakeOverlayStep, TaskIntakeOverlayUiState};
+use theme::AkraTheme;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AutoFollowupSubmitContext {

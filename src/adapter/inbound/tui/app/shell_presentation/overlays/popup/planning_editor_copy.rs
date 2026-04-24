@@ -1,5 +1,5 @@
 use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
-use super::super::super::super::{Color, Line, PlanningValidationSeverity, Span, Style};
+use super::super::super::super::{AkraTheme, Line, PlanningValidationSeverity, Span};
 use super::copy::{PlanningDraftEditorStatusCopy, planning_draft_title_line};
 
 pub(super) fn build_planning_draft_editor_header_lines(
@@ -21,18 +21,18 @@ pub(super) fn build_planning_draft_editor_status_lines(
             copy.active_path, copy.selected_file_position, copy.file_count
         )),
         Line::from(vec![
-            Span::styled("validation state: ", Style::default().fg(Color::Gray)),
+            Span::styled("validation state: ", AkraTheme::muted()),
             Span::styled(
                 if copy.validation_ok {
                     "ok"
                 } else {
                     "needs attention"
                 },
-                Style::default().fg(if copy.validation_ok {
-                    Color::Green
+                if copy.validation_ok {
+                    AkraTheme::success()
                 } else {
-                    Color::Yellow
-                }),
+                    AkraTheme::warning()
+                },
             ),
         ]),
     ];
@@ -43,10 +43,10 @@ pub(super) fn build_planning_draft_editor_status_lines(
                     PlanningValidationSeverity::Error => "error: ",
                     PlanningValidationSeverity::Warning => "warning: ",
                 },
-                Style::default().fg(match issue.severity {
-                    PlanningValidationSeverity::Error => Color::Red,
-                    PlanningValidationSeverity::Warning => Color::Yellow,
-                }),
+                match issue.severity {
+                    PlanningValidationSeverity::Error => AkraTheme::danger(),
+                    PlanningValidationSeverity::Warning => AkraTheme::warning(),
+                },
             ),
             Span::raw(issue.detail),
         ]));
@@ -71,11 +71,11 @@ pub(super) fn build_planning_draft_editor_status_lines(
                 } else {
                     "close guard: "
                 },
-                Style::default().fg(if copy.confirmation_pending {
-                    Color::Red
+                if copy.confirmation_pending {
+                    AkraTheme::danger()
                 } else {
-                    Color::Yellow
-                }),
+                    AkraTheme::warning()
+                },
             ),
             Span::raw(planning_draft_close_guard_detail(
                 risk,

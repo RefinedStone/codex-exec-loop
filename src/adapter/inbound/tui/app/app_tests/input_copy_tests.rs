@@ -99,7 +99,7 @@ fn inline_tail_compacts_empty_draft_prompt_copy() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("Akra  |  Workflows: ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
     assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
     assert!(rendered.contains("conversation"));

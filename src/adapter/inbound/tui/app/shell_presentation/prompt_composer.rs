@@ -168,16 +168,14 @@ pub(super) fn build_shell_command_palette_lines(
             let is_selected = selected_index == window_start + offset;
             let selector = if is_selected { "> " } else { "  " };
             let label_style = if is_selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                AkraTheme::brand()
             } else {
                 Style::default()
             };
             let detail_style = if is_selected {
                 Style::default().add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                AkraTheme::subtle()
             };
 
             Line::from(vec![

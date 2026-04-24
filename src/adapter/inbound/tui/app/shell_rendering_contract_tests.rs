@@ -167,7 +167,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
-    assert!(rendered.contains("startup: startup ready"));
+    assert!(rendered.contains("Akra  |  Workflows: ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
     assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
     assert!(rendered.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
@@ -244,7 +244,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 8));
+        .assert_cursor_position(Position::new(2, 13));
 }
 
 #[test]

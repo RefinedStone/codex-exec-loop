@@ -1,14 +1,10 @@
 #[cfg(test)]
-use ratatui::style::{Color, Modifier, Style};
-#[cfg(test)]
-use ratatui::widgets::{Block, Borders};
-#[cfg(test)]
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 #[cfg(test)]
 use super::super::shell_presentation::OverlayListView;
 #[cfg(test)]
-use super::super::{Frame, Line, NativeTuiApp, Rect};
+use super::super::{AkraTheme, Frame, Line, NativeTuiApp, Rect};
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -20,7 +16,7 @@ pub(super) fn draw_session_list_panel(
 ) {
     if let Some(message_lines) = list_view.message_lines {
         let widget = Paragraph::new(message_lines)
-            .block(Block::default().borders(Borders::ALL).title("Threads"))
+            .block(AkraTheme::panel_block("Threads"))
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
         return;
@@ -32,13 +28,8 @@ pub(super) fn draw_session_list_panel(
             .into_iter()
             .map(|item| ListItem::new(item.lines)),
     )
-    .block(Block::default().borders(Borders::ALL).title("Threads"))
-    .highlight_style(
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+    .block(AkraTheme::panel_block("Threads"))
+    .highlight_style(AkraTheme::selected())
     .highlight_symbol(">> ");
 
     app.session_overlay_ui_state
@@ -54,11 +45,7 @@ pub(super) fn draw_session_detail_panel(
     lines: Vec<Line<'static>>,
 ) {
     let detail = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Selected Session"),
-        )
+        .block(AkraTheme::panel_block("Selected Session"))
         .wrap(Wrap { trim: false });
     frame.render_widget(detail, area);
 }
@@ -73,7 +60,7 @@ pub(super) fn draw_automation_list_panel(
 ) {
     if let Some(message_lines) = list_view.message_lines {
         let widget = Paragraph::new(message_lines)
-            .block(Block::default().borders(Borders::ALL).title("Automation"))
+            .block(AkraTheme::panel_block("Automation"))
             .wrap(Wrap { trim: true });
         frame.render_widget(widget, area);
         return;
@@ -85,13 +72,8 @@ pub(super) fn draw_automation_list_panel(
             .into_iter()
             .map(|item| ListItem::new(item.lines)),
     )
-    .block(Block::default().borders(Borders::ALL).title("Automation"))
-    .highlight_style(
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+    .block(AkraTheme::panel_block("Automation"))
+    .highlight_style(AkraTheme::selected())
     .highlight_symbol(">> ");
 
     app.followup_overlay_ui_state

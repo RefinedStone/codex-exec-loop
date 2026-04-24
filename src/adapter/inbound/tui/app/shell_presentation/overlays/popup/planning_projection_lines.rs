@@ -1,5 +1,5 @@
 use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorBufferState;
-use super::super::super::super::{Color, Line, Modifier, Span, Style};
+use super::super::super::super::{AkraTheme, Line, Modifier, Span, Style};
 
 pub(super) fn build_planning_draft_editor_file_lines(
     buffers: &[PlanningDraftEditorBufferState],
@@ -12,11 +12,11 @@ pub(super) fn build_planning_draft_editor_file_lines(
             let selected = index == selected_index;
             let dirty_suffix = if buffer.is_dirty() { " *dirty" } else { "" };
             let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                AkraTheme::selected()
             } else if buffer.is_dirty() {
-                Style::default().fg(Color::Yellow)
+                AkraTheme::warning()
             } else {
-                Style::default().fg(Color::White)
+                Style::default()
             };
             let marker = if selected { ">> " } else { "   " };
             Line::from(vec![

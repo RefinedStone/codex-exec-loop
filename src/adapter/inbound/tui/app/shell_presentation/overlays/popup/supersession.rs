@@ -1,11 +1,10 @@
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 
 use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
 };
 
-use super::super::super::super::NativeTuiApp;
+use super::super::super::super::{AkraTheme, NativeTuiApp};
 use super::SupersessionOverlayView;
 
 pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> SupersessionOverlayView {
@@ -37,15 +36,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
 
     SupersessionOverlayView {
         header_lines: vec![
-            Line::from(vec![
-                Span::styled(
-                    "Supersession Control Tower",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" / supervisor board"),
-            ]),
+            AkraTheme::title_line("Supersession Control Tower", " / supervisor board"),
             Line::from("Track readiness, pool capacity, agent roster, and distributor state."),
         ],
         summary_lines,

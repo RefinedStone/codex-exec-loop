@@ -12,7 +12,7 @@ use super::capability_copy::{
     startup_overlay_running_checks_label, startup_probe_loading_summary_line,
     startup_probe_not_started_line,
 };
-use super::{Color, Line, NativeTuiApp, Span, StartupState, Style};
+use super::{AkraTheme, Line, NativeTuiApp, Span, StartupState};
 
 pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     match &app.startup_state {
@@ -22,24 +22,21 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
         ],
         StartupState::Loading => vec![
             Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    startup_overlay_running_checks_label(),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled("status: ", AkraTheme::muted()),
+                Span::styled(startup_overlay_running_checks_label(), AkraTheme::warning()),
             ]),
             Line::from(startup_probe_loading_summary_line()),
         ],
         StartupState::Ready(diagnostics) => vec![
             Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::Gray)),
+                Span::styled("status: ", AkraTheme::muted()),
                 Span::styled(
                     startup_overlay_readiness_label(diagnostics.can_continue()),
-                    Style::default().fg(if diagnostics.can_continue() {
-                        Color::Green
+                    if diagnostics.can_continue() {
+                        AkraTheme::success()
                     } else {
-                        Color::Yellow
-                    }),
+                        AkraTheme::warning()
+                    },
                 ),
             ]),
             Line::from(format!("cwd: {}", diagnostics.cwd)),
@@ -49,11 +46,8 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
         ],
         StartupState::Failed(message) => vec![
             Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    startup_overlay_failed_label(),
-                    Style::default().fg(Color::Red),
-                ),
+                Span::styled("status: ", AkraTheme::muted()),
+                Span::styled(startup_overlay_failed_label(), AkraTheme::danger()),
             ]),
             Line::from(message.clone()),
         ],
