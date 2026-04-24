@@ -329,7 +329,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.status_text,
-            "auto follow-up submitted / turn 1/3 / mode: planning queue"
+            "auto follow-up submitted / turn 1/20 / mode: planning queue"
         );
         assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 0);
         assert_eq!(reduced.state.auto_follow_state.active_turn_index(), Some(1));
@@ -339,7 +339,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("submitted auto turn 1/3")
+            Some("submitted auto turn 1/20")
         );
         assert_eq!(
             reduced
@@ -1140,7 +1140,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("queued auto turn 1/3")
+            Some("queued auto turn 1/20")
         );
     }
 
@@ -1192,7 +1192,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("queued auto turn 1/3")
+            Some("queued auto turn 1/20")
         );
     }
 
@@ -1244,7 +1244,7 @@ mod tests {
                 .last_auto_followup_activity
                 .as_ref()
                 .map(|activity| activity.summary.as_str()),
-            Some("queued auto turn 1/3")
+            Some("queued auto turn 1/20")
         );
     }
 

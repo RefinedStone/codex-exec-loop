@@ -95,7 +95,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
     assert!(rendered.contains(
-        "thread: new draft  |  turn: idle  |  auto: on/idle  |  done: 0/3  |  in: draft"
+        "thread: new draft  |  turn: idle  |  auto: on/idle  |  done: 0/20  |  in: draft"
     ));
     assert!(!rendered.contains("stable history should stay above the live region"));
     assert!(!rendered.contains("No messages in this thread yet."));
@@ -677,7 +677,7 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
     assert!(header.contains("Simple mode review"));
     assert!(options.contains("bootstrap-1"));
     assert!(options.contains("advanced path"));
-    assert!(status.contains("turn budget: 3"));
+    assert!(status.contains("turn budget: 20"));
     assert!(status.contains("advanced action: D opens detail-mode authoring"));
     assert!(keys.contains("Enter or Ctrl+P promotes the staged scaffold."));
     assert!(keys.contains("Ctrl+L edits turn budget."));

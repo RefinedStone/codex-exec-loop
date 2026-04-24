@@ -430,14 +430,14 @@ fn buffered_queue_command_stays_available_while_auto_followup_submits() {
     assert_eq!(conversation.input_buffer, ":q");
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / mode: planning queue"
+        "auto follow-up submitted / turn 1/20 / mode: planning queue"
     );
     assert_eq!(
         conversation
             .last_auto_followup_activity
             .as_ref()
             .map(|activity| activity.summary.as_str()),
-        Some("submitted auto turn 1/3")
+        Some("submitted auto turn 1/20")
     );
 
     app.start_turn_submission();
@@ -536,7 +536,7 @@ fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
     assert_eq!(conversation.input_buffer, "operator draft stays here");
     assert_eq!(
         conversation.status_text,
-        "auto follow-up submitted / turn 1/3 / mode: planning queue"
+        "auto follow-up submitted / turn 1/20 / mode: planning queue"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
