@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -10,16 +10,17 @@ use super::{
 pub(super) struct ShellRuntime {
     app: NativeTuiApp,
     should_quit: bool,
-    redraw_requested: bool,
+    frame_scheduler: TuiFrameScheduler,
     last_live_activity_pulse: Option<u64>,
 }
 
 impl ShellRuntime {
     pub(super) fn new(app: NativeTuiApp) -> Self {
+        let now = Instant::now();
         Self {
             app,
             should_quit: false,
-            redraw_requested: true,
+            frame_scheduler: TuiFrameScheduler::new(now),
             last_live_activity_pulse: None,
         }
     }
@@ -37,17 +38,33 @@ impl ShellRuntime {
         self.should_quit
     }
 
+    #[cfg(test)]
     pub(super) fn take_redraw_request(&mut self) -> bool {
-        std::mem::take(&mut self.redraw_requested)
+        self.take_due_draw_request(Instant::now())
     }
 
-    fn request_redraw(&mut self) {
-        self.redraw_requested = true;
+    pub(super) fn take_due_draw_request(&mut self, now: Instant) -> bool {
+        self.frame_scheduler.take_due(now)
+    }
+
+    pub(super) fn next_event_poll_timeout(
+        &self,
+        now: Instant,
+        default_timeout: Duration,
+    ) -> Duration {
+        self.frame_scheduler.next_poll_timeout(now, default_timeout)
+    }
+
+    fn request_redraw_at(&mut self, now: Instant) {
+        self.frame_scheduler.request_immediate(now);
     }
 
     pub(super) fn poll_background_messages(&mut self) {
+        self.poll_background_messages_at(Instant::now());
+    }
+
+    fn poll_background_messages_at(&mut self, now: Instant) {
         let mut redraw_requested = false;
-        let now = Instant::now();
 
         while let Ok(message) = self.app.rx.try_recv() {
             redraw_requested = true;
@@ -137,28 +154,37 @@ impl ShellRuntime {
         }
         self.last_live_activity_pulse = live_activity_pulse;
         if redraw_requested {
-            self.request_redraw();
+            self.request_redraw_at(now);
+        } else if live_activity_pulse.is_some() {
+            self.frame_scheduler
+                .request_delayed(now, Duration::from_millis(250));
         }
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: Event) {
+        self.handle_terminal_event_at(event, Instant::now());
+    }
+
+    fn handle_terminal_event_at(&mut self, event: Event, now: Instant) {
         match event {
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
                     return;
                 }
 
-                self.handle_key_press(key);
+                self.handle_key_press(key, now);
             }
-            Event::Resize(_, _) => self.request_redraw(),
+            Event::Resize(_, _) => self.request_redraw_at(now),
+            Event::FocusGained => self.frame_scheduler.set_focused(true, now),
+            Event::FocusLost => self.frame_scheduler.set_focused(false, now),
             _ => {}
         }
     }
 
-    fn handle_key_press(&mut self, key: KeyEvent) {
+    fn handle_key_press(&mut self, key: KeyEvent, now: Instant) {
         if let Some(confirmed_exit) = self.app.handle_exit_confirmation_key(key) {
             if !confirmed_exit {
-                self.request_redraw();
+                self.request_redraw_at(now);
             }
             if confirmed_exit {
                 self.should_quit = true;
@@ -172,7 +198,7 @@ impl ShellRuntime {
         }
 
         if self.app.handle_shell_overlay_key(key) {
-            self.request_redraw();
+            self.request_redraw_at(now);
             return;
         }
 
@@ -180,25 +206,25 @@ impl ShellRuntime {
             match key.code {
                 KeyCode::Esc if key.modifiers.is_empty() => {
                     if self.app.dismiss_inline_command_palette() {
-                        self.request_redraw();
+                        self.request_redraw_at(now);
                         return;
                     }
                 }
                 KeyCode::Up if key.modifiers.is_empty() => {
                     if self.app.move_inline_command_palette_selection(-1) {
-                        self.request_redraw();
+                        self.request_redraw_at(now);
                         return;
                     }
                 }
                 KeyCode::Down if key.modifiers.is_empty() => {
                     if self.app.move_inline_command_palette_selection(1) {
-                        self.request_redraw();
+                        self.request_redraw_at(now);
                         return;
                     }
                 }
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     if self.app.accept_inline_command_palette_selection() {
-                        self.request_redraw();
+                        self.request_redraw_at(now);
                         return;
                     }
                 }
@@ -208,7 +234,7 @@ impl ShellRuntime {
 
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
             self.app.handle_ctrl_c();
-            self.request_redraw();
+            self.request_redraw_at(now);
             return;
         }
 
@@ -262,7 +288,75 @@ impl ShellRuntime {
             _ => return,
         }
 
-        self.request_redraw();
+        self.request_redraw_at(now);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TuiFrameScheduler {
+    focused: bool,
+    next_deadline: Option<Instant>,
+}
+
+impl TuiFrameScheduler {
+    fn new(now: Instant) -> Self {
+        let mut scheduler = Self {
+            focused: true,
+            next_deadline: None,
+        };
+        scheduler.request_immediate(now);
+        scheduler
+    }
+
+    fn request_immediate(&mut self, now: Instant) {
+        self.coalesce_deadline(now);
+    }
+
+    fn request_delayed(&mut self, now: Instant, delay: Duration) {
+        self.coalesce_deadline(now + delay);
+    }
+
+    fn take_due(&mut self, now: Instant) -> bool {
+        if !self.focused {
+            return false;
+        }
+
+        let Some(deadline) = self.next_deadline else {
+            return false;
+        };
+        if deadline > now {
+            return false;
+        }
+
+        self.next_deadline = None;
+        true
+    }
+
+    fn next_poll_timeout(&self, now: Instant, default_timeout: Duration) -> Duration {
+        if !self.focused {
+            return default_timeout;
+        }
+
+        let Some(deadline) = self.next_deadline else {
+            return default_timeout;
+        };
+        default_timeout.min(deadline.saturating_duration_since(now))
+    }
+
+    fn set_focused(&mut self, focused: bool, now: Instant) {
+        self.focused = focused;
+        if focused {
+            self.request_immediate(now);
+        }
+    }
+
+    fn coalesce_deadline(&mut self, deadline: Instant) {
+        if self
+            .next_deadline
+            .is_none_or(|existing_deadline| deadline < existing_deadline)
+        {
+            self.next_deadline = Some(deadline);
+        }
     }
 }
 
@@ -538,6 +632,58 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_coalesces_immediate_and_delayed_requests() {
+        let now = Instant::now();
+        let mut scheduler = TuiFrameScheduler {
+            focused: true,
+            next_deadline: None,
+        };
+
+        scheduler.request_delayed(now, Duration::from_secs(10));
+        scheduler.request_delayed(now, Duration::from_secs(5));
+        assert_eq!(
+            scheduler.next_poll_timeout(now, Duration::from_secs(30)),
+            Duration::from_secs(5)
+        );
+
+        scheduler.request_immediate(now + Duration::from_secs(1));
+        assert_eq!(
+            scheduler.next_poll_timeout(now, Duration::from_secs(30)),
+            Duration::from_secs(1)
+        );
+        assert!(!scheduler.take_due(now));
+        assert!(scheduler.take_due(now + Duration::from_secs(1)));
+        assert!(!scheduler.take_due(now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn scheduler_reports_zero_timeout_when_draw_is_due() {
+        let now = Instant::now();
+        let scheduler = TuiFrameScheduler::new(now);
+
+        assert_eq!(
+            scheduler.next_poll_timeout(now, Duration::from_millis(100)),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn focus_lost_blocks_draw_until_focus_returns() {
+        let mut runtime = make_test_runtime();
+        runtime.take_redraw_request();
+        let now = Instant::now();
+
+        runtime.handle_terminal_event_at(Event::FocusLost, now);
+        runtime.handle_terminal_event_at(Event::Resize(120, 40), now + Duration::from_millis(1));
+
+        assert!(!runtime.take_due_draw_request(now + Duration::from_millis(1)));
+
+        runtime.handle_terminal_event_at(Event::FocusGained, now + Duration::from_millis(2));
+
+        assert!(runtime.take_due_draw_request(now + Duration::from_millis(2)));
+    }
+
+    #[test]
     fn idle_background_poll_does_not_request_redraw() {
         let mut runtime = make_test_runtime();
         runtime.take_redraw_request();
@@ -545,6 +691,30 @@ mod tests {
         runtime.poll_background_messages();
 
         assert!(!runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
+        let mut runtime = make_test_runtime();
+        runtime.take_redraw_request();
+        let now = Instant::now();
+        let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state
+        else {
+            panic!("expected ready conversation state");
+        };
+        conversation.input_state = ConversationInputState::StreamingTurn;
+        conversation.active_turn_id = Some("turn-1".to_string());
+        conversation.active_turn_started_at = Some(now - Duration::from_secs(5));
+        runtime.last_live_activity_pulse = Some(5);
+
+        runtime.poll_background_messages_at(now);
+
+        assert!(!runtime.take_due_draw_request(now));
+        assert_eq!(
+            runtime.next_event_poll_timeout(now, Duration::from_secs(1)),
+            Duration::from_millis(250)
+        );
+        assert!(runtime.take_due_draw_request(now + Duration::from_millis(250)));
     }
 
     #[test]

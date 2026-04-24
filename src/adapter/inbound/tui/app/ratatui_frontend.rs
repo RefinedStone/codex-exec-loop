@@ -67,11 +67,13 @@ fn run_event_loop(
 ) -> Result<()> {
     while !runtime.should_quit() {
         runtime.poll_background_messages();
-        if runtime.take_redraw_request() {
+        if runtime.take_due_draw_request(std::time::Instant::now()) {
             draw_inline_transaction(terminal, runtime, inline_terminal)?;
         }
 
-        if !event::poll(Duration::from_millis(100))? {
+        let poll_timeout =
+            runtime.next_event_poll_timeout(std::time::Instant::now(), Duration::from_millis(100));
+        if !event::poll(poll_timeout)? {
             continue;
         }
 
