@@ -1,0 +1,17 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: rendered
+---
+thread: new draft  |  turn: working  |  auto: on/idle  |  done: 0/20  |  in:    
+streaming  |  Plan on / invalid                                                 
+status: new thread draft  |  warn: none  |  startup: startup ready  |  gh: off  
+parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |       
+queue: inactive                                                                 
+◦ Working (0s • turn running / interrupt unsupported)                           
+planning: invalid  |  failure: planning validation failed: task ...             
+now: none  |  next: none                                                        
+proposed: none  |  blocked: none                                                
+live: Codex                                                                     
+  streaming delta should stay in the live tail until completion                 
+>                                                                               
+prompt: turn running  |  type now, Enter when idle

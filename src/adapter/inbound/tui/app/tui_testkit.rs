@@ -57,12 +57,36 @@ pub(super) fn render_inline_snapshot(app: &mut NativeTuiApp, width: u16, height:
     screen_text(&terminal)
 }
 
+pub(super) fn render_inline_vt100_snapshot(
+    app: &mut NativeTuiApp,
+    width: u16,
+    height: u16,
+) -> String {
+    let mut terminal = inline_terminal(width, height);
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+    vt100_contents_from_buffer(terminal.backend().buffer())
+}
+
 pub(super) fn render_shell_snapshot(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
     let mut terminal = shell_terminal(width, height);
     terminal
         .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
         .expect("shell render succeeds");
     screen_text(&terminal)
+}
+
+pub(super) fn render_shell_vt100_snapshot(
+    app: &mut NativeTuiApp,
+    width: u16,
+    height: u16,
+) -> String {
+    let mut terminal = shell_terminal(width, height);
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::InlineMainBuffer))
+        .expect("shell render succeeds");
+    vt100_contents_from_buffer(terminal.backend().buffer())
 }
 
 pub(super) fn screen_text<B>(terminal: &Terminal<B>) -> String
@@ -89,6 +113,11 @@ pub(super) fn buffer_text(buffer: &Buffer) -> String {
         .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(super) fn vt100_contents_from_buffer(buffer: &Buffer) -> String {
+    let bytes = buffer_text(buffer).replace('\n', "\r\n");
+    vt100_contents(buffer.area.width, buffer.area.height, bytes.as_bytes())
 }
 
 pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
