@@ -118,8 +118,8 @@ fn insert_with_newline_fallback<B: Backend>(
     while source_y < overflow_pending_rows {
         let rows_this_chunk = (overflow_pending_rows - source_y).min(staging_rows);
         let destination_y = viewport_top.saturating_sub(rows_this_chunk);
-        draw_buffer_rows_at(terminal, buffer, source_y, rows_this_chunk, destination_y)?;
         scroll_terminal_from_bottom(terminal, size.height, rows_this_chunk)?;
+        draw_buffer_rows_at(terminal, buffer, source_y, rows_this_chunk, destination_y)?;
         source_y += rows_this_chunk;
     }
 
@@ -460,7 +460,14 @@ mod tests {
             .inner_mut()
             .write_all(b"SHELL_ONE\r\nSHELL_TWO\r\nSHELL_THREE\r\nSHELL_FOUR")
             .unwrap();
-        let lines = vec![Line::from("history one"), Line::from("history two")];
+        let lines = vec![
+            Line::from("history one"),
+            Line::from("history two"),
+            Line::from("history three"),
+            Line::from("history four"),
+            Line::from("history five"),
+            Line::from("history six"),
+        ];
 
         HistoryInsertionAdapter::new(HistoryInsertionMode::NewlineFallback)
             .insert(&mut terminal, &lines)
@@ -474,6 +481,10 @@ mod tests {
             "SHELL_FOUR",
             "history one",
             "history two",
+            "history three",
+            "history four",
+            "history five",
+            "history six",
         ] {
             assert!(
                 terminal_history.contains(marker),
