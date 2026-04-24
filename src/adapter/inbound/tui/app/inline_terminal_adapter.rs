@@ -504,8 +504,11 @@ impl HistoryFlushState {
                 as u16
         };
         if inserted_rows > 0 {
-            HistoryInsertionAdapter::new(insert_mode)
-                .insert(terminal, &self.pending_history_lines)?;
+            HistoryInsertionAdapter::new(insert_mode).insert_with_rendered_rows(
+                terminal,
+                &self.pending_history_lines,
+                inserted_rows,
+            )?;
         }
         let viewport_top_after_insert = terminal.get_frame().area().top();
         if current_lines.is_empty() {

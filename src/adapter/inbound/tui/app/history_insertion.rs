@@ -63,25 +63,37 @@ impl HistoryInsertionAdapter {
         Self { mode }
     }
 
+    #[cfg(test)]
     pub(super) fn insert<B: Backend>(
         self,
         terminal: &mut Terminal<B>,
         lines: &[Line<'static>],
     ) -> Result<(), B::Error> {
         let width = terminal.size()?.width;
-        let height = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
-        if width == 0 || height == 0 {
+        let rendered_rows = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
+        self.insert_with_rendered_rows(terminal, lines, rendered_rows)
+    }
+
+    pub(super) fn insert_with_rendered_rows<B: Backend>(
+        self,
+        terminal: &mut Terminal<B>,
+        lines: &[Line<'static>],
+        rendered_rows: u16,
+    ) -> Result<(), B::Error> {
+        let width = terminal.size()?.width;
+        if width == 0 || rendered_rows == 0 {
             return Ok(());
         }
 
         let cursor = terminal.get_cursor_position()?;
         let result = match self.mode {
             HistoryInsertionMode::StandardScrollRegion => {
-                insert_with_standard_scroll_region(terminal, lines, height)
+                insert_with_standard_scroll_region(terminal, lines, rendered_rows)
             }
             HistoryInsertionMode::NewlineFallback => {
                 let viewport_top = terminal.get_frame().area().top();
-                let buffer = rendered_history_buffer_with_height(width, height, lines.to_vec());
+                let buffer =
+                    rendered_history_buffer_with_height(width, rendered_rows, lines.to_vec());
                 insert_with_newline_fallback(terminal, &buffer, viewport_top)
             }
         };
@@ -165,9 +177,20 @@ fn draw_buffer_rows_at<B: Backend>(
         terminal
             .backend_mut()
             .clear_region(ClearType::CurrentLine)?;
+        let row_area = Rect {
+            x: 0,
+            y: destination_row,
+            width: buffer.area.width,
+            height: 1,
+        };
+        let mut rendered_row = Buffer::empty(row_area);
+        for x in 0..buffer.area.width {
+            rendered_row[(x, destination_row)] = buffer[(x, y)].clone();
+        }
+        let blank_row = Buffer::empty(row_area);
         terminal
             .backend_mut()
-            .draw((0..buffer.area.width).map(|x| (x, destination_row, &buffer[(x, y)])))?;
+            .draw(blank_row.diff(&rendered_row).into_iter())?;
     }
     terminal.backend_mut().flush()
 }
@@ -491,5 +514,36 @@ mod tests {
                 "newline fallback should preserve {marker}: {terminal_history:?}"
             );
         }
+    }
+
+    #[test]
+    fn newline_fallback_keeps_hangul_graphemes_compact() {
+        let mut terminal = tui_testkit::inline_history_vt100_terminal(
+            InlineHistoryRenderMode::HostScrollback,
+            40,
+            16,
+        );
+        let lines = vec![
+            Line::from("동화 설명해 주세요"),
+            Line::from("한글 간격이 벌어지면 안 됩니다"),
+        ];
+
+        HistoryInsertionAdapter::new(HistoryInsertionMode::NewlineFallback)
+            .insert(&mut terminal, &lines)
+            .unwrap();
+
+        let terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+        assert!(
+            terminal_history.contains("동화 설명해 주세요"),
+            "newline fallback should keep Hangul contiguous: {terminal_history:?}"
+        );
+        assert!(
+            terminal_history.contains("한글 간격이 벌어지면 안 됩니다"),
+            "newline fallback should keep wrapped Hangul contiguous: {terminal_history:?}"
+        );
+        assert!(
+            !terminal_history.contains("동 화"),
+            "newline fallback should not expose hidden Hangul cells as spaces: {terminal_history:?}"
+        );
     }
 }
