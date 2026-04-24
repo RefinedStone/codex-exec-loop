@@ -4,7 +4,7 @@ use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -67,7 +67,6 @@ impl HistoryInsertionAdapter {
         self,
         terminal: &mut Terminal<B>,
         lines: &[Line<'static>],
-        visible_history_rows: u16,
     ) -> Result<(), B::Error> {
         let width = terminal.size()?.width;
         let height = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
@@ -82,8 +81,8 @@ impl HistoryInsertionAdapter {
             }
             HistoryInsertionMode::NewlineFallback => {
                 let viewport_top = terminal.get_frame().area().top();
-                let buffer = rendered_history_buffer(width, lines);
-                insert_with_newline_fallback(terminal, &buffer, visible_history_rows, viewport_top)
+                let buffer = rendered_history_buffer_with_height(width, height, lines.to_vec());
+                insert_with_newline_fallback(terminal, &buffer, viewport_top)
             }
         };
         restore_cursor(terminal, cursor)?;
@@ -97,14 +96,13 @@ fn insert_with_standard_scroll_region<B: Backend>(
     height: u16,
 ) -> Result<(), B::Error> {
     terminal.insert_before(height, |buffer| {
-        history_paragraph(lines).render(buffer.area, buffer);
+        history_paragraph(lines.to_vec()).render(buffer.area, buffer);
     })
 }
 
 fn insert_with_newline_fallback<B: Backend>(
     terminal: &mut Terminal<B>,
     buffer: &Buffer,
-    visible_history_rows: u16,
     viewport_top: u16,
 ) -> Result<(), B::Error> {
     let size = terminal.size()?;
@@ -112,43 +110,42 @@ fn insert_with_newline_fallback<B: Backend>(
         return Ok(());
     }
 
-    let existing_visible_rows = visible_history_rows.min(viewport_top);
     let pending_rows = buffer.area.height;
-    let overflow_rows = existing_visible_rows
-        .saturating_add(pending_rows)
-        .saturating_sub(viewport_top);
-    let overflow_existing_rows = overflow_rows.min(existing_visible_rows);
-    let overflow_pending_rows = overflow_rows.saturating_sub(overflow_existing_rows);
-
-    if overflow_existing_rows > 0 {
-        terminal.backend_mut().set_cursor_position(Position {
-            x: 0,
-            y: size.height - 1,
-        })?;
-        terminal
-            .backend_mut()
-            .append_lines(overflow_existing_rows)?;
-    }
-
+    let overflow_pending_rows = pending_rows.saturating_sub(viewport_top);
+    let staging_rows = viewport_top.max(1);
     let mut source_y = 0;
+
     while source_y < overflow_pending_rows {
-        let rows_this_chunk = (overflow_pending_rows - source_y).min(size.height);
-        draw_buffer_rows_at(terminal, buffer, source_y, rows_this_chunk, 0)?;
-        terminal.backend_mut().set_cursor_position(Position {
-            x: 0,
-            y: size.height - 1,
-        })?;
-        terminal.backend_mut().append_lines(rows_this_chunk)?;
+        let rows_this_chunk = (overflow_pending_rows - source_y).min(staging_rows);
+        let destination_y = viewport_top.saturating_sub(rows_this_chunk);
+        draw_buffer_rows_at(terminal, buffer, source_y, rows_this_chunk, destination_y)?;
+        scroll_terminal_from_bottom(terminal, size.height, rows_this_chunk)?;
         source_y += rows_this_chunk;
     }
 
     let suffix_rows = pending_rows.saturating_sub(overflow_pending_rows);
     if suffix_rows > 0 {
-        let suffix_start = buffer.area.height - suffix_rows;
-        let destination_y = existing_visible_rows.saturating_sub(overflow_existing_rows);
-        draw_buffer_rows_at(terminal, buffer, suffix_start, suffix_rows, destination_y)?;
+        scroll_terminal_from_bottom(terminal, size.height, suffix_rows)?;
+        let destination_y = viewport_top.saturating_sub(suffix_rows);
+        draw_buffer_rows_at(terminal, buffer, source_y, suffix_rows, destination_y)?;
     }
     terminal.backend_mut().flush()
+}
+
+fn scroll_terminal_from_bottom<B: Backend>(
+    terminal: &mut Terminal<B>,
+    terminal_height: u16,
+    row_count: u16,
+) -> Result<(), B::Error> {
+    if row_count == 0 || terminal_height == 0 {
+        return Ok(());
+    }
+
+    terminal.backend_mut().set_cursor_position(Position {
+        x: 0,
+        y: terminal_height - 1,
+    })?;
+    terminal.backend_mut().append_lines(row_count)
 }
 
 fn draw_buffer_rows_at<B: Backend>(
@@ -198,8 +195,17 @@ pub(super) fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -
     rendered_history_height(width, lines)
 }
 
+#[cfg(test)]
 pub(super) fn rendered_history_buffer(width: u16, lines: &[Line<'static>]) -> Buffer {
     let height = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
+    rendered_history_buffer_with_height(width, height, lines.to_vec())
+}
+
+fn rendered_history_buffer_with_height<'a>(
+    width: u16,
+    height: u16,
+    text: impl Into<Text<'a>>,
+) -> Buffer {
     let area = Rect {
         x: 0,
         y: 0,
@@ -211,12 +217,12 @@ pub(super) fn rendered_history_buffer(width: u16, lines: &[Line<'static>]) -> Bu
         return buffer;
     }
 
-    history_paragraph(lines).render(buffer.area, &mut buffer);
+    history_paragraph(text).render(buffer.area, &mut buffer);
     buffer
 }
 
-fn history_paragraph(lines: &[Line<'static>]) -> Paragraph<'static> {
-    Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false })
+fn history_paragraph<'a>(text: impl Into<Text<'a>>) -> Paragraph<'a> {
+    Paragraph::new(text).wrap(Wrap { trim: false })
 }
 
 fn rendered_history_height(width: u16, lines: &[Line<'static>]) -> usize {
@@ -231,7 +237,7 @@ fn rendered_history_height(width: u16, lines: &[Line<'static>]) -> usize {
         height: probe_height,
     };
     let mut buffer = Buffer::empty(area);
-    history_paragraph(&probe_lines).render(area, &mut buffer);
+    history_paragraph(probe_lines).render(area, &mut buffer);
 
     for y in 0..probe_height {
         if (0..width).any(|x| {
@@ -267,6 +273,8 @@ fn sentinel_bg() -> Color {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use ratatui::layout::Position;
     use ratatui::text::Line;
 
@@ -387,7 +395,7 @@ mod tests {
         ];
 
         HistoryInsertionAdapter::new(HistoryInsertionMode::StandardScrollRegion)
-            .insert(&mut terminal, &lines, 0)
+            .insert(&mut terminal, &lines)
             .unwrap();
 
         let rendered = tui_testkit::screen_text(&terminal);
@@ -405,7 +413,7 @@ mod tests {
         ];
 
         HistoryInsertionAdapter::new(HistoryInsertionMode::NewlineFallback)
-            .insert(&mut terminal, &lines, 0)
+            .insert(&mut terminal, &lines)
             .unwrap();
 
         let rendered = tui_testkit::inline_terminal_history_text(&terminal);
@@ -429,13 +437,47 @@ mod tests {
                 .unwrap();
 
             HistoryInsertionAdapter::new(mode)
-                .insert(&mut terminal, &[Line::from("cursor neutral insert")], 0)
+                .insert(&mut terminal, &[Line::from("cursor neutral insert")])
                 .unwrap();
 
             assert_eq!(
                 terminal.get_cursor_position().unwrap(),
                 Position { x: 3, y: 4 },
                 "{mode:?} should leave cursor position unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn newline_fallback_preserves_shell_rows_by_scrolling_before_insert() {
+        let mut terminal = tui_testkit::inline_history_vt100_terminal(
+            InlineHistoryRenderMode::HostScrollback,
+            30,
+            20,
+        );
+        terminal
+            .backend_mut()
+            .inner_mut()
+            .write_all(b"SHELL_ONE\r\nSHELL_TWO\r\nSHELL_THREE\r\nSHELL_FOUR")
+            .unwrap();
+        let lines = vec![Line::from("history one"), Line::from("history two")];
+
+        HistoryInsertionAdapter::new(HistoryInsertionMode::NewlineFallback)
+            .insert(&mut terminal, &lines)
+            .unwrap();
+
+        let terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+        for marker in [
+            "SHELL_ONE",
+            "SHELL_TWO",
+            "SHELL_THREE",
+            "SHELL_FOUR",
+            "history one",
+            "history two",
+        ] {
+            assert!(
+                terminal_history.contains(marker),
+                "newline fallback should preserve {marker}: {terminal_history:?}"
             );
         }
     }

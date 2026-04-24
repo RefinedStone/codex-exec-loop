@@ -117,7 +117,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<(), B::Error> {
     if !inline_terminal.back_buffer_trustworthy {
-        terminal.clear()?;
+        clear_inline_viewport(terminal, inline_terminal.viewport_area)?;
     }
     terminal
         .backend_mut()
@@ -138,6 +138,22 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     result?;
     let terminal_size = terminal.size()?;
     inline_terminal.mark_frame_drawn(terminal_size, drawn_viewport_area);
+    Ok(())
+}
+
+fn clear_inline_viewport<B: Backend>(
+    terminal: &mut Terminal<B>,
+    viewport_area: Option<Rect>,
+) -> Result<(), B::Error> {
+    let viewport_area = viewport_area.unwrap_or_else(|| terminal.get_frame().area());
+    terminal
+        .backend_mut()
+        .set_cursor_position(viewport_area.as_position())?;
+    terminal
+        .backend_mut()
+        .clear_region(ClearType::AfterCursor)?;
+    terminal.swap_buffers();
+    terminal.swap_buffers();
     Ok(())
 }
 
@@ -446,11 +462,7 @@ impl InlineHistoryState {
         let inserted_rows =
             count_rendered_history_rows(&pending_lines, width).min(u16::MAX as usize) as u16;
         if !pending_lines.is_empty() {
-            HistoryInsertionAdapter::new(insert_mode).insert(
-                terminal,
-                &pending_lines,
-                self.visible_history_rows,
-            )?;
+            HistoryInsertionAdapter::new(insert_mode).insert(terminal, &pending_lines)?;
         }
         let viewport_top_after_insert = terminal.get_frame().area().top();
         if current_lines.is_empty() {
