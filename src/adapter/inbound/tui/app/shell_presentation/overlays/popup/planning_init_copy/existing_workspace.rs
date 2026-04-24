@@ -1,4 +1,4 @@
-use super::super::super::super::super::Line;
+use super::super::super::super::super::{AkraTheme, Line};
 use super::super::super::PlanningInitOverlayView;
 use super::super::copy::{PlanningExistingWorkspaceCopy, planning_setup_title_line};
 
@@ -43,9 +43,9 @@ pub(super) fn build_existing_workspace_overlay_view(
         ],
         status_lines,
         key_lines: vec![
-            Line::from("Enter opens queue inspection or resumes Plan on."),
-            Line::from("Q opens queue inspection. D opens directions maintenance."),
-            Line::from("O toggles Plan on or off. Esc/Ctrl+C closes this surface."),
+            AkraTheme::key_line("Enter opens queue inspection or resumes Plan on."),
+            AkraTheme::key_line("Q opens queue inspection. D opens directions maintenance."),
+            AkraTheme::key_line("O toggles Plan on or off. Esc/Ctrl+C closes this surface."),
         ],
     }
 }

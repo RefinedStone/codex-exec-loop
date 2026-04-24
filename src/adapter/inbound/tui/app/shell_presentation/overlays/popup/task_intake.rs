@@ -62,10 +62,12 @@ pub(crate) fn build_task_intake_overlay_view(app: &NativeTuiApp) -> TaskIntakeOv
 fn build_task_intake_key_lines(step: TaskIntakeOverlayStep) -> Vec<Line<'static>> {
     match step {
         TaskIntakeOverlayStep::Prompt => {
-            vec![Line::from("Enter preview  |  Ctrl+u clear  |  Esc cancel")]
+            vec![AkraTheme::key_line(
+                "Enter preview  |  Ctrl+u clear  |  Esc cancel",
+            )]
         }
         TaskIntakeOverlayStep::Preview => {
-            vec![Line::from("Y commit  |  E edit  |  N/Esc cancel")]
+            vec![AkraTheme::key_line("Y commit  |  E edit  |  N/Esc cancel")]
         }
     }
 }

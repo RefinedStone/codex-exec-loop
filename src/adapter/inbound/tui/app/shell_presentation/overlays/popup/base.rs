@@ -22,8 +22,8 @@ pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayVi
         check_lines: build_startup_check_lines(app),
         warning_lines: build_startup_warning_lines(app),
         key_lines: vec![
-            Line::from("Esc/Ctrl+C: close    r: rerun checks"),
-            Line::from(ctrl_o_label),
+            AkraTheme::key_line("Esc/Ctrl+C: close    r: rerun checks"),
+            AkraTheme::key_line(ctrl_o_label),
         ],
     }
 }

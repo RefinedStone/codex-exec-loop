@@ -2,10 +2,10 @@
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: rendered
 ---
-Planning Draft / inline inspection
+Akra / Planning Draft / inline inspection
 draft dir: /tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test
 Files
->> directions.toml
+> directions.toml
 directions.toml
 version = 1
 

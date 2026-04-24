@@ -685,6 +685,60 @@ fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
     assert!(keys.contains("n keeps editing"));
 }
 
+#[test]
+fn overlay_family_uses_shared_akra_chrome_tokens() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    let startup = shell_presentation::build_startup_overlay_view(&app);
+    let sessions = shell_presentation::build_session_overlay_view(&app);
+    let help = shell_presentation::build_help_overlay_view();
+    let queue = shell_presentation::build_queue_overlay_view(&app);
+    let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
+    let automation = shell_presentation::build_automation_overlay_view(&app);
+    let supersession = shell_presentation::build_supersession_overlay_view(&app);
+    app.show_planning_init_overlay();
+    let planning = shell_presentation::build_planning_init_overlay_view(&app);
+    let task_intake = shell_presentation::build_task_intake_overlay_view(&app);
+
+    for title in [
+        startup.header_lines[0].to_string(),
+        sessions.header_lines[0].to_string(),
+        help.header_lines[0].to_string(),
+        queue.header_lines[0].to_string(),
+        directions.header_lines[0].to_string(),
+        automation.header_lines[0].to_string(),
+        supersession.header_lines[0].to_string(),
+        planning.header_lines[0].to_string(),
+        task_intake.header_lines[0].to_string(),
+    ] {
+        assert!(
+            title.starts_with("Akra / "),
+            "overlay title should carry the shared Akra masthead: {title}"
+        );
+    }
+
+    assert_eq!(queue.key_lines[0].style.fg, Some(Color::Yellow));
+    assert_eq!(task_intake.key_lines[0].style.fg, Some(Color::Yellow));
+}
+
+#[test]
+fn exit_confirmation_uses_shared_akra_chrome() {
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("exit confirmation render succeeds");
+
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Akra / Confirm Exit"));
+    assert!(rendered.contains("Exit codex-exec-loop?"));
+}
+
 struct FakeCodexAppServerPort;
 
 impl CodexAppServerPort for FakeCodexAppServerPort {

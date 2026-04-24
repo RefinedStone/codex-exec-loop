@@ -1,5 +1,5 @@
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 
 pub(super) struct AkraTheme;
@@ -76,8 +76,26 @@ impl AkraTheme {
 
     pub(super) fn title_line(text: &'static str, suffix: &'static str) -> Line<'static> {
         Line::from(vec![
-            ratatui::text::Span::styled(text, Self::title()),
-            ratatui::text::Span::raw(suffix),
+            Span::styled("Akra", Self::brand()),
+            Span::raw(" / "),
+            Span::styled(text, Self::title()),
+            Span::raw(suffix),
         ])
+    }
+
+    pub(super) fn key_line(text: impl Into<String>) -> Line<'static> {
+        Line::styled(text.into(), Self::shortcut())
+    }
+
+    pub(super) fn selected_marker() -> &'static str {
+        "> "
+    }
+
+    pub(super) fn idle_marker() -> &'static str {
+        "  "
+    }
+
+    pub(super) fn list_highlight_symbol() -> &'static str {
+        "> "
     }
 }

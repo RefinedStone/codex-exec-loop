@@ -12,10 +12,14 @@ pub(crate) fn overlay_option_line(
         (false, true) => AkraTheme::selected(),
         (false, false) => Style::default(),
     };
-    let marker = if selected { ">>" } else { "  " };
+    let marker = if selected {
+        AkraTheme::selected_marker()
+    } else {
+        AkraTheme::idle_marker()
+    };
 
     Line::from(vec![
-        Span::styled(format!("{marker} {shortcut}. "), style),
+        Span::styled(format!("{marker}{shortcut}. "), style),
         Span::styled(label.to_string(), style.bold()),
         Span::styled(format!("  {detail}"), style),
     ])

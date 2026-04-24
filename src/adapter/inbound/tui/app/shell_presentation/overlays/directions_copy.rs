@@ -66,10 +66,10 @@ pub(super) fn build_overview_overlay_view(
             }),
         ],
         key_lines: vec![
-            Line::from(
+            AkraTheme::key_line(
                 "Enter: edit directions    d: create or repair detail doc    p: edit queue-idle prompt",
             ),
-            Line::from("r: reload summary    Esc/Ctrl+C: close"),
+            AkraTheme::key_line("r: reload summary    Esc/Ctrl+C: close"),
         ],
     }
 }
@@ -99,8 +99,8 @@ pub(super) fn build_detail_doc_selection_overlay_view(
             selected_direction_title.unwrap_or("none")
         ))],
         key_lines: vec![
-            Line::from("Up/Down or j/k: move selection"),
-            Line::from("Enter: continue    Backspace/Left: back    Esc/Ctrl+C: close"),
+            AkraTheme::key_line("Up/Down or j/k: move selection"),
+            AkraTheme::key_line("Enter: continue    Backspace/Left: back    Esc/Ctrl+C: close"),
         ],
     }
 }
@@ -141,8 +141,8 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
         ],
         status_lines: vec![Line::from("confirmation: generate a staged doc file now")],
         key_lines: vec![
-            Line::from("Up/Down or j/k: change selection"),
-            Line::from("Enter: act    Backspace/Left: back    Esc/Ctrl+C: close"),
+            AkraTheme::key_line("Up/Down or j/k: change selection"),
+            AkraTheme::key_line("Enter: act    Backspace/Left: back    Esc/Ctrl+C: close"),
         ],
     }
 }
@@ -160,6 +160,6 @@ pub(super) fn build_manual_editor_overlay_view() -> DirectionsMaintenanceOverlay
             "Use Tab to switch files and Ctrl+S to save + validate.",
         )],
         status_lines: vec![Line::from("editor ready")],
-        key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+        key_lines: vec![AkraTheme::key_line("Esc/Ctrl+C: close")],
     }
 }

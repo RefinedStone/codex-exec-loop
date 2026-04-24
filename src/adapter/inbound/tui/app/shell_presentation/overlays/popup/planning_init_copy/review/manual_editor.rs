@@ -1,4 +1,4 @@
-use super::super::super::super::super::super::Line;
+use super::super::super::super::super::super::{AkraTheme, Line};
 use super::super::super::PlanningInitOverlayView;
 use super::super::super::copy::planning_draft_title_line;
 
@@ -17,6 +17,6 @@ pub(super) fn build_manual_editor_overlay_view() -> PlanningInitOverlayView {
         status_lines: vec![Line::from(
             "current state: editing the staged planning draft",
         )],
-        key_lines: vec![Line::from("Esc/Ctrl+C closes this surface.")],
+        key_lines: vec![AkraTheme::key_line("Esc/Ctrl+C closes this surface.")],
     }
 }

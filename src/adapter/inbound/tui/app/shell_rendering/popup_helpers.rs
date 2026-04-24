@@ -30,7 +30,7 @@ pub(super) fn draw_session_list_panel(
     )
     .block(AkraTheme::panel_block("Threads"))
     .highlight_style(AkraTheme::selected())
-    .highlight_symbol(">> ");
+    .highlight_symbol(AkraTheme::list_highlight_symbol());
 
     app.session_overlay_ui_state
         .sync_selected_session(list_view.selected_index);
@@ -74,7 +74,7 @@ pub(super) fn draw_automation_list_panel(
     )
     .block(AkraTheme::panel_block("Automation"))
     .highlight_style(AkraTheme::selected())
-    .highlight_symbol(">> ");
+    .highlight_symbol(AkraTheme::list_highlight_symbol());
 
     app.followup_overlay_ui_state
         .list_state

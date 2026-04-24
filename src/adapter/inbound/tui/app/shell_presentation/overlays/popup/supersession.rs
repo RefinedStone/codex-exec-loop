@@ -30,8 +30,8 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let detail_lines = build_detail_lines(&supervisor_snapshot);
     let distributor_lines = build_distributor_lines(&supervisor_snapshot.distributor);
     let key_lines = vec![
-        Line::from("r: rerun readiness    Ctrl+P: parallel off"),
-        Line::from("Ctrl+O or Esc/Ctrl+C: close"),
+        AkraTheme::key_line("r: rerun readiness    Ctrl+P: parallel off"),
+        AkraTheme::key_line("Ctrl+O or Esc/Ctrl+C: close"),
     ];
 
     SupersessionOverlayView {

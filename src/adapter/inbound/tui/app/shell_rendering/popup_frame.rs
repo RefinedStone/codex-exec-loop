@@ -37,9 +37,12 @@ pub(super) fn draw_exit_confirmation(frame: &mut Frame<'_>) {
         Line::from("You are already at the shell home."),
         Line::from("Exit codex-exec-loop?"),
         Line::from(""),
-        Line::from("y: exit    n: stay"),
+        AkraTheme::key_line("y: exit    n: stay"),
     ])
-    .block(AkraTheme::panel_block("Confirm Exit"))
+    .block(AkraTheme::panel_block(AkraTheme::title_line(
+        "Confirm Exit",
+        "",
+    )))
     .wrap(Wrap { trim: true });
 
     frame.render_widget(popup, popup_area);

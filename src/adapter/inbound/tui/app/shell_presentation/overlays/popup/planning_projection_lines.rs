@@ -18,7 +18,11 @@ pub(super) fn build_planning_draft_editor_file_lines(
             } else {
                 Style::default()
             };
-            let marker = if selected { ">> " } else { "   " };
+            let marker = if selected {
+                AkraTheme::selected_marker()
+            } else {
+                "  "
+            };
             Line::from(vec![
                 Span::styled(marker, style),
                 Span::styled(buffer.file_label(), style.add_modifier(Modifier::BOLD)),

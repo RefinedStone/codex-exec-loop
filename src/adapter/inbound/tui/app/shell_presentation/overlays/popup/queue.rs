@@ -178,7 +178,7 @@ pub(crate) fn build_automation_overlay_view(app: &NativeTuiApp) -> AutomationOve
 }
 
 fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
-    vec![Line::from(
+    vec![AkraTheme::key_line(
         "Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: automation controls",
     )]
 }

@@ -26,9 +26,13 @@ pub(super) fn build_detail_doc_selection_projection(
                 } else {
                     Style::default()
                 };
-                let marker = if selected { ">>" } else { "  " };
+                let marker = if selected {
+                    AkraTheme::selected_marker()
+                } else {
+                    AkraTheme::idle_marker()
+                };
                 Line::from(vec![
-                    Span::styled(format!("{marker} "), style),
+                    Span::styled(marker, style),
                     Span::styled(direction.title.clone(), style.add_modifier(Modifier::BOLD)),
                     Span::styled(
                         format!(

@@ -1,4 +1,4 @@
-use super::super::{InlineShellCommand, Line};
+use super::super::{AkraTheme, InlineShellCommand, Line};
 
 pub(crate) struct HelpOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
@@ -17,7 +17,7 @@ pub(crate) fn build_help_overlay_view() -> HelpOverlayView {
 
     HelpOverlayView {
         header_lines: vec![
-            Line::from("Shell command help"),
+            AkraTheme::title_line("Shell Command Help", " / inline inspection"),
             Line::from("Commands are typed directly into the prompt."),
         ],
         command_lines: entries
@@ -31,6 +31,6 @@ pub(crate) fn build_help_overlay_view() -> HelpOverlayView {
                 ))
             })
             .collect(),
-        key_lines: vec![Line::from("Esc/Ctrl+C: close")],
+        key_lines: vec![AkraTheme::key_line("Esc/Ctrl+C: close")],
     }
 }

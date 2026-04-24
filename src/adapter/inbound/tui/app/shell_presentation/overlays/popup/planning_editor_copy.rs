@@ -91,11 +91,11 @@ pub(super) fn build_planning_draft_editor_key_lines(
     confirmation_pending: bool,
 ) -> Vec<Line<'static>> {
     vec![
-        Line::from("controls: Tab/BackTab switches files  |  arrows move the cursor"),
-        Line::from(
+        AkraTheme::key_line("controls: Tab/BackTab switches files  |  arrows move the cursor"),
+        AkraTheme::key_line(
             "controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word",
         ),
-        Line::from(
+        AkraTheme::key_line(
             "controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning",
         ),
         planning_draft_editor_close_key_line(close_risk, confirmation_pending),
@@ -132,12 +132,14 @@ fn planning_draft_editor_close_key_line(
     confirmation_pending: bool,
 ) -> Line<'static> {
     if confirmation_pending {
-        return Line::from("controls: Enter, Esc, or Ctrl+C confirms close  |  n keeps editing");
+        return AkraTheme::key_line(
+            "controls: Enter, Esc, or Ctrl+C confirms close  |  n keeps editing",
+        );
     }
 
     if close_risk.is_some() {
-        return Line::from("controls: Esc/Ctrl+C reviews close");
+        return AkraTheme::key_line("controls: Esc/Ctrl+C reviews close");
     }
 
-    Line::from("controls: Esc/Ctrl+C closes this surface")
+    AkraTheme::key_line("controls: Esc/Ctrl+C closes this surface")
 }

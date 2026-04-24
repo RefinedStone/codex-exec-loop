@@ -2,7 +2,7 @@
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: rendered
 ---
-"Planning Queue / inline inspection                                                              "
+"Akra / Planning Queue / inline inspection                                                       "
 "Review the next actionable work without opening raw planning files.                             "
 "Summary                                                                                         "
 "next: Implement shell planning status  |  queue: Queue Summary                                  "

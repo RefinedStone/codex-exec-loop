@@ -1,5 +1,5 @@
 use super::super::super::super::super::{
-    Line, PlanningInitDetailSelection, PlanningInitModeSelection,
+    AkraTheme, Line, PlanningInitDetailSelection, PlanningInitModeSelection,
 };
 use super::super::super::super::option_lines::overlay_option_line;
 use super::super::super::PlanningInitOverlayView;
@@ -48,8 +48,8 @@ pub(super) fn build_mode_selection_overlay_view(
             Line::from("simple mode is the low-ceremony path for planning-aware execution."),
         ],
         key_lines: vec![
-            Line::from("A/B or arrows move selection."),
-            Line::from("Enter continues. Esc/Ctrl+C cancels."),
+            AkraTheme::key_line("A/B or arrows move selection."),
+            AkraTheme::key_line("Enter continues. Esc/Ctrl+C cancels."),
         ],
     }
 }
@@ -93,8 +93,8 @@ pub(super) fn build_detail_selection_overlay_view(
             Line::from("Enter on manual opens the embedded draft editor."),
         ],
         key_lines: vec![
-            Line::from("A/B or arrows move selection."),
-            Line::from("Backspace/Left goes back. Enter continues. Esc/Ctrl+C cancels."),
+            AkraTheme::key_line("A/B or arrows move selection."),
+            AkraTheme::key_line("Backspace/Left goes back. Enter continues. Esc/Ctrl+C cancels."),
         ],
     }
 }

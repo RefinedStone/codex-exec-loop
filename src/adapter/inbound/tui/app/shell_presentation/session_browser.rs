@@ -1,6 +1,5 @@
 use ratatui::text::Line;
 
-use super::NativeTuiApp;
 use super::capability_copy::{
     session_catalog_empty_action_hint_line, session_catalog_empty_message_line,
     session_catalog_empty_provider_line, session_catalog_loading_message,
@@ -11,6 +10,7 @@ use super::capability_copy::{
     session_catalog_warning_blocked_line, session_catalog_warning_waiting_line,
 };
 use super::overlays::{OverlayListEntryView, OverlayListView};
+use super::{AkraTheme, NativeTuiApp};
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
 #[cfg(test)]
 use crate::application::service::session_service::SessionProjectFilterOption;
@@ -239,22 +239,26 @@ fn build_session_browser_summary_lines(
 pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.session_overlay_ui_state.is_search_query_editing() {
         return vec![
-            Line::from("Type the session query directly. Spaces match multiple tokens."),
-            Line::from("Enter: apply query    Esc/Ctrl+C: cancel    Backspace: delete"),
+            AkraTheme::key_line("Type the session query directly. Spaces match multiple tokens."),
+            AkraTheme::key_line("Enter: apply query    Esc/Ctrl+C: cancel    Backspace: delete"),
         ];
     }
 
     if !app.session_browser_available() {
         return vec![
-            Line::from("n: draft    r: reload    Ctrl+d: diagnostics    Esc/Ctrl+C: close"),
-            Line::from("Recent-session navigation requires a queryable catalog surface."),
+            AkraTheme::key_line(
+                "n: draft    r: reload    Ctrl+d: diagnostics    Esc/Ctrl+C: close",
+            ),
+            AkraTheme::key_line("Recent-session navigation requires a queryable catalog surface."),
         ];
     }
 
     vec![
-        Line::from("/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page"),
-        Line::from("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
-        Line::from("n: draft    r: reload    Ctrl+d: diagnostics"),
+        AkraTheme::key_line(
+            "/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page",
+        ),
+        AkraTheme::key_line("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
+        AkraTheme::key_line("n: draft    r: reload    Ctrl+d: diagnostics"),
     ]
 }
 

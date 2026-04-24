@@ -21,6 +21,10 @@ use super::inline_layout::{
     render_inline_section, set_cursor_if_visible, split_inline_section, take_panel_body_lines,
 };
 
+fn inline_overlay_title(name: &'static str) -> Line<'static> {
+    AkraTheme::title_line(name, " / inline inspection")
+}
+
 pub(super) fn draw_inline_shell_inspection(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
@@ -68,7 +72,7 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Shell Commands / inline inspection"),
+        inline_overlay_title("Shell Commands"),
         body_lines,
         true,
     );
@@ -117,7 +121,7 @@ fn draw_inline_directions_maintenance_inspection(
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Directions / inline inspection"),
+        inline_overlay_title("Directions"),
         body_lines,
         true,
     );
@@ -152,7 +156,7 @@ fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Diagnostics / inline inspection"),
+        inline_overlay_title("Diagnostics"),
         body_lines,
         true,
     );
@@ -191,7 +195,7 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Recent Sessions / inline inspection"),
+        inline_overlay_title("Recent Sessions"),
         body_lines,
         true,
     );
@@ -246,7 +250,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Supersession / inline inspection"),
+        inline_overlay_title("Supersession"),
         body_lines,
         true,
     );
@@ -333,7 +337,7 @@ fn draw_inline_automation_inspection(frame: &mut Frame<'_>, area: Rect, app: &mu
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Automation Controls / inline inspection"),
+        inline_overlay_title("Automation Controls"),
         body_lines,
         true,
     );
@@ -403,7 +407,7 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Planning Queue / inline inspection"),
+        inline_overlay_title("Planning Queue"),
         body_lines,
         true,
     );
@@ -436,7 +440,7 @@ fn draw_inline_task_intake_inspection(frame: &mut Frame<'_>, area: Rect, app: &N
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Task Intake / inline inspection"),
+        inline_overlay_title("Task Intake"),
         body_lines,
         true,
     );
@@ -481,7 +485,7 @@ fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: 
     render_inline_section(
         frame,
         layout[0],
-        Line::from("Planning / inline inspection"),
+        inline_overlay_title("Planning"),
         body_lines,
         true,
     );
@@ -496,7 +500,7 @@ fn draw_inline_planning_draft_editor_inspection(
     area: Rect,
     app: &NativeTuiApp,
 ) {
-    draw_inline_draft_editor_inspection(frame, area, app, "Planning Draft / inline inspection");
+    draw_inline_draft_editor_inspection(frame, area, app, "Planning Draft");
 }
 
 fn draw_inline_draft_editor_inspection(
@@ -533,7 +537,13 @@ fn draw_inline_draft_editor_inspection(
         ])
         .split(area);
 
-    render_inline_section(frame, layout[0], Line::from(title), body_lines, true);
+    render_inline_section(
+        frame,
+        layout[0],
+        inline_overlay_title(title),
+        body_lines,
+        true,
+    );
     render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
     render_inline_scrolled_section(
         frame,
@@ -553,7 +563,7 @@ fn draw_inline_directions_draft_editor_inspection(
     area: Rect,
     app: &NativeTuiApp,
 ) {
-    draw_inline_draft_editor_inspection(frame, area, app, "Directions Draft / inline inspection");
+    draw_inline_draft_editor_inspection(frame, area, app, "Directions Draft");
 }
 
 fn draw_inline_session_list_panel(
@@ -583,7 +593,7 @@ fn draw_inline_session_list_panel(
             .map(|item| ListItem::new(item.lines)),
     )
     .highlight_style(AkraTheme::selected())
-    .highlight_symbol(">> ");
+    .highlight_symbol(AkraTheme::list_highlight_symbol());
 
     app.session_overlay_ui_state
         .sync_selected_session(list_view.selected_index);
@@ -621,7 +631,7 @@ fn draw_inline_automation_list_panel(
             .map(|item| ListItem::new(item.lines)),
     )
     .highlight_style(AkraTheme::selected())
-    .highlight_symbol(">> ");
+    .highlight_symbol(AkraTheme::list_highlight_symbol());
 
     app.followup_overlay_ui_state
         .list_state
