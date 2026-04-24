@@ -186,6 +186,54 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn should_queue_task_intake_command(
+        &self,
+        command_input: &InlineShellCommandInput,
+    ) -> bool {
+        if command_input.command() != InlineShellCommand::Task {
+            return false;
+        }
+
+        matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation) if conversation.has_running_turn()
+        )
+    }
+
+    pub(super) fn queue_task_intake_command_until_idle(
+        &mut self,
+        command_input: InlineShellCommandInput,
+    ) {
+        self.pending_task_intake_command = Some(command_input);
+        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowStopped);
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "task intake queued until the current turn reaches a planning-safe point"
+                .to_string(),
+        });
+    }
+
+    pub(super) fn execute_pending_task_intake_command_if_ready(&mut self) -> bool {
+        let Some(command_input) = self.pending_task_intake_command.clone() else {
+            return false;
+        };
+        let command_still_buffered = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if !conversation.has_running_turn()
+                    && InlineShellCommandInput::parse(&conversation.input_buffer)
+                        .as_ref()
+                        == Some(&command_input)
+        );
+        if !command_still_buffered {
+            self.pending_task_intake_command = None;
+            return false;
+        }
+
+        self.pending_task_intake_command = None;
+        self.execute_inline_shell_command_input(command_input);
+        true
+    }
+
     fn preview_task_intake_prompt(&mut self) {
         let prompt = self
             .task_intake_overlay_ui_state

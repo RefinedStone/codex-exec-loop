@@ -16,14 +16,14 @@ use super::conversation_runtime::ConversationPostTurnEvaluation;
 use super::{
     ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
     ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
-    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEvent,
-    ConversationState, ConversationViewModel, ExitConfirmationState, FollowupControlEffect,
-    FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState, NativeTuiApp,
-    PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
-    ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay, StartupState,
-    reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
-    reduce_conversation_runtime, reduce_followup_controls, reduce_followup_overlay_ui,
-    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
+    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
+    ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
+    FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState,
+    NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState,
+    SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
+    StartupState, reduce_conversation_input, reduce_conversation_intents,
+    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
+    reduce_followup_overlay_ui, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 
 #[derive(Debug, Clone)]
@@ -83,6 +83,7 @@ impl NativeTuiApp {
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
             task_intake_overlay_ui_state: super::TaskIntakeOverlayUiState::default(),
+            pending_task_intake_command: None,
             active_session: None,
             startup_service,
             session_service,
@@ -211,16 +212,27 @@ impl NativeTuiApp {
             &event,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
         );
+        let should_flush_pending_task_intake = matches!(
+            &event,
+            ConversationRuntimeEvent::PostTurnEvaluated { .. }
+                | ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
+        );
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
 
         let reduction = reduce_conversation_runtime(conversation, event);
+        let mut effects = reduction.effects;
         self.conversation_state = ConversationState::ready(reduction.state);
         if clear_turn_snapshot {
             self.active_turn_planning_capture = None;
         }
-        for effect in reduction.effects {
+        if should_flush_pending_task_intake && self.execute_pending_task_intake_command_if_ready() {
+            effects.retain(|effect| {
+                !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
+            });
+        }
+        for effect in effects {
             self.execute_conversation_runtime_effect(effect);
         }
     }

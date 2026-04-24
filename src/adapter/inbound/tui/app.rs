@@ -272,6 +272,7 @@ struct NativeTuiApp {
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
     task_intake_overlay_ui_state: TaskIntakeOverlayUiState,
+    pending_task_intake_command: Option<InlineShellCommandInput>,
     active_session: Option<SessionSummary>,
     startup_service: StartupService,
     session_service: SessionService,

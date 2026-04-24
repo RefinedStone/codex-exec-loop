@@ -33,6 +33,10 @@ impl NativeTuiApp {
             _ => None,
         };
         if let Some(command) = inline_command {
+            if self.should_queue_task_intake_command(&command) {
+                self.queue_task_intake_command_until_idle(command);
+                return;
+            }
             self.execute_inline_shell_command_input(command);
             return;
         }
