@@ -133,6 +133,49 @@ fn inline_tail_uses_compact_thread_title_instead_of_full_thread_id() {
 }
 
 #[test]
+fn inline_tail_command_palette_surfaces_real_keys() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = ":q".to_string();
+    conversation.sync_inline_shell_command_palette();
+    app.conversation_state = ConversationState::ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("> :q"));
+    assert!(rendered.contains("command: palette"));
+    assert!(rendered.contains("Up/Down move"));
+    assert!(rendered.contains("Enter choose"));
+    assert!(rendered.contains("Esc close"));
+    assert!(rendered.contains(":queue"));
+}
+
+#[test]
+fn inline_tail_preserves_korean_wide_char_prompt() {
+    let (mut app, _) = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
+    let mut conversation = ready_conversation();
+    conversation.input_buffer = "다음 작업 정리\n테스트 확인".to_string();
+    app.conversation_state = ConversationState::ready(conversation);
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("> 다음 작업 정리"));
+    assert!(rendered.contains("  테스트 확인"));
+    assert!(rendered.contains("buffered prompt"));
+    assert!(!rendered.contains('\u{fffd}'));
+}
+
+#[test]
 fn empty_draft_prompts_for_first_message() {
     let mut conversation = ready_conversation();
     conversation.thread_id.clear();

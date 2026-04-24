@@ -112,9 +112,10 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
-    assert!(rendered.contains(
-        "thread: new draft  |  turn: idle  |  auto: on/idle  |  done: 0/20  |  in: draft"
-    ));
+    assert!(rendered.contains("Akra  |  thread: new draft  |  turn: idle"));
+    assert!(rendered.contains("input: draft"));
+    assert!(rendered.contains("auto: on/idle"));
+    assert!(rendered.contains("done: 0/20"));
     assert!(!rendered.contains("stable history should stay above the live region"));
     assert!(!rendered.contains("No messages in this thread yet."));
     assert!(!rendered.contains("┌"));
@@ -137,7 +138,7 @@ fn inline_main_buffer_tail_anchors_below_transcript_area_after_history() {
         .iter()
         .position(|line| {
             line.trim_matches('"')
-                .starts_with("thread: new draft  |  turn: idle")
+                .starts_with("Akra  |  thread: new draft  |  turn: idle")
         })
         .expect("inline viewport should contain visible tail text");
     assert!(

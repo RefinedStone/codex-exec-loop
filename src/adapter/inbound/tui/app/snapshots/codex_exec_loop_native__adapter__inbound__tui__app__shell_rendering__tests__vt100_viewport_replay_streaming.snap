@@ -1,15 +1,14 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
-assertion_line: 403
 expression: rendered
 ---
-
 Codex:
   viewport replay stream remains separate
 
-thread: new draft  |  turn: working  |  auto: on/idle  |  done: 0/20  |  in:
-streaming  |  Plan on / invalid
-status: new thread draft  |  warn: none  |  startup: startup ready  |  gh: off
+Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto:
+on/idle  |  done: 0/20  |  Plan on / invalid
+status: new thread draft  |  startup: startup ready  |  gh: off
+runtime: clear  |  warn: none
 parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |
 queue: inactive
 ◦ Working (0s • turn running / interrupt unsupported)

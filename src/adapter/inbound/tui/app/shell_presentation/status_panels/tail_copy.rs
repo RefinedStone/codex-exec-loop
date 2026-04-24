@@ -17,7 +17,9 @@ use super::super::{
     ShellOverlay, StartupState, auto_follow_prompt_status_line, build_working_line,
     compact_inline_detail, inline_input_state_label, turn_status_label,
 };
-use super::plan_indicator::{current_plan_mode_indicator, plan_mode_prefixed_spans};
+use super::plan_indicator::{
+    PlanModeIndicatorView, current_plan_mode_indicator, plan_mode_prefixed_spans,
+};
 use super::tail_shared::{
     build_operator_notice_line, compact_auto_follow_status_summary, compact_inline_summary_label,
     inline_thread_label, parallel_mode_alert_line, parallel_mode_summary_line,
@@ -61,29 +63,32 @@ pub(super) fn build_inline_tail_lines_with_context(
         ShellConversationState::Loading => {
             lines.push(Line::from(plan_mode_prefixed_spans(
                 format!(
-                    "thread: loading  |  startup: {}  |  sessions: {}",
+                    "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
                     context.shell_action_availability.status_text(),
                     context.recent_session_status_label.as_str(),
                 ),
                 plan_mode_indicator,
             )));
             lines.push(Line::from(format!(
-                "github: {}  |  flow: terminal main buffer",
+                "runtime: loading thread history  |  gh: {}  |  flow: terminal main buffer",
                 context.github_review_polling_status_label.as_str(),
             )));
-            lines.push(Line::from(thread_history_loading_status_line()));
+            lines.push(Line::from(format!(
+                "status: {}",
+                thread_history_loading_status_line()
+            )));
         }
         ShellConversationState::Failed(message) => {
             lines.push(Line::from(plan_mode_prefixed_spans(
                 format!(
-                    "thread: unavailable  |  startup: {}  |  sessions: {}",
+                    "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
                     context.shell_action_availability.status_text(),
                     context.recent_session_status_label.as_str(),
                 ),
                 plan_mode_indicator,
             )));
             lines.push(Line::from(format!(
-                "github: {}  |  flow: terminal main buffer",
+                "runtime: unavailable  |  gh: {}  |  flow: terminal main buffer",
                 context.github_review_polling_status_label.as_str(),
             )));
             lines.push(Line::from(format!("status: {message}")));
@@ -96,40 +101,21 @@ pub(super) fn build_inline_tail_lines_with_context(
                 .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
                 .map(|summary| compact_inline_summary_label(&summary));
 
-            lines.push(Line::from(plan_mode_prefixed_spans(
-                format!(
-                    "thread: {}  |  turn: {}  |  auto: {}  |  done: {}  |  in: {}",
-                    inline_thread_label(conversation),
-                    turn_status_label(conversation),
-                    compact_auto_follow_status_summary(
-                        conversation,
-                        INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
-                    ),
-                    conversation.auto_follow_state.progress_label(),
-                    inline_input_state_label(conversation.input_state),
-                ),
+            lines.push(build_ready_status_ribbon_line(
+                conversation,
                 plan_mode_indicator,
+            ));
+            lines.push(Line::from(format!(
+                "status: {}  |  startup: {}  |  gh: {}",
+                compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT),
+                context.shell_action_availability.status_text(),
+                context.github_review_polling_status_label.as_str(),
             )));
-            let mut status_segments = vec![format!(
-                "status: {}",
-                compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT)
-            )];
-            if warning_summary != "clear" {
-                status_segments.push(warning_summary);
-            }
-            if let Some(runtime_notice_summary) = runtime_notice_summary.as_deref() {
-                status_segments.push(runtime_notice_summary.to_string());
-            } else {
-                status_segments.push(format!(
-                    "startup: {}",
-                    context.shell_action_availability.status_text()
-                ));
-                status_segments.push(format!(
-                    "gh: {}",
-                    context.github_review_polling_status_label.as_str()
-                ));
-            }
-            lines.push(Line::from(status_segments.join("  |  ")));
+            lines.push(Line::from(format!(
+                "runtime: {}  |  {}",
+                runtime_notice_summary.as_deref().unwrap_or("clear"),
+                warning_summary,
+            )));
             lines.push(Line::from(parallel_mode_summary_line(app)));
             if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(app) {
                 lines.push(Line::from(parallel_mode_alert_line));
@@ -147,6 +133,11 @@ pub(super) fn build_inline_tail_lines_with_context(
                 if let Some(planning_notice_line) = planning_projection.notice_line.as_deref() {
                     lines.push(Line::from(planning_notice_line.to_string()));
                 }
+            } else {
+                lines.push(Line::from(format!(
+                    "planning: unavailable  |  startup: {}",
+                    context.shell_action_availability.status_text()
+                )));
             }
             lines.extend(planner_panel_lines.into_iter().map(Line::from));
             lines.extend(build_recent_transcript_summary_lines(
@@ -169,6 +160,23 @@ pub(super) fn build_inline_tail_lines_with_context(
         app.shell_action_availability(),
     ));
     lines
+}
+
+fn build_ready_status_ribbon_line(
+    conversation: &ConversationViewModel,
+    plan_mode_indicator: PlanModeIndicatorView,
+) -> Line<'static> {
+    Line::from(plan_mode_prefixed_spans(
+        format!(
+            "Akra  |  thread: {}  |  turn: {}  |  input: {}  |  auto: {}  |  done: {}",
+            inline_thread_label(conversation),
+            turn_status_label(conversation),
+            inline_input_state_label(conversation.input_state),
+            compact_auto_follow_status_summary(conversation, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,),
+            conversation.auto_follow_state.progress_label(),
+        ),
+        plan_mode_indicator,
+    ))
 }
 
 fn build_recent_transcript_summary_lines(
@@ -400,12 +408,15 @@ fn build_inline_ready_prompt_lines(
     }
 
     if conversation.inline_shell_command_palette_state.is_active() {
+        lines.push(Line::from(
+            "command: palette  |  Up/Down move  |  Enter choose  |  Esc close",
+        ));
         lines.extend(build_shell_command_palette_lines(conversation));
         return lines;
     }
 
     if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
-        lines.push(Line::from(command.buffered_hint()));
+        lines.push(Line::from(format!("command: {}", command.buffered_hint())));
         return lines;
     }
 
