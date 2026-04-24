@@ -235,6 +235,13 @@ pub(super) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> 
     status_panels::build_inline_tail_view(app, content_width)
 }
 
+pub(super) fn build_inline_live_transcript_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        return Vec::new();
+    };
+    status_panels::current_live_agent_lines(conversation).unwrap_or_default()
+}
+
 #[cfg(test)]
 fn build_conversation_lines_with_context(
     context: &ShellCorePresentationContext<'_>,

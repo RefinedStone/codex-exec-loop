@@ -34,10 +34,10 @@ use super::{
 pub(super) fn run(mut runtime: ShellRuntime) -> Result<()> {
     let _restore_guard = TerminalRestoreGuard::activate()?;
     let backend = CrosstermBackend::new(io::stdout());
-    let mut inline_terminal = InlineTerminalState::default();
     let render_mode = runtime.app_mut().inline_history_render_mode;
-    let mut terminal = build_terminal(backend, render_mode)?;
-    run_event_loop(&mut terminal, &mut runtime, &mut inline_terminal)
+    let terminal = build_terminal(backend, render_mode)?;
+    let mut surface = InlineTerminalSurface::new(terminal);
+    run_event_loop(&mut surface, &mut runtime)
 }
 
 fn build_terminal(
@@ -61,14 +61,13 @@ pub(super) fn terminal_options_for_render_mode(
 }
 
 fn run_event_loop(
-    terminal: &mut Terminal<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
+    surface: &mut InlineTerminalSurface<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
     runtime: &mut ShellRuntime,
-    inline_terminal: &mut InlineTerminalState,
 ) -> Result<()> {
     while !runtime.should_quit() {
         runtime.poll_background_messages();
         if runtime.take_due_draw_request(std::time::Instant::now()) {
-            draw_inline_transaction(terminal, runtime, inline_terminal)?;
+            surface.draw_transaction(runtime)?;
         }
 
         let poll_timeout =
@@ -81,6 +80,24 @@ fn run_event_loop(
     }
 
     Ok(())
+}
+
+struct InlineTerminalSurface<B: InlineResizeBackend> {
+    terminal: Terminal<B>,
+    state: InlineTerminalState,
+}
+
+impl<B: InlineResizeBackend> InlineTerminalSurface<B> {
+    fn new(terminal: Terminal<B>) -> Self {
+        Self {
+            terminal,
+            state: InlineTerminalState::default(),
+        }
+    }
+
+    fn draw_transaction(&mut self, runtime: &mut ShellRuntime) -> Result<(), B::Error> {
+        draw_inline_transaction(&mut self.terminal, runtime, &mut self.state)
+    }
 }
 
 fn draw_inline_transaction<B: InlineResizeBackend>(

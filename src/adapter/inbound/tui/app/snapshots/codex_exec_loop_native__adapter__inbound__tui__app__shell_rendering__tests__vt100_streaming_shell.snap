@@ -1,7 +1,13 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+assertion_line: 378
 expression: rendered
 ---
+
+
+Codex:
+  streaming delta should stay in the transcript until completion
+
 thread: new draft  |  turn: working  |  auto: on/idle  |  done: 0/20  |  in:
 streaming  |  Plan on / invalid
 status: new thread draft  |  warn: none  |  startup: startup ready  |  gh: off
@@ -11,8 +17,5 @@ queue: inactive
 planning: invalid  |  failure: planning validation failed: task ...
 now: none  |  next: none
 proposed: none  |  blocked: none
-Codex:
-  streaming delta should stay in the transcript until completion
-
 >
 prompt: turn running  |  type now, Enter when idle

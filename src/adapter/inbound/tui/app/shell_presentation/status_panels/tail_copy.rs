@@ -20,8 +20,7 @@ use super::super::{
 use super::plan_indicator::{current_plan_mode_indicator, plan_mode_prefixed_spans};
 use super::tail_shared::{
     build_operator_notice_line, compact_auto_follow_status_summary, compact_inline_summary_label,
-    current_live_agent_lines, inline_thread_label, parallel_mode_alert_line,
-    parallel_mode_summary_line,
+    inline_thread_label, parallel_mode_alert_line, parallel_mode_summary_line,
 };
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
@@ -151,9 +150,7 @@ pub(super) fn build_inline_tail_lines_with_context(
                 conversation,
             ));
 
-            if let Some(live_agent_lines) = current_live_agent_lines(conversation) {
-                lines.extend(live_agent_lines);
-            } else if let Some(notice_line) = build_operator_notice_line(
+            if let Some(notice_line) = build_operator_notice_line(
                 github_review_recent_changes_summary.as_deref(),
                 conversation,
                 INLINE_TAIL_NOTICE_DETAIL_LIMIT,

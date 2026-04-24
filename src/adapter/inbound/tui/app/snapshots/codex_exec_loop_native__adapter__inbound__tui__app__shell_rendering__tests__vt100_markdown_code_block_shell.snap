@@ -1,7 +1,14 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+assertion_line: 414
 expression: rendered
 ---
+
+Codex:
+  ```rust
+  let ok = true;
+  ```
+
 thread: new draft  |  turn: working  |  auto: on/idle  |  done: 0/20  |  in: streaming  |  Plan
 on / invalid
 status: new thread draft  |  warn: none  |  startup: startup ready  |  gh: off
@@ -10,10 +17,5 @@ parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |  queue
 planning: invalid  |  failure: planning validation failed: task ...
 now: none  |  next: none
 proposed: none  |  blocked: none
-Codex:
-  ```rust
-  let ok = true;
-  ```
-
 >
 prompt: turn running  |  type now, Enter when idle

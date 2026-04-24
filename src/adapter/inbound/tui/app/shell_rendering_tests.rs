@@ -124,7 +124,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
 }
 
 #[test]
-fn inline_main_buffer_tail_starts_at_top_of_viewport_after_history() {
+fn inline_main_buffer_tail_anchors_below_transcript_area_after_history() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
     tui_testkit::append_agent_history_message(&mut app, "latest reply should stay in scrollback");
@@ -134,13 +134,24 @@ fn inline_main_buffer_tail_starts_at_top_of_viewport_after_history() {
         .expect("inline render succeeds");
 
     let rendered = tui_testkit::screen_text(&terminal);
-    let first_non_empty_line = rendered
-        .lines()
-        .find(|line| !line.trim().is_empty())
+    let rendered_lines = rendered.lines().collect::<Vec<_>>();
+    let thread_line_index = rendered_lines
+        .iter()
+        .position(|line| {
+            line.trim_matches('"')
+                .starts_with("thread: new draft  |  turn: idle")
+        })
         .expect("inline viewport should contain visible tail text");
-    let first_non_empty_line = first_non_empty_line.trim_matches('"');
-
-    assert!(first_non_empty_line.starts_with("thread: new draft  |  turn: idle"));
+    assert!(
+        thread_line_index > 0,
+        "tail should leave a transcript-live area above it:\n{rendered}"
+    );
+    assert!(
+        rendered_lines[..thread_line_index]
+            .iter()
+            .all(|line| line.trim_matches('"').trim().is_empty()),
+        "tail should not leave stale transcript text above it:\n{rendered}"
+    );
 }
 
 #[test]

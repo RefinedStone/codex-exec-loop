@@ -1,9 +1,7 @@
-#[cfg(test)]
 use ratatui::text::Line;
 
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 
-#[cfg(test)]
 use super::ConversationViewModel;
 use super::NativeTuiApp;
 #[cfg(test)]
@@ -58,7 +56,6 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
     build_inline_tail_view(app, 0).lines
 }
 
-#[cfg(test)]
 pub(super) fn current_live_agent_lines(
     conversation: &ConversationViewModel,
 ) -> Option<Vec<Line<'static>>> {

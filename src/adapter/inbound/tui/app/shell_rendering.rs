@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::shell_presentation::build_inline_tail_view;
+use super::shell_presentation::{build_inline_live_transcript_lines, build_inline_tail_view};
 use super::*;
 
 #[path = "shell_rendering/inline_inspection.rs"]
@@ -18,8 +18,8 @@ use inline_inspection::draw_inline_shell_inspection;
 #[cfg(test)]
 use inline_layout::centered_rect;
 use inline_layout::{
-    build_inline_terminal_flow_layout, inline_body_render_area, inline_body_top_render_area,
-    render_inline_body, set_cursor_if_visible,
+    build_inline_terminal_flow_layout, inline_body_render_area, render_inline_body,
+    set_cursor_if_visible,
 };
 use popup_frame::draw_exit_confirmation;
 
@@ -50,9 +50,10 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     let _ = mode;
     let frame_area = frame.area();
     let tail_view = build_inline_tail_view(app, frame_area.width);
+    let live_transcript_lines = build_inline_live_transcript_lines(app);
     let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_view.lines);
 
-    draw_inline_conversation_shell(frame, app, tail_view, &layout);
+    draw_inline_conversation_shell(frame, app, tail_view, live_transcript_lines, &layout);
 
     if app.shell_overlay != ShellOverlay::Hidden {
         draw_inline_shell_inspection(frame, app, layout[0]);
@@ -67,16 +68,20 @@ fn draw_inline_conversation_shell(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
     tail_view: super::shell_presentation::InlineTailView,
+    live_transcript_lines: Vec<Line<'static>>,
     layout: &Rc<[Rect]>,
 ) {
     let frame_area = frame.area();
     frame.render_widget(Clear, frame_area);
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        let tail_area = if tail_view.render_from_top {
-            frame_area
-        } else {
-            inline_body_top_render_area(frame_area, &tail_view.lines)
-        };
+        if tail_view.render_from_top {
+            render_inline_body(frame, frame_area, tail_view.lines, false);
+            set_cursor_if_visible(frame, frame_area, tail_view.prompt_cursor_offset);
+            return;
+        }
+
+        let tail_area = inline_body_render_area(frame_area, &tail_view.lines);
+        render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
         render_inline_body(frame, tail_area, tail_view.lines, false);
         set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
         return;
@@ -88,6 +93,26 @@ fn draw_inline_conversation_shell(
         tail_view.lines,
         false,
     );
+}
+
+fn render_inline_live_transcript(
+    frame: &mut Frame<'_>,
+    frame_area: Rect,
+    tail_area: Rect,
+    live_transcript_lines: Vec<Line<'static>>,
+) {
+    if live_transcript_lines.is_empty() || tail_area.y <= frame_area.y {
+        return;
+    }
+
+    let live_container = Rect::new(
+        frame_area.x,
+        frame_area.y,
+        frame_area.width,
+        tail_area.y.saturating_sub(frame_area.y),
+    );
+    let live_area = inline_body_render_area(live_container, &live_transcript_lines);
+    render_inline_body(frame, live_area, live_transcript_lines, false);
 }
 
 #[cfg(test)]
