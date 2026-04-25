@@ -1,0 +1,43 @@
+name: Native PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+      - prerelease
+  push:
+    branches:
+      - main
+      - prerelease
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native-pr-checks:
+    name: Native PR Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install shell tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
+      - name: Run native PR checks
+        shell: bash
+        run: bash scripts/check_native_pr.sh

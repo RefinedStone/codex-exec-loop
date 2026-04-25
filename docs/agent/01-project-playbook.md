@@ -36,6 +36,7 @@ Keep mapping logic in adapters, not domain models.
 - `. "$HOME/.cargo/env" && cargo test`: run tests
 - `. "$HOME/.cargo/env" && cargo fmt`: format source
 - `. "$HOME/.cargo/env" && cargo clippy --all-targets --all-features -D warnings`: run when touching lint-sensitive code
+- `bash scripts/check_native_pr.sh`: run the native PR gate used by GitHub Actions
 
 ## Style
 
@@ -74,6 +75,7 @@ Keep mapping logic in adapters, not domain models.
 - Keep commits small and milestone-based.
 - Keep TUI PRs to one primary contract at a time: reducer/runtime, terminal primitive, frame scheduling, or visual snapshot.
 - Keep Akra TUI styling behind `AkraTheme`; run `bash scripts/check_tui_layering.sh` when touching native shell visual or presentation code.
+- Use `bash scripts/check_native_pr.sh` before opening broad native/TUI PRs; it runs TUI layering, rustfmt check, tests, and clippy in the same order as CI.
 - If a TUI bug is being fixed, start by adding the reproducer test or validation capture in the same PR.
 - For TUI changes, include a screenshot or short terminal capture in the PR when practical.
 - For terminal-affecting TUI PRs, run the focused cargo commands from `docs/plan/29-terminal-ui-testing-methodology.md` and record at least `Windows Terminal / PowerShell / inline` plus `Windows Terminal / WSL bash / inline` with `scripts/capture_native_validation.sh` or `.ps1`.
