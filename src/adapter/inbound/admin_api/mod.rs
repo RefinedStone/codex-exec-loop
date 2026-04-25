@@ -76,6 +76,7 @@ struct ResetForm {
 #[derive(Debug, Clone, Deserialize)]
 struct DirectionMutationForm {
     csrf_token: String,
+    #[serde(default)]
     id: String,
     title: String,
     #[serde(default)]
@@ -99,6 +100,7 @@ struct IdDeleteForm {
 #[derive(Debug, Clone, Deserialize)]
 struct TaskMutationForm {
     csrf_token: String,
+    #[serde(default)]
     id: String,
     #[serde(default)]
     direction_id: String,
@@ -1418,7 +1420,7 @@ mod tests {
 
         facade
             .upsert_direction(PlanningAdminDirectionMutationRequest {
-                id: "secondary".to_string(),
+                id: String::new(),
                 title: "Secondary".to_string(),
                 summary: "Secondary workstream".to_string(),
                 success_criteria_text: "Keep secondary work isolated".to_string(),
@@ -1429,7 +1431,7 @@ mod tests {
             .expect("direction should be added");
         facade
             .upsert_task(PlanningAdminTaskMutationRequest {
-                id: "task-default".to_string(),
+                id: String::new(),
                 direction_id: String::new(),
                 title: "Defaulted task".to_string(),
                 description: String::new(),
@@ -1443,15 +1445,15 @@ mod tests {
             .expect("task should default to general workstream");
         facade
             .upsert_task(PlanningAdminTaskMutationRequest {
-                id: "task-secondary".to_string(),
-                direction_id: "secondary".to_string(),
+                id: String::new(),
+                direction_id: "dir-secondary".to_string(),
                 title: "Secondary task".to_string(),
                 description: String::new(),
                 status: "ready".to_string(),
                 base_priority: "10".to_string(),
                 dynamic_priority_delta: String::new(),
                 priority_reason: String::new(),
-                depends_on_text: "task-default".to_string(),
+                depends_on_text: "task-defaulted-task".to_string(),
                 blocked_by_text: String::new(),
             })
             .expect("secondary task should be added");
@@ -1459,6 +1461,11 @@ mod tests {
         facade
             .delete_direction(PlanningAdminDirectionDeleteRequest {
                 id: "secondary".to_string(),
+            })
+            .expect_err("old manual id should not exist after generated-id create");
+        facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "dir-secondary".to_string(),
             })
             .expect("direction delete should remove child tasks");
 
@@ -1476,15 +1483,15 @@ mod tests {
             directions
                 .directions
                 .iter()
-                .all(|direction| direction.id != "secondary")
+                .all(|direction| direction.id != "dir-secondary")
         );
         assert!(
             task_ledger
                 .tasks
                 .iter()
-                .all(|task| task.id != "task-secondary")
+                .all(|task| task.id != "task-secondary-task")
         );
-        assert_eq!(task_ledger.tasks[0].id, "task-default");
+        assert_eq!(task_ledger.tasks[0].id, "task-defaulted-task");
         assert_eq!(task_ledger.tasks[0].direction_id, "general-workstream");
     }
 }

@@ -39,6 +39,8 @@ use crate::domain::planning::{
 };
 
 const DEFAULT_DIRECTION_ID: &str = "general-workstream";
+const GENERATED_DIRECTION_ID_PREFIX: &str = "dir";
+const GENERATED_TASK_ID_PREFIX: &str = "task";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -290,6 +292,7 @@ pub struct PlanningAdminManagementView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningAdminDirectionMutationRequest {
+    #[serde(default)]
     pub id: String,
     pub title: String,
     #[serde(default)]
@@ -311,6 +314,7 @@ pub struct PlanningAdminDirectionDeleteRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningAdminTaskMutationRequest {
+    #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub direction_id: String,
@@ -487,7 +491,7 @@ impl PlanningAdminFacadeService {
         request: PlanningAdminDirectionMutationRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
         let mut documents = self.load_admin_documents()?;
-        let direction = direction_from_request(request)?;
+        let direction = direction_from_request(request, &documents.directions)?;
         let id = direction.id.clone();
         let mut updated = false;
         for existing in &mut documents.directions.directions {
@@ -1194,15 +1198,27 @@ fn map_management_view(
 
 fn direction_from_request(
     request: PlanningAdminDirectionMutationRequest,
+    directions: &DirectionCatalogDocument,
 ) -> Result<DirectionDefinition> {
-    let id = normalized_required_id(&request.id, "direction id")?;
     let title = normalized_required_text(&request.title, "direction title")?;
+    let id = if request.id.trim().is_empty() {
+        generated_unique_id(
+            GENERATED_DIRECTION_ID_PREFIX,
+            title,
+            directions
+                .directions
+                .iter()
+                .map(|direction| direction.id.trim()),
+        )
+    } else {
+        normalized_required_id(&request.id, "direction id")?.to_string()
+    };
     let success_criteria = split_lines(&request.success_criteria_text);
     if success_criteria.is_empty() {
         bail!("direction `{id}` requires at least one success criterion");
     }
     Ok(DirectionDefinition {
-        id: id.to_string(),
+        id,
         title: title.to_string(),
         summary: non_empty_or(&request.summary, title),
         success_criteria,
@@ -1217,24 +1233,32 @@ fn task_from_request(
     task_ledger: &TaskLedgerDocument,
     default_direction_id: &str,
 ) -> Result<TaskDefinition> {
-    let id = normalized_required_id(&request.id, "task id")?;
+    let title = normalized_required_text(&request.title, "task title")?;
+    let id = if request.id.trim().is_empty() {
+        generated_unique_id(
+            GENERATED_TASK_ID_PREFIX,
+            title,
+            task_ledger.tasks.iter().map(|task| task.id.trim()),
+        )
+    } else {
+        normalized_required_id(&request.id, "task id")?.to_string()
+    };
     let now = Utc::now().to_rfc3339();
     let existing = task_ledger
         .tasks
         .iter()
-        .find(|task| task.id.trim() == id)
+        .find(|task| task.id.trim() == id.as_str())
         .cloned();
     let direction_id = if request.direction_id.trim().is_empty() {
         default_direction_id.to_string()
     } else {
         normalized_required_id(&request.direction_id, "direction id")?.to_string()
     };
-    let title = normalized_required_text(&request.title, "task title")?;
     let base_priority = parse_i32_or_default(&request.base_priority, 10, "base priority")?;
     let dynamic_priority_delta =
         parse_i32_or_default(&request.dynamic_priority_delta, 0, "dynamic priority delta")?;
     Ok(TaskDefinition {
-        id: id.to_string(),
+        id,
         direction_id,
         direction_relation_note: existing
             .as_ref()
@@ -1337,6 +1361,49 @@ fn non_empty_or(value: &str, fallback: &str) -> String {
         fallback.to_string()
     } else {
         value.to_string()
+    }
+}
+
+fn generated_unique_id<'a>(
+    prefix: &str,
+    title: &str,
+    existing_ids: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let existing = existing_ids.into_iter().collect::<BTreeSet<_>>();
+    let slug = slugify_title(title);
+    let base = format!("{prefix}-{slug}");
+    if !existing.contains(base.as_str()) {
+        return base;
+    }
+
+    for suffix in 2.. {
+        let candidate = format!("{base}-{suffix}");
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("numeric suffix search should eventually find an unused id")
+}
+
+fn slugify_title(title: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for character in title.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+            previous_dash = false;
+        } else if !previous_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "item".to_string()
+    } else {
+        slug
     }
 }
 

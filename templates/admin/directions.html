@@ -1,18 +1,14 @@
 {% extends "admin/base.html" %}
 {% block content %}
-<section class="grid">
-  <article class="card span-12">
-    <h2>Add Direction</h2>
+<section class="toolbar">
+  <details class="create-panel">
+    <summary>Add direction</summary>
     <form method="post" action="/admin/directions/upsert" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label class="field">
-          <span>ID</span>
-          <input type="text" name="id" placeholder="customer-onboarding" required>
-        </label>
-        <label class="field">
           <span>Title</span>
-          <input type="text" name="title" required>
+          <input type="text" name="title" placeholder="Customer onboarding" required>
         </label>
         <label class="field">
           <span>State</span>
@@ -29,141 +25,137 @@
       </label>
       <div class="form-grid">
         <label class="field">
-          <span>Success Criteria</span>
+          <span>Success criteria</span>
           <textarea name="success_criteria_text" class="short-textarea" required></textarea>
         </label>
         <label class="field">
-          <span>Scope Hints</span>
+          <span>Scope hints</span>
           <textarea name="scope_hints_text" class="short-textarea"></textarea>
         </label>
       </div>
       <label class="field">
-        <span>Detail Doc Path</span>
+        <span>Detail doc path</span>
         <input type="text" name="detail_doc_path" placeholder=".codex-exec-loop/planning/directions/customer-onboarding.md">
       </label>
-      <button type="submit">Add Direction</button>
+      <button type="submit">Create direction</button>
     </form>
-  </article>
+  </details>
 
-  <article class="card span-12">
-    <h2>File Workflow</h2>
-    <div class="actions">
-      <form method="post" action="/admin/drafts">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="kind" value="directions">
-        <button type="submit">Edit Directions Catalog</button>
-      </form>
-      <form method="post" action="/admin/drafts">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="kind" value="queue_idle_prompt">
-        <button type="submit" class="secondary">Edit Queue-Idle Prompt</button>
-      </form>
-      <form method="post" action="/admin/files/export">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="secondary">Export Files</button>
-      </form>
-      <form method="post" action="/admin/files/apply">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="warn">Apply Edited Files</button>
-      </form>
-    </div>
-  </article>
+  <div class="actions">
+    <form method="post" action="/admin/drafts">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="directions">
+      <button type="submit" class="secondary">Raw catalog</button>
+    </form>
+    <form method="post" action="/admin/drafts">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="queue_idle_prompt">
+      <button type="submit" class="secondary">Queue prompt</button>
+    </form>
+    <form method="post" action="/admin/files/export">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="secondary">Export files</button>
+    </form>
+    <form method="post" action="/admin/files/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="warn">Apply files</button>
+    </form>
+  </div>
+</section>
 
-  {% if let Some(directions) = overview.directions %}
-  <article class="card span-12">
-    <h2>Directions</h2>
-    <div class="statline">
-      <span class="pill">queue-idle: {{ directions.queue_idle_policy }}</span>
-      <span class="pill">missing detail docs: {{ directions.missing_detail_doc_count }}</span>
-      <span class="pill">broken detail docs: {{ directions.broken_detail_doc_count }}</span>
-      <span class="pill">prompt status: {{ directions.queue_idle_prompt_status }}</span>
+{% if let Some(directions) = overview.directions %}
+<section class="metric-row">
+  <div class="metric"><span>queue idle</span><strong>{{ directions.queue_idle_policy }}</strong></div>
+  <div class="metric"><span>missing docs</span><strong>{{ directions.missing_detail_doc_count }}</strong></div>
+  <div class="metric"><span>broken docs</span><strong>{{ directions.broken_detail_doc_count }}</strong></div>
+  <div class="metric"><span>prompt</span><strong>{{ directions.queue_idle_prompt_status }}</strong></div>
+</section>
+{% if let Some(parse_error) = directions.parse_error %}
+<section class="notice error-notice"><strong>Parse error:</strong> {{ parse_error }}</section>
+{% endif %}
+{% endif %}
+
+<section class="list-panel">
+  <div class="list-header">
+    <div>
+      <h2>Directions</h2>
+      <p>{{ management.directions.len() }} total</p>
     </div>
-    {% if let Some(parse_error) = directions.parse_error %}
-    <p><strong>Parse error:</strong> {{ parse_error }}</p>
-    {% endif %}
-    <table>
-      <thead>
-        <tr>
-          <th>Direction</th>
-          <th>Detail Doc</th>
-          <th>Status</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for direction in management.directions %}
-        <tr>
-          <td>
-            <form method="post" action="/admin/directions/upsert" class="stack compact-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="id" value="{{ direction.id }}">
+  </div>
+  <div class="entity-list">
+    {% for direction in management.directions %}
+    <details class="entity-row">
+      <summary>
+        <span class="entity-main">
+          <strong>{{ direction.title }}</strong>
+          <span class="mono">{{ direction.id }}</span>
+        </span>
+        <span class="entity-meta">
+          <span class="status-pill {{ direction.state }}">{{ direction.state }}</span>
+          <span>{{ direction.task_count }} tasks</span>
+          {% if direction.detail_doc_path.is_empty() %}
+          <span>no detail doc</span>
+          {% else %}
+          <span class="mono">{{ direction.detail_doc_path }}</span>
+          {% endif %}
+        </span>
+      </summary>
+      <div class="entity-detail">
+        <form method="post" action="/admin/directions/upsert" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="id" value="{{ direction.id }}">
+          <div class="form-grid">
+            <label class="field">
+              <span>Title</span>
               <input type="text" name="title" value="{{ direction.title }}" required>
-              <small class="mono">{{ direction.id }} / {{ direction.task_count }} tasks</small>
-              <textarea name="summary" class="short-textarea">{{ direction.summary }}</textarea>
-              <div class="form-grid">
-                <label class="field">
-                  <span>Success Criteria</span>
-                  <textarea name="success_criteria_text" class="short-textarea" required>{{ direction.success_criteria_text }}</textarea>
-                </label>
-                <label class="field">
-                  <span>Scope Hints</span>
-                  <textarea name="scope_hints_text" class="short-textarea">{{ direction.scope_hints_text }}</textarea>
-                </label>
-              </div>
-              <div class="inline-actions">
-                <button type="submit" class="secondary">Save</button>
-              </div>
-            </form>
-          </td>
-          <td>
-            <form method="post" action="/admin/directions/upsert" class="stack compact-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="id" value="{{ direction.id }}">
-              <input type="hidden" name="title" value="{{ direction.title }}">
-              <input type="hidden" name="summary" value="{{ direction.summary }}">
-              <input type="hidden" name="success_criteria_text" value="{{ direction.success_criteria_text }}">
-              <input type="hidden" name="scope_hints_text" value="{{ direction.scope_hints_text }}">
-              <input type="text" name="detail_doc_path" value="{{ direction.detail_doc_path }}">
-              <button type="submit" class="secondary">Save Path</button>
-            </form>
-          </td>
-          <td>
-            <form method="post" action="/admin/directions/upsert" class="stack compact-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="id" value="{{ direction.id }}">
-              <input type="hidden" name="title" value="{{ direction.title }}">
-              <input type="hidden" name="summary" value="{{ direction.summary }}">
-              <input type="hidden" name="success_criteria_text" value="{{ direction.success_criteria_text }}">
-              <input type="hidden" name="scope_hints_text" value="{{ direction.scope_hints_text }}">
-              <input type="hidden" name="detail_doc_path" value="{{ direction.detail_doc_path }}">
+            </label>
+            <label class="field">
+              <span>State</span>
               <select name="state">
                 <option value="active" {% if direction.state == "active" %}selected{% endif %}>active</option>
                 <option value="paused" {% if direction.state == "paused" %}selected{% endif %}>paused</option>
                 <option value="done" {% if direction.state == "done" %}selected{% endif %}>done</option>
               </select>
-              <button type="submit" class="secondary">Save State</button>
-            </form>
-          </td>
-          <td>
-            <div class="inline-actions">
-            <form method="post" action="/admin/drafts">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="kind" value="direction_detail">
-              <input type="hidden" name="direction_id" value="{{ direction.id }}">
-              <button type="submit" class="secondary">Edit Detail</button>
-            </form>
-            <form method="post" action="/admin/directions/delete">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="id" value="{{ direction.id }}">
-              <button type="submit" class="error">Delete</button>
-            </form>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </article>
-  {% endif %}
+            </label>
+          </div>
+          <label class="field">
+            <span>Summary</span>
+            <textarea name="summary" class="short-textarea">{{ direction.summary }}</textarea>
+          </label>
+          <div class="form-grid">
+            <label class="field">
+              <span>Success criteria</span>
+              <textarea name="success_criteria_text" class="short-textarea" required>{{ direction.success_criteria_text }}</textarea>
+            </label>
+            <label class="field">
+              <span>Scope hints</span>
+              <textarea name="scope_hints_text" class="short-textarea">{{ direction.scope_hints_text }}</textarea>
+            </label>
+          </div>
+          <label class="field">
+            <span>Detail doc path</span>
+            <input type="text" name="detail_doc_path" value="{{ direction.detail_doc_path }}">
+          </label>
+          <div class="inline-actions">
+            <button type="submit">Save direction</button>
+          </div>
+        </form>
+        <div class="inline-actions danger-zone">
+          <form method="post" action="/admin/drafts">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="kind" value="direction_detail">
+            <input type="hidden" name="direction_id" value="{{ direction.id }}">
+            <button type="submit" class="secondary">Edit detail doc</button>
+          </form>
+          <form method="post" action="/admin/directions/delete">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="id" value="{{ direction.id }}">
+            <button type="submit" class="error">Delete direction and tasks</button>
+          </form>
+        </div>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
 </section>
 {% endblock %}
