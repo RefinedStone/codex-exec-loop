@@ -43,8 +43,5 @@ pub(in super::super) fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<
         }
     }
 
-    art_lines
-        .iter()
-        .map(|line| Line::from((*line).to_string()))
-        .collect()
+    art_lines.iter().map(|line| Line::from(*line)).collect()
 }
