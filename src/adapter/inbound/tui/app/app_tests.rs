@@ -46,7 +46,7 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLAN_OFF_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
 use crate::application::service::planning::{PlanningExecutionSnapshot, PlanningRepairRequest};
 use crate::application::service::priority_queue_service::PriorityQueueService;

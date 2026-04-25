@@ -511,16 +511,6 @@ fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
             TelegramInboundCommand::Planning(PlanningControlCommand::Queue),
             "/queue",
         ),
-        "/plan_on" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::EnablePlan),
-            "/plan_on",
-        ),
-        "/plan_off" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::DisablePlan),
-            "/plan_off",
-        ),
         "/plan" => parse_plan_arguments(&arguments),
         "/reset_queue" => parse_command_without_arguments(
             &arguments,
@@ -566,13 +556,10 @@ fn parse_command_without_arguments(
 
 fn parse_plan_arguments(arguments: &[&str]) -> TelegramParsedMessage {
     match arguments {
-        ["on"] => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::EnablePlan,
+        [] | ["status"] => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
+            PlanningControlCommand::Status,
         )),
-        ["off"] => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::DisablePlan,
-        )),
-        _ => TelegramParsedMessage::Error("사용법: /plan on | /plan off".to_string()),
+        _ => TelegramParsedMessage::Error("사용법: /plan [status]".to_string()),
     }
 }
 
@@ -613,14 +600,6 @@ impl crate::application::service::planning::control::PlanningControlSurface
         bail!("noop control surface should not execute");
     }
 
-    fn set_plan_enabled(
-        &self,
-        _enabled: bool,
-    ) -> Result<crate::application::service::planning::control::PlanningControlPlanToggleOutcome>
-    {
-        bail!("noop control surface should not execute");
-    }
-
     fn reset_workspace(
         &self,
         _target: PlanningResetTarget,
@@ -648,9 +627,8 @@ mod tests {
     };
     use crate::application::service::planning::PlanningResetTarget;
     use crate::application::service::planning::control::{
-        PlanningControlCommand, PlanningControlPlanToggleOutcome, PlanningControlQueueEntry,
-        PlanningControlResetOutcome, PlanningControlService, PlanningControlStatusSnapshot,
-        PlanningControlSurface,
+        PlanningControlCommand, PlanningControlQueueEntry, PlanningControlResetOutcome,
+        PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
     };
 
     struct FakePlanningControlSurface;
@@ -665,7 +643,6 @@ mod tests {
                 health: Some("planning workspace ready".to_string()),
                 issue: None,
                 note: None,
-                plan_enabled: true,
                 preview_status_label: "queue ready".to_string(),
                 preview_detail: None,
                 queue_head: Some(PlanningControlQueueEntry {
@@ -677,19 +654,6 @@ mod tests {
                 }),
                 visible_tasks: Vec::new(),
                 proposed_tasks: Vec::new(),
-            })
-        }
-
-        fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningControlPlanToggleOutcome> {
-            Ok(PlanningControlPlanToggleOutcome {
-                enabled,
-                planning_state: if enabled {
-                    "ready".to_string()
-                } else {
-                    "plan_disabled".to_string()
-                },
-                health: Some("planning workspace ready".to_string()),
-                issue: None,
             })
         }
 
@@ -719,10 +683,6 @@ mod tests {
                 bail!("temporary planning failure");
             }
             FakePlanningControlSurface.load_status_snapshot()
-        }
-
-        fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningControlPlanToggleOutcome> {
-            FakePlanningControlSurface.set_plan_enabled(enabled)
         }
 
         fn reset_workspace(
@@ -782,13 +742,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_message_accepts_plan_command_with_bot_mention() {
-        let parsed = parse_message(Some("/plan@AkraBot off"));
+    fn parse_message_accepts_plan_status_command_with_bot_mention() {
+        let parsed = parse_message(Some("/plan@AkraBot status"));
 
         assert_eq!(
             parsed,
             TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-                PlanningControlCommand::DisablePlan
+                PlanningControlCommand::Status
             ))
         );
     }

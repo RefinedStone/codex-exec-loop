@@ -788,7 +788,7 @@ mod tests {
         PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
     };
     use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
 
@@ -1334,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_reports_ready_with_task_and_plan_off_note() {
+    fn doctor_reports_ready_with_task() {
         let workspace =
             TestWorkspace::new("doctor-ready").expect("test workspace should be created");
         let artifacts =
@@ -1366,10 +1366,6 @@ mod tests {
                 ..artifacts
             })
             .expect("planning artifacts should be written");
-        workspace
-            .write_file(PLAN_OFF_FILE_PATH, "plan off\n")
-            .expect("plan.off should be writable");
-
         let mut stdout = Vec::new();
         let exit_code = run_with_args(doctor_args(&workspace), &mut stdout)
             .expect("doctor should run")
@@ -1380,8 +1376,6 @@ mod tests {
         assert!(output.contains("planning state: ready_with_task"));
         assert!(output.contains("queue-idle policy: stop"));
         assert!(output.contains("queue summary: now: Implement doctor command"));
-        assert!(output.contains("note: queue-driven continuation is disabled by"));
-        assert!(output.contains(Path::new(PLAN_OFF_FILE_PATH).display().to_string().as_str()));
     }
 
     #[test]

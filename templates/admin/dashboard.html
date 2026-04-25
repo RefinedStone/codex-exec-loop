@@ -8,7 +8,6 @@
       {% if let Some(policy) = overview.doctor.queue_idle_policy %}
       <span class="pill">queue-idle: {{ policy }}</span>
       {% endif %}
-      <span class="pill">plan enabled: {{ overview.runtime.plan_enabled }}</span>
       <span class="pill">status: {{ overview.runtime.preview_status_label }}</span>
     </div>
     {% if let Some(health) = overview.doctor.health %}

@@ -13,7 +13,6 @@ pub struct PlanningRuntimePolicyService;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningAutoFollowBlockReason {
-    PlanningDisabled,
     InvalidWorkspace,
     ActionableQueueRequired,
     RepeatedQueueHead,
@@ -100,12 +99,6 @@ impl PlanningRuntimePolicyService {
         &self,
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningAutoFollowPolicyDecision {
-        if snapshot.workspace_present() && !snapshot.plan_enabled() {
-            return PlanningAutoFollowPolicyDecision::Blocked(
-                PlanningAutoFollowBlockReason::PlanningDisabled,
-            );
-        }
-
         if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
             return PlanningAutoFollowPolicyDecision::Blocked(
                 PlanningAutoFollowBlockReason::InvalidWorkspace,
@@ -163,9 +156,7 @@ impl PlanningRuntimePolicyService {
         &self,
         request: PlanningRuntimeSummaryRequest<'_>,
     ) -> PlanningRuntimeSummaryView {
-        let workspace_state = if !request.snapshot.plan_enabled() {
-            PlanningWorkspaceState::Uninitialized
-        } else if request.is_repairing {
+        let workspace_state = if request.is_repairing {
             PlanningWorkspaceState::Repairing
         } else {
             match request.snapshot.workspace_status() {
@@ -204,9 +195,6 @@ impl PlanningRuntimePolicyService {
     ) -> PlanningRuntimePreviewView {
         if let PlanningAutoFollowPolicyDecision::Blocked(reason) = decision {
             let detail = match reason {
-                PlanningAutoFollowBlockReason::PlanningDisabled => {
-                    "planning mode is off; run :planning to resume queue automation".to_string()
-                }
                 PlanningAutoFollowBlockReason::InvalidWorkspace => {
                     "planning files are invalid or incomplete".to_string()
                 }
@@ -400,7 +388,6 @@ fn workspace_status_label(state: PlanningWorkspaceState) -> &'static str {
 
 fn preview_block_label(reason: PlanningAutoFollowBlockReason) -> &'static str {
     match reason {
-        PlanningAutoFollowBlockReason::PlanningDisabled => "inactive",
         PlanningAutoFollowBlockReason::InvalidWorkspace => "blocked",
         PlanningAutoFollowBlockReason::ActionableQueueRequired => "queue-empty",
         PlanningAutoFollowBlockReason::RepeatedQueueHead => "paused",

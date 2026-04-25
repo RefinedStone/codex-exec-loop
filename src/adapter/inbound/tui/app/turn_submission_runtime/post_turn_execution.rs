@@ -292,26 +292,6 @@ impl PostTurnEvaluationExecutor {
                     .load_runtime_snapshot_or_invalid(planning_workspace_directory)
             };
 
-        if planning_workspace_snapshot.workspace_present()
-            && !planning_workspace_snapshot.plan_enabled()
-        {
-            let failure_detail =
-                "official completion refresh is blocked because planning mode is off";
-            self.parallel_mode_turn_service
-                .mark_official_completion_failed(&request.workspace_directory, failure_detail);
-            let failure_snapshot = self
-                .official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
-            self.record_planner_worker_failure(
-                PlannerWorkerStatus::RefreshFailed,
-                failure_detail,
-                &failure_snapshot,
-            );
-            return OfficialCompletionRefreshOutcome {
-                runtime_snapshot: failure_snapshot,
-                runtime_notices: Vec::new(),
-            };
-        }
-
         if matches!(
             planning_workspace_snapshot.workspace_status(),
             PlanningRuntimeWorkspaceStatus::Invalid | PlanningRuntimeWorkspaceStatus::Uninitialized
@@ -566,12 +546,6 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         current_snapshot: PlanningRuntimeSnapshot,
     ) -> BuiltinNextTaskRefreshOutcome {
-        if current_snapshot.workspace_present() && !current_snapshot.plan_enabled() {
-            return BuiltinNextTaskRefreshOutcome {
-                runtime_snapshot: current_snapshot,
-            };
-        }
-
         if !matches!(
             current_snapshot.workspace_status(),
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
@@ -785,14 +759,6 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> ConversationPostTurnAction {
-        if planning_runtime_snapshot.workspace_present()
-            && !planning_runtime_snapshot.plan_enabled()
-        {
-            return ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::PlanningDisabled,
-            };
-        }
-
         if planning_runtime_snapshot.workspace_status()
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop

@@ -158,7 +158,7 @@ commit a ledger or projection derived from an older revision over a newer runtim
 
 ## Runtime Semantics
 
-- `:task` is allowed while planning mode is off, but it does not enable automation.
+- `:task` is allowed before workspace initialization, but it does not enable queue automation until planning files exist.
 - `:task` is rejected when no planning workspace exists; the TUI should guide the operator to
   `:planning`.
 - `:task` is rejected when no active direction exists; the TUI should guide the operator to

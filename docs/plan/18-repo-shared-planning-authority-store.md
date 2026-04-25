@@ -33,7 +33,7 @@ The canonical repo root owns one authority domain for:
 
 - directions and direction detail content
 - task ledger rows and queue projection
-- plan-enabled and queue-idle metadata
+- queue-idle metadata
 - store-backed drafts, promotion results, and rejection archives
 - official refresh claims
 - distributor queue claims

@@ -3,14 +3,10 @@
 <section class="grid">
   <article class="card span-6">
     <h2>Plan Execution</h2>
-    <p>Current state: <strong>{% if overview.runtime.plan_enabled %}enabled{% else %}paused{% endif %}</strong></p>
-    <div class="actions">
-      <form method="post" action="/admin/controls/plan-enabled">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="enabled" value="{% if overview.runtime.plan_enabled %}false{% else %}true{% endif %}">
-        <button type="submit">{% if overview.runtime.plan_enabled %}Pause Planning{% else %}Enable Planning{% endif %}</button>
-      </form>
-    </div>
+    <p>Current state: <strong>{{ overview.runtime.preview_status_label }}</strong></p>
+    {% if let Some(detail) = overview.runtime.preview_detail %}
+    <p>{{ detail }}</p>
+    {% endif %}
   </article>
 
   <article class="card span-6">

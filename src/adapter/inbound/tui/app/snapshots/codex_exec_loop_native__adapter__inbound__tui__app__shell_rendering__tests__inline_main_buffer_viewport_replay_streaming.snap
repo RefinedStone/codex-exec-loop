@@ -5,7 +5,7 @@ expression: rendered
 "Codex:                                                                          "
 "  streaming reply still visible                                                 "
 "Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto:     "
-"on/idle  |  done: 0/20  |  Plan on / ready                                      "
+"on/idle  |  done: 0/20  |  Plan ready / ready                                   "
 "status: turn started  |  startup: startup ready  |  gh: off                     "
 "runtime: clear  |  warn: none                                                   "
 "parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |       "

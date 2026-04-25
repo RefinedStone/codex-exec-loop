@@ -48,7 +48,6 @@ pub use self::admin::{
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
     PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
     PlanningAdminOverview, PlanningAdminResetOutcome, PlanningAdminSessionView,
-    PlanningAdminTogglePlanOutcome,
 };
 pub use self::authoring::bootstrap::PlanningBootstrapMode;
 pub use self::authoring::directions::{
@@ -277,10 +276,6 @@ impl PlanningWorkspaceUseCases {
     ) -> anyhow::Result<PlanningTrackedTaskLedgerApplyResult> {
         self.task_ledger_apply_service
             .apply_tracked_task_ledger(workspace_dir)
-    }
-
-    pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> anyhow::Result<()> {
-        self.init_service.set_plan_enabled(workspace_dir, enabled)
     }
 
     pub fn stage_simple_mode_draft(

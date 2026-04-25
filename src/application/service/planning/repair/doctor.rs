@@ -1,4 +1,3 @@
-use crate::application::service::planning::shared::contract::PLAN_OFF_FILE_PATH;
 use crate::domain::text::compact_whitespace_detail;
 
 use crate::application::service::planning::runtime::prompt::PlanningPromptService;
@@ -98,13 +97,7 @@ impl PlanningDoctorReport {
             planning_state,
             PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask
         );
-        let note = if snapshot.workspace_present() && !snapshot.plan_enabled() {
-            Some(format!(
-                "queue-driven continuation is disabled by {PLAN_OFF_FILE_PATH}"
-            ))
-        } else {
-            None
-        };
+        let note = None;
         let health = match planning_state {
             PlanningDoctorState::Absent => {
                 Some("planning workspace is not initialized".to_string())
@@ -203,12 +196,8 @@ mod tests {
 
     use super::{PlanningDoctorService, PlanningDoctorState};
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning::authoring::bootstrap::PlanningBootstrapService;
-    use crate::application::service::planning::authoring::init::PlanningInitService;
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::PLAN_OFF_FILE_PATH;
     use crate::application::service::priority_queue_service::PriorityQueueService;
 
     fn create_temp_workspace(label: &str) -> String {
@@ -248,43 +237,6 @@ mod tests {
             Some("planning workspace is not initialized")
         );
         assert_eq!(report.exit_code(), 0);
-
-        std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn inspect_workspace_includes_plan_off_note_for_ready_workspace() {
-        let workspace_dir = create_temp_workspace("planning-doctor-ready");
-        let workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let init_service = PlanningInitService::new(
-            workspace_port.clone(),
-            PlanningBootstrapService::new(),
-            PlanningValidationService::new(),
-        );
-        init_service
-            .initialize_simple_workspace(&workspace_dir)
-            .expect("simple workspace should initialize");
-        workspace_port
-            .replace_planning_workspace_file(&workspace_dir, PLAN_OFF_FILE_PATH, Some("plan off\n"))
-            .expect("plan off marker should be writable");
-
-        let prompt_service = PlanningPromptService::new(
-            workspace_port,
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
-        );
-        let report = PlanningDoctorService::new(prompt_service).inspect_workspace(&workspace_dir);
-
-        assert_eq!(
-            report.planning_state(),
-            PlanningDoctorState::ReadyWithoutTask
-        );
-        assert_eq!(report.health(), Some("planning workspace is healthy"));
-        assert!(
-            report
-                .note()
-                .is_some_and(|value| value.contains(PLAN_OFF_FILE_PATH))
-        );
 
         std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

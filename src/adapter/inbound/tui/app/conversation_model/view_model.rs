@@ -820,9 +820,6 @@ impl ConversationViewModel {
             }
             PlanningRuntimeAutoFollowDecision::Blocked(block_reason) => {
                 AutoFollowupDecision::Skip(match block_reason {
-                    PlanningAutoFollowBlockReason::PlanningDisabled => {
-                        AutoFollowupSkipReason::PlanningDisabled
-                    }
                     PlanningAutoFollowBlockReason::InvalidWorkspace => {
                         AutoFollowupSkipReason::PlanningBlocked
                     }

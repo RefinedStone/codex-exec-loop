@@ -255,7 +255,6 @@ pub struct PlanningAdminDoctorSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminRuntimeSummary {
     pub workspace_present: bool,
-    pub plan_enabled: bool,
     pub preview_status_label: String,
     pub preview_detail: Option<String>,
     pub queue_head: Option<PlanningAdminQueueHeadView>,
@@ -269,12 +268,6 @@ pub struct PlanningAdminOverview {
     pub doctor: PlanningAdminDoctorSummary,
     pub runtime: PlanningAdminRuntimeSummary,
     pub directions: Option<PlanningAdminDirectionsSummaryView>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PlanningAdminTogglePlanOutcome {
-    pub enabled: bool,
-    pub doctor: PlanningAdminDoctorSummary,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,20 +440,6 @@ impl PlanningAdminFacadeService {
             direction_id: request.direction_id,
         })?;
         Ok((result, session))
-    }
-
-    pub fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningAdminTogglePlanOutcome> {
-        self.planning
-            .workspace
-            .set_plan_enabled(self.workspace_dir.as_str(), enabled)?;
-        let doctor = self
-            .planning
-            .workspace
-            .inspect_workspace(self.workspace_dir.as_str());
-        Ok(PlanningAdminTogglePlanOutcome {
-            enabled,
-            doctor: map_doctor_report(&doctor),
-        })
     }
 
     pub fn reset_workspace(
@@ -809,7 +788,6 @@ fn map_runtime_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanningAdminRunt
     let queue_preview = snapshot.queue_snapshot().cloned().map(map_queue_preview);
     PlanningAdminRuntimeSummary {
         workspace_present: snapshot.workspace_present(),
-        plan_enabled: snapshot.plan_enabled(),
         preview_status_label: snapshot.preview_status_label().to_string(),
         preview_detail: snapshot.preview_detail().map(str::to_string),
         queue_head: queue_preview

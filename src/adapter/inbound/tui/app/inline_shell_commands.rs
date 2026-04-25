@@ -50,7 +50,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
 }
 
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :stop  :auto  :planning [on|off|doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :stop  :auto  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
 const MAX_AUTO_TURNS_USAGE: &str =
     "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
 const RESET_USAGE: &str =
@@ -224,17 +224,11 @@ impl InlineShellCommandInput {
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::PlanningInit => match self.argument() {
-                Some(value) if value.eq_ignore_ascii_case("off") => {
-                    "Press Enter to turn Plan off.".to_string()
-                }
-                Some(value) if value.eq_ignore_ascii_case("on") => {
-                    "Press Enter to turn Plan on.".to_string()
-                }
                 Some(value) if value.eq_ignore_ascii_case("doctor") => {
                     "Press Enter to inspect planning health.".to_string()
                 }
                 Some(value) => format!(
-                    "Press Enter to apply `:planning {value}`. Supported arguments: on, off, doctor."
+                    "Press Enter to apply `:planning {value}`. Supported arguments: doctor."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -458,7 +452,7 @@ impl InlineShellCommand {
             InlineShellCommand::Queue => ":queue [apply]",
             InlineShellCommand::Directions => ":directions [apply]",
             InlineShellCommand::Task => ":task [prompt]",
-            InlineShellCommand::PlanningInit => ":planning [on|off|doctor]",
+            InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
             InlineShellCommand::MaxAutoTurns => ":turns <n|infinite>",
             InlineShellCommand::Diagnostics
@@ -600,14 +594,6 @@ mod tests {
             (":init", Some((InlineShellCommand::Init, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
             (
-                ":planning off",
-                Some((InlineShellCommand::PlanningInit, Some("off"))),
-            ),
-            (
-                ":planning on",
-                Some((InlineShellCommand::PlanningInit, Some("on"))),
-            ),
-            (
                 ":planning doctor",
                 Some((InlineShellCommand::PlanningInit, Some("doctor"))),
             ),
@@ -723,7 +709,10 @@ mod tests {
             Some(":p".to_string())
         );
         assert_eq!(InlineShellCommand::suggestion_prefix(":turns "), None);
-        assert_eq!(InlineShellCommand::suggestion_prefix(":planning off"), None);
+        assert_eq!(
+            InlineShellCommand::suggestion_prefix(":planning doctor"),
+            None
+        );
     }
 
     #[test]
@@ -813,8 +802,6 @@ mod tests {
     #[test]
     fn planning_command_hint_is_argument_aware() {
         let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");
-        let off = InlineShellCommandInput::parse(":planning off").expect("command should parse");
-        let on = InlineShellCommandInput::parse(":planning on").expect("command should parse");
         let doctor =
             InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
@@ -822,8 +809,6 @@ mod tests {
             plain.buffered_hint(),
             "Press Enter to open the planning control center."
         );
-        assert_eq!(off.buffered_hint(), "Press Enter to turn Plan off.");
-        assert_eq!(on.buffered_hint(), "Press Enter to turn Plan on.");
         assert_eq!(
             doctor.buffered_hint(),
             "Press Enter to inspect planning health."

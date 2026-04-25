@@ -13,9 +13,9 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
-    PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
+    PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{TaskLedgerDocument, TaskStatus};
@@ -242,8 +242,6 @@ impl PlanningResetService {
                 RESULT_OUTPUT_FILE_PATH,
                 Some(&bootstrap.result_output_markdown),
             )?;
-        self.planning_workspace_port
-            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None)?;
         self.commit_task_authority_from_bodies(
             workspace_dir,
             Some(&bootstrap.directions_toml),
@@ -265,7 +263,6 @@ impl PlanningResetService {
                 PLANNING_DIRECTION_DOCS_DIRECTORY.to_string(),
                 PLANNING_PROMPTS_DIRECTORY.to_string(),
                 QUEUE_SNAPSHOT_FILE_PATH.to_string(),
-                PLAN_OFF_FILE_PATH.to_string(),
             ],
         })
     }
@@ -373,7 +370,7 @@ mod tests {
     };
     use crate::application::service::planning::authoring::bootstrap::PlanningBootstrapService;
     use crate::application::service::planning::shared::contract::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH,
         PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
         RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
@@ -599,7 +596,6 @@ state = "active"
             format!("{PLANNING_PROMPTS_DIRECTORY}/custom.md"),
             "# Custom queue idle prompt".to_string(),
         );
-        active_file_bodies.insert(PLAN_OFF_FILE_PATH.to_string(), "plan off\n".to_string());
     }
 
     #[test]
@@ -726,7 +722,7 @@ state = "active"
     }
 
     #[test]
-    fn reset_all_rewrites_full_scaffold_and_turns_plan_back_on() {
+    fn reset_all_rewrites_full_scaffold() {
         let (service, workspace_port) = reset_service();
         seed_active_workspace(
             &workspace_port,
@@ -754,10 +750,8 @@ state = "active"
                 PLANNING_DIRECTION_DOCS_DIRECTORY.to_string(),
                 PLANNING_PROMPTS_DIRECTORY.to_string(),
                 QUEUE_SNAPSHOT_FILE_PATH.to_string(),
-                PLAN_OFF_FILE_PATH.to_string(),
             ]
         );
-        assert!(workspace_port.active_file(PLAN_OFF_FILE_PATH).is_none());
         assert!(
             workspace_port
                 .active_file(QUEUE_SNAPSHOT_FILE_PATH)

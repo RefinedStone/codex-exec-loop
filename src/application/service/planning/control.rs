@@ -11,8 +11,6 @@ const CONTROL_HELP_TEXT: &str = "지원 명령어\n\
 /help\n\
 /status\n\
 /queue\n\
-/plan on\n\
-/plan off\n\
 /reset queue\n\
 /reset directions\n\
 /reset all";
@@ -22,8 +20,6 @@ pub enum PlanningControlCommand {
     Help,
     Status,
     Queue,
-    EnablePlan,
-    DisablePlan,
     Reset(PlanningResetTarget),
 }
 
@@ -56,20 +52,11 @@ pub struct PlanningControlStatusSnapshot {
     pub health: Option<String>,
     pub issue: Option<String>,
     pub note: Option<String>,
-    pub plan_enabled: bool,
     pub preview_status_label: String,
     pub preview_detail: Option<String>,
     pub queue_head: Option<PlanningControlQueueEntry>,
     pub visible_tasks: Vec<PlanningControlQueueEntry>,
     pub proposed_tasks: Vec<PlanningControlQueueEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlPlanToggleOutcome {
-    pub enabled: bool,
-    pub planning_state: String,
-    pub health: Option<String>,
-    pub issue: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,8 +72,6 @@ pub struct PlanningControlResetOutcome {
 pub trait PlanningControlSurface: Send + Sync {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot>;
 
-    fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningControlPlanToggleOutcome>;
-
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome>;
 }
 
@@ -94,16 +79,6 @@ impl PlanningControlSurface for PlanningAdminFacadeService {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         let overview = self.load_overview()?;
         Ok(map_overview(overview))
-    }
-
-    fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningControlPlanToggleOutcome> {
-        let outcome = self.set_plan_enabled(enabled)?;
-        Ok(PlanningControlPlanToggleOutcome {
-            enabled: outcome.enabled,
-            planning_state: outcome.doctor.planning_state,
-            health: outcome.doctor.health,
-            issue: outcome.doctor.issue,
-        })
     }
 
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
@@ -140,14 +115,6 @@ impl PlanningControlService {
                 let snapshot = self.surface.load_status_snapshot()?;
                 Ok(PlanningControlReply::new(format_queue(&snapshot)))
             }
-            PlanningControlCommand::EnablePlan => {
-                let outcome = self.surface.set_plan_enabled(true)?;
-                Ok(PlanningControlReply::new(format_plan_toggle(&outcome)))
-            }
-            PlanningControlCommand::DisablePlan => {
-                let outcome = self.surface.set_plan_enabled(false)?;
-                Ok(PlanningControlReply::new(format_plan_toggle(&outcome)))
-            }
             PlanningControlCommand::Reset(target) => {
                 let outcome = self.surface.reset_workspace(target)?;
                 Ok(PlanningControlReply::new(format_reset(&outcome)))
@@ -169,7 +136,6 @@ fn map_overview(overview: PlanningAdminOverview) -> PlanningControlStatusSnapsho
         health: overview.doctor.health,
         issue: overview.doctor.issue,
         note: overview.doctor.note,
-        plan_enabled: overview.runtime.plan_enabled,
         preview_status_label: overview.runtime.preview_status_label,
         preview_detail: overview.runtime.preview_detail,
         queue_head: overview.runtime.queue_head.map(map_queue_head),
@@ -213,10 +179,6 @@ fn format_status(snapshot: &PlanningControlStatusSnapshot) -> String {
         "상태 요약".to_string(),
         format!("workspace: {}", snapshot.workspace_dir),
         format!("planning_state: {}", snapshot.planning_state),
-        format!(
-            "plan_enabled: {}",
-            if snapshot.plan_enabled { "on" } else { "off" }
-        ),
         format!("preview: {}", snapshot.preview_status_label),
     ];
     if let Some(detail) = snapshot.preview_detail.as_ref() {
@@ -293,24 +255,6 @@ fn queue_entry_label(entry: &PlanningControlQueueEntry) -> String {
     )
 }
 
-fn format_plan_toggle(outcome: &PlanningControlPlanToggleOutcome) -> String {
-    let mut lines = vec![
-        if outcome.enabled {
-            "plan을 켰습니다.".to_string()
-        } else {
-            "plan을 껐습니다.".to_string()
-        },
-        format!("planning_state: {}", outcome.planning_state),
-    ];
-    if let Some(health) = outcome.health.as_ref() {
-        lines.push(format!("health: {health}"));
-    }
-    if let Some(issue) = outcome.issue.as_ref() {
-        lines.push(format!("issue: {issue}"));
-    }
-    lines.join("\n")
-}
-
 fn format_reset(outcome: &PlanningControlResetOutcome) -> String {
     let mut lines = vec![
         format!("reset {} 완료", outcome.target),
@@ -340,30 +284,19 @@ mod tests {
     use anyhow::Result;
 
     use super::{
-        PlanningControlCommand, PlanningControlPlanToggleOutcome, PlanningControlQueueEntry,
-        PlanningControlResetOutcome, PlanningControlService, PlanningControlStatusSnapshot,
-        PlanningControlSurface,
+        PlanningControlCommand, PlanningControlQueueEntry, PlanningControlResetOutcome,
+        PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
     };
     use crate::application::service::planning::PlanningResetTarget;
 
     struct FakePlanningControlSurface {
         status: PlanningControlStatusSnapshot,
-        enable_outcome: PlanningControlPlanToggleOutcome,
-        disable_outcome: PlanningControlPlanToggleOutcome,
         reset_outcome: PlanningControlResetOutcome,
     }
 
     impl PlanningControlSurface for FakePlanningControlSurface {
         fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
             Ok(self.status.clone())
-        }
-
-        fn set_plan_enabled(&self, enabled: bool) -> Result<PlanningControlPlanToggleOutcome> {
-            Ok(if enabled {
-                self.enable_outcome.clone()
-            } else {
-                self.disable_outcome.clone()
-            })
         }
 
         fn reset_workspace(
@@ -384,7 +317,6 @@ mod tests {
                 health: Some("planning workspace ready".to_string()),
                 issue: None,
                 note: Some("next task available".to_string()),
-                plan_enabled: true,
                 preview_status_label: "queue ready".to_string(),
                 preview_detail: Some("head task is executable".to_string()),
                 queue_head: Some(PlanningControlQueueEntry {
@@ -409,18 +341,6 @@ mod tests {
                     combined_priority: 60,
                 }],
             },
-            enable_outcome: PlanningControlPlanToggleOutcome {
-                enabled: true,
-                planning_state: "ready".to_string(),
-                health: Some("planning workspace ready".to_string()),
-                issue: None,
-            },
-            disable_outcome: PlanningControlPlanToggleOutcome {
-                enabled: false,
-                planning_state: "plan_disabled".to_string(),
-                health: Some("planning paused".to_string()),
-                issue: None,
-            },
             reset_outcome: PlanningControlResetOutcome {
                 target: "queue".to_string(),
                 rewritten_paths: vec![".codex-exec-loop/planning/task-ledger.json".to_string()],
@@ -441,7 +361,6 @@ mod tests {
             .expect("help should execute");
 
         assert!(reply.text.contains("/status"));
-        assert!(reply.text.contains("/plan on"));
         assert!(reply.text.contains("/reset all"));
     }
 

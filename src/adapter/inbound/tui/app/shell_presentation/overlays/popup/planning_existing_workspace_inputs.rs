@@ -8,11 +8,7 @@ pub(super) fn build_existing_workspace_copy(
     workspace_directory: &str,
     snapshot: &PlanningRuntimeSnapshot,
 ) -> PlanningExistingWorkspaceCopy {
-    let plan_state_label = if snapshot.plan_enabled() {
-        format!("Plan on / {}", plan_runtime_substate_label(snapshot))
-    } else {
-        "Plan off".to_string()
-    };
+    let plan_state_label = format!("Plan / {}", plan_runtime_substate_label(snapshot));
     let queue_summary = snapshot
         .queue_summary()
         .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
@@ -27,6 +23,5 @@ pub(super) fn build_existing_workspace_copy(
         queue_summary,
         queue_idle_policy: snapshot.queue_idle_policy().label().to_string(),
         failure_summary,
-        plan_enabled: snapshot.plan_enabled(),
     }
 }
