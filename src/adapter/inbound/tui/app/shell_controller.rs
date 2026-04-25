@@ -238,6 +238,13 @@ impl NativeTuiApp {
             .prompt_buffer()
             .trim()
             .to_string();
+        if !prompt.is_empty()
+            && let Err(error) = self.ensure_default_active_planning_workspace()
+        {
+            self.task_intake_overlay_ui_state
+                .show_error(error.to_string());
+            return;
+        }
         let request = PlanningTaskIntakeRequest {
             workspace_directory: self.planning_workspace_directory(),
             raw_prompt: prompt,

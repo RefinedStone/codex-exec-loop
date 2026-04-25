@@ -387,7 +387,7 @@ impl PlanningTaskIntakeService {
             .load_planning_workspace_files(&request.workspace_directory)?;
         if !workspace_record.has_any_files() {
             return Err(anyhow!(
-                "Planning workspace is unavailable; open :planning before using :task."
+                "Planning workspace is unavailable; :task can initialize a new default workspace, but this workspace could not be loaded. Run :doctor for details."
             ));
         }
 
@@ -429,14 +429,15 @@ impl PlanningTaskIntakeService {
                     result_output_markdown,
                 });
         if !validation_result.is_valid() {
+            let first_failure = validation_result
+                .report
+                .errors()
+                .first()
+                .map(|issue| issue.message.as_str())
+                .unwrap_or("planning validation failed");
             return Err(anyhow!(
-                "Planning workspace is invalid; repair it with :planning or :doctor before using :task: {}",
-                validation_result
-                    .report
-                    .errors()
-                    .first()
-                    .map(|issue| issue.message.as_str())
-                    .unwrap_or("planning validation failed")
+                "Planning workspace is invalid; {first_failure}. {}",
+                task_intake_repair_guidance(first_failure, repository_snapshot.is_some())
             ));
         }
 
@@ -574,9 +575,31 @@ fn required_workspace_body<'a>(
 ) -> Result<&'a str> {
     body.ok_or_else(|| {
         anyhow!(
-            "Planning workspace is incomplete: missing {path}. Open :planning before using :task."
+            "Planning workspace is incomplete: missing {path}. Run :doctor to inspect the workspace, then use :directions apply or :queue apply if tracked planning files are newer."
         )
     })
+}
+
+fn task_intake_repair_guidance(first_failure: &str, uses_task_repository: bool) -> &'static str {
+    if first_failure.contains("references unknown direction_id") {
+        if uses_task_repository {
+            return "Next action: run :directions apply if tracked directions.toml contains the missing direction; otherwise run :doctor.";
+        }
+        return "Next action: run :directions apply if directions.toml is newer, or :queue apply if task-ledger.json is the stale file; use :doctor to inspect.";
+    }
+    if first_failure.contains("task-ledger.json")
+        || first_failure.contains("task ")
+        || first_failure.contains("task-ledger")
+    {
+        return "Next action: run :queue apply if tracked task-ledger.json is newer; otherwise run :doctor.";
+    }
+    if first_failure.contains("directions.toml")
+        || first_failure.contains("direction ")
+        || first_failure.contains("queue_idle")
+    {
+        return "Next action: run :directions apply if tracked directions.toml is newer; otherwise run :doctor.";
+    }
+    "Next action: run :doctor to inspect the workspace, then use :directions apply or :queue apply for tracked-file drift."
 }
 
 fn validate_task_link(

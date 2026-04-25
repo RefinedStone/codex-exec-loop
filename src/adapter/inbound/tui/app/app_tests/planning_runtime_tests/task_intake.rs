@@ -3,13 +3,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::super::{
     ActiveTurnPlanningCapture, ConversationInputState, ConversationRuntimeEvent, ConversationState,
     InlineShellCommandInput, PlanningExecutionSnapshot, ShellOverlay, StartupState,
-    TaskIntakeOverlayStep, bootstrap_active_planning_workspace, create_temp_workspace,
-    make_test_app, sample_startup_diagnostics, sync_draft_conversation_to_startup_workspace,
+    TaskIntakeOverlayStep, TempGitWorkspace, bootstrap_active_planning_workspace,
+    create_temp_workspace, make_test_app, sample_startup_diagnostics,
+    sync_draft_conversation_to_startup_workspace,
 };
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityCommit;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
+use crate::domain::planning::{PriorityQueueSnapshot, TaskLedgerDocument};
 
 #[test]
 fn task_command_with_prompt_previews_and_commits_ready_task() {
@@ -143,32 +147,181 @@ fn task_command_without_prompt_keeps_editor_open_on_blank_preview() {
 }
 
 #[test]
-fn task_command_rejects_missing_planning_workspace_without_bootstrap() {
+fn task_command_bootstraps_missing_planning_workspace_and_commits_ready_task() {
     let (mut app, _) = make_test_app();
-    let workspace_dir = create_temp_workspace("task-intake-missing-workspace");
+    let workspace_dir = create_temp_workspace("task-intake-default-bootstrap");
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
     sync_draft_conversation_to_startup_workspace(&mut app);
 
     app.execute_inline_shell_command_input(
-        InlineShellCommandInput::parse(":task Add planning task")
-            .expect("task command should parse"),
+        InlineShellCommandInput::parse(":task Add work").expect("task command should parse"),
     );
 
     assert_eq!(app.shell_overlay, ShellOverlay::TaskIntake);
     assert!(
         app.task_intake_overlay_ui_state
-            .error()
-            .expect("missing workspace should show an error")
-            .contains(":planning")
+            .proposal()
+            .expect("fresh workspace task command should preview")
+            .draft
+            .task
+            .title
+            .contains("Add work")
     );
     assert!(
-        !std::path::Path::new(&workspace_dir)
+        std::path::Path::new(&workspace_dir)
             .join(".codex-exec-loop")
             .exists(),
-        "task intake should not bootstrap planning files implicitly"
+        "task intake should initialize the default planning workspace"
+    );
+
+    assert!(app.handle_shell_overlay_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE,)));
+
+    assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should be ready");
+    };
+    assert!(
+        conversation
+            .planning_runtime_snapshot
+            .queue_head()
+            .is_some_and(|task| task.task_title.contains("Add work"))
+    );
+    let exported_ledger = std::fs::read_to_string(
+        std::path::Path::new(&workspace_dir)
+            .join(".codex-exec-loop/runtime/exports/task-ledger.json"),
+    )
+    .expect("task authority export should be refreshed");
+    assert!(
+        exported_ledger.contains("Add work"),
+        "task intake should commit into the ready task authority"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn task_command_preserves_unknown_direction_failure_and_guides_directions_apply() {
+    let (mut app, _) = make_test_app();
+    let workspace = TempGitWorkspace::new("task-intake-authority-drift");
+    let workspace_dir = workspace.workspace_dir().to_string();
+    bootstrap_active_planning_workspace(&workspace_dir);
+    write_tracked_directions_with_claude_runner(&workspace_dir);
+    commit_task_authority_with_claude_runner_task(&workspace_dir);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":task Add follow-up work")
+            .expect("task command should parse"),
+    );
+
+    assert_eq!(app.shell_overlay, ShellOverlay::TaskIntake);
+    let error = app
+        .task_intake_overlay_ui_state
+        .error()
+        .expect("authority drift should block task preview");
+    assert!(
+        error.contains(
+            "task claude-runner-task references unknown direction_id claude-first-headless-cli-runner"
+        ),
+        "task intake should preserve the validator's first concrete failure: {error}"
+    );
+    assert!(
+        error.contains(":directions apply"),
+        "task intake should point to tracked directions repair: {error}"
+    );
+}
+
+fn write_tracked_directions_with_claude_runner(workspace_dir: &str) {
+    let directions_path = std::path::Path::new(workspace_dir)
+        .join(".codex-exec-loop")
+        .join("planning")
+        .join("directions.toml");
+    std::fs::create_dir_all(
+        directions_path
+            .parent()
+            .expect("directions path should have a parent"),
+    )
+    .expect("tracked planning directory should be created");
+    std::fs::write(
+        directions_path,
+        r#"version = 1
+
+[queue_idle]
+policy = "review_and_enqueue"
+prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
+
+[[directions]]
+id = "general-workstream"
+title = "General workstream"
+summary = "Default planning direction."
+success_criteria = [
+    "Keep work represented in the task ledger.",
+]
+scope_hints = [
+    "Use for generic runtime intake work.",
+]
+detail_doc_path = ""
+state = "active"
+
+[[directions]]
+id = "claude-first-headless-cli-runner"
+title = "Claude-first headless CLI runner"
+summary = "Tracked direction that has not been applied to the authority store yet."
+success_criteria = [
+    "Task intake can see this direction after :directions apply.",
+]
+scope_hints = [
+    "Use for authority drift regression coverage.",
+]
+detail_doc_path = ""
+state = "active"
+"#,
+    )
+    .expect("tracked directions should write");
+}
+
+fn commit_task_authority_with_claude_runner_task(workspace_dir: &str) {
+    let task_ledger: TaskLedgerDocument = serde_json::from_str(
+        r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "claude-runner-task",
+      "direction_id": "claude-first-headless-cli-runner",
+      "direction_relation_note": "authority drift regression",
+      "title": "Run the claude-first headless CLI",
+      "description": "Keep this task in the authority store while active directions are stale.",
+      "status": "ready",
+      "base_priority": 80,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "Regression fixture",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "user",
+      "source_turn_id": null,
+      "updated_at": "2026-04-23T12:00:00Z"
+    }
+  ]
+}"#,
+    )
+    .expect("task authority fixture should parse");
+    let queue_snapshot = PriorityQueueSnapshot {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    SqlitePlanningAuthorityAdapter::commit_task_authority_snapshot(
+        workspace_dir,
+        PlanningTaskAuthorityCommit {
+            observed_planning_revision: None,
+            task_ledger: &task_ledger,
+            queue_snapshot: &queue_snapshot,
+        },
+    )
+    .expect("task authority fixture should commit");
 }
 
 #[test]

@@ -498,6 +498,55 @@ impl NativeTuiApp {
         self.stage_simple_mode_planning_init_draft();
     }
 
+    pub(in crate::adapter::inbound::tui::app) fn ensure_default_active_planning_workspace(
+        &mut self,
+    ) -> anyhow::Result<()> {
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning
+            .workspace
+            .has_planning_workspace(&workspace_directory)
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                let stage_result = self
+                    .planning
+                    .workspace
+                    .stage_simple_mode_draft(&workspace_directory)
+                    .map_err(|error| {
+                        anyhow::anyhow!("planning default bootstrap failed while staging: {error}")
+                    })?;
+                let promote_result = self
+                    .planning
+                    .workspace
+                    .promote_staged_draft(&workspace_directory, &stage_result.draft_name)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "planning default bootstrap failed while promoting: {error}"
+                        )
+                    })?;
+                if promote_result.promoted_file_count == 0 {
+                    let first_error = promote_result
+                        .validation_report
+                        .errors()
+                        .first()
+                        .map(|issue| issue.message.as_str())
+                        .unwrap_or("planning validation failed");
+                    anyhow::bail!(
+                        "planning default bootstrap was blocked by validation: {first_error}"
+                    );
+                }
+                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                    &workspace_directory,
+                );
+                Ok(())
+            }
+            Err(error) => Err(anyhow::anyhow!(
+                "planning workspace check failed before operator action: {error}"
+            )),
+        }
+    }
+
     pub(in crate::adapter::inbound::tui::app) fn handle_planning_shell_command(
         &mut self,
         argument: Option<&str>,

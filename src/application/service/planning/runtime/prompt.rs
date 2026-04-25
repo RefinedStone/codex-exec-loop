@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::{
@@ -346,7 +346,16 @@ impl PlanningPromptService {
             .with_plan_enabled(plan_enabled));
         }
 
-        let workspace_files = workspace_record_to_files(&workspace_record);
+        let task_authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?;
+        let authority_task_ledger_json = task_authority_snapshot
+            .as_ref()
+            .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_ledger))
+            .transpose()
+            .context("failed to serialize task authority ledger")?;
+        let workspace_files =
+            workspace_record_to_files(&workspace_record, authority_task_ledger_json.as_deref());
         let mut validation_result = self
             .planning_validation_service
             .validate_workspace_files(workspace_files);
@@ -384,10 +393,7 @@ impl PlanningPromptService {
         let task_ledger = validation_result
             .task_ledger
             .expect("valid planning task ledger should be available");
-        let stored_queue_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)?
-            .map(|snapshot| snapshot.queue_snapshot);
+        let stored_queue_snapshot = task_authority_snapshot.map(|snapshot| snapshot.queue_snapshot);
         let current_queue_snapshot = match self
             .priority_queue_service
             .build_snapshot(&directions, &task_ledger)
@@ -480,18 +486,21 @@ where
     hasher.finish()
 }
 
-fn workspace_record_to_files(
-    workspace_record: &PlanningWorkspaceLoadRecord,
-) -> PlanningWorkspaceFiles<'_> {
+fn workspace_record_to_files<'a>(
+    workspace_record: &'a PlanningWorkspaceLoadRecord,
+    task_ledger_json_override: Option<&'a str>,
+) -> PlanningWorkspaceFiles<'a> {
     PlanningWorkspaceFiles {
         directions_toml: workspace_record
             .directions_toml
             .as_deref()
             .expect("complete planning workspace should include directions"),
-        task_ledger_json: workspace_record
-            .task_ledger_json
-            .as_deref()
-            .expect("complete planning workspace should include task ledger"),
+        task_ledger_json: task_ledger_json_override.unwrap_or_else(|| {
+            workspace_record
+                .task_ledger_json
+                .as_deref()
+                .expect("complete planning workspace should include task ledger")
+        }),
         task_ledger_schema_json: workspace_record
             .task_ledger_schema_json
             .as_deref()
