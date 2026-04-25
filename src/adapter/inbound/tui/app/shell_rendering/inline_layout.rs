@@ -119,9 +119,20 @@ pub(super) fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: O
         return;
     }
 
+    let frame_area = frame.area();
     let clamped_x = cursor_x.min(area.width.saturating_sub(1));
     let clamped_y = cursor_y.min(area.height.saturating_sub(1));
-    frame.set_cursor_position(Position::new(area.x + clamped_x, area.y + clamped_y));
+    let absolute_x = area.x.saturating_add(clamped_x);
+    let absolute_y = area.y.saturating_add(clamped_y);
+    if absolute_x < frame_area.x
+        || absolute_y < frame_area.y
+        || absolute_x >= frame_area.x.saturating_add(frame_area.width)
+        || absolute_y >= frame_area.y.saturating_add(frame_area.height)
+    {
+        return;
+    }
+
+    frame.set_cursor_position(Position::new(absolute_x, absolute_y));
 }
 
 pub(super) fn render_inline_scrolled_section(
@@ -184,4 +195,24 @@ pub(super) fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area
             Constraint::Percentage((100u16.saturating_sub(horizontal_percent)) / 2),
         ])
         .split(vertical_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::*;
+
+    #[test]
+    fn set_cursor_if_visible_ignores_area_outside_frame() {
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| {
+                set_cursor_if_visible(frame, Rect::new(0, 8, 80, 1), Some((0, 0)));
+            })
+            .expect("cursor outside frame should be ignored");
+    }
 }
