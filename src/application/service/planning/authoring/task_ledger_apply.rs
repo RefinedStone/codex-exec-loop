@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -107,21 +107,38 @@ impl PlanningTaskLedgerApplyService {
             .map_err(|error| {
                 anyhow!("planning validation passed but queue build failed: {error}")
             })?;
-        let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)?;
-        let mut committed_record = active_workspace;
-        committed_record.task_ledger_json = Some(candidate_task_ledger);
-        committed_record.queue_snapshot_json = Some(queue_snapshot_json);
-        self.planning_workspace_port
-            .commit_planning_workspace_files(workspace_dir, &committed_record)?;
-        self.planning_task_repository_port
-            .commit_task_authority_snapshot(
-                workspace_dir,
-                PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
-                    task_ledger,
-                    queue_snapshot: &queue_snapshot,
-                },
-            )?;
+        let authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?;
+        if let Some(snapshot) = authority_snapshot {
+            match self
+                .planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    workspace_dir,
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: Some(snapshot.planning_revision),
+                        task_ledger,
+                        queue_snapshot: &queue_snapshot,
+                    },
+                )? {
+                PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+                PlanningTaskAuthorityCommitResult::Conflict {
+                    observed_planning_revision,
+                    current_planning_revision,
+                } => {
+                    return Err(anyhow!(
+                        "planning db changed while applying tracked task ledger (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                    ));
+                }
+            }
+        } else {
+            let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)?;
+            let mut committed_record = active_workspace;
+            committed_record.task_ledger_json = Some(candidate_task_ledger);
+            committed_record.queue_snapshot_json = Some(queue_snapshot_json);
+            self.planning_workspace_port
+                .commit_planning_workspace_files(workspace_dir, &committed_record)?;
+        }
 
         Ok(PlanningTrackedTaskLedgerApplyResult {
             applied_paths: vec![
