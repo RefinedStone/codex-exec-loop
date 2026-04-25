@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 #[cfg(test)]
 use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -124,6 +124,32 @@ impl PlanningDirectionsApplyService {
             .build_snapshot(directions, task_ledger)
             .context("failed to rebuild planning queue after tracked directions apply")?;
 
+        let authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?;
+        if let Some(snapshot) = authority_snapshot.as_ref() {
+            match self
+                .planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    workspace_dir,
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: Some(snapshot.planning_revision),
+                        task_ledger,
+                        queue_snapshot: &queue_snapshot,
+                    },
+                )? {
+                PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+                PlanningTaskAuthorityCommitResult::Conflict {
+                    observed_planning_revision,
+                    current_planning_revision,
+                } => {
+                    return Err(anyhow!(
+                        "planning db changed while applying tracked directions (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                    ));
+                }
+            }
+        }
+
         self.planning_workspace_port
             .replace_planning_workspace_file(
                 workspace_dir,
@@ -140,15 +166,17 @@ impl PlanningDirectionsApplyService {
         applied_paths.sort();
         applied_paths.dedup();
 
-        self.planning_task_repository_port
-            .commit_task_authority_snapshot(
-                workspace_dir,
-                PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
-                    task_ledger,
-                    queue_snapshot: &queue_snapshot,
-                },
-            )?;
+        if authority_snapshot.is_none() {
+            self.planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    workspace_dir,
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: None,
+                        task_ledger,
+                        queue_snapshot: &queue_snapshot,
+                    },
+                )?;
+        }
 
         Ok(PlanningTrackedDirectionsApplyResult {
             applied_paths,
