@@ -19,9 +19,12 @@ use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, Codex
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
+    PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
     PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
-    PlanningAdminOverview, PlanningAdminSessionView, PlanningResetTarget, PlanningServices,
+    PlanningAdminManagementView, PlanningAdminOverview, PlanningAdminSessionView,
+    PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest, PlanningResetTarget,
+    PlanningServices,
 };
 
 const DEFAULT_PORT: u16 = 18442;
@@ -68,6 +71,57 @@ struct DraftMutationForm {
 struct ResetForm {
     csrf_token: String,
     target: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DirectionMutationForm {
+    csrf_token: String,
+    id: String,
+    title: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    success_criteria_text: String,
+    #[serde(default)]
+    scope_hints_text: String,
+    #[serde(default)]
+    detail_doc_path: String,
+    #[serde(default)]
+    state: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct IdDeleteForm {
+    csrf_token: String,
+    id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TaskMutationForm {
+    csrf_token: String,
+    id: String,
+    #[serde(default)]
+    direction_id: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    base_priority: String,
+    #[serde(default)]
+    dynamic_priority_delta: String,
+    #[serde(default)]
+    priority_reason: String,
+    #[serde(default)]
+    depends_on_text: String,
+    #[serde(default)]
+    blocked_by_text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FileSyncForm {
+    csrf_token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,6 +178,7 @@ struct DirectionsTemplate {
     csrf_token: String,
     notice: Option<String>,
     overview: PlanningAdminOverview,
+    management: PlanningAdminManagementView,
 }
 
 #[derive(Template)]
@@ -135,6 +190,7 @@ struct TasksTemplate {
     csrf_token: String,
     notice: Option<String>,
     overview: PlanningAdminOverview,
+    management: PlanningAdminManagementView,
 }
 
 #[derive(Template)]
@@ -207,10 +263,16 @@ fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
         planning_authority.clone(),
-        planning_authority,
+        planning_authority.clone(),
         Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
     );
-    PlanningAdminFacadeService::from_planning(workspace_dir, planning, planning_workspace_port)
+    PlanningAdminFacadeService::from_planning_with_authority(
+        workspace_dir,
+        planning,
+        planning_workspace_port,
+        planning_authority.clone(),
+        planning_authority,
+    )
 }
 
 fn build_router(state: AdminAppState) -> Router {
@@ -221,6 +283,12 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/admin/tasks", get(tasks_page))
         .route("/admin/controls", get(controls_page))
         .route("/admin/drafts", post(create_draft_page))
+        .route("/admin/directions/upsert", post(upsert_direction_page))
+        .route("/admin/directions/delete", post(delete_direction_page))
+        .route("/admin/tasks/upsert", post(upsert_task_page))
+        .route("/admin/tasks/delete", post(delete_task_page))
+        .route("/admin/files/export", post(export_files_page))
+        .route("/admin/files/apply", post(apply_files_page))
         .route("/admin/drafts/{draft_name}", get(editor_page))
         .route("/admin/drafts/{draft_name}/save", post(save_draft_page))
         .route(
@@ -247,6 +315,15 @@ fn build_router(state: AdminAppState) -> Router {
             "/api/planning/drafts/{draft_name}/promote",
             post(promote_draft_api),
         )
+        .route("/api/planning/directions", post(upsert_direction_api))
+        .route(
+            "/api/planning/directions/delete",
+            post(delete_direction_api),
+        )
+        .route("/api/planning/tasks", post(upsert_task_api))
+        .route("/api/planning/tasks/delete", post(delete_task_api))
+        .route("/api/planning/files/export", post(export_files_api))
+        .route("/api/planning/files/apply", post(apply_files_api))
         .route("/api/planning/reset", post(reset_api))
         .with_state(state)
 }
@@ -284,6 +361,10 @@ async fn directions_page(
         .facade
         .load_overview()
         .map_err(internal_server_error)?;
+    let management = state
+        .facade
+        .load_management_view()
+        .map_err(internal_server_error)?;
     render_html(
         jar,
         DirectionsTemplate {
@@ -293,6 +374,7 @@ async fn directions_page(
             csrf_token,
             notice: query.get("notice").cloned(),
             overview,
+            management,
         },
     )
 }
@@ -307,6 +389,10 @@ async fn tasks_page(
         .facade
         .load_overview()
         .map_err(internal_server_error)?;
+    let management = state
+        .facade
+        .load_management_view()
+        .map_err(internal_server_error)?;
     render_html(
         jar,
         TasksTemplate {
@@ -316,8 +402,106 @@ async fn tasks_page(
             csrf_token,
             notice: query.get("notice").cloned(),
             overview,
+            management,
         },
     )
+}
+
+async fn upsert_direction_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<DirectionMutationForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let outcome = state
+        .facade
+        .upsert_direction(PlanningAdminDirectionMutationRequest {
+            id: form.id,
+            title: form.title,
+            summary: form.summary,
+            success_criteria_text: form.success_criteria_text,
+            scope_hints_text: form.scope_hints_text,
+            detail_doc_path: form.detail_doc_path,
+            state: form.state,
+        })
+        .map_err(internal_server_error)?;
+    Ok(Redirect::to(&notice_location("/admin/directions", &outcome.notice)).into_response())
+}
+
+async fn delete_direction_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<IdDeleteForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let outcome = state
+        .facade
+        .delete_direction(PlanningAdminDirectionDeleteRequest { id: form.id })
+        .map_err(internal_server_error)?;
+    Ok(Redirect::to(&notice_location("/admin/directions", &outcome.notice)).into_response())
+}
+
+async fn upsert_task_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<TaskMutationForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let outcome = state
+        .facade
+        .upsert_task(PlanningAdminTaskMutationRequest {
+            id: form.id,
+            direction_id: form.direction_id,
+            title: form.title,
+            description: form.description,
+            status: form.status,
+            base_priority: form.base_priority,
+            dynamic_priority_delta: form.dynamic_priority_delta,
+            priority_reason: form.priority_reason,
+            depends_on_text: form.depends_on_text,
+            blocked_by_text: form.blocked_by_text,
+        })
+        .map_err(internal_server_error)?;
+    Ok(Redirect::to(&notice_location("/admin/tasks", &outcome.notice)).into_response())
+}
+
+async fn delete_task_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<IdDeleteForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let outcome = state
+        .facade
+        .delete_task(PlanningAdminTaskDeleteRequest { id: form.id })
+        .map_err(internal_server_error)?;
+    Ok(Redirect::to(&notice_location("/admin/tasks", &outcome.notice)).into_response())
+}
+
+async fn export_files_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<FileSyncForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let outcome = state
+        .facade
+        .export_active_files_for_edit()
+        .map_err(internal_server_error)?;
+    Ok(Redirect::to(&notice_location("/admin/controls", &outcome.notice)).into_response())
+}
+
+async fn apply_files_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<FileSyncForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let outcome = state
+        .facade
+        .apply_exported_files()
+        .map_err(internal_server_error)?;
+    Ok(Redirect::to(&notice_location("/admin/controls", &outcome.notice)).into_response())
 }
 
 async fn controls_page(
@@ -611,6 +795,88 @@ async fn promote_draft_api(
     .into_response())
 }
 
+async fn upsert_direction_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<PlanningAdminDirectionMutationRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let outcome = state
+        .facade
+        .upsert_direction(request)
+        .map_err(internal_server_error)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn delete_direction_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<PlanningAdminDirectionDeleteRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let outcome = state
+        .facade
+        .delete_direction(request)
+        .map_err(internal_server_error)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn upsert_task_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<PlanningAdminTaskMutationRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let outcome = state
+        .facade
+        .upsert_task(request)
+        .map_err(internal_server_error)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn delete_task_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<PlanningAdminTaskDeleteRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let outcome = state
+        .facade
+        .delete_task(request)
+        .map_err(internal_server_error)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn export_files_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let outcome = state
+        .facade
+        .export_active_files_for_edit()
+        .map_err(internal_server_error)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn apply_files_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let outcome = state
+        .facade
+        .apply_exported_files()
+        .map_err(internal_server_error)?;
+    Ok(Json(outcome).into_response())
+}
+
 async fn reset_api(
     State(state): State<AdminAppState>,
     jar: CookieJar,
@@ -694,6 +960,10 @@ fn draft_editor_location(
         location.push_str(&encode_uri_component(notice));
     }
     location
+}
+
+fn notice_location(path: &str, notice: &str) -> String {
+    format!("{path}?notice={}", encode_uri_component(notice))
 }
 
 fn encode_uri_component(value: &str) -> String {
@@ -841,9 +1111,13 @@ mod tests {
 
     use super::{AdminAppState, CSRF_COOKIE_NAME, DEFAULT_PORT, build_router, parse_args};
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::{
-        PlanningAdminDraftKind, PlanningAdminFacadeService, PlanningServices,
+        PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
+        PlanningAdminDraftKind, PlanningAdminFacadeService, PlanningAdminTaskMutationRequest,
+        PlanningServices,
     };
+    use crate::domain::planning::{DirectionCatalogDocument, TaskLedgerDocument};
 
     struct TempGitRepo {
         root: PathBuf,
@@ -1133,5 +1407,84 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn admin_crud_defaults_task_direction_and_deletes_direction_children() {
+        let repo = TempGitRepo::new("admin-crud");
+        init_workspace(&repo.repo_root);
+        let adapter = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let facade = PlanningAdminFacadeService::new(repo.repo_root.display().to_string(), adapter);
+
+        facade
+            .upsert_direction(PlanningAdminDirectionMutationRequest {
+                id: "secondary".to_string(),
+                title: "Secondary".to_string(),
+                summary: "Secondary workstream".to_string(),
+                success_criteria_text: "Keep secondary work isolated".to_string(),
+                scope_hints_text: String::new(),
+                detail_doc_path: String::new(),
+                state: "active".to_string(),
+            })
+            .expect("direction should be added");
+        facade
+            .upsert_task(PlanningAdminTaskMutationRequest {
+                id: "task-default".to_string(),
+                direction_id: String::new(),
+                title: "Defaulted task".to_string(),
+                description: String::new(),
+                status: "ready".to_string(),
+                base_priority: "10".to_string(),
+                dynamic_priority_delta: String::new(),
+                priority_reason: String::new(),
+                depends_on_text: String::new(),
+                blocked_by_text: String::new(),
+            })
+            .expect("task should default to general workstream");
+        facade
+            .upsert_task(PlanningAdminTaskMutationRequest {
+                id: "task-secondary".to_string(),
+                direction_id: "secondary".to_string(),
+                title: "Secondary task".to_string(),
+                description: String::new(),
+                status: "ready".to_string(),
+                base_priority: "10".to_string(),
+                dynamic_priority_delta: String::new(),
+                priority_reason: String::new(),
+                depends_on_text: "task-default".to_string(),
+                blocked_by_text: String::new(),
+            })
+            .expect("secondary task should be added");
+
+        facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "secondary".to_string(),
+            })
+            .expect("direction delete should remove child tasks");
+
+        let record = FilesystemPlanningWorkspaceAdapter::new()
+            .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
+            .expect("workspace should load");
+        let directions: DirectionCatalogDocument =
+            toml::from_str(&record.directions_toml.expect("directions should exist"))
+                .expect("directions should parse");
+        let task_ledger: TaskLedgerDocument =
+            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
+                .expect("task ledger should parse");
+
+        assert!(
+            directions
+                .directions
+                .iter()
+                .all(|direction| direction.id != "secondary")
+        );
+        assert!(
+            task_ledger
+                .tasks
+                .iter()
+                .all(|task| task.id != "task-secondary")
+        );
+        assert_eq!(task_ledger.tasks[0].id, "task-default");
+        assert_eq!(task_ledger.tasks[0].direction_id, "general-workstream");
     }
 }
