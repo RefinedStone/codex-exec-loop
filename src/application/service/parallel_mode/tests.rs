@@ -4,8 +4,8 @@ use super::{
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeService, ParallelModeSupervisorState,
     agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
-    derive_default_pool_root, derive_readiness, detect_canonical_repo_root, inspect_planning,
-    lease_session_key, parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
+    derive_default_pool_root, derive_readiness, detect_canonical_repo_root, lease_session_key,
+    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
     resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash,
     short_sha, slot_id, slot_lease_file_path,
 };
@@ -493,19 +493,6 @@ fn derive_readiness_marks_degraded_when_only_optional_capabilities_fail() {
     ]);
 
     assert_eq!(readiness, ParallelModeReadinessState::Degraded);
-}
-
-#[test]
-fn inspect_planning_blocks_when_plan_is_off() {
-    let capability = inspect_planning(
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
-            .with_plan_enabled(false)
-            .with_workspace_present(true),
-    );
-
-    assert_eq!(capability.key, ParallelModeCapabilityKey::Planning);
-    assert_eq!(capability.state, ParallelModeCapabilityState::Blocked);
-    assert!(capability.detail.contains("planning mode is off"));
 }
 
 #[test]

@@ -11,7 +11,7 @@ Codex:
   ```
 
 Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto: on/idle  |  done:
-0/20  |  Plan off
+0/20  |  Plan setup / idle
 status: new thread draft  |  startup: startup ready  |  gh: off
 runtime: clear  |  warn: none
 parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |  queue: inactive

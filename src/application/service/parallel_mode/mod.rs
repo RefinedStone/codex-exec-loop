@@ -1023,15 +1023,6 @@ fn inspect_planning(snapshot: &PlanningRuntimeSnapshot) -> ParallelModeCapabilit
         );
     }
 
-    if !snapshot.plan_enabled() {
-        return ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::Planning,
-            ParallelModeCapabilityState::Blocked,
-            "planning mode is off for this workspace",
-            Some("run `:planning on` before assigning work in parallel mode".to_string()),
-        );
-    }
-
     match snapshot.workspace_status() {
         PlanningRuntimeWorkspaceStatus::Uninitialized => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::Planning,

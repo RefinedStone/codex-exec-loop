@@ -65,12 +65,6 @@ struct DraftMutationForm {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct TogglePlanForm {
-    csrf_token: String,
-    enabled: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct ResetForm {
     csrf_token: String,
     target: String,
@@ -90,11 +84,6 @@ struct SaveDraftRequest {
     direction_id: Option<String>,
     #[serde(default)]
     files: Vec<PlanningAdminDraftFileUpdate>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct TogglePlanRequest {
-    enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -242,7 +231,6 @@ fn build_router(state: AdminAppState) -> Router {
             "/admin/drafts/{draft_name}/promote",
             post(promote_draft_page),
         )
-        .route("/admin/controls/plan-enabled", post(toggle_plan_page))
         .route("/admin/controls/reset", post(reset_page))
         .route("/api/planning/summary", get(summary_api))
         .route("/api/planning/runtime", get(runtime_api))
@@ -259,7 +247,6 @@ fn build_router(state: AdminAppState) -> Router {
             "/api/planning/drafts/{draft_name}/promote",
             post(promote_draft_api),
         )
-        .route("/api/planning/plan-enabled", post(toggle_plan_api))
         .route("/api/planning/reset", post(reset_api))
         .with_state(state)
 }
@@ -484,24 +471,6 @@ async fn promote_draft_page(
     )
 }
 
-async fn toggle_plan_page(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    Form(form): Form<TogglePlanForm>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_form_csrf(&jar, &form.csrf_token)?;
-    state
-        .facade
-        .set_plan_enabled(form.enabled)
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(if form.enabled {
-        "/admin/controls?notice=planning%20enabled"
-    } else {
-        "/admin/controls?notice=planning%20paused"
-    })
-    .into_response())
-}
-
 async fn reset_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
@@ -640,20 +609,6 @@ async fn promote_draft_api(
         session,
     })
     .into_response())
-}
-
-async fn toggle_plan_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<TogglePlanRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .set_plan_enabled(request.enabled)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
 }
 
 async fn reset_api(

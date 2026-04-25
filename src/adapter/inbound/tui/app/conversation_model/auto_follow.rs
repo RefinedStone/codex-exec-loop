@@ -23,7 +23,6 @@ pub(crate) enum AutoFollowupSkipReason {
     NoAgentReply,
     StopKeywordMatched,
     NoFileChanges,
-    PlanningDisabled,
     PlanningBlocked,
     PlanningQueueIdlePolicyStop,
     PlanningQueueHeadRequired,
@@ -57,9 +56,6 @@ impl AutoFollowupSkipReason {
                 "the last completed turn changed {} files while the no-file stop rule is on",
                 turn_activity.last_completed_file_change_count()
             ),
-            Self::PlanningDisabled => {
-                "planning mode is off; run :planning to resume queue automation".to_string()
-            }
             Self::PlanningBlocked => {
                 "planning files are invalid or incomplete; auto follow-up stays paused until they validate"
                     .to_string()
@@ -89,7 +85,6 @@ impl AutoFollowupSkipReason {
             Self::NoAgentReply => "skipped: no agent reply",
             Self::StopKeywordMatched => "stopped: stop keyword matched",
             Self::NoFileChanges => "stopped: no file changes",
-            Self::PlanningDisabled => "stopped: planning off",
             Self::PlanningBlocked => "paused: planning files invalid",
             Self::PlanningQueueIdlePolicyStop => "stopped: queue idle policy stop",
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
@@ -114,9 +109,6 @@ impl AutoFollowupSkipReason {
             ),
             Self::NoFileChanges => {
                 "turn completed / auto follow-up stopped: no file changes".to_string()
-            }
-            Self::PlanningDisabled => {
-                "turn completed / auto follow-up stopped: planning mode is off".to_string()
             }
             Self::PlanningBlocked => {
                 "turn completed / auto follow-up paused: planning files invalid".to_string()

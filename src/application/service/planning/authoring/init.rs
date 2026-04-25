@@ -12,7 +12,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspacePort,
 };
 use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::planning::PlanningValidationReport;
@@ -191,24 +191,6 @@ impl PlanningInitService {
         self.initialize_workspace(workspace_dir, PlanningBootstrapMode::Simple)
     }
 
-    pub fn set_plan_enabled(&self, workspace_dir: &str, enabled: bool) -> Result<()> {
-        if enabled {
-            if !self.has_planning_workspace(workspace_dir)? {
-                anyhow::bail!("planning workspace is unavailable; initialize planning first");
-            }
-            return self
-                .planning_workspace_port
-                .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None);
-        }
-
-        if !self.has_planning_workspace(workspace_dir)? {
-            anyhow::bail!("planning workspace is unavailable; initialize planning first");
-        }
-
-        self.planning_workspace_port
-            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, Some("plan off\n"))
-    }
-
     pub fn save_draft_editor_files(
         &self,
         workspace_dir: &str,
@@ -297,10 +279,6 @@ impl PlanningInitService {
                     .load_optional_planning_file(workspace_dir, &file.active_path)?,
             );
         }
-        let plan_off_before = self
-            .planning_workspace_port
-            .load_optional_planning_file(workspace_dir, PLAN_OFF_FILE_PATH)?;
-
         let mut applied_paths = Vec::with_capacity(loaded.staged_files.len());
         let promote_result = (|| -> Result<()> {
             for file in &loaded.staged_files {
@@ -312,7 +290,6 @@ impl PlanningInitService {
                     )?;
                 applied_paths.push(file.active_path.clone());
             }
-            self.set_plan_enabled(workspace_dir, true)?;
             self.planning_task_repository_port
                 .commit_task_authority_snapshot(
                     workspace_dir,
@@ -329,10 +306,8 @@ impl PlanningInitService {
                 workspace_dir,
                 &applied_paths,
                 &previous_active_files,
-                plan_off_before.as_deref(),
             ) {
                 let mut manual_recovery_paths = applied_paths.clone();
-                manual_recovery_paths.push(PLAN_OFF_FILE_PATH.to_string());
                 manual_recovery_paths.sort();
                 manual_recovery_paths.dedup();
                 return Err(anyhow!(
@@ -355,7 +330,6 @@ impl PlanningInitService {
         workspace_dir: &str,
         applied_paths: &[String],
         previous_active_files: &HashMap<String, Option<String>>,
-        plan_off_before: Option<&str>,
     ) -> Result<()> {
         for active_path in applied_paths.iter().rev() {
             self.planning_workspace_port
@@ -367,8 +341,6 @@ impl PlanningInitService {
                         .and_then(|body| body.as_deref()),
                 )?;
         }
-        self.planning_workspace_port
-            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, plan_off_before)?;
         Ok(())
     }
 
@@ -479,8 +451,6 @@ impl PlanningInitService {
                     Some(&file.body),
                 )?;
         }
-        self.planning_workspace_port
-            .replace_planning_workspace_file(workspace_dir, PLAN_OFF_FILE_PATH, None)?;
         self.commit_task_authority_from_bootstrap(workspace_dir, &bootstrap.files)?;
 
         Ok(PlanningWorkspaceInitResult {
@@ -642,9 +612,8 @@ mod tests {
     };
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
-        QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-        TASK_LEDGER_SCHEMA_FILE_PATH,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH,
+        RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
 
     #[derive(Default)]
@@ -663,13 +632,6 @@ mod tests {
                 .lock()
                 .expect("fail_next_active_write_for_path mutex should not be poisoned") =
                 Some(relative_path.to_string());
-        }
-
-        fn fail_next_workspace_load(&self) {
-            *self
-                .fail_next_workspace_load
-                .lock()
-                .expect("fail_next_workspace_load mutex should not be poisoned") = true;
         }
     }
 
@@ -1092,7 +1054,6 @@ mod tests {
                     RESULT_OUTPUT_FILE_PATH.to_string(),
                     "# previous".to_string(),
                 ),
-                (PLAN_OFF_FILE_PATH.to_string(), "plan off\n".to_string()),
             ]);
         workspace_port.fail_next_active_write_for_path(TASK_LEDGER_FILE_PATH);
         let service = PlanningInitService::new(
@@ -1138,84 +1099,6 @@ mod tests {
                 .map(String::as_str),
             Some("# previous")
         );
-        assert_eq!(
-            active_files.get(PLAN_OFF_FILE_PATH).map(String::as_str),
-            Some("plan off\n")
-        );
-    }
-
-    #[test]
-    fn promote_staged_draft_restores_active_state_when_plan_enable_fails() {
-        let workspace_port = Arc::new(FakePlanningWorkspacePort::default());
-        workspace_port
-            .active_file_bodies
-            .lock()
-            .expect("active_file_bodies mutex should not be poisoned")
-            .extend([
-                (DIRECTIONS_FILE_PATH.to_string(), "version = 0".to_string()),
-                (
-                    TASK_LEDGER_FILE_PATH.to_string(),
-                    "{\"version\":0,\"tasks\":[]}".to_string(),
-                ),
-                (
-                    TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
-                    "{\"type\":\"array\"}".to_string(),
-                ),
-                (
-                    RESULT_OUTPUT_FILE_PATH.to_string(),
-                    "# previous".to_string(),
-                ),
-                (PLAN_OFF_FILE_PATH.to_string(), "plan off\n".to_string()),
-            ]);
-        workspace_port.fail_next_workspace_load();
-        let service = PlanningInitService::new(
-            workspace_port.clone(),
-            PlanningBootstrapService::new(),
-            PlanningValidationService::new(),
-        );
-
-        let staged = service
-            .stage_simple_mode_draft("/tmp/workspace")
-            .expect("simple staged draft should be created");
-
-        let error = service
-            .promote_staged_draft("/tmp/workspace", &staged.draft_name)
-            .expect_err("failed plan enable should abort promotion");
-
-        assert!(
-            error
-                .to_string()
-                .contains("simulated workspace load failure")
-        );
-        let active_files = workspace_port
-            .active_file_bodies
-            .lock()
-            .expect("active_file_bodies mutex should not be poisoned");
-        assert_eq!(
-            active_files.get(DIRECTIONS_FILE_PATH).map(String::as_str),
-            Some("version = 0")
-        );
-        assert_eq!(
-            active_files.get(TASK_LEDGER_FILE_PATH).map(String::as_str),
-            Some("{\"version\":0,\"tasks\":[]}")
-        );
-        assert_eq!(
-            active_files
-                .get(TASK_LEDGER_SCHEMA_FILE_PATH)
-                .map(String::as_str),
-            Some("{\"type\":\"array\"}")
-        );
-        assert_eq!(
-            active_files
-                .get(RESULT_OUTPUT_FILE_PATH)
-                .map(String::as_str),
-            Some("# previous")
-        );
-        assert_eq!(
-            active_files.get(PLAN_OFF_FILE_PATH).map(String::as_str),
-            Some("plan off\n")
-        );
-        assert!(!active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
     }
 
     #[test]
@@ -1253,7 +1136,6 @@ mod tests {
         assert!(active_files.contains_key(TASK_LEDGER_SCHEMA_FILE_PATH));
         assert!(active_files.contains_key(RESULT_OUTPUT_FILE_PATH));
         assert!(active_files.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH));
-        assert!(!active_files.contains_key(PLAN_OFF_FILE_PATH));
     }
 
     #[test]

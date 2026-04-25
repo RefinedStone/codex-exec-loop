@@ -52,17 +52,18 @@ pub(super) fn plan_mode_prefixed_spans(
 }
 
 fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanModeIndicatorView {
-    if !snapshot.plan_enabled() {
-        return PlanModeIndicatorView {
-            primary_label: "Plan off",
-            detail_label: None,
-            style: AkraTheme::danger(),
-        };
-    }
-
     PlanModeIndicatorView {
-        primary_label: "Plan on",
+        primary_label: match snapshot.workspace_status() {
+            PlanningRuntimeWorkspaceStatus::Uninitialized => "Plan setup",
+            PlanningRuntimeWorkspaceStatus::Invalid => "Plan invalid",
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "Plan ready",
+        },
         detail_label: Some(plan_runtime_substate_label(snapshot)),
-        style: AkraTheme::accent(),
+        style: if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+            AkraTheme::danger()
+        } else {
+            AkraTheme::accent()
+        },
     }
 }

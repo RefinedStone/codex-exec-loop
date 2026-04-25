@@ -7,7 +7,6 @@ pub(super) struct PlanningExistingWorkspaceCopy {
     pub(super) queue_summary: String,
     pub(super) queue_idle_policy: String,
     pub(super) failure_summary: Option<String>,
-    pub(super) plan_enabled: bool,
 }
 
 pub(super) struct PlanningSimpleReviewCopy {

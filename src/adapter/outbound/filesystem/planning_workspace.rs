@@ -10,10 +10,9 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspacePort,
 };
 use crate::application::service::planning::shared::contract::{
-    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH,
-    PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH,
-    RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    canonical_active_planning_file_path,
+    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY,
+    PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
 };
 
 #[derive(Default)]
@@ -123,7 +122,6 @@ impl FilesystemPlanningWorkspaceAdapter {
 
     fn authority_managed_path(relative_path: &str) -> bool {
         canonical_active_planning_file_path(relative_path).is_some()
-            || relative_path.trim().replace('\\', "/") == PLAN_OFF_FILE_PATH
     }
 
     fn staged_draft_file_path(
@@ -539,7 +537,7 @@ mod tests {
         PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, PLAN_OFF_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
 
     fn create_temp_workspace(prefix: &str) -> String {
@@ -795,22 +793,6 @@ mod tests {
             .expect("supporting file should exist");
 
         assert_eq!(body, "# prompt from authority store\n");
-    }
-
-    #[test]
-    fn git_backed_plan_off_does_not_fall_back_to_tracked_repo_copy() {
-        let repo = TempGitRepo::new("planning-workspace-plan-off-authority-only");
-        let adapter = FilesystemPlanningWorkspaceAdapter::new();
-        repo.write_repo_file(PLAN_OFF_FILE_PATH, "plan off\n");
-
-        let body = adapter
-            .load_optional_planning_file(
-                repo.worktree_root.to_str().expect("valid worktree path"),
-                PLAN_OFF_FILE_PATH,
-            )
-            .expect("plan off lookup should succeed");
-
-        assert!(body.is_none());
     }
 
     #[test]

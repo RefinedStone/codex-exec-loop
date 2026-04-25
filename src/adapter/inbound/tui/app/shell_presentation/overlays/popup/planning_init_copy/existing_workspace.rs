@@ -5,17 +5,10 @@ use super::super::copy::{PlanningExistingWorkspaceCopy, planning_setup_title_lin
 pub(super) fn build_existing_workspace_overlay_view(
     copy: PlanningExistingWorkspaceCopy,
 ) -> PlanningInitOverlayView {
-    let mut status_lines = if copy.plan_enabled {
-        vec![
-            Line::from("Enter opens queue inspection for the existing planning workspace."),
-            Line::from("Press D to maintain directions, or O to turn Plan off."),
-        ]
-    } else {
-        vec![
-            Line::from("Enter turns Plan on and resumes the existing planning workspace."),
-            Line::from("Directions maintenance stays blocked while Plan off."),
-        ]
-    };
+    let mut status_lines = vec![
+        Line::from("Enter opens queue inspection for the existing planning workspace."),
+        Line::from("Press D to maintain directions."),
+    ];
     if let Some(failure_summary) = copy.failure_summary.as_deref() {
         status_lines.push(Line::from(format!("planning failure: {failure_summary}")));
     }
@@ -27,14 +20,9 @@ pub(super) fn build_existing_workspace_overlay_view(
                 "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
             ),
         ],
-        summary_lines: vec![
-            Line::from(
-                "Use :directions only after Plan on. Hidden planner sessions still update task-ledger.json only.",
-            ),
-            Line::from(
-                "Turning Plan off keeps the workspace files on disk and blocks directions maintenance until planning resumes.",
-            ),
-        ],
+        summary_lines: vec![Line::from(
+            "Hidden planner sessions update task-ledger.json through the active planning workspace.",
+        )],
         option_lines: vec![
             Line::from(format!("workspace: {}", copy.workspace_directory)),
             Line::from(format!("planning state: {}", copy.plan_state_label)),
@@ -43,9 +31,9 @@ pub(super) fn build_existing_workspace_overlay_view(
         ],
         status_lines,
         key_lines: vec![
-            AkraTheme::key_line("Enter opens queue inspection or resumes Plan on."),
+            AkraTheme::key_line("Enter opens queue inspection."),
             AkraTheme::key_line("Q opens queue inspection. D opens directions maintenance."),
-            AkraTheme::key_line("O toggles Plan on or off. Esc/Ctrl+C closes this surface."),
+            AkraTheme::key_line("Esc/Ctrl+C closes this surface."),
         ],
     }
 }
