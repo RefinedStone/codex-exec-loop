@@ -8,14 +8,6 @@
 
 - [ ] Reproducer test or validation capture added first for bug fixes
 - [ ] `bash scripts/check_native_pr.sh`
-- [ ] `bash scripts/check_tui_layering.sh`
-- [ ] `cargo fmt`
-- [ ] `cargo test shell_runtime`
-- [ ] `cargo test inline_terminal_adapter`
-- [ ] `cargo test history_insertion`
-- [ ] `cargo test shell_rendering`
-- [ ] `cargo test`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 
 ## Manual Capture
 

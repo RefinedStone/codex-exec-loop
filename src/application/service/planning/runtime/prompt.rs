@@ -351,7 +351,7 @@ impl PlanningPromptService {
             .load_task_authority_snapshot(workspace_dir)?;
         let authority_task_ledger_json = task_authority_snapshot
             .as_ref()
-            .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_ledger))
+            .map(|snapshot| serde_json::to_string(&snapshot.task_ledger))
             .transpose()
             .context("failed to serialize task authority ledger")?;
         let workspace_files =

@@ -82,7 +82,7 @@ impl<'a> ShellCorePresentationContext<'a> {
     pub(super) fn ready_conversation(&self) -> Option<&'a ConversationViewModel> {
         match self.conversation_state {
             ShellConversationState::Ready(conversation) => Some(conversation),
-            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
+            _ => None,
         }
     }
 

@@ -30,24 +30,18 @@ pub(in super::super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Li
 }
 
 pub(in super::super) fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
-    match &app.conversation_state {
-        ConversationState::Loading => OverlayListView {
-            message_lines: Some(vec![Line::from("conversation is still loading")]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        ConversationState::Failed(message) => OverlayListView {
-            message_lines: Some(vec![Line::from(message.clone())]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        ConversationState::Ready(_) => OverlayListView {
-            message_lines: Some(vec![
-                Line::from("automation follows the planning queue only"),
-                Line::from("no legacy automation catalogs or workspace prompt files are used"),
-            ]),
-            items: Vec::new(),
-            selected_index: None,
-        },
+    let message_lines = match &app.conversation_state {
+        ConversationState::Loading => Some(vec![Line::from("conversation is still loading")]),
+        ConversationState::Failed(message) => Some(vec![Line::from(message.clone())]),
+        ConversationState::Ready(_) => Some(vec![
+            Line::from("automation follows the planning queue only"),
+            Line::from("no legacy automation catalogs or workspace prompt files are used"),
+        ]),
+    };
+
+    OverlayListView {
+        message_lines,
+        items: Vec::new(),
+        selected_index: None,
     }
 }
