@@ -3,18 +3,18 @@ source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: rendered
 ---
 
+
+
+
 Codex:
   streaming delta should stay in the transcript until completion
 
 Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto:
-on/idle  |  done: 0/20  |  Plan on / invalid
+on/idle  |  done: 0/20  |  Plan off
 status: new thread draft  |  startup: startup ready  |  gh: off
 runtime: clear  |  warn: none
 parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |
 queue: inactive
 ◦ Working (0s • turn running / interrupt unsupported)
-planning: invalid  |  failure: planning validation failed: task ...
-now: none  |  next: none
-proposed: none  |  blocked: none
 >
 prompt: turn running  |  type now, Enter when idle

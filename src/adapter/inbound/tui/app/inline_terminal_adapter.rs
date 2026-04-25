@@ -601,7 +601,7 @@ mod tests {
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
-    use crate::application::service::planning::PlanningServices;
+    use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::ConversationSnapshot;
@@ -1408,7 +1408,7 @@ mod tests {
 
     fn make_test_app() -> NativeTuiApp {
         let codex_port = Arc::new(FakeCodexAppServerPort);
-        NativeTuiApp::new(
+        let mut app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
@@ -1416,6 +1416,13 @@ mod tests {
             PlanningServices::from_workspace_port(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),
-        )
+        );
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start with a ready draft conversation");
+        };
+        conversation.cwd = "/tmp/root".to_string();
+        conversation.draft_workspace_directory = "/tmp/root".to_string();
+        conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::uninitialized());
+        app
     }
 }
