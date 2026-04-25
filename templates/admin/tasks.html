@@ -1,14 +1,14 @@
 {% extends "admin/base.html" %}
 {% block content %}
-<section class="grid">
-  <article class="card span-12">
-    <h2>Add Task</h2>
+<section class="toolbar">
+  <details class="create-panel">
+    <summary>Add task</summary>
     <form method="post" action="/admin/tasks/upsert" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label class="field">
-          <span>ID</span>
-          <input type="text" name="id" placeholder="task-123" required>
+          <span>Title</span>
+          <input type="text" name="title" placeholder="Ship admin import flow" required>
         </label>
         <label class="field">
           <span>Direction</span>
@@ -32,149 +32,156 @@
           </select>
         </label>
         <label class="field">
-          <span>Base Priority</span>
+          <span>Base priority</span>
           <input type="text" name="base_priority" value="10">
         </label>
       </div>
-      <label class="field">
-        <span>Title</span>
-        <input type="text" name="title" required>
-      </label>
       <label class="field">
         <span>Description</span>
         <textarea name="description" class="short-textarea"></textarea>
       </label>
       <div class="form-grid">
         <label class="field">
-          <span>Depends On</span>
+          <span>Depends on</span>
           <textarea name="depends_on_text" class="short-textarea"></textarea>
         </label>
         <label class="field">
-          <span>Blocked By</span>
+          <span>Blocked by</span>
           <textarea name="blocked_by_text" class="short-textarea"></textarea>
         </label>
       </div>
-      <button type="submit">Add Task</button>
+      <button type="submit">Create task</button>
     </form>
-  </article>
+  </details>
 
-  <article class="card span-12">
-    <h2>Task Ledger</h2>
-    <div class="actions">
-      <form method="post" action="/admin/drafts">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="kind" value="task_ledger">
-        <button type="submit">Open Task Draft</button>
-      </form>
-      <form method="post" action="/admin/files/export">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="secondary">Export Files</button>
-      </form>
-      <form method="post" action="/admin/files/apply">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="warn">Apply Edited Files</button>
-      </form>
+  <div class="actions">
+    <form method="post" action="/admin/drafts">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="task_ledger">
+      <button type="submit" class="secondary">Raw task ledger</button>
+    </form>
+    <form method="post" action="/admin/files/export">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="secondary">Export files</button>
+    </form>
+    <form method="post" action="/admin/files/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="warn">Apply files</button>
+    </form>
+  </div>
+</section>
+
+<section class="metric-row">
+  <div class="metric"><span>tasks</span><strong>{{ management.tasks.len() }}</strong></div>
+  <div class="metric"><span>directions</span><strong>{{ management.directions.len() }}</strong></div>
+  <div class="metric"><span>default direction</span><strong class="mono">{{ management.default_direction_id }}</strong></div>
+  {% if let Some(queue_head) = overview.runtime.queue_head %}
+  <div class="metric"><span>queue head</span><strong>{{ queue_head.task_title }}</strong></div>
+  {% else %}
+  <div class="metric"><span>queue head</span><strong>none</strong></div>
+  {% endif %}
+</section>
+
+<section class="list-panel">
+  <div class="list-header">
+    <div>
+      <h2>Tasks</h2>
+      <p>Compact list. Open a row to edit details.</p>
     </div>
-  </article>
-
-  <article class="card span-12">
-    <h2>Tasks</h2>
-    {% if management.tasks.is_empty() %}
-    <p>No tasks are stored in the ledger.</p>
-    {% else %}
-    <table>
-      <thead>
-        <tr>
-          <th>Task</th>
-          <th>Direction</th>
-          <th>Status</th>
-          <th>Priority</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for task in management.tasks %}
-        <tr>
-          <td>
-            <form method="post" action="/admin/tasks/upsert" class="stack compact-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="id" value="{{ task.id }}">
+  </div>
+  {% if management.tasks.is_empty() %}
+  <p class="empty-state">No tasks are stored in the ledger.</p>
+  {% else %}
+  <div class="entity-list">
+    {% for task in management.tasks %}
+    <details class="entity-row">
+      <summary>
+        <span class="entity-main">
+          <strong>{{ task.title }}</strong>
+          <span class="mono">{{ task.id }}</span>
+        </span>
+        <span class="entity-meta">
+          <span class="status-pill {{ task.status }}">{{ task.status }}</span>
+          <span class="mono">{{ task.direction_id }}</span>
+          <span>priority {{ task.base_priority }} / {{ task.dynamic_priority_delta }}</span>
+        </span>
+      </summary>
+      <div class="entity-detail">
+        <form method="post" action="/admin/tasks/upsert" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="id" value="{{ task.id }}">
+          <div class="form-grid">
+            <label class="field">
+              <span>Title</span>
               <input type="text" name="title" value="{{ task.title }}" required>
-              <small class="mono">{{ task.id }} / updated {{ task.updated_at }}</small>
-              <textarea name="description" class="short-textarea">{{ task.description }}</textarea>
-              <div class="form-grid">
-                <label class="field">
-                  <span>Direction</span>
-                  <select name="direction_id">
-                    <option value="">default: {{ management.default_direction_id }}</option>
-                    {% for direction in management.directions %}
-                    <option value="{{ direction.id }}" {% if task.direction_id == direction.id %}selected{% endif %}>{{ direction.id }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Status</span>
-                  <select name="status">
-                    <option value="ready" {% if task.status == "ready" %}selected{% endif %}>ready</option>
-                    <option value="blocked" {% if task.status == "blocked" %}selected{% endif %}>blocked</option>
-                    <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>in_progress</option>
-                    <option value="done" {% if task.status == "done" %}selected{% endif %}>done</option>
-                    <option value="cancelled" {% if task.status == "cancelled" %}selected{% endif %}>cancelled</option>
-                    <option value="awaiting_user" {% if task.status == "awaiting_user" %}selected{% endif %}>awaiting_user</option>
-                    <option value="proposed" {% if task.status == "proposed" %}selected{% endif %}>proposed</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Base Priority</span>
-                  <input type="text" name="base_priority" value="{{ task.base_priority }}">
-                </label>
-                <label class="field">
-                  <span>Delta</span>
-                  <input type="text" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">
-                </label>
-              </div>
-              <input type="text" name="priority_reason" value="{{ task.priority_reason }}" placeholder="priority reason">
-              <div class="form-grid">
-                <label class="field">
-                  <span>Depends On</span>
-                  <textarea name="depends_on_text" class="short-textarea">{{ task.depends_on_text }}</textarea>
-                </label>
-                <label class="field">
-                  <span>Blocked By</span>
-                  <textarea name="blocked_by_text" class="short-textarea">{{ task.blocked_by_text }}</textarea>
-                </label>
-              </div>
-              <button type="submit" class="secondary">Save</button>
-            </form>
-          </td>
-          <td class="mono">{{ task.direction_id }}</td>
-          <td>{{ task.status }}</td>
-          <td>{{ task.base_priority }} / {{ task.dynamic_priority_delta }}</td>
-          <td>
-            <form method="post" action="/admin/tasks/delete">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="id" value="{{ task.id }}">
-              <button type="submit" class="error">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-  </article>
+            </label>
+            <label class="field">
+              <span>Direction</span>
+              <select name="direction_id">
+                <option value="">default: {{ management.default_direction_id }}</option>
+                {% for direction in management.directions %}
+                <option value="{{ direction.id }}" {% if task.direction_id == direction.id %}selected{% endif %}>{{ direction.id }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="field">
+              <span>Status</span>
+              <select name="status">
+                <option value="ready" {% if task.status == "ready" %}selected{% endif %}>ready</option>
+                <option value="blocked" {% if task.status == "blocked" %}selected{% endif %}>blocked</option>
+                <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>in_progress</option>
+                <option value="done" {% if task.status == "done" %}selected{% endif %}>done</option>
+                <option value="cancelled" {% if task.status == "cancelled" %}selected{% endif %}>cancelled</option>
+                <option value="awaiting_user" {% if task.status == "awaiting_user" %}selected{% endif %}>awaiting_user</option>
+                <option value="proposed" {% if task.status == "proposed" %}selected{% endif %}>proposed</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Description</span>
+            <textarea name="description" class="short-textarea">{{ task.description }}</textarea>
+          </label>
+          <div class="form-grid">
+            <label class="field">
+              <span>Base priority</span>
+              <input type="text" name="base_priority" value="{{ task.base_priority }}">
+            </label>
+            <label class="field">
+              <span>Dynamic delta</span>
+              <input type="text" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">
+            </label>
+            <label class="field">
+              <span>Priority reason</span>
+              <input type="text" name="priority_reason" value="{{ task.priority_reason }}">
+            </label>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>Depends on</span>
+              <textarea name="depends_on_text" class="short-textarea">{{ task.depends_on_text }}</textarea>
+            </label>
+            <label class="field">
+              <span>Blocked by</span>
+              <textarea name="blocked_by_text" class="short-textarea">{{ task.blocked_by_text }}</textarea>
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button type="submit">Save task</button>
+          </div>
+        </form>
+        <form method="post" action="/admin/tasks/delete" class="danger-zone">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="id" value="{{ task.id }}">
+          <button type="submit" class="error">Delete task</button>
+        </form>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
 
-  <article class="card span-6">
-    <h2>Queue Head</h2>
-    {% if let Some(queue_head) = overview.runtime.queue_head %}
-    <p><strong>{{ queue_head.task_title }}</strong></p>
-    <p class="mono">{{ queue_head.task_id }} / {{ queue_head.direction_id }}</p>
-    <p>Priority {{ queue_head.combined_priority }} / {{ queue_head.status }}</p>
-    {% else %}
-    <p>No actionable queue head.</p>
-    {% endif %}
-  </article>
-
+<section class="grid">
   <article class="card span-6">
     <h2>Proposals</h2>
     {% if overview.runtime.proposed_tasks.is_empty() %}
