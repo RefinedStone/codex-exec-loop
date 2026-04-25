@@ -31,101 +31,6 @@ const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
 const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
 const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
 
-#[cfg(test)]
-pub(super) struct ConversationShellView {
-    pub(super) shell_title: Line<'static>,
-    pub(super) header_lines: Vec<Line<'static>>,
-    pub(super) conversation_lines: Vec<Line<'static>>,
-    pub(super) status_title: Line<'static>,
-    pub(super) footer_lines: Vec<Line<'static>>,
-    pub(super) input_title: Line<'static>,
-    pub(super) input_lines: Vec<Line<'static>>,
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(super) struct ConversationShellFrameView {
-    pub(super) shell_title: Line<'static>,
-    pub(super) header_lines: Vec<Line<'static>>,
-    pub(super) header_area: Rect,
-    pub(super) transcript_view: TranscriptPanelView,
-    pub(super) transcript_area: Rect,
-    pub(super) status_title: Line<'static>,
-    pub(super) footer_lines: Vec<Line<'static>>,
-    pub(super) footer_area: Rect,
-    pub(super) input_title: Line<'static>,
-    pub(super) input_lines: Vec<Line<'static>>,
-    pub(super) input_area: Rect,
-}
-
-#[cfg(test)]
-pub(super) struct TranscriptPanelView {
-    pub(super) title: Line<'static>,
-    pub(super) lines: Vec<Line<'static>>,
-    pub(super) scroll_offset: u16,
-}
-
-#[derive(Clone, Copy)]
-enum ShellConversationState<'a> {
-    Loading,
-    Failed(&'a str),
-    Ready(&'a ConversationViewModel),
-}
-
-struct ShellCorePresentationContext<'a> {
-    show_startup_ascii_art: bool,
-    startup_state: &'a StartupState,
-    shell_action_availability: ShellActionAvailability,
-    recent_session_status_label: String,
-    github_review_polling_status_label: String,
-    #[cfg(test)]
-    planner_shows_debug_details: bool,
-    conversation_state: ShellConversationState<'a>,
-}
-
-impl<'a> ShellCorePresentationContext<'a> {
-    fn from_app(app: &'a NativeTuiApp) -> Self {
-        Self {
-            show_startup_ascii_art: app.show_startup_ascii_art,
-            startup_state: &app.startup_state,
-            shell_action_availability: app.shell_action_availability(),
-            recent_session_status_label: recent_session_status_label(app),
-            github_review_polling_status_label: app.github_review_polling_status_label(),
-            #[cfg(test)]
-            planner_shows_debug_details: app.planner_shows_debug_details(),
-            conversation_state: match &app.conversation_state {
-                ConversationState::Loading => ShellConversationState::Loading,
-                ConversationState::Failed(message) => ShellConversationState::Failed(message),
-                ConversationState::Ready(conversation) => {
-                    ShellConversationState::Ready(conversation)
-                }
-            },
-        }
-    }
-
-    fn ready_conversation(&self) -> Option<&'a ConversationViewModel> {
-        match self.conversation_state {
-            ShellConversationState::Ready(conversation) => Some(conversation),
-            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
-        }
-    }
-
-    fn startup_screen_is_active(&self) -> bool {
-        let Some(conversation) = self.ready_conversation() else {
-            return false;
-        };
-
-        !conversation.has_active_thread()
-            && conversation.messages.is_empty()
-            && conversation.active_turn_id.is_none()
-            && conversation.live_agent_message.is_none()
-    }
-
-    fn startup_banner_is_active(&self) -> bool {
-        self.show_startup_ascii_art && self.startup_screen_is_active()
-    }
-}
-
 #[path = "shell_presentation/automation_copy.rs"]
 mod automation_copy;
 #[path = "shell_presentation/capability_copy.rs"]
@@ -143,6 +48,8 @@ mod session_browser;
 #[cfg(test)]
 #[path = "shell_presentation/shell_copy.rs"]
 mod shell_copy;
+#[path = "shell_presentation/shell_core.rs"]
+mod shell_core;
 #[path = "shell_presentation/startup_banner.rs"]
 mod startup_banner;
 #[path = "shell_presentation/status_panels.rs"]
@@ -151,7 +58,6 @@ mod status_panels;
 mod transcript_copy;
 
 pub(super) use automation_copy::{build_automation_key_lines, build_automation_list_view};
-use capability_projection::recent_session_status_label;
 #[cfg(test)]
 use runtime_status_copy::{auto_follow_prompt_lines, input_state_style};
 use runtime_status_copy::{
@@ -174,6 +80,11 @@ pub(super) use overlays::{
 #[cfg(test)]
 pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
 pub(super) use runtime_status_copy::format_elapsed;
+#[cfg(test)]
+pub(super) use shell_core::{
+    ConversationShellFrameView, ConversationShellView, TranscriptPanelView,
+};
+use shell_core::{ShellConversationState, ShellCorePresentationContext};
 #[cfg(test)]
 use startup_banner::build_startup_banner_lines_from_context;
 pub(super) use startup_banner::startup_ascii_art_lines;
