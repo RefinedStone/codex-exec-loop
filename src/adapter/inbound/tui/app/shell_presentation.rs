@@ -30,13 +30,6 @@ const QUEUE_INSPECTION_TASK_LIMIT: usize = 2;
 const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
 const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
 const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
-const STARTUP_ASCII_ART_DEFAULT: &str = r#"
-    _    _  __ ____    _
-   / \  | |/ /|  _ \  / \
-  / _ \ | ' / | |_) |/ _ \
- / ___ \| . \ |  _ </ ___ \
-/_/   \_\_|\_\|_| \_\_/   \_\
-"#;
 
 #[cfg(test)]
 pub(super) struct ConversationShellView {
@@ -133,6 +126,8 @@ impl<'a> ShellCorePresentationContext<'a> {
     }
 }
 
+#[path = "shell_presentation/automation_copy.rs"]
+mod automation_copy;
 #[path = "shell_presentation/capability_copy.rs"]
 mod capability_copy;
 #[path = "shell_presentation/capability_projection.rs"]
@@ -148,11 +143,14 @@ mod session_browser;
 #[cfg(test)]
 #[path = "shell_presentation/shell_copy.rs"]
 mod shell_copy;
+#[path = "shell_presentation/startup_banner.rs"]
+mod startup_banner;
 #[path = "shell_presentation/status_panels.rs"]
 mod status_panels;
 #[path = "shell_presentation/transcript_copy.rs"]
 mod transcript_copy;
 
+pub(super) use automation_copy::{build_automation_key_lines, build_automation_list_view};
 use capability_projection::recent_session_status_label;
 #[cfg(test)]
 use runtime_status_copy::{auto_follow_prompt_lines, input_state_style};
@@ -176,6 +174,9 @@ pub(super) use overlays::{
 #[cfg(test)]
 pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
 pub(super) use runtime_status_copy::format_elapsed;
+#[cfg(test)]
+use startup_banner::build_startup_banner_lines_from_context;
+pub(super) use startup_banner::startup_ascii_art_lines;
 pub(super) use status_panels::InlineTailView;
 pub(super) use transcript_copy::{format_conversation_lines, format_conversation_lines_with_debug};
 
@@ -250,79 +251,6 @@ fn build_conversation_lines_with_context(
     }
 }
 
-#[cfg(test)]
-fn build_startup_banner_lines_from_context(
-    context: &ShellCorePresentationContext<'_>,
-    max_height: Option<u16>,
-) -> Option<Vec<Line<'static>>> {
-    if !context.startup_banner_is_active() {
-        return None;
-    }
-
-    let max_height = match max_height {
-        Some(0) => return None,
-        value => value,
-    };
-
-    Some(startup_ascii_art_lines(max_height))
-}
-
-fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
-    let mut art_lines = STARTUP_ASCII_ART_DEFAULT.lines().collect::<Vec<_>>();
-    let start = art_lines
-        .iter()
-        .position(|line| !line.trim().is_empty())
-        .unwrap_or(0);
-    let end = art_lines
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map(|index| index + 1)
-        .unwrap_or(art_lines.len());
-    art_lines = art_lines[start..end].to_vec();
-
-    if let Some(max_height) = max_height {
-        let max_height = max_height as usize;
-        if max_height > 0 && art_lines.len() > max_height {
-            let start = art_lines.len().saturating_sub(max_height) / 2;
-            art_lines = art_lines[start..start + max_height].to_vec();
-        }
-    }
-
-    art_lines
-        .into_iter()
-        .map(|line| Line::from(line.to_string()))
-        .collect()
-}
-
-pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    if app.is_max_auto_turns_editing() {
-        return vec![
-            AkraTheme::key_line("Type the new max-turn value directly. Backspace deletes."),
-            AkraTheme::key_line("Enter: save max turns    Esc/Ctrl+C: cancel edit"),
-            AkraTheme::key_line("Use a whole number greater than 0, or type infinite."),
-        ];
-    }
-
-    if app.is_stop_keyword_editing() {
-        return vec![
-            AkraTheme::key_line("Type the new stop keyword directly. Backspace deletes."),
-            AkraTheme::key_line("Enter: save stop keyword    Esc/Ctrl+C: cancel edit"),
-            AkraTheme::key_line("Use letters, numbers, or underscores only."),
-        ];
-    }
-
-    vec![
-        AkraTheme::key_line("PageUp/PageDown or Ctrl+u/Ctrl+d: scroll preview"),
-        AkraTheme::key_line(
-            "Ctrl+a: automation on/off    Ctrl+l: edit max turns    Ctrl+g: edit stop keyword",
-        ),
-        AkraTheme::key_line(
-            "Ctrl+k: stop rule on/off    Ctrl+n: no-file stop    Ctrl+b: planner detail",
-        ),
-        AkraTheme::key_line("Enter/Esc/Ctrl+C: close"),
-    ]
-}
-
 fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     capability_projection::build_startup_check_lines(app)
 }
@@ -341,27 +269,4 @@ fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 
 fn build_startup_warning_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
     capability_projection::build_startup_warning_lines_from_state(startup_state)
-}
-
-fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
-    match &app.conversation_state {
-        ConversationState::Loading => OverlayListView {
-            message_lines: Some(vec![Line::from("conversation is still loading")]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        ConversationState::Failed(message) => OverlayListView {
-            message_lines: Some(vec![Line::from(message.clone())]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-        ConversationState::Ready(_) => OverlayListView {
-            message_lines: Some(vec![
-                Line::from("automation follows the planning queue only"),
-                Line::from("no legacy automation catalogs or workspace prompt files are used"),
-            ]),
-            items: Vec::new(),
-            selected_index: None,
-        },
-    }
 }
