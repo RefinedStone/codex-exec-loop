@@ -155,7 +155,7 @@ fn queue_apply_command_refreshes_queue_overlay_on_success() {
     assert!(
         conversation
             .status_text
-            .contains("tracked task ledger applied")
+            .contains("tracked task catalog applied")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
@@ -205,7 +205,7 @@ fn queue_apply_command_surfaces_validation_reason() {
     assert!(
         conversation
             .status_text
-            .contains("tracked task ledger apply blocked")
+            .contains("tracked task catalog apply blocked")
     );
     assert!(
         conversation
