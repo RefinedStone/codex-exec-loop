@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,7 +34,10 @@ use crate::domain::planning::{
     PriorityQueueTask, TaskLedgerDocument,
 };
 
-const RUNTIME_DIRECTORY: &str = ".codex-exec-loop/runtime";
+const AKRA_HOME_ENV: &str = "AKRA_HOME";
+const AKRA_HOME_DIRECTORY: &str = ".akra";
+const AKRA_PROJECTS_DIRECTORY: &str = "projects";
+const RUNTIME_DIRECTORY: &str = "runtime";
 const RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
 const PLANNING_SNAPSHOT_EXPORT_FILE_NAME: &str = "planning-snapshot.json";
@@ -818,7 +822,7 @@ impl SqlitePlanningAuthorityAdapter {
         let workspace_root = canonicalize_best_effort(Path::new(workspace_dir));
         let canonical_repo_root =
             resolve_canonical_repo_root(workspace_dir).unwrap_or_else(|| workspace_root.clone());
-        let runtime_dir = canonical_repo_root.join(RUNTIME_DIRECTORY);
+        let runtime_dir = management_project_root(&canonical_repo_root).join(RUNTIME_DIRECTORY);
         let authority_store_path = runtime_dir.join(AUTHORITY_STORE_FILE_NAME);
 
         Ok(PlanningAuthorityLocation {
@@ -1804,9 +1808,40 @@ fn legacy_runtime_pool_root(location: &PlanningAuthorityLocation) -> PathBuf {
         .unwrap_or("workspace");
     let parent_dir = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
     parent_dir
-        .join(format!("{repo_name}-worktrees"))
+        .join(format!("{repo_name}-akra-worktrees"))
         .join(stable_short_hash(&canonical_repo_root.to_string_lossy()))
         .join("akra-pool")
+}
+
+fn management_project_root(canonical_repo_root: &Path) -> PathBuf {
+    let repo_name = canonical_repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace");
+    akra_home_root().join(AKRA_PROJECTS_DIRECTORY).join(format!(
+        "{repo_name}-{}",
+        stable_short_hash(&canonical_repo_root.to_string_lossy())
+    ))
+}
+
+fn akra_home_root() -> PathBuf {
+    if let Some(path) = env::var_os(AKRA_HOME_ENV).filter(|path| !path.is_empty()) {
+        return PathBuf::from(path);
+    }
+
+    #[cfg(test)]
+    {
+        env::temp_dir().join(AKRA_HOME_DIRECTORY).join("tests")
+    }
+
+    #[cfg(not(test))]
+    {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(AKRA_HOME_DIRECTORY)
+    }
 }
 
 fn stable_short_hash(value: &str) -> String {
@@ -2703,11 +2738,12 @@ mod tests {
                 .display()
                 .to_string()
         );
-        assert!(location.runtime_dir.ends_with(".codex-exec-loop/runtime"));
+        assert!(location.runtime_dir.contains("/.akra/tests/projects/"));
+        assert!(location.runtime_dir.ends_with("/runtime"));
         assert!(
             location
                 .authority_store_path
-                .ends_with(".codex-exec-loop/runtime/planning-authority.db")
+                .ends_with("/runtime/planning-authority.db")
         );
     }
 
@@ -2751,7 +2787,7 @@ mod tests {
         assert!(
             location
                 .authority_store_path
-                .ends_with(".codex-exec-loop/runtime/planning-authority.db")
+                .ends_with("/runtime/planning-authority.db")
         );
 
         let _ = fs::remove_dir_all(root);
@@ -2877,7 +2913,10 @@ mod tests {
         let repo = TempGitRepo::new("shadow-upgrade-v1");
         let adapter = SqlitePlanningAuthorityAdapter::new();
         repo.write_repo_file(".codex-exec-loop/planning/directions.toml", "version = 1\n");
-        let runtime_dir = repo.repo_root.join(".codex-exec-loop/runtime");
+        let location = adapter
+            .resolve_authority_location(repo.worktree_root.to_str().expect("valid path"))
+            .expect("authority location should resolve");
+        let runtime_dir = PathBuf::from(&location.runtime_dir);
         fs::create_dir_all(&runtime_dir).expect("runtime directory should exist");
         let authority_store_path = runtime_dir.join("planning-authority.db");
         let connection =

@@ -111,8 +111,12 @@ impl NativeTuiApp {
                 } else {
                     self.parallel_mode_enabled = false;
                     self.sync_parallel_mode_supervisor_snapshot(false);
+                    let cause = snapshot
+                        .top_alert
+                        .as_deref()
+                        .unwrap_or("inspect the readiness panel before retrying");
                     format!(
-                        "parallel mode: blocked / readiness: {} / inspect the prepare surface before retrying",
+                        "parallel mode: blocked / readiness: {} / {cause}",
                         snapshot.readiness_label()
                     )
                 };
