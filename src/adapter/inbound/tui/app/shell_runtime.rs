@@ -204,29 +204,32 @@ impl ShellRuntime {
 
         if self.app.is_inline_command_palette_active() {
             match key.code {
-                KeyCode::Esc if key.modifiers.is_empty() => {
-                    if self.app.dismiss_inline_command_palette() {
-                        self.request_redraw_at(now);
-                        return;
-                    }
+                KeyCode::Esc
+                    if key.modifiers.is_empty() && self.app.dismiss_inline_command_palette() =>
+                {
+                    self.request_redraw_at(now);
+                    return;
                 }
-                KeyCode::Up if key.modifiers.is_empty() => {
-                    if self.app.move_inline_command_palette_selection(-1) {
-                        self.request_redraw_at(now);
-                        return;
-                    }
+                KeyCode::Up
+                    if key.modifiers.is_empty()
+                        && self.app.move_inline_command_palette_selection(-1) =>
+                {
+                    self.request_redraw_at(now);
+                    return;
                 }
-                KeyCode::Down if key.modifiers.is_empty() => {
-                    if self.app.move_inline_command_palette_selection(1) {
-                        self.request_redraw_at(now);
-                        return;
-                    }
+                KeyCode::Down
+                    if key.modifiers.is_empty()
+                        && self.app.move_inline_command_palette_selection(1) =>
+                {
+                    self.request_redraw_at(now);
+                    return;
                 }
-                KeyCode::Enter if key.modifiers.is_empty() => {
-                    if self.app.accept_inline_command_palette_selection() {
-                        self.request_redraw_at(now);
-                        return;
-                    }
+                KeyCode::Enter
+                    if key.modifiers.is_empty()
+                        && self.app.accept_inline_command_palette_selection() =>
+                {
+                    self.request_redraw_at(now);
+                    return;
                 }
                 _ => {}
             }

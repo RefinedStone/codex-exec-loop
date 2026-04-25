@@ -196,12 +196,10 @@ impl NativeTuiApp {
         }
 
         match key.code {
-            KeyCode::Char('r') if key.modifiers.is_empty() => {
-                if self.can_open_session_list() {
-                    self.dispatch_shell_chrome(ShellChromeEvent::SessionsRequested {
-                        limit: SESSION_PAGE_SIZE,
-                    });
-                }
+            KeyCode::Char('r') if key.modifiers.is_empty() && self.can_open_session_list() => {
+                self.dispatch_shell_chrome(ShellChromeEvent::SessionsRequested {
+                    limit: SESSION_PAGE_SIZE,
+                });
             }
             KeyCode::Char('n') if key.modifiers.is_empty() => {
                 self.open_new_conversation_shell();
