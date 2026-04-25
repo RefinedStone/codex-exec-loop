@@ -241,11 +241,11 @@ impl QueueApplyReport {
     fn success(workspace_path: String, result: PlanningTrackedTaskLedgerApplyResult) -> Self {
         let status = if result.applied() {
             Some(format!(
-                "tracked task ledger applied to active planning ({} files)",
+                "tracked task catalog applied to active planning ({} files)",
                 result.applied_paths.len()
             ))
         } else {
-            Some("tracked task ledger apply blocked by validation".to_string())
+            Some("tracked task catalog apply blocked by validation".to_string())
         };
         let issue = if result.validation_report.is_valid() {
             None
@@ -1119,7 +1119,7 @@ mod tests {
         assert!(output.contains(&format!("applied: {TASK_LEDGER_FILE_PATH}")));
         assert!(output.contains("applied: .codex-exec-loop/planning/queue.snapshot.json"));
         assert!(output.contains("validation: valid"));
-        assert!(output.contains("status: tracked task ledger applied to active planning"));
+        assert!(output.contains("status: tracked task catalog applied to active planning"));
     }
 
     #[test]
@@ -1173,7 +1173,7 @@ mod tests {
         assert!(output.contains(
             "validation issue: task task-1 references unknown direction_id missing-direction"
         ));
-        assert!(output.contains("status: tracked task ledger apply blocked by validation"));
+        assert!(output.contains("status: tracked task catalog apply blocked by validation"));
         assert!(
             output.contains("issue: task task-1 references unknown direction_id missing-direction")
         );

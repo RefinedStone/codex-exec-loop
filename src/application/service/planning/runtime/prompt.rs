@@ -637,7 +637,7 @@ fn build_prompt_fragment(
     }
 
     lines.push(String::new());
-    lines.push("Task Ledger Mutation Contract".to_string());
+    lines.push("Task Catalog Mutation Contract".to_string());
     lines.push(format!("- You may edit only `{}`.", TASK_LEDGER_FILE_PATH));
     lines.push(format!(
         "- Do not edit `{}`, `{}`, `{}`, or `{}`.",

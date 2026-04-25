@@ -37,15 +37,15 @@ prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 [[directions]]
 id = "general-workstream"
 title = "General workstream"
-summary = "No detailed direction taxonomy is defined yet. Derive the next actionable work from the latest user request and the latest accepted answer, capture it in task-ledger.json, and work from that queue."
+summary = "No detailed direction taxonomy is defined yet. Derive the next actionable work from the latest user request and the latest accepted answer, capture it in the task catalog compatibility file, and work from the derived queue."
 success_criteria = [
-    "Actionable goals are represented in task-ledger.json before execution.",
-    "When the latest answer clearly implies a next step, that follow-up is derived into task-ledger.json instead of leaving the queue idle.",
-    "Work advances by updating the task ledger instead of inventing unmanaged side tasks.",
+    "Actionable goals are represented in the task catalog before execution.",
+    "When the latest answer clearly implies a next step, that follow-up is derived into the task catalog instead of leaving the queue idle.",
+    "Work advances by updating the task catalog instead of inventing unmanaged side tasks.",
 ]
 scope_hints = [
     "Use this generic direction until the operator replaces it with a richer direction catalog.",
-    "Represent concrete next actions and proposals in the accepted task ledger.",
+    "Represent concrete next actions and proposals in the accepted task catalog.",
     "If the user asked for a multi-step artifact, convert the next obvious step from the latest answer into a queued task.",
 ]
 detail_doc_path = ""
@@ -55,7 +55,7 @@ state = "active"
 const DEFAULT_RESULT_OUTPUT_MARKDOWN: &str = r#"# Result Output Prompt
 
 - Summarize the work you actually completed in this turn.
-- If you updated `task-ledger.json`, mention which tasks changed and why.
+- If you updated the task catalog compatibility file, mention which tasks changed and why.
 - Do not claim unrelated work was added when it was rejected by validation.
 "#;
 
@@ -129,7 +129,7 @@ impl PlanningBootstrapService {
             task_ledger_schema_path: TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
             task_ledger_schema_json: serde_json::to_string_pretty(&json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "title": "Task Ledger",
+                "title": "Task Catalog Compatibility File",
                 "type": "object",
                 "required": ["version", "tasks"],
                 "additionalProperties": false,
@@ -285,7 +285,7 @@ mod tests {
         assert!(
             directions.directions[0]
                 .summary
-                .contains("task-ledger.json")
+                .contains("task catalog compatibility file")
         );
         assert_eq!(artifacts.supplemental_files.len(), 1);
         assert_eq!(

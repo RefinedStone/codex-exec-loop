@@ -57,7 +57,7 @@ impl PlanningAdminDraftKind {
         match self {
             Self::FullPlanning => "full planning",
             Self::Directions => "directions",
-            Self::TaskLedger => "task ledger",
+            Self::TaskLedger => "task catalog",
             Self::QueueIdlePrompt => "queue-idle prompt",
             Self::DirectionDetail => "direction detail",
         }
@@ -67,7 +67,7 @@ impl PlanningAdminDraftKind {
         match self {
             Self::FullPlanning => "Full Planning Draft",
             Self::Directions => "Directions Draft",
-            Self::TaskLedger => "Task Draft",
+            Self::TaskLedger => "Task Catalog Draft",
             Self::QueueIdlePrompt => "Queue-Idle Prompt Draft",
             Self::DirectionDetail => "Direction Detail Draft",
         }
@@ -112,7 +112,7 @@ impl PlanningAdminFileKey {
     pub fn label(self) -> &'static str {
         match self {
             Self::Directions => "Directions",
-            Self::TaskLedger => "Task Ledger",
+            Self::TaskLedger => "Task Catalog",
             Self::ResultOutput => "Result Output",
             Self::QueueIdlePrompt => "Queue-Idle Prompt",
             Self::DirectionDetail => "Direction Detail",
@@ -664,7 +664,7 @@ impl PlanningAdminFacadeService {
             .workspace
             .apply_tracked_task_ledger(self.workspace_dir.as_str())?;
         if !task_result.validation_report.is_valid() {
-            bail!("tracked task ledger apply failed validation");
+            bail!("tracked task catalog apply failed validation");
         }
         let mut paths = directions_result.applied_paths;
         paths.extend(task_result.applied_paths);
@@ -1389,7 +1389,7 @@ fn slugify_title(title: &str) -> String {
     let mut slug = String::new();
     let mut previous_dash = false;
     for character in title.chars().flat_map(char::to_lowercase) {
-        if character.is_ascii_alphanumeric() {
+        if character.is_alphanumeric() {
             slug.push(character);
             previous_dash = false;
         } else if !previous_dash && !slug.is_empty() {
@@ -1430,6 +1430,26 @@ fn split_references(raw: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generated_unique_id, slugify_title};
+
+    #[test]
+    fn slugify_title_preserves_unicode_alphanumerics() {
+        assert_eq!(slugify_title("한글 작업 1"), "한글-작업-1");
+    }
+
+    #[test]
+    fn generated_unique_id_keeps_unicode_title_identity() {
+        let existing = ["task-한글-작업", "task-한글-작업-2"];
+
+        assert_eq!(
+            generated_unique_id("task", "한글 작업", existing),
+            "task-한글-작업-3"
+        );
+    }
 }
 
 fn remove_task_references(
@@ -1541,8 +1561,8 @@ fn missing_core_draft_file_error(path: &'static str, file_kind: PlanningFileKind
         "draft is missing required {} content at {}",
         match file_kind {
             PlanningFileKind::Directions => "directions",
-            PlanningFileKind::TaskLedger => "task-ledger",
-            PlanningFileKind::TaskLedgerSchema => "task-ledger schema",
+            PlanningFileKind::TaskLedger => "task catalog compatibility file",
+            PlanningFileKind::TaskLedgerSchema => "task catalog compatibility schema",
             PlanningFileKind::ResultOutput => "result output",
         },
         path

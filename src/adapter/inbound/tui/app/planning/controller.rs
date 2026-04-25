@@ -405,7 +405,7 @@ impl NativeTuiApp {
             }
             Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("tracked task ledger apply failed: {error}"),
+                    status_text: format!("tracked task catalog apply failed: {error}"),
                 });
             }
         }
@@ -1300,7 +1300,7 @@ fn tracked_directions_apply_status_text(result: &PlanningTrackedDirectionsApplyR
 fn tracked_task_ledger_apply_status_text(result: &PlanningTrackedTaskLedgerApplyResult) -> String {
     if result.applied() {
         return format!(
-            "tracked task ledger applied / files: {} / next action: review the refreshed planning queue",
+            "tracked task catalog applied / files: {} / next action: review the refreshed planning queue",
             result.applied_paths.len()
         );
     }
@@ -1311,7 +1311,7 @@ fn tracked_task_ledger_apply_status_text(result: &PlanningTrackedTaskLedgerApply
         .first()
         .map(|issue| issue.message.as_str())
         .unwrap_or("planning validation failed");
-    format!("tracked task ledger apply blocked / issue: {issue}")
+    format!("tracked task catalog apply blocked / issue: {issue}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1368,11 +1368,11 @@ fn parse_reset_shell_argument(argument: Option<&str>) -> Result<ParsedResetShell
 fn planning_reset_preview_text(target: PlanningResetTarget) -> String {
     match target {
         PlanningResetTarget::Queue => {
-            "reset queue preview: rewrites task-ledger.json and clears derived queue state"
+            "reset queue preview: rewrites the task catalog compatibility file and clears derived queue state"
                 .to_string()
         }
         PlanningResetTarget::Directions => "reset directions preview: rewrites directions.toml, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue".to_string(),
-        PlanningResetTarget::All => "reset all preview: replaces the full active planning scaffold, clears derived queue state, and turns Plan back on / rerun `:reset all confirm` to continue".to_string(),
+        PlanningResetTarget::All => "reset all preview: replaces the full active planning scaffold, clears derived queue state, and refreshes the planning authority / rerun `:reset all confirm` to continue".to_string(),
     }
 }
 
