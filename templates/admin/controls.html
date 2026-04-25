@@ -10,6 +10,21 @@
   </article>
 
   <article class="card span-6">
+    <h2>File Import / Export</h2>
+    <p>Export writes the current DB authority documents to the workspace planning files. Apply reloads edited workspace files into the DB authority and is blocked while parallel work is active.</p>
+    <div class="actions">
+      <form method="post" action="/admin/files/export">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Export For Edit</button>
+      </form>
+      <form method="post" action="/admin/files/apply">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="warn">Apply Edited Files</button>
+      </form>
+    </div>
+  </article>
+
+  <article class="card span-6">
     <h2>Reset</h2>
     <p>Reset targets run through the existing planning services and keep the current contract checks.</p>
     <div class="stack">

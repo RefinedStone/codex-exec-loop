@@ -153,6 +153,14 @@
         display: grid;
         gap: 14px;
       }
+      .compact-form {
+        gap: 8px;
+      }
+      .form-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+      }
       .field {
         display: grid;
         gap: 8px;
@@ -171,6 +179,9 @@
       textarea {
         min-height: 14rem;
         resize: vertical;
+      }
+      .short-textarea {
+        min-height: 5rem;
       }
       table {
         width: 100%;

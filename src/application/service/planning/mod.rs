@@ -45,9 +45,12 @@ use super::turn_prompt_assembly_service::TurnPromptAssemblyService;
 
 pub use self::PlanningFeature as PlanningServices;
 pub use self::admin::{
-    PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
-    PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
+    PlanningAdminCrudOutcome, PlanningAdminDirectionDeleteRequest,
+    PlanningAdminDirectionMutationRequest, PlanningAdminDraftFileUpdate, PlanningAdminDraftKind,
+    PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest, PlanningAdminFacadeService,
+    PlanningAdminFileKey, PlanningAdminFileSyncOutcome, PlanningAdminManagementView,
     PlanningAdminOverview, PlanningAdminResetOutcome, PlanningAdminSessionView,
+    PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
 pub use self::authoring::bootstrap::PlanningBootstrapMode;
 pub use self::authoring::directions::{

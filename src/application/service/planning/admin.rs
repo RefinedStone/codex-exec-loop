@@ -1,12 +1,21 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+};
+use crate::application::port::outbound::planning_task_repository_port::{
+    NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+    PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
 };
@@ -22,10 +31,14 @@ use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningServices,
 };
 use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::parallel_mode::ParallelModeQueueItemState;
 use crate::domain::planning::{
-    DirectionCatalogDocument, PlanningFileKind, PlanningValidationReport, PlanningWorkspaceFiles,
-    PriorityQueueSnapshot,
+    DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningFileKind,
+    PlanningValidationReport, PlanningWorkspaceFiles, PriorityQueueSnapshot, TaskActor,
+    TaskDefinition, TaskLedgerDocument, TaskStatus,
 };
+
+const DEFAULT_DIRECTION_ID: &str = "general-workstream";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,6 +255,100 @@ pub struct PlanningAdminDirectionsSummaryView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminDirectionManagementView {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub success_criteria_text: String,
+    pub scope_hints_text: String,
+    pub detail_doc_path: String,
+    pub state: String,
+    pub task_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminTaskManagementView {
+    pub id: String,
+    pub direction_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub base_priority: i32,
+    pub dynamic_priority_delta: i32,
+    pub priority_reason: String,
+    pub depends_on_text: String,
+    pub blocked_by_text: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminManagementView {
+    pub default_direction_id: String,
+    pub directions: Vec<PlanningAdminDirectionManagementView>,
+    pub tasks: Vec<PlanningAdminTaskManagementView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningAdminDirectionMutationRequest {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub success_criteria_text: String,
+    #[serde(default)]
+    pub scope_hints_text: String,
+    #[serde(default)]
+    pub detail_doc_path: String,
+    #[serde(default)]
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningAdminDirectionDeleteRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningAdminTaskMutationRequest {
+    pub id: String,
+    #[serde(default)]
+    pub direction_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub base_priority: String,
+    #[serde(default)]
+    pub dynamic_priority_delta: String,
+    #[serde(default)]
+    pub priority_reason: String,
+    #[serde(default)]
+    pub depends_on_text: String,
+    #[serde(default)]
+    pub blocked_by_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningAdminTaskDeleteRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminCrudOutcome {
+    pub notice: String,
+    pub management: PlanningAdminManagementView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminFileSyncOutcome {
+    pub notice: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminDoctorSummary {
     pub planning_state: String,
     pub queue_idle_policy: Option<String>,
@@ -283,6 +390,8 @@ pub struct PlanningAdminFacadeService {
     workspace_dir: String,
     planning: PlanningServices,
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+    planning_authority_port: Arc<dyn PlanningAuthorityPort>,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
 }
@@ -293,10 +402,28 @@ impl PlanningAdminFacadeService {
         planning: PlanningServices,
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     ) -> Self {
+        Self::from_planning_with_authority(
+            workspace_dir,
+            planning,
+            planning_workspace_port,
+            Arc::new(super::NoopPlanningAuthorityPort::default()),
+            Arc::new(NoopPlanningTaskRepositoryPort),
+        )
+    }
+
+    pub fn from_planning_with_authority(
+        workspace_dir: impl Into<String>,
+        planning: PlanningServices,
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_authority_port: Arc<dyn PlanningAuthorityPort>,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
             planning,
             planning_workspace_port,
+            planning_authority_port,
+            planning_task_repository_port,
             planning_validation_service: PlanningValidationService::new(),
             priority_queue_service: PriorityQueueService::new(),
         }
@@ -344,6 +471,205 @@ impl PlanningAdminFacadeService {
             .runtime
             .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
         Ok(map_runtime_snapshot(&runtime))
+    }
+
+    pub fn load_management_view(&self) -> Result<PlanningAdminManagementView> {
+        let documents = self.load_admin_documents()?;
+        Ok(map_management_view(
+            &documents.directions,
+            &documents.task_ledger,
+            default_direction_id(&documents.directions)?,
+        ))
+    }
+
+    pub fn upsert_direction(
+        &self,
+        request: PlanningAdminDirectionMutationRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        let mut documents = self.load_admin_documents()?;
+        let direction = direction_from_request(request)?;
+        let id = direction.id.clone();
+        let mut updated = false;
+        for existing in &mut documents.directions.directions {
+            if existing.id.trim() == id {
+                *existing = direction.clone();
+                updated = true;
+                break;
+            }
+        }
+        if !updated {
+            documents.directions.directions.push(direction);
+        }
+        self.commit_admin_documents(documents)?;
+        let management = self.load_management_view()?;
+        Ok(PlanningAdminCrudOutcome {
+            notice: if updated {
+                format!("direction `{id}` updated")
+            } else {
+                format!("direction `{id}` added")
+            },
+            management,
+        })
+    }
+
+    pub fn delete_direction(
+        &self,
+        request: PlanningAdminDirectionDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        let direction_id = normalized_required_id(&request.id, "direction id")?;
+        let mut documents = self.load_admin_documents()?;
+        if documents.directions.directions.len() <= 1 {
+            bail!("at least one direction must remain");
+        }
+        let original_count = documents.directions.directions.len();
+        documents
+            .directions
+            .directions
+            .retain(|direction| direction.id.trim() != direction_id);
+        if documents.directions.directions.len() == original_count {
+            bail!("direction `{direction_id}` was not found");
+        }
+
+        let removed_task_ids = documents
+            .task_ledger
+            .tasks
+            .iter()
+            .filter(|task| task.direction_id.trim() == direction_id)
+            .map(|task| task.id.trim().to_string())
+            .collect::<BTreeSet<_>>();
+        documents
+            .task_ledger
+            .tasks
+            .retain(|task| task.direction_id.trim() != direction_id);
+        remove_task_references(&mut documents.task_ledger, &removed_task_ids);
+
+        let removed_task_count = removed_task_ids.len();
+        self.commit_admin_documents(documents)?;
+        let management = self.load_management_view()?;
+        Ok(PlanningAdminCrudOutcome {
+            notice: format!(
+                "direction `{direction_id}` deleted with {removed_task_count} child tasks"
+            ),
+            management,
+        })
+    }
+
+    pub fn upsert_task(
+        &self,
+        request: PlanningAdminTaskMutationRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        let mut documents = self.load_admin_documents()?;
+        let default_direction_id = default_direction_id(&documents.directions)?;
+        let task = task_from_request(request, &documents.task_ledger, default_direction_id)?;
+        ensure_direction_exists(&documents.directions, &task.direction_id)?;
+        let task_id = task.id.clone();
+        let mut updated = false;
+        for existing in &mut documents.task_ledger.tasks {
+            if existing.id.trim() == task_id {
+                *existing = task.clone();
+                updated = true;
+                break;
+            }
+        }
+        if !updated {
+            documents.task_ledger.tasks.push(task);
+        }
+        self.commit_admin_documents(documents)?;
+        let management = self.load_management_view()?;
+        Ok(PlanningAdminCrudOutcome {
+            notice: if updated {
+                format!("task `{task_id}` updated")
+            } else {
+                format!("task `{task_id}` added")
+            },
+            management,
+        })
+    }
+
+    pub fn delete_task(
+        &self,
+        request: PlanningAdminTaskDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        let task_id = normalized_required_id(&request.id, "task id")?;
+        let mut documents = self.load_admin_documents()?;
+        let original_count = documents.task_ledger.tasks.len();
+        documents
+            .task_ledger
+            .tasks
+            .retain(|task| task.id.trim() != task_id);
+        if documents.task_ledger.tasks.len() == original_count {
+            bail!("task `{task_id}` was not found");
+        }
+        remove_task_references(
+            &mut documents.task_ledger,
+            &BTreeSet::from([task_id.to_string()]),
+        );
+        self.commit_admin_documents(documents)?;
+        let management = self.load_management_view()?;
+        Ok(PlanningAdminCrudOutcome {
+            notice: format!("task `{task_id}` deleted"),
+            management,
+        })
+    }
+
+    pub fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
+        self.ensure_no_parallel_working("export planning files")?;
+        let documents = self.load_admin_documents()?;
+        let mut paths = Vec::new();
+        write_candidate_file(
+            &self.workspace_dir,
+            DIRECTIONS_FILE_PATH,
+            &toml::to_string_pretty(&documents.directions)?,
+            &mut paths,
+        )?;
+        write_candidate_file(
+            &self.workspace_dir,
+            TASK_LEDGER_FILE_PATH,
+            &serde_json::to_string_pretty(&documents.task_ledger)?,
+            &mut paths,
+        )?;
+        write_candidate_file(
+            &self.workspace_dir,
+            TASK_LEDGER_SCHEMA_FILE_PATH,
+            &documents.task_ledger_schema_json,
+            &mut paths,
+        )?;
+        write_candidate_file(
+            &self.workspace_dir,
+            RESULT_OUTPUT_FILE_PATH,
+            &documents.result_output_markdown,
+            &mut paths,
+        )?;
+        Ok(PlanningAdminFileSyncOutcome {
+            notice: format!("exported {} planning files for editing", paths.len()),
+            paths,
+        })
+    }
+
+    pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
+        self.ensure_no_parallel_working("apply exported planning files")?;
+        let directions_result = self
+            .planning
+            .workspace
+            .apply_tracked_directions(self.workspace_dir.as_str())?;
+        if !directions_result.validation_report.is_valid() {
+            bail!("tracked directions apply failed validation");
+        }
+        let task_result = self
+            .planning
+            .workspace
+            .apply_tracked_task_ledger(self.workspace_dir.as_str())?;
+        if !task_result.validation_report.is_valid() {
+            bail!("tracked task ledger apply failed validation");
+        }
+        let mut paths = directions_result.applied_paths;
+        paths.extend(task_result.applied_paths);
+        paths.sort();
+        paths.dedup();
+        Ok(PlanningAdminFileSyncOutcome {
+            notice: format!("applied {} exported planning paths", paths.len()),
+            paths,
+        })
     }
 
     pub fn create_draft_session(
@@ -460,6 +786,130 @@ impl PlanningAdminFacadeService {
             removed_paths: result.removed_paths,
             doctor: map_doctor_report(&doctor),
         })
+    }
+
+    fn load_admin_documents(&self) -> Result<PlanningAdminDocuments> {
+        let workspace = self
+            .planning_workspace_port
+            .load_planning_workspace_files(self.workspace_dir.as_str())?;
+        let directions_toml = workspace.directions_toml.ok_or_else(|| {
+            anyhow!("planning directions are unavailable; initialize planning first")
+        })?;
+        let task_ledger_json = workspace
+            .task_ledger_json
+            .ok_or_else(|| anyhow!("task-ledger.json is unavailable; initialize planning first"))?;
+        let task_ledger_schema_json = workspace.task_ledger_schema_json.ok_or_else(|| {
+            anyhow!("task-ledger.schema.json is unavailable; initialize planning first")
+        })?;
+        let result_output_markdown = workspace
+            .result_output_markdown
+            .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
+        let task_authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(self.workspace_dir.as_str())?;
+        let directions = toml::from_str::<DirectionCatalogDocument>(&directions_toml)
+            .context("failed to parse active directions.toml")?;
+        let task_ledger = match task_authority_snapshot.as_ref() {
+            Some(snapshot) => snapshot.task_ledger.clone(),
+            None => serde_json::from_str::<TaskLedgerDocument>(&task_ledger_json)
+                .context("failed to parse active task-ledger.json")?,
+        };
+        Ok(PlanningAdminDocuments {
+            directions,
+            task_ledger,
+            task_ledger_schema_json,
+            result_output_markdown,
+            observed_planning_revision: task_authority_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.planning_revision),
+            uses_task_repository: task_authority_snapshot.is_some(),
+        })
+    }
+
+    fn commit_admin_documents(&self, documents: PlanningAdminDocuments) -> Result<()> {
+        let directions_toml = toml::to_string_pretty(&documents.directions)?;
+        let task_ledger_json = serde_json::to_string_pretty(&documents.task_ledger)?;
+        let validation_result =
+            self.planning_validation_service
+                .validate_workspace_files(PlanningWorkspaceFiles {
+                    directions_toml: &directions_toml,
+                    task_ledger_json: &task_ledger_json,
+                    task_ledger_schema_json: &documents.task_ledger_schema_json,
+                    result_output_markdown: &documents.result_output_markdown,
+                });
+        if !validation_result.report.is_valid() {
+            bail!(
+                "planning mutation failed validation: {}",
+                validation_result
+                    .report
+                    .issues
+                    .iter()
+                    .map(|issue| issue.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+        let queue_snapshot = self
+            .priority_queue_service
+            .build_snapshot(&documents.directions, &documents.task_ledger)
+            .context("failed to rebuild planning queue")?;
+
+        if documents.uses_task_repository {
+            match self
+                .planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    self.workspace_dir.as_str(),
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: documents.observed_planning_revision,
+                        task_ledger: &documents.task_ledger,
+                        queue_snapshot: &queue_snapshot,
+                    },
+                )? {
+                PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+                PlanningTaskAuthorityCommitResult::Conflict {
+                    observed_planning_revision,
+                    current_planning_revision,
+                } => {
+                    bail!(
+                        "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                    );
+                }
+            }
+            self.planning_workspace_port
+                .replace_planning_workspace_file(
+                    self.workspace_dir.as_str(),
+                    DIRECTIONS_FILE_PATH,
+                    Some(&directions_toml),
+                )?;
+            self.planning_workspace_port
+                .replace_planning_workspace_file(
+                    self.workspace_dir.as_str(),
+                    RESULT_OUTPUT_FILE_PATH,
+                    Some(&documents.result_output_markdown),
+                )?;
+            return Ok(());
+        }
+
+        self.planning_workspace_port.commit_planning_workspace_files(
+            self.workspace_dir.as_str(),
+            &crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord {
+                directions_toml: Some(directions_toml),
+                task_ledger_json: Some(task_ledger_json),
+                task_ledger_schema_json: Some(documents.task_ledger_schema_json),
+                queue_snapshot_json: Some(serde_json::to_string_pretty(&queue_snapshot)?),
+                result_output_markdown: Some(documents.result_output_markdown),
+            },
+        )
+    }
+
+    fn ensure_no_parallel_working(&self, action: &str) -> Result<()> {
+        let runtime = self
+            .planning_authority_port
+            .load_runtime_projections(self.workspace_dir.as_str())?;
+        if let Some(reason) = describe_parallel_busy(&runtime) {
+            bail!("{action} is blocked while parallel work is active: {reason}");
+        }
+        Ok(())
     }
 
     fn resolve_mutated_visible_files(
@@ -679,6 +1129,317 @@ impl PlanningAdminFacadeService {
         )?;
         Ok(draft_name)
     }
+}
+
+#[derive(Debug, Clone)]
+struct PlanningAdminDocuments {
+    directions: DirectionCatalogDocument,
+    task_ledger: TaskLedgerDocument,
+    task_ledger_schema_json: String,
+    result_output_markdown: String,
+    observed_planning_revision: Option<i64>,
+    uses_task_repository: bool,
+}
+
+fn map_management_view(
+    directions: &DirectionCatalogDocument,
+    task_ledger: &TaskLedgerDocument,
+    default_direction_id: &str,
+) -> PlanningAdminManagementView {
+    let mut task_counts = BTreeMap::<String, usize>::new();
+    for task in &task_ledger.tasks {
+        *task_counts
+            .entry(task.direction_id.trim().to_string())
+            .or_default() += 1;
+    }
+
+    PlanningAdminManagementView {
+        default_direction_id: default_direction_id.to_string(),
+        directions: directions
+            .directions
+            .iter()
+            .map(|direction| PlanningAdminDirectionManagementView {
+                id: direction.id.clone(),
+                title: direction.title.clone(),
+                summary: direction.summary.clone(),
+                success_criteria_text: direction.success_criteria.join("\n"),
+                scope_hints_text: direction.scope_hints.join("\n"),
+                detail_doc_path: direction.detail_doc_path.clone(),
+                state: direction_state_label(direction.state).to_string(),
+                task_count: task_counts
+                    .get(direction.id.trim())
+                    .copied()
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        tasks: task_ledger
+            .tasks
+            .iter()
+            .map(|task| PlanningAdminTaskManagementView {
+                id: task.id.clone(),
+                direction_id: task.direction_id.clone(),
+                title: task.title.clone(),
+                description: task.description.clone(),
+                status: task.status.label().to_string(),
+                base_priority: task.base_priority,
+                dynamic_priority_delta: task.dynamic_priority_delta,
+                priority_reason: task.priority_reason.clone(),
+                depends_on_text: task.depends_on.join("\n"),
+                blocked_by_text: task.blocked_by.join("\n"),
+                updated_at: task.updated_at.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn direction_from_request(
+    request: PlanningAdminDirectionMutationRequest,
+) -> Result<DirectionDefinition> {
+    let id = normalized_required_id(&request.id, "direction id")?;
+    let title = normalized_required_text(&request.title, "direction title")?;
+    let success_criteria = split_lines(&request.success_criteria_text);
+    if success_criteria.is_empty() {
+        bail!("direction `{id}` requires at least one success criterion");
+    }
+    Ok(DirectionDefinition {
+        id: id.to_string(),
+        title: title.to_string(),
+        summary: non_empty_or(&request.summary, title),
+        success_criteria,
+        scope_hints: split_lines(&request.scope_hints_text),
+        detail_doc_path: request.detail_doc_path.trim().to_string(),
+        state: parse_direction_state(&request.state)?,
+    })
+}
+
+fn task_from_request(
+    request: PlanningAdminTaskMutationRequest,
+    task_ledger: &TaskLedgerDocument,
+    default_direction_id: &str,
+) -> Result<TaskDefinition> {
+    let id = normalized_required_id(&request.id, "task id")?;
+    let now = Utc::now().to_rfc3339();
+    let existing = task_ledger
+        .tasks
+        .iter()
+        .find(|task| task.id.trim() == id)
+        .cloned();
+    let direction_id = if request.direction_id.trim().is_empty() {
+        default_direction_id.to_string()
+    } else {
+        normalized_required_id(&request.direction_id, "direction id")?.to_string()
+    };
+    let title = normalized_required_text(&request.title, "task title")?;
+    let base_priority = parse_i32_or_default(&request.base_priority, 10, "base priority")?;
+    let dynamic_priority_delta =
+        parse_i32_or_default(&request.dynamic_priority_delta, 0, "dynamic priority delta")?;
+    Ok(TaskDefinition {
+        id: id.to_string(),
+        direction_id,
+        direction_relation_note: existing
+            .as_ref()
+            .map(|task| task.direction_relation_note.clone())
+            .unwrap_or_default(),
+        title: title.to_string(),
+        description: non_empty_or(&request.description, title),
+        status: parse_task_status(&request.status)?,
+        base_priority,
+        dynamic_priority_delta,
+        priority_reason: request.priority_reason.trim().to_string(),
+        depends_on: split_references(&request.depends_on_text),
+        blocked_by: split_references(&request.blocked_by_text),
+        created_by: existing
+            .as_ref()
+            .map(|task| task.created_by)
+            .unwrap_or(TaskActor::User),
+        last_updated_by: TaskActor::User,
+        source_turn_id: existing.and_then(|task| task.source_turn_id),
+        updated_at: now,
+    })
+}
+
+fn parse_direction_state(raw: &str) -> Result<DirectionState> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "active" => Ok(DirectionState::Active),
+        "paused" => Ok(DirectionState::Paused),
+        "done" => Ok(DirectionState::Done),
+        other => bail!("unknown direction state `{other}`"),
+    }
+}
+
+fn parse_task_status(raw: &str) -> Result<TaskStatus> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "ready" => Ok(TaskStatus::Ready),
+        "blocked" => Ok(TaskStatus::Blocked),
+        "in_progress" => Ok(TaskStatus::InProgress),
+        "done" => Ok(TaskStatus::Done),
+        "cancelled" => Ok(TaskStatus::Cancelled),
+        "awaiting_user" => Ok(TaskStatus::AwaitingUser),
+        "proposed" => Ok(TaskStatus::Proposed),
+        other => bail!("unknown task status `{other}`"),
+    }
+}
+
+fn default_direction_id(directions: &DirectionCatalogDocument) -> Result<&str> {
+    if let Some(direction) = directions
+        .directions
+        .iter()
+        .find(|direction| direction.id.trim() == DEFAULT_DIRECTION_ID)
+    {
+        return Ok(direction.id.trim());
+    }
+    directions
+        .directions
+        .iter()
+        .find(|direction| direction.state == DirectionState::Active)
+        .or_else(|| directions.directions.first())
+        .map(|direction| direction.id.trim())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow!("at least one direction is required"))
+}
+
+fn ensure_direction_exists(
+    directions: &DirectionCatalogDocument,
+    direction_id: &str,
+) -> Result<()> {
+    if directions
+        .directions
+        .iter()
+        .any(|direction| direction.id.trim() == direction_id.trim())
+    {
+        return Ok(());
+    }
+    bail!("direction `{}` does not exist", direction_id.trim())
+}
+
+fn normalized_required_id<'a>(value: &'a str, label: &str) -> Result<&'a str> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{label} is required");
+    }
+    if value.contains(char::is_whitespace) || value.contains('/') || value.contains('\\') {
+        bail!("{label} `{value}` must not contain whitespace or path separators");
+    }
+    Ok(value)
+}
+
+fn normalized_required_text<'a>(value: &'a str, label: &str) -> Result<&'a str> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{label} is required");
+    }
+    Ok(value)
+}
+
+fn non_empty_or(value: &str, fallback: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn parse_i32_or_default(raw: &str, default: i32, label: &str) -> Result<i32> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(default);
+    }
+    raw.parse::<i32>()
+        .with_context(|| format!("{label} must be an integer"))
+}
+
+fn split_lines(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn split_references(raw: &str) -> Vec<String> {
+    raw.split([',', '\n'])
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn remove_task_references(
+    task_ledger: &mut TaskLedgerDocument,
+    removed_task_ids: &BTreeSet<String>,
+) {
+    for task in &mut task_ledger.tasks {
+        task.depends_on
+            .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
+        task.blocked_by
+            .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
+    }
+}
+
+fn direction_state_label(state: DirectionState) -> &'static str {
+    match state {
+        DirectionState::Active => "active",
+        DirectionState::Paused => "paused",
+        DirectionState::Done => "done",
+    }
+}
+
+fn describe_parallel_busy(runtime: &PlanningAuthorityRuntimeProjectionSnapshot) -> Option<String> {
+    if let Some(lease) = runtime.slot_leases.values().find(|lease| {
+        matches!(
+            lease.state,
+            crate::domain::parallel_mode::ParallelModeSlotLeaseState::Leased
+                | crate::domain::parallel_mode::ParallelModeSlotLeaseState::Running
+                | crate::domain::parallel_mode::ParallelModeSlotLeaseState::CleanupPending
+        )
+    }) {
+        return Some(format!(
+            "slot {} is {} for task {}",
+            lease.slot_id,
+            lease.state.label(),
+            lease.task_id
+        ));
+    }
+    if let Some(record) = runtime
+        .distributor_queue_records
+        .iter()
+        .find(|record| record.queue_state.is_active())
+    {
+        let state = match record.queue_state {
+            ParallelModeQueueItemState::Idle => "idle",
+            ParallelModeQueueItemState::Queued => "queued",
+            ParallelModeQueueItemState::Pushing => "pushing",
+            ParallelModeQueueItemState::PrPending => "pr pending",
+            ParallelModeQueueItemState::MergePending => "merge pending",
+            ParallelModeQueueItemState::Integrating => "integrating",
+            ParallelModeQueueItemState::Cleaning => "cleaning",
+            ParallelModeQueueItemState::Done => "done",
+            ParallelModeQueueItemState::Blocked => "blocked",
+            ParallelModeQueueItemState::Failed => "failed",
+        };
+        return Some(format!(
+            "distributor item {} is {} for task {}",
+            record.queue_item_id, state, record.task_id
+        ));
+    }
+    None
+}
+
+fn write_candidate_file(
+    workspace_dir: &str,
+    relative_path: &str,
+    body: &str,
+    written_paths: &mut Vec<String>,
+) -> Result<()> {
+    let path = Path::new(workspace_dir).join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+    written_paths.push(relative_path.to_string());
+    Ok(())
 }
 
 fn collect_direction_supporting_paths(directions_toml: &str) -> Vec<String> {
