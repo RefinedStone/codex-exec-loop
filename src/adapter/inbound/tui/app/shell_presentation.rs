@@ -1,8 +1,5 @@
-use std::time::{Duration, Instant};
-
 pub(super) use super::planning::{build_automation_preview_lines, build_automation_status_lines};
 use super::*;
-use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 use crate::domain::planning::{
     PlanningValidationSeverity, PriorityQueueSkippedTask, PriorityQueueTask,
 };
@@ -144,6 +141,8 @@ mod capability_projection;
 mod overlays;
 #[path = "shell_presentation/prompt_composer.rs"]
 mod prompt_composer;
+#[path = "shell_presentation/runtime_status_copy.rs"]
+mod runtime_status_copy;
 #[path = "shell_presentation/session_browser.rs"]
 mod session_browser;
 #[cfg(test)]
@@ -151,8 +150,16 @@ mod session_browser;
 mod shell_copy;
 #[path = "shell_presentation/status_panels.rs"]
 mod status_panels;
+#[path = "shell_presentation/transcript_copy.rs"]
+mod transcript_copy;
 
 use capability_projection::recent_session_status_label;
+#[cfg(test)]
+use runtime_status_copy::{auto_follow_prompt_lines, input_state_style};
+use runtime_status_copy::{
+    auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
+    inline_input_state_label, turn_status_label,
+};
 
 #[cfg(test)]
 pub(super) use overlays::build_conversation_shell_frame_view;
@@ -168,7 +175,9 @@ pub(super) use overlays::{
 };
 #[cfg(test)]
 pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
+pub(super) use runtime_status_copy::format_elapsed;
 pub(super) use status_panels::InlineTailView;
+pub(super) use transcript_copy::{format_conversation_lines, format_conversation_lines_with_debug};
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -285,55 +294,6 @@ fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub(super) fn format_conversation_lines(messages: &[ConversationMessage]) -> Vec<Line<'static>> {
-    format_conversation_lines_with_debug(messages, false)
-}
-
-pub(super) fn format_conversation_lines_with_debug(
-    messages: &[ConversationMessage],
-    show_debug_details: bool,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    for message in messages {
-        let label = conversation_message_label(message);
-        lines.push(Line::from(Span::styled(
-            format!("{label}:"),
-            label_style(message.kind),
-        )));
-        for text_line in message.text.lines() {
-            lines.push(Line::from(format!("  {}", expand_tui_tabs(text_line))));
-        }
-        if show_debug_details && let Some(debug_detail) = message.debug_detail.as_deref() {
-            for detail_line in debug_detail.lines() {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", expand_tui_tabs(detail_line)),
-                    AkraTheme::muted(),
-                )));
-            }
-        }
-        lines.push(Line::from(""));
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from("No messages in this thread yet."));
-    }
-
-    if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
-        lines.drain(0..lines.len() - MAX_CONVERSATION_HISTORY_LINES);
-    }
-
-    lines
-}
-
-fn expand_tui_tabs(text: &str) -> String {
-    text.replace('\t', "    ")
-}
-
-fn compact_inline_detail(text: &str, max_len: usize) -> String {
-    compact_whitespace_detail(text, max_len)
-}
-
 pub(super) fn build_automation_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.is_max_auto_turns_editing() {
         return vec![
@@ -403,193 +363,5 @@ fn build_automation_list_view(app: &NativeTuiApp) -> OverlayListView {
             items: Vec::new(),
             selected_index: None,
         },
-    }
-}
-
-fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
-    if conversation.has_running_turn() || conversation.auto_follow_state.has_live_activity() {
-        "working"
-    } else {
-        "idle"
-    }
-}
-
-fn build_working_line(
-    conversation: &ConversationViewModel,
-    max_detail_len: usize,
-) -> Option<Line<'static>> {
-    let (started_at, detail) = if conversation.auto_follow_state.has_live_activity() {
-        (
-            conversation.auto_follow_state.active_started_at()?,
-            auto_follow_working_detail(conversation),
-        )
-    } else {
-        (
-            conversation.active_turn_started_at?,
-            manual_turn_working_detail(conversation)?,
-        )
-    };
-    let detail = compact_inline_detail(&detail, max_detail_len);
-    let elapsed = format_elapsed(Instant::now().saturating_duration_since(started_at));
-
-    Some(Line::from(vec![
-        Span::styled(
-            "◦ Working".to_string(),
-            AkraTheme::muted().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" ({elapsed} • {detail})"), AkraTheme::subtle()),
-    ]))
-}
-
-fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<String> {
-    if !conversation.has_running_turn() {
-        return None;
-    }
-
-    let interrupt_label = conversation.interrupt_support_label();
-    match conversation.input_state {
-        ConversationInputState::SubmittingTurn => {
-            Some(format!("starting turn / interrupt {interrupt_label}"))
-        }
-        ConversationInputState::StreamingTurn => {
-            if conversation.live_agent_message.is_some() {
-                Some(format!("turn running / interrupt {interrupt_label}"))
-            } else {
-                Some(format!(
-                    "waiting for response / interrupt {interrupt_label}"
-                ))
-            }
-        }
-        ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => None,
-    }
-}
-
-fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
-    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
-    let interrupt_label = conversation.interrupt_support_label();
-    match &conversation.auto_follow_state.runtime_phase {
-        AutoFollowRuntimePhase::Idle => "idle".to_string(),
-        AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
-        }
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-            format!(
-                "auto turn {turn_index}/{max_auto_turns} starting / interrupt {interrupt_label}"
-            )
-        }
-        AutoFollowRuntimePhase::Running { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} running / interrupt {interrupt_label}")
-        }
-    }
-}
-
-fn auto_follow_prompt_status_line(
-    conversation: &ConversationViewModel,
-    inline: bool,
-) -> Option<String> {
-    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
-    let detail = match &conversation.auto_follow_state.runtime_phase {
-        AutoFollowRuntimePhase::Idle => return None,
-        AutoFollowRuntimePhase::Evaluating { .. } => "auto follow-up evaluating".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} queued")
-        }
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} starting")
-        }
-        AutoFollowRuntimePhase::Running { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} running")
-        }
-    };
-
-    Some(if inline {
-        format!("prompt: {detail}  |  type now, Enter when idle")
-    } else {
-        detail
-    })
-}
-
-#[cfg(test)]
-fn auto_follow_prompt_lines(conversation: &ConversationViewModel) -> Option<Vec<Line<'static>>> {
-    let detail = auto_follow_prompt_status_line(conversation, false)?;
-    Some(vec![
-        Line::from(format!("Auto follow-up is {detail}.")),
-        Line::from("Type now; press Enter after the shell returns idle."),
-    ])
-}
-
-pub(super) fn format_elapsed(duration: Duration) -> String {
-    let total_seconds = duration.as_secs();
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-
-    if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
-    }
-}
-
-fn inline_input_state_label(input_state: ConversationInputState) -> &'static str {
-    match input_state {
-        ConversationInputState::DraftReady => "draft",
-        ConversationInputState::ReadyToContinue => "ready",
-        ConversationInputState::SubmittingTurn => "sending",
-        ConversationInputState::StreamingTurn => "streaming",
-    }
-}
-
-#[cfg(test)]
-pub(super) fn input_state_style(input_state: ConversationInputState) -> Style {
-    match input_state {
-        ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => {
-            AkraTheme::success()
-        }
-        ConversationInputState::SubmittingTurn => AkraTheme::warning(),
-        ConversationInputState::StreamingTurn => AkraTheme::accent(),
-    }
-}
-
-fn label_style(kind: ConversationMessageKind) -> Style {
-    match kind {
-        ConversationMessageKind::User => AkraTheme::shortcut(),
-        ConversationMessageKind::Agent => AkraTheme::brand(),
-        ConversationMessageKind::Tool => AkraTheme::tool(),
-        ConversationMessageKind::Status => AkraTheme::muted(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::adapter::inbound::tui::app::{
-        AutoFollowRuntimePhase, AutoFollowState, ConversationViewModel,
-        INFINITE_AUTO_FOLLOW_MAX_TURNS,
-    };
-
-    #[test]
-    fn auto_follow_status_lines_use_infinite_label() {
-        let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        conversation.auto_follow_state = AutoFollowState::new();
-        conversation
-            .auto_follow_state
-            .set_max_auto_turns(INFINITE_AUTO_FOLLOW_MAX_TURNS);
-        conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Running {
-            started_at: Instant::now(),
-            turn_index: 2,
-        };
-
-        assert_eq!(
-            auto_follow_working_detail(&conversation),
-            "auto turn 2/infinite running / interrupt unsupported"
-        );
-        assert_eq!(
-            auto_follow_prompt_status_line(&conversation, true).as_deref(),
-            Some("prompt: auto turn 2/infinite running  |  type now, Enter when idle")
-        );
     }
 }
