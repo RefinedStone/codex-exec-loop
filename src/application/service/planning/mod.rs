@@ -239,6 +239,11 @@ impl PlanningWorkspaceUseCases {
         self.init_service.has_planning_workspace(workspace_dir)
     }
 
+    pub fn has_planning_candidate_workspace(&self, workspace_dir: &str) -> anyhow::Result<bool> {
+        self.init_service
+            .has_planning_candidate_workspace(workspace_dir)
+    }
+
     pub fn initialize_simple_workspace(
         &self,
         workspace_dir: &str,

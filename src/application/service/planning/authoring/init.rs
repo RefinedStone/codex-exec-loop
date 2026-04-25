@@ -177,6 +177,13 @@ impl PlanningInitService {
             .has_any_files())
     }
 
+    pub fn has_planning_candidate_workspace(&self, workspace_dir: &str) -> Result<bool> {
+        Ok(self
+            .planning_workspace_port
+            .load_planning_workspace_candidate_files(workspace_dir)?
+            .has_any_files())
+    }
+
     pub fn initialize_simple_workspace(
         &self,
         workspace_dir: &str,

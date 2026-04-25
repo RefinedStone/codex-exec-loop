@@ -4,14 +4,17 @@ use super::super::{
     ActiveTurnPlanningCapture, ConversationInputState, ConversationRuntimeEvent, ConversationState,
     InlineShellCommandInput, PlanningExecutionSnapshot, ShellOverlay, StartupState,
     TaskIntakeOverlayStep, TempGitWorkspace, bootstrap_active_planning_workspace,
-    create_temp_workspace, make_test_app, sample_startup_diagnostics,
-    sync_draft_conversation_to_startup_workspace,
+    create_temp_workspace, make_test_app, replace_candidate_planning_workspace_file,
+    sample_startup_diagnostics, sync_draft_conversation_to_startup_workspace,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityCommit;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::planning::authoring::bootstrap::{
+    PlanningBootstrapMode, PlanningBootstrapService,
+};
 use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
 use crate::domain::planning::{PriorityQueueSnapshot, TaskLedgerDocument};
 
@@ -197,6 +200,63 @@ fn task_command_bootstraps_missing_planning_workspace_and_commits_ready_task() {
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+}
+
+#[test]
+fn task_command_blocks_default_bootstrap_when_candidate_workspace_exists() {
+    let (mut app, _) = make_test_app();
+    let workspace = TempGitWorkspace::new("task-intake-candidate-without-authority");
+    let workspace_dir = workspace.workspace_dir().to_string();
+    let bootstrap =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+    replace_candidate_planning_workspace_file(
+        &workspace_dir,
+        bootstrap.directions_path.as_str(),
+        bootstrap.directions_toml.as_str(),
+    );
+    replace_candidate_planning_workspace_file(
+        &workspace_dir,
+        bootstrap.task_ledger_path.as_str(),
+        bootstrap.task_ledger_json.as_str(),
+    );
+    replace_candidate_planning_workspace_file(
+        &workspace_dir,
+        bootstrap.task_ledger_schema_path.as_str(),
+        bootstrap.task_ledger_schema_json.as_str(),
+    );
+    replace_candidate_planning_workspace_file(
+        &workspace_dir,
+        bootstrap.result_output_path.as_str(),
+        bootstrap.result_output_markdown.as_str(),
+    );
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir, true));
+    sync_draft_conversation_to_startup_workspace(&mut app);
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":task Add work").expect("task command should parse"),
+    );
+
+    assert_eq!(app.shell_overlay, ShellOverlay::TaskIntake);
+    assert!(app.task_intake_overlay_ui_state.proposal().is_none());
+    let error = app
+        .task_intake_overlay_ui_state
+        .error()
+        .expect("candidate workspace should block default bootstrap");
+    assert!(
+        error.contains("tracked planning candidates exist without active authority"),
+        "candidate workspace should be preserved: {error}"
+    );
+    assert!(
+        error.contains(":directions apply") && error.contains(":queue apply"),
+        "blocked bootstrap should guide tracked candidate apply commands: {error}"
+    );
+    let workspace = FilesystemPlanningWorkspaceAdapter::new()
+        .load_planning_workspace_files(&workspace_dir)
+        .expect("active workspace should load");
+    assert!(
+        !workspace.has_any_files(),
+        "task intake must not overwrite active authority from default bootstrap"
+    );
 }
 
 #[test]

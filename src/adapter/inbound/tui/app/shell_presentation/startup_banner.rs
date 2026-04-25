@@ -15,41 +15,36 @@ pub(super) fn build_startup_banner_lines_from_context(
     context: &ShellCorePresentationContext<'_>,
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
-    if !context.startup_banner_is_active() {
+    if !context.startup_banner_is_active() || max_height == Some(0) {
         return None;
     }
-
-    let max_height = match max_height {
-        Some(0) => return None,
-        value => value,
-    };
 
     Some(startup_ascii_art_lines(max_height))
 }
 
 pub(in super::super) fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
-    let mut art_lines = STARTUP_ASCII_ART_DEFAULT.lines().collect::<Vec<_>>();
-    let start = art_lines
+    let art_lines_vec = STARTUP_ASCII_ART_DEFAULT.lines().collect::<Vec<_>>();
+    let start = art_lines_vec
         .iter()
         .position(|line| !line.trim().is_empty())
         .unwrap_or(0);
-    let end = art_lines
+    let end = art_lines_vec
         .iter()
         .rposition(|line| !line.trim().is_empty())
         .map(|index| index + 1)
-        .unwrap_or(art_lines.len());
-    art_lines = art_lines[start..end].to_vec();
+        .unwrap_or(art_lines_vec.len());
+    let mut art_lines = &art_lines_vec[start..end];
 
     if let Some(max_height) = max_height {
         let max_height = max_height as usize;
         if max_height > 0 && art_lines.len() > max_height {
             let start = art_lines.len().saturating_sub(max_height) / 2;
-            art_lines = art_lines[start..start + max_height].to_vec();
+            art_lines = &art_lines[start..start + max_height];
         }
     }
 
     art_lines
-        .into_iter()
-        .map(|line| Line::from(line.to_string()))
+        .iter()
+        .map(|line| Line::from((*line).to_string()))
         .collect()
 }

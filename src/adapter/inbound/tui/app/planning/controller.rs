@@ -509,6 +509,20 @@ impl NativeTuiApp {
         {
             Ok(true) => Ok(()),
             Ok(false) => {
+                if self
+                    .planning
+                    .workspace
+                    .has_planning_candidate_workspace(&workspace_directory)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "planning candidate workspace check failed before operator action: {error}"
+                        )
+                    })?
+                {
+                    anyhow::bail!(
+                        "planning default bootstrap blocked: tracked planning candidates exist without active authority / run :directions apply or :queue apply before :task"
+                    );
+                }
                 let stage_result = self
                     .planning
                     .workspace
