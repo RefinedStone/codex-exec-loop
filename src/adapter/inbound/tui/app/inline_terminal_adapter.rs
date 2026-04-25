@@ -225,7 +225,9 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        self.inner.draw(content)
+        let size = self.inner.size()?;
+        self.inner
+            .draw(content.filter(move |(x, y, _)| *x < size.width && *y < size.height))
     }
 
     fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
@@ -304,8 +306,15 @@ impl InlineTerminalState {
         viewport_area: Rect,
         cursor_position: Position,
     ) {
+        let terminal_resized = self
+            .viewport
+            .last_known_screen_size
+            .is_some_and(|last_known_screen_size| last_known_screen_size != terminal_size);
         self.viewport
             .record_terminal_viewport(terminal_size, viewport_area, cursor_position);
+        if terminal_resized {
+            self.invalidate_back_buffer();
+        }
     }
 
     fn invalidate_back_buffer(&mut self) {
@@ -1170,6 +1179,7 @@ mod tests {
         let mut app = make_test_app();
         app.show_startup_ascii_art = false;
         app.inline_history_render_mode = render_mode;
+        app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
         if let ConversationState::Ready(conversation) = &mut app.conversation_state {
             conversation.input_buffer = "live prompt must not move to scrollback".to_string();
         }
@@ -1199,6 +1209,7 @@ mod tests {
         let mut app = make_test_app();
         app.show_startup_ascii_art = false;
         app.inline_history_render_mode = render_mode;
+        app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
         if let ConversationState::Ready(conversation) = &mut app.conversation_state {
             conversation.input_buffer = "live prompt must not move to scrollback".to_string();
         }
