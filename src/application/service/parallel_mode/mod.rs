@@ -1257,18 +1257,6 @@ fn reconcile_pool_board_and_context(
             "canonical root inspection failed".to_string(),
         )));
     };
-    let Ok((_akra_head, created_akra_branch)) = ensure_akra_branch(&repo_root) else {
-        return Err(Box::new((
-            build_blocked_pool_board(
-                planning_authority,
-                workspace_dir,
-                "reconcile blocked / `akra` baseline could not be created",
-                "`akra` is unavailable during reconcile",
-            ),
-            "`akra` is unavailable during reconcile".to_string(),
-        )));
-    };
-
     let pool_root = derive_default_pool_root(&canonical_repo_root);
     let pool_root_existed = pool_root.exists();
     if ensure_directory_exists(&pool_root).is_err() {
@@ -1283,6 +1271,23 @@ fn reconcile_pool_board_and_context(
         )));
     }
     let created_pool_root = !pool_root_existed;
+    let runtime_projection =
+        load_runtime_projection_snapshot(planning_authority, &repo_root, &pool_root);
+    let can_reset_akra_baseline = runtime_projection.slot_leases.is_empty()
+        && runtime_projection.distributor_queue_records.is_empty();
+    let Ok((_akra_head, created_akra_branch)) =
+        ensure_akra_branch(&repo_root, can_reset_akra_baseline)
+    else {
+        return Err(Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile blocked / `akra` baseline could not be created",
+                "`akra` is unavailable during reconcile",
+            ),
+            "`akra` is unavailable during reconcile".to_string(),
+        )));
+    };
     let Some(worktree_records) = load_worktree_records(&repo_root) else {
         return Err(Box::new((
             build_blocked_pool_board(
@@ -1381,7 +1386,21 @@ fn inspect_pool_board_and_context(
     }
 }
 
-fn ensure_akra_branch(repo_root: &str) -> Result<(String, bool), ()> {
+fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(String, bool), ()> {
+    if reset_to_current_head
+        && command_succeeds("git", ["-C", repo_root, "rev-parse", "--verify", "HEAD"])
+    {
+        let existed = resolve_branch_head(repo_root, AKRA_BRANCH).is_some();
+        if command_succeeds(
+            "git",
+            ["-C", repo_root, "branch", "-f", AKRA_BRANCH, "HEAD"],
+        ) {
+            return resolve_branch_head(repo_root, AKRA_BRANCH)
+                .map(|akra_head| (akra_head, !existed))
+                .ok_or(());
+        }
+    }
+
     if let Some(akra_head) = resolve_branch_head(repo_root, AKRA_BRANCH) {
         return Ok((akra_head, false));
     }
@@ -2174,7 +2193,7 @@ fn derive_default_pool_root(canonical_repo_root: &Path) -> PathBuf {
     let parent_dir = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
 
     parent_dir
-        .join(format!("{repo_name}-worktrees"))
+        .join(format!("{repo_name}-akra-worktrees"))
         .join(stable_short_hash(&canonical_repo_root.to_string_lossy()))
         .join("akra-pool")
 }

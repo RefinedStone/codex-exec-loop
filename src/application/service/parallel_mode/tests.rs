@@ -221,6 +221,12 @@ impl TempGitRepo {
             &["update-ref", &format!("refs/remotes/{branch_name}"), target],
         );
     }
+
+    fn commit_on_current_branch(&self, file_name: &str, contents: &str, message: &str) {
+        fs::write(self.repo_root.join(file_name), contents).expect("repo file should write");
+        run_git(&self.repo_root, &["add", file_name]);
+        run_git(&self.repo_root, &["commit", "-qm", message]);
+    }
 }
 
 impl Drop for TempGitRepo {
@@ -2014,6 +2020,22 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
 }
 
 #[test]
+fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
+    let repo = TempGitRepo::new("pool-root");
+    let pool_root = repo.pool_root();
+    let normalized = pool_root.to_string_lossy().replace('\\', "/");
+
+    assert!(
+        normalized.contains("/repo-akra-worktrees/"),
+        "pool root should live under a repo sibling akra worktrees root: {normalized}"
+    );
+    assert!(
+        normalized.ends_with("/akra-pool"),
+        "pool root should end at the akra pool directory: {normalized}"
+    );
+}
+
+#[test]
 fn reconcile_creates_local_akra_branch_before_provisioning_slots() {
     let repo = TempGitRepo::new("create-akra");
     repo.delete_local_akra_branch();
@@ -2027,6 +2049,36 @@ fn reconcile_creates_local_akra_branch_before_provisioning_slots() {
     assert!(repo.branch_exists("akra"));
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
     assert!(pool.reconcile_status.contains("created `akra`"));
+}
+
+#[test]
+fn reconcile_resets_empty_akra_baseline_to_current_head() {
+    let repo = TempGitRepo::new("reset-akra");
+    let old_akra_head = repo.head_sha();
+    repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
+    let current_head = repo.head_sha();
+    assert_ne!(old_akra_head, current_head);
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "rev-parse",
+                "akra",
+            ],
+            None,
+        )
+        .expect("akra should resolve"),
+        current_head
+    );
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
 
 #[test]
