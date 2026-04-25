@@ -1288,7 +1288,7 @@ fn reconcile_pool_board_and_context(
             "`akra` is unavailable during reconcile".to_string(),
         )));
     };
-    let Some(worktree_records) = load_worktree_records(&repo_root) else {
+    let Some(mut worktree_records) = load_worktree_records(&repo_root) else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1299,6 +1299,16 @@ fn reconcile_pool_board_and_context(
             "worktree list inspection failed".to_string(),
         )));
     };
+    let reset_stale_baseline_slots = if can_reset_akra_baseline {
+        reset_stale_detached_baseline_slots(&repo_root, &pool_root, &worktree_records)
+    } else {
+        0
+    };
+    if reset_stale_baseline_slots > 0
+        && let Some(refreshed_records) = load_worktree_records(&repo_root)
+    {
+        worktree_records = refreshed_records;
+    }
 
     let provisioned_slots = provision_missing_slots(&repo_root, &pool_root, &worktree_records);
     let Some(reloaded_worktree_records) = load_worktree_records(&repo_root) else {
@@ -1387,17 +1397,13 @@ fn inspect_pool_board_and_context(
 }
 
 fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(String, bool), ()> {
-    if reset_to_current_head
-        && command_succeeds("git", ["-C", repo_root, "rev-parse", "--verify", "HEAD"])
-    {
+    if reset_to_current_head && let Some(head_sha) = resolve_branch_head(repo_root, "HEAD") {
         let existed = resolve_branch_head(repo_root, AKRA_BRANCH).is_some();
         if command_succeeds(
             "git",
             ["-C", repo_root, "branch", "-f", AKRA_BRANCH, "HEAD"],
         ) {
-            return resolve_branch_head(repo_root, AKRA_BRANCH)
-                .map(|akra_head| (akra_head, !existed))
-                .ok_or(());
+            return Ok((head_sha, !existed));
         }
     }
 
@@ -1639,6 +1645,59 @@ fn provision_missing_slots(
     }
 
     provisioned_slots
+}
+
+fn reset_stale_detached_baseline_slots(
+    repo_root: &str,
+    pool_root: &Path,
+    worktree_records: &[GitWorktreeRecord],
+) -> usize {
+    let akra_head = resolve_akra_baseline_head(repo_root).unwrap_or_default();
+    if akra_head.is_empty() {
+        return 0;
+    }
+
+    let mut reset_slots = 0;
+    for slot_number in 1..=DEFAULT_POOL_SIZE {
+        let slot_path = pool_root.join(slot_id(slot_number));
+        let Some(worktree_record) = worktree_records
+            .iter()
+            .find(|record| record.path == slot_path)
+        else {
+            continue;
+        };
+        if !worktree_record.detached || worktree_record.head_sha == akra_head {
+            continue;
+        }
+        if !inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline) {
+            continue;
+        }
+        let slot_path_string = slot_path.display().to_string();
+        if command_succeeds(
+            "git",
+            [
+                "-C",
+                slot_path_string.as_str(),
+                "checkout",
+                "--detach",
+                AKRA_BRANCH,
+            ],
+        ) && command_succeeds(
+            "git",
+            [
+                "-C",
+                slot_path_string.as_str(),
+                "reset",
+                "--hard",
+                AKRA_BRANCH,
+            ],
+        ) && command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fdx"])
+        {
+            reset_slots += 1;
+        }
+    }
+
+    reset_slots
 }
 
 fn cleanup_reusable_slots(

@@ -1440,6 +1440,7 @@ fn parse_queue_snapshot_export(body: &str) -> PriorityQueueSnapshot {
 
 fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Connection> {
     let authority_store_path = Path::new(&location.authority_store_path);
+    migrate_legacy_authority_store_if_needed(location)?;
     if let Some(parent) = authority_store_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -1454,6 +1455,32 @@ fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Con
     ensure_schema(&connection)?;
     backfill_task_authority_from_active_documents(&mut connection)?;
     Ok(connection)
+}
+
+fn migrate_legacy_authority_store_if_needed(location: &PlanningAuthorityLocation) -> Result<()> {
+    let authority_store_path = Path::new(&location.authority_store_path);
+    if authority_store_path.exists() {
+        return Ok(());
+    }
+
+    let legacy_store_path = Path::new(&location.canonical_repo_root)
+        .join(".codex-exec-loop/runtime/planning-authority.db");
+    if !legacy_store_path.is_file() {
+        return Ok(());
+    }
+
+    if let Some(parent) = authority_store_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::copy(&legacy_store_path, authority_store_path).with_context(|| {
+        format!(
+            "failed to migrate legacy authority store from {} to {}",
+            legacy_store_path.display(),
+            authority_store_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn load_runtime_projection_snapshot(
@@ -1838,6 +1865,7 @@ fn akra_home_root() -> PathBuf {
     #[cfg(not(test))]
     {
         env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."))
             .join(AKRA_HOME_DIRECTORY)
@@ -2738,13 +2766,11 @@ mod tests {
                 .display()
                 .to_string()
         );
-        assert!(location.runtime_dir.contains("/.akra/tests/projects/"));
-        assert!(location.runtime_dir.ends_with("/runtime"));
-        assert!(
-            location
-                .authority_store_path
-                .ends_with("/runtime/planning-authority.db")
-        );
+        let normalized_runtime_dir = location.runtime_dir.replace('\\', "/");
+        let normalized_store_path = location.authority_store_path.replace('\\', "/");
+        assert!(normalized_runtime_dir.contains("/.akra/tests/projects/"));
+        assert!(normalized_runtime_dir.ends_with("/runtime"));
+        assert!(normalized_store_path.ends_with("/runtime/planning-authority.db"));
     }
 
     #[test]
@@ -2787,6 +2813,7 @@ mod tests {
         assert!(
             location
                 .authority_store_path
+                .replace('\\', "/")
                 .ends_with("/runtime/planning-authority.db")
         );
 
@@ -3348,6 +3375,82 @@ mod tests {
         assert!(snapshot.invalid_slot_leases.is_empty());
         assert!(snapshot.session_details.is_empty());
         assert!(snapshot.distributor_queue_records.is_empty());
+    }
+
+    #[test]
+    fn authority_open_migrates_legacy_repo_local_runtime_store() {
+        let repo = TempGitRepo::new("authority-legacy-runtime-migration");
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let location = adapter
+            .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
+            .expect("authority location should resolve");
+        assert!(
+            !Path::new(&location.authority_store_path).exists(),
+            "new authority store should not exist before migration"
+        );
+        let legacy_runtime_dir = repo.repo_root.join(".codex-exec-loop/runtime");
+        fs::create_dir_all(&legacy_runtime_dir).expect("legacy runtime dir should exist");
+        let legacy_store_path = legacy_runtime_dir.join("planning-authority.db");
+        let legacy_connection =
+            Connection::open(&legacy_store_path).expect("legacy authority store should open");
+        legacy_connection
+            .execute_batch(
+                r#"
+                CREATE TABLE authority_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE runtime_slot_leases (
+                    slot_id TEXT PRIMARY KEY,
+                    updated_at TEXT NOT NULL,
+                    content TEXT NOT NULL
+                );
+                "#,
+            )
+            .expect("legacy runtime schema should initialize");
+        legacy_connection
+            .execute(
+                "INSERT INTO authority_metadata (key, value) VALUES ('schema_version', ?1)",
+                [AUTHORITY_STORE_SCHEMA_VERSION.to_string()],
+            )
+            .expect("legacy schema version should insert");
+        let legacy_lease = ParallelModeSlotLeaseSnapshot::new(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            "akra-agent/slot-1/task-one",
+            repo.worktree_root.display().to_string(),
+            ParallelModeSlotLeaseState::Running,
+            "2026-04-18T10:00:00Z",
+            Some("2026-04-18T10:05:00Z".to_string()),
+        );
+        legacy_connection
+            .execute(
+                "INSERT INTO runtime_slot_leases (slot_id, updated_at, content) VALUES (?1, ?2, ?3)",
+                (
+                    legacy_lease.slot_id.as_str(),
+                    "2026-04-18T10:05:00Z",
+                    serde_json::to_string(&legacy_lease).expect("legacy lease should serialize"),
+                ),
+            )
+            .expect("legacy runtime lease should insert");
+        drop(legacy_connection);
+
+        let snapshot = SqlitePlanningAuthorityAdapter::load_runtime_projections(
+            repo.worktree_root.to_str().expect("valid worktree path"),
+        )
+        .expect("runtime projections should load from migrated store");
+
+        assert!(Path::new(&location.authority_store_path).is_file());
+        assert_eq!(
+            snapshot
+                .slot_leases
+                .get("slot-1")
+                .expect("legacy slot lease should migrate")
+                .branch_name,
+            "akra-agent/slot-1/task-one"
+        );
     }
 
     #[test]

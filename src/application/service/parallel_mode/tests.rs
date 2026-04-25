@@ -2082,6 +2082,31 @@ fn reconcile_resets_empty_akra_baseline_to_current_head() {
 }
 
 #[test]
+fn reconcile_resets_clean_detached_slots_after_empty_akra_baseline_moves() {
+    let repo = TempGitRepo::new("reset-detached-slots");
+    let initial_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+
+    repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
+
+    let refreshed_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(refreshed_pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(refreshed_pool.blocked_slots, 0);
+    assert!(refreshed_pool.slots.iter().all(|slot| {
+        !slot
+            .worktree_label
+            .contains("detached away from `akra` baseline")
+    }));
+}
+
+#[test]
 fn build_pool_board_uses_remote_akra_when_local_branch_is_missing() {
     let repo = TempGitRepo::new("remote-akra");
     let readiness = ParallelModeReadinessSnapshot::new(

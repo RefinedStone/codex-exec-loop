@@ -133,12 +133,19 @@ impl PlanningTaskLedgerApplyService {
             }
         }
 
-        let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)?;
-        let mut committed_record = active_workspace;
-        committed_record.task_ledger_json = Some(candidate_task_ledger);
-        committed_record.queue_snapshot_json = Some(queue_snapshot_json);
         self.planning_workspace_port
-            .commit_planning_workspace_files(workspace_dir, &committed_record)?;
+            .replace_planning_workspace_file(
+                workspace_dir,
+                TASK_LEDGER_FILE_PATH,
+                Some(&candidate_task_ledger),
+            )?;
+        let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)?;
+        self.planning_workspace_port
+            .replace_planning_workspace_file(
+                workspace_dir,
+                QUEUE_SNAPSHOT_FILE_PATH,
+                Some(&queue_snapshot_json),
+            )?;
 
         if authority_snapshot.is_none() {
             self.planning_task_repository_port
@@ -330,6 +337,7 @@ mod tests {
         active: Mutex<PlanningWorkspaceLoadRecord>,
         candidate: Mutex<PlanningWorkspaceLoadRecord>,
         committed_records: Mutex<Vec<PlanningWorkspaceLoadRecord>>,
+        replaced_files: Mutex<Vec<(String, Option<String>)>>,
     }
 
     impl RecordingPlanningWorkspacePort {
@@ -341,6 +349,7 @@ mod tests {
                 active: Mutex::new(active),
                 candidate: Mutex::new(candidate),
                 committed_records: Mutex::new(Vec::new()),
+                replaced_files: Mutex::new(Vec::new()),
             }
         }
 
@@ -348,6 +357,13 @@ mod tests {
             self.committed_records
                 .lock()
                 .expect("committed records lock should be available")
+                .clone()
+        }
+
+        fn replaced_files(&self) -> Vec<(String, Option<String>)> {
+            self.replaced_files
+                .lock()
+                .expect("replaced files lock should be available")
                 .clone()
         }
     }
@@ -437,10 +453,23 @@ mod tests {
         fn replace_planning_workspace_file(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
-            _body: Option<&str>,
+            relative_path: &str,
+            body: Option<&str>,
         ) -> Result<()> {
-            Err(anyhow!("unused"))
+            let mut active = self
+                .active
+                .lock()
+                .expect("active workspace lock should be available");
+            match relative_path {
+                TASK_LEDGER_FILE_PATH => active.task_ledger_json = body.map(str::to_string),
+                QUEUE_SNAPSHOT_FILE_PATH => active.queue_snapshot_json = body.map(str::to_string),
+                _ => return Err(anyhow!("unexpected replacement path: {relative_path}")),
+            }
+            self.replaced_files
+                .lock()
+                .expect("replaced files lock should be available")
+                .push((relative_path.to_string(), body.map(str::to_string)));
+            Ok(())
         }
 
         fn remove_planning_workspace_entry(
@@ -617,19 +646,27 @@ mod tests {
         .expect("task catalog apply should succeed");
 
         let committed_records = workspace_port.committed_records();
+        let replaced_files = workspace_port.replaced_files();
         let authority_commits = repository_port.commits();
         assert!(result.applied());
-        assert_eq!(committed_records.len(), 1);
+        assert!(committed_records.is_empty());
+        assert_eq!(
+            replaced_files
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .collect::<Vec<_>>(),
+            vec![TASK_LEDGER_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH]
+        );
         assert!(
-            committed_records[0]
-                .task_ledger_json
+            replaced_files[0]
+                .1
                 .as_ref()
                 .expect("task catalog should be committed")
                 .contains("\"id\": \"task-1\"")
         );
         assert!(
-            committed_records[0]
-                .queue_snapshot_json
+            replaced_files[1]
+                .1
                 .as_ref()
                 .expect("queue snapshot should be committed")
                 .contains("\"task_id\": \"task-1\"")
@@ -657,9 +694,17 @@ mod tests {
         .expect("task catalog apply should succeed");
 
         let committed_records = workspace_port.committed_records();
+        let replaced_files = workspace_port.replaced_files();
         let authority_commits = repository_port.commits();
         assert!(result.applied());
-        assert_eq!(committed_records.len(), 1);
+        assert!(committed_records.is_empty());
+        assert_eq!(
+            replaced_files
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .collect::<Vec<_>>(),
+            vec![TASK_LEDGER_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH]
+        );
         assert_eq!(authority_commits.len(), 1);
         assert_eq!(authority_commits[0].observed_planning_revision, None);
         assert_eq!(authority_commits[0].task_ids, vec!["task-1"]);
