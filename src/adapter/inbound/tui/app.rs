@@ -190,9 +190,16 @@ struct AutoFollowupSubmitContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelDispatchSubmitContext {
+    transcript_text: String,
+    handoff_task: PlanningTaskHandoff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptOrigin {
     Manual,
     AutoFollow(Box<AutoFollowupSubmitContext>),
+    ParallelDispatch(Box<ParallelDispatchSubmitContext>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

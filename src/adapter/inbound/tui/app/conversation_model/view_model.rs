@@ -707,6 +707,15 @@ impl ConversationViewModel {
         });
     }
 
+    pub(crate) fn record_parallel_dispatch_submission(
+        &mut self,
+        handoff_task: &PlanningTaskHandoff,
+    ) {
+        self.last_planning_task_handoff = Some(handoff_task.clone());
+        self.last_auto_followup_activity = None;
+        self.clear_auto_followup_skip();
+    }
+
     pub(crate) fn record_auto_followup_queue(&mut self, _queued_from_turn_id: &str) {
         let turn_index = self.auto_follow_state.mark_auto_turn_queued();
         let next_progress = format!(

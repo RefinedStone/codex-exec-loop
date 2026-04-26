@@ -170,6 +170,65 @@ fn parallel_mode_handoff_launch_uses_leased_slot_workspace_and_new_thread_stream
 }
 
 #[test]
+fn parallel_on_dispatches_queue_head_without_post_turn_automation() {
+    let repo = TempGitWorkspace::new("parallel-mode-on-dispatch");
+    commit_active_planning_workspace_into_akra(repo.workspace_dir());
+    replace_active_planning_workspace_file(
+        repo.workspace_dir(),
+        TASK_LEDGER_FILE_PATH,
+        &official_completion_task_ledger(),
+    );
+    let (mut app, codex_port) = make_test_app();
+    install_ready_github_automation(&mut app);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(repo.workspace_dir(), true));
+    let mut conversation = ready_conversation();
+    conversation.cwd = repo.workspace_dir().to_string();
+    conversation.draft_workspace_directory = repo.workspace_dir().to_string();
+    conversation.auto_follow_state.enabled = false;
+    app.conversation_state = ConversationState::ready(conversation);
+
+    app.handle_parallel_shell_command(Some("on"));
+
+    assert!(app.parallel_mode_enabled);
+    let leased_workspace = match &app.conversation_state {
+        ConversationState::Ready(conversation) => {
+            assert!(!conversation.auto_follow_state.enabled);
+            assert_eq!(conversation.auto_follow_state.completed_auto_turns, 0);
+            conversation
+                .active_turn_workspace_directory
+                .clone()
+                .expect("active turn workspace should be recorded")
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => {
+            panic!("conversation should stay ready during launch setup")
+        }
+    };
+    assert_ne!(leased_workspace, repo.workspace_dir());
+    assert!(Path::new(&leased_workspace).exists());
+    assert!(current_branch(&leased_workspace).starts_with("akra-agent/slot-1/"));
+
+    wait_for_stream_call(|| {
+        !codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread calls mutex poisoned")
+            .is_empty()
+    });
+    let new_thread_calls = codex_port
+        .new_thread_calls
+        .lock()
+        .expect("new-thread calls mutex poisoned")
+        .clone();
+    assert_eq!(new_thread_calls.len(), 1);
+    assert_eq!(new_thread_calls[0].0, leased_workspace);
+    assert!(
+        new_thread_calls[0]
+            .1
+            .contains("Continue distributor queue wiring")
+    );
+}
+
+#[test]
 fn leased_slot_success_completion_waits_for_official_refresh_before_cleanup() {
     let repo = TempGitWorkspace::new("parallel-mode-runtime-cleanup");
     commit_active_planning_workspace_into_akra(repo.workspace_dir());
