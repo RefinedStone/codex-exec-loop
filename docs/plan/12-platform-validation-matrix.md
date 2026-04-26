@@ -79,7 +79,7 @@ Run these checks once per required row:
    - verify `Ctrl+j`, `Ctrl+u`, `Ctrl+w`, and `Enter`
    - confirm the prompt owns a visible cursor
 4. Inspection flow
-   - open diagnostics, sessions, automation controls, and planning at least once
+   - open diagnostics, sessions, queue, and planning at least once
    - close each surface with `Esc` or `Ctrl+C`
 5. Streaming and status
    - confirm streamed text changes before completion

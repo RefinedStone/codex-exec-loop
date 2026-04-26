@@ -1,7 +1,6 @@
 use super::super::{ConversationViewModel, NativeTuiApp};
 use crate::application::service::planning::{
-    PlanningRuntimeRepairAttempt, PlanningRuntimeSnapshot, PlanningRuntimeStatusProjectionRequest,
-    PlanningRuntimeSummaryLineRequest,
+    PlanningRuntimeRepairAttempt, PlanningRuntimeSnapshot, PlanningRuntimeSummaryLineRequest,
 };
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
@@ -14,16 +13,6 @@ pub(crate) struct PlanningStatusSurfaceProjection {
     pub(crate) summary_line: Option<String>,
     pub(crate) notice_line: Option<String>,
     pub(crate) queue_framing_lines: Vec<Line<'static>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PlanningFollowupSurfaceProjection {
-    pub(crate) planning_status_line: String,
-    pub(crate) repair_attempt_line: Option<String>,
-    pub(crate) queue_head_line: Option<String>,
-    pub(crate) proposal_line: Option<String>,
-    pub(crate) failure_line: Option<String>,
-    pub(crate) notice_line: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,40 +47,6 @@ pub(crate) fn build_planning_status_surface_projection(
         ),
         notice_line: build_planning_notice_line(conversation, supplemental_detail_len),
         queue_framing_lines: build_queue_framing_lines(conversation, supplemental_detail_len),
-    }
-}
-
-pub(crate) fn build_planning_followup_surface_projection(
-    app: &NativeTuiApp,
-    conversation: &ConversationViewModel,
-    max_detail_len: usize,
-) -> PlanningFollowupSurfaceProjection {
-    let followup_projection = app.planning.runtime.build_followup_status_projection(
-        PlanningRuntimeStatusProjectionRequest {
-            snapshot: &conversation.planning_runtime_snapshot,
-            has_running_turn: conversation.has_running_turn(),
-            is_repairing: conversation.planning_repair_state.is_some(),
-            repair_failure_summary: conversation
-                .planning_repair_state
-                .as_ref()
-                .map(|state| state.latest_request.failure_summary.as_str()),
-            repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
-                PlanningRuntimeRepairAttempt {
-                    attempts_used: state.attempts_used,
-                    max_attempts: state.max_attempts,
-                }
-            }),
-            max_detail_len,
-        },
-    );
-
-    PlanningFollowupSurfaceProjection {
-        planning_status_line: followup_projection.planning_status_line,
-        repair_attempt_line: followup_projection.repair_attempt_line,
-        queue_head_line: followup_projection.queue_head_line,
-        proposal_line: followup_projection.proposal_line,
-        failure_line: followup_projection.failure_line,
-        notice_line: build_planning_notice_line(conversation, max_detail_len),
     }
 }
 

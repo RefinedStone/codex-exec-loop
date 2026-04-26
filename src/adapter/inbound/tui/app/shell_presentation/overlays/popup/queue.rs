@@ -1,11 +1,9 @@
 use super::super::super::{
     AkraTheme, ConversationState, Line, NativeTuiApp, PriorityQueueSkippedTask, PriorityQueueTask,
     QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
-    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, build_automation_key_lines,
-    build_automation_list_view, build_automation_preview_lines, build_automation_status_lines,
-    compact_whitespace_detail,
+    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, compact_whitespace_detail,
 };
-use super::{AutomationOverlayView, QueueOverlayView};
+use super::QueueOverlayView;
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     let header_lines = vec![
@@ -164,22 +162,9 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     }
 }
 
-pub(crate) fn build_automation_overlay_view(app: &NativeTuiApp) -> AutomationOverlayView {
-    AutomationOverlayView {
-        header_lines: vec![
-            AkraTheme::title_line("Automation Controls", " / shell inspection"),
-            Line::from("Inspect planning-driven automation before the next auto-follow turn."),
-        ],
-        list_view: build_automation_list_view(app),
-        preview_lines: build_automation_preview_lines(app),
-        status_lines: build_automation_status_lines(app),
-        key_lines: build_automation_key_lines(app),
-    }
-}
-
 fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
     vec![AkraTheme::key_line(
-        "Esc/Ctrl+C: close  |  :planning: update files  |  Ctrl+f/Ctrl+a: automation controls",
+        "Esc/Ctrl+C: close  |  :planning: update files",
     )]
 }
 

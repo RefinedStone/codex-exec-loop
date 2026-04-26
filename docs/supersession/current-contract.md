@@ -16,7 +16,6 @@ directions behavior on the current branch.
 | --- | --- | --- |
 | Diagnostics | `Ctrl+d`, `:diag` | shows startup readiness and blocking failures |
 | Sessions | `Ctrl+o`, `:sessions` | resumes prior threads with current-work context |
-| Automation | `Ctrl+f`, `:auto` | edits stop rules, preview, and planner visibility |
 | Queue | `:queue` | shows the current queue task, proposed tasks, and skip framing |
 | Task Intake | `:task` | adds one validated user task to the accepted queue without opening draft authoring |
 | Planning | `:planning` | stages or reopens planning authoring flows |

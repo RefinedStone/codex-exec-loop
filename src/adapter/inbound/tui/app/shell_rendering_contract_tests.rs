@@ -345,27 +345,6 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
 }
 
 #[test]
-fn inline_followup_inspection_renders_preview_inside_shell_frame() {
-    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
-    let mut app = make_test_app();
-    app.show_automation_overlay();
-
-    terminal
-        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
-        .expect("inline followup inspection render succeeds");
-
-    let rendered = tui_testkit::screen_text(&terminal);
-
-    assert!(rendered.contains("Automation Controls / inline inspection"));
-    assert!(rendered.contains("Automation"));
-    assert!(rendered.contains("Preview"));
-    assert!(rendered.contains("automation: on"));
-    assert!(!rendered.contains("shell inspection"));
-    assert!(!rendered.contains("Transcript /"));
-    assert!(!rendered.contains("┌"));
-}
-
-#[test]
 fn inline_help_inspection_renders_command_help() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
@@ -380,8 +359,8 @@ fn inline_help_inspection_renders_command_help() {
     assert!(rendered.contains("Shell Commands / inline inspection"));
     assert!(rendered.contains(":diag"));
     assert!(rendered.contains("diagnostics"));
-    assert!(rendered.contains(":turns <n|infinite>"));
-    assert!(rendered.contains("set max auto turns"));
+    assert!(!rendered.contains(":turns"));
+    assert!(!rendered.contains(":auto"));
     assert!(rendered.contains("Esc/Ctrl+C: close"));
     assert!(!rendered.contains("Shell commands: :diag  :parallel"));
     assert!(!rendered.contains("Transcript /"));
@@ -696,7 +675,6 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     let help = shell_presentation::build_help_overlay_view();
     let queue = shell_presentation::build_queue_overlay_view(&app);
     let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
-    let automation = shell_presentation::build_automation_overlay_view(&app);
     let supersession = shell_presentation::build_supersession_overlay_view(&app);
     app.show_planning_init_overlay();
     let planning = shell_presentation::build_planning_init_overlay_view(&app);
@@ -708,7 +686,6 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
         help.header_lines[0].to_string(),
         queue.header_lines[0].to_string(),
         directions.header_lines[0].to_string(),
-        automation.header_lines[0].to_string(),
         supersession.header_lines[0].to_string(),
         planning.header_lines[0].to_string(),
         task_intake.header_lines[0].to_string(),

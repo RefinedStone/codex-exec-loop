@@ -106,7 +106,6 @@ impl ShellRuntime {
                     }
                     self.app
                         .dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
-                            stop_keyword: self.app.current_stop_keyword_value(),
                             max_auto_turns: self.app.current_max_auto_turns_label(),
                         });
                 }
@@ -242,24 +241,6 @@ impl ShellRuntime {
         }
 
         match key.code {
-            KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.toggle_auto_followup()
-            }
-            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.start_max_auto_turns_edit()
-            }
-            KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.start_stop_keyword_edit()
-            }
-            KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.toggle_automation_overlay()
-            }
-            KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.toggle_stop_keyword()
-            }
-            KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.toggle_no_file_change_stop()
-            }
             KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.toggle_startup_overlay()
             }
@@ -376,7 +357,7 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnEvaluation;
     use crate::adapter::inbound::tui::app::{
-        ConversationInputState, ConversationState, ConversationViewModel, InlineShellCommand,
+        ConversationInputState, ConversationState, InlineShellCommand,
     };
     use crate::adapter::inbound::tui::shell_chrome::{ShellOverlay, StartupState};
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -825,10 +806,9 @@ mod tests {
     fn down_then_enter_on_palette_item_with_argument_inserts_completion() {
         let mut runtime = make_test_runtime();
         runtime.app_mut().push_input_character(':');
-        runtime.app_mut().push_input_character('t');
+        runtime.app_mut().push_input_character('r');
         runtime.take_redraw_request();
 
-        runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
         runtime.handle_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
@@ -837,7 +817,7 @@ mod tests {
         let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
             panic!("expected ready conversation state");
         };
-        assert_eq!(conversation.input_buffer, ":turns ");
+        assert_eq!(conversation.input_buffer, ":reset ");
         assert!(!conversation.inline_shell_command_palette_state.is_active());
         assert_eq!(runtime.app().shell_overlay, ShellOverlay::Hidden);
     }
@@ -927,21 +907,6 @@ mod tests {
         assert_eq!(conversation.input_buffer, "buffered prompt");
         assert_eq!(conversation.messages.len(), 1);
         assert!(runtime.take_redraw_request());
-    }
-
-    #[test]
-    fn ctrl_l_starts_max_auto_turns_editing() {
-        let mut runtime = make_test_runtime();
-        runtime.app_mut().conversation_state =
-            ConversationState::ready(ConversationViewModel::new_draft("/tmp/root".to_string()));
-
-        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Char('l'),
-            KeyModifiers::CONTROL,
-        )));
-
-        assert!(runtime.app().is_max_auto_turns_editing());
-        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Automation);
     }
 
     #[test]

@@ -10,7 +10,6 @@ pub enum ShellOverlay {
     Help,
     Queue,
     DirectionsMaintenance,
-    Automation,
     PlanningInit,
     TaskIntake,
 }
@@ -90,7 +89,6 @@ pub enum ShellChromeEvent {
     HelpOverlayShown,
     QueueOverlayShown,
     DirectionsMaintenanceOverlayShown,
-    AutomationOverlayShown,
     PlanningInitOverlayShown,
     TaskIntakeOverlayShown,
     StartupOverlayToggled,
@@ -98,7 +96,6 @@ pub enum ShellChromeEvent {
         limit: usize,
     },
     SupersessionOverlayToggled,
-    AutomationOverlayToggled,
     OverlayClosed,
     ExitConfirmationShown,
     ExitConfirmationHidden,
@@ -188,10 +185,6 @@ pub fn reduce_shell_chrome(
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::DirectionsMaintenance;
         }
-        ShellChromeEvent::AutomationOverlayShown => {
-            state.exit_confirmation_state = ExitConfirmationState::Hidden;
-            state.shell_overlay = ShellOverlay::Automation;
-        }
         ShellChromeEvent::PlanningInitOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::PlanningInit;
@@ -223,14 +216,6 @@ pub fn reduce_shell_chrome(
             } else {
                 state.exit_confirmation_state = ExitConfirmationState::Hidden;
                 state.shell_overlay = ShellOverlay::Supersession;
-            }
-        }
-        ShellChromeEvent::AutomationOverlayToggled => {
-            if state.shell_overlay == ShellOverlay::Automation {
-                state.shell_overlay = ShellOverlay::Hidden;
-            } else {
-                state.exit_confirmation_state = ExitConfirmationState::Hidden;
-                state.shell_overlay = ShellOverlay::Automation;
             }
         }
         ShellChromeEvent::OverlayClosed => {
@@ -451,20 +436,6 @@ mod tests {
             reduce_shell_chrome(state, ShellChromeEvent::SessionSelectionMoved { delta: -1 });
 
         assert_eq!(reduced.state.selected_session_index, 1);
-    }
-
-    #[test]
-    fn toggle_automation_overlay_hides_exit_confirmation() {
-        let mut state = ShellChromeState::new();
-        state.exit_confirmation_state = ExitConfirmationState::Visible;
-
-        let reduced = reduce_shell_chrome(state, ShellChromeEvent::AutomationOverlayToggled);
-
-        assert_eq!(
-            reduced.state.exit_confirmation_state,
-            ExitConfirmationState::Hidden
-        );
-        assert_eq!(reduced.state.shell_overlay, ShellOverlay::Automation);
     }
 
     #[test]

@@ -52,20 +52,6 @@ impl PlannerVisibility {
         }
     }
 
-    pub(in crate::adapter::inbound::tui::app) fn toggle(self) -> Self {
-        match self {
-            Self::Normal => Self::Debug,
-            Self::Debug => Self::Normal,
-        }
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn label(self) -> &'static str {
-        match self {
-            Self::Normal => "normal",
-            Self::Debug => "debug",
-        }
-    }
-
     pub(in crate::adapter::inbound::tui::app) fn shows_debug_details(self) -> bool {
         matches!(self, Self::Debug)
     }

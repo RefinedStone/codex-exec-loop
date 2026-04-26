@@ -1,3 +1,4 @@
+#[cfg(test)]
 use ratatui::text::Line;
 
 #[cfg(test)]
@@ -5,6 +6,7 @@ use super::{
     MAX_COMPOSER_HEIGHT, MAX_SHELL_STATUS_HEIGHT, MIN_COMPOSER_HEIGHT, MIN_SHELL_STATUS_HEIGHT,
 };
 
+#[cfg(test)]
 pub(super) fn build_conversation_scroll_offset(
     lines: &[Line<'static>],
     content_width: u16,
@@ -21,6 +23,7 @@ pub(super) fn build_conversation_scroll_offset(
         .min(u16::MAX as usize) as u16
 }
 
+#[cfg(test)]
 fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16) -> usize {
     if content_width == 0 {
         return 0;
@@ -50,6 +53,7 @@ pub(super) fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_he
         .clamp(min_height as usize, max_height as usize) as u16
 }
 
+#[cfg(test)]
 fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {
     if content_width == 0 {
         return 0;

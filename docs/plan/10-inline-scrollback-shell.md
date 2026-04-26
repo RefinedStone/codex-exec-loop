@@ -30,5 +30,5 @@ This file is the current contract for inline mode on `prerelease`.
 
 - blank startup reads as startup context, conversation placeholder, and prompt
 - once committed history exists, the live tail starts at the first visible row of its viewport so prompt and notices stay attached to the latest line
-- diagnostics, sessions, automation controls, planning, and queue inspections reuse the same inline shell surface
+- diagnostics, sessions, planning, and queue inspections reuse the same inline shell surface
 - routine status stays compact and flow-oriented instead of acting like a permanent heavy footer

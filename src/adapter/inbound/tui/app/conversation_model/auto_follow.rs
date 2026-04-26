@@ -38,7 +38,7 @@ impl AutoFollowupSkipReason {
     ) -> String {
         match self {
             Self::Disabled => {
-                "post-turn automation is off; toggle Ctrl+a to re-enable it".to_string()
+                "post-turn continuation is paused for this internal runtime cycle".to_string()
             }
             Self::LimitReached => format!(
                 "reached the configured auto-turn budget ({})",
@@ -80,7 +80,7 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn activity_summary(self) -> &'static str {
         match self {
-            Self::Disabled => "stopped: automation off",
+            Self::Disabled => "paused: internal continuation off",
             Self::LimitReached => "stopped: turn limit reached",
             Self::NoAgentReply => "skipped: no agent reply",
             Self::StopKeywordMatched => "stopped: stop keyword matched",
@@ -95,7 +95,7 @@ impl AutoFollowupSkipReason {
 
     pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
         match self {
-            Self::Disabled => "turn completed / automation stopped: off".to_string(),
+            Self::Disabled => "turn completed / internal continuation paused".to_string(),
             Self::LimitReached => format!(
                 "turn completed / auto follow-up stopped: turn limit reached ({})",
                 auto_follow_state.progress_label()
@@ -201,14 +201,6 @@ impl AutoFollowState {
         )
     }
 
-    pub(crate) fn completed_progress_label(&self) -> String {
-        format!(
-            "{}/{} completed",
-            self.completed_auto_turns,
-            self.max_auto_turns_label()
-        )
-    }
-
     #[cfg(test)]
     pub(crate) fn compact_completed_progress_label(&self) -> String {
         format!(
@@ -227,16 +219,8 @@ impl AutoFollowState {
         format_max_auto_turns(self.max_auto_turns)
     }
 
-    pub(crate) fn stop_keyword_label(&self) -> String {
-        self.stop_rules.stop_keyword.label()
-    }
-
     pub(crate) fn stop_keyword_value(&self) -> &str {
         self.stop_rules.stop_keyword.value()
-    }
-
-    pub(crate) fn no_file_change_stop_label(&self) -> &'static str {
-        self.stop_rules.no_file_change_label()
     }
 
     pub(crate) fn next_auto_turn_index(&self) -> usize {
@@ -342,36 +326,13 @@ impl AutoFollowState {
         self.runtime_phase = AutoFollowRuntimePhase::Idle;
     }
 
-    pub(crate) fn enable(&mut self) {
-        self.enabled = true;
-    }
-
-    pub(crate) fn stop(&mut self) {
-        self.enabled = false;
-        if matches!(
-            self.runtime_phase,
-            AutoFollowRuntimePhase::Idle
-                | AutoFollowRuntimePhase::Evaluating { .. }
-                | AutoFollowRuntimePhase::Queued { .. }
-        ) {
-            self.runtime_phase = AutoFollowRuntimePhase::Idle;
-        }
-    }
-
     pub(crate) fn set_max_auto_turns(&mut self, value: usize) {
         self.max_auto_turns = value;
     }
 
-    pub(crate) fn toggle_stop_keyword(&mut self) {
-        self.stop_rules.stop_keyword.toggle();
-    }
-
+    #[cfg(test)]
     pub(crate) fn set_stop_keyword_value(&mut self, value: String) {
         self.stop_rules.stop_keyword.set_value(value);
-    }
-
-    pub(crate) fn toggle_no_file_change_stop(&mut self) {
-        self.stop_rules.stop_on_no_file_changes = !self.stop_rules.stop_on_no_file_changes;
     }
 
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
@@ -426,17 +387,10 @@ impl AutoFollowStopRules {
     pub(crate) fn should_stop_on_no_file_changes(&self, file_change_count: usize) -> bool {
         self.stop_on_no_file_changes && file_change_count == 0
     }
-
-    pub(crate) fn no_file_change_label(&self) -> &'static str {
-        if self.stop_on_no_file_changes {
-            "on"
-        } else {
-            "off"
-        }
-    }
 }
 
 impl StopKeywordRule {
+    #[cfg(test)]
     pub(crate) fn normalize_candidate(candidate: &str) -> Option<String> {
         let normalized = candidate.trim();
         if normalized.is_empty()
@@ -447,14 +401,6 @@ impl StopKeywordRule {
             None
         } else {
             Some(normalized.to_string())
-        }
-    }
-
-    pub(crate) fn label(&self) -> String {
-        if self.enabled {
-            format!("on ({})", self.value)
-        } else {
-            format!("off ({})", self.value)
         }
     }
 
@@ -469,10 +415,7 @@ impl StopKeywordRule {
             })
     }
 
-    pub(crate) fn toggle(&mut self) {
-        self.enabled = !self.enabled;
-    }
-
+    #[cfg(test)]
     pub(crate) fn set_value(&mut self, value: String) {
         self.value = value;
     }

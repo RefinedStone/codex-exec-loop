@@ -1,6 +1,8 @@
+#[cfg(test)]
+use crate::domain::conversation::ConversationRuntimeControlTruth;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationControlSupport,
-    ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
+    ConversationMessage, ConversationMessageKind,
 };
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -105,6 +107,7 @@ pub(crate) fn interrupt_blocked_status_text(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn runtime_control_summary_text(truth: ConversationRuntimeControlTruth) -> String {
     format!(
         "approval: {}  |  interrupt: {}",

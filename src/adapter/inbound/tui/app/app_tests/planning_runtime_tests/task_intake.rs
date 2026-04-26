@@ -449,7 +449,7 @@ fn task_command_enter_during_streaming_defers_until_post_turn_safe_point() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
     };
-    assert!(!conversation.auto_follow_state.enabled);
+    assert!(conversation.auto_follow_state.enabled);
     assert!(!conversation.auto_follow_state.has_live_activity());
     assert!(
         app.task_intake_overlay_ui_state

@@ -9,12 +9,11 @@ use ratatui::widgets::List;
 use super::super::PlanningInitOverlayStep;
 #[cfg(test)]
 use super::super::shell_presentation::{
-    AutomationOverlayView, ConversationShellFrameView, PlanningDraftEditorOverlayView,
-    PlanningInitOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    build_automation_overlay_view, build_conversation_shell_frame_view,
-    build_input_prompt_cursor_offset, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    build_supersession_overlay_view,
+    ConversationShellFrameView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
+    SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
+    build_conversation_shell_frame_view, build_input_prompt_cursor_offset,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, build_supersession_overlay_view,
 };
 use super::super::{AkraTheme, Frame, Line};
 #[cfg(test)]
@@ -23,11 +22,9 @@ use super::super::{NativeTuiApp, ShellOverlay};
 use super::super::{ShellFrontendMode, block_height_for_lines};
 use super::inline_layout::centered_rect;
 #[cfg(test)]
-use super::inline_layout::{clamp_scroll_offset, set_cursor_if_visible};
+use super::inline_layout::set_cursor_if_visible;
 #[cfg(test)]
-use super::popup_helpers::{
-    draw_automation_list_panel, draw_session_detail_panel, draw_session_list_panel,
-};
+use super::popup_helpers::{draw_session_detail_panel, draw_session_list_panel};
 
 pub(super) fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     let popup_area = centered_rect(42, 22, frame.area());
@@ -295,69 +292,6 @@ pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiAp
             .wrap(Wrap { trim: false }),
         right_layout[1],
     );
-    frame.render_widget(
-        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
-        layout[3],
-    );
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(super) fn draw_automation_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
-    let overlay_view = build_automation_overlay_view(app);
-    let AutomationOverlayView {
-        header_lines,
-        list_view,
-        preview_lines,
-        status_lines,
-        key_lines,
-    } = overlay_view;
-    let popup_area = centered_rect(92, 82, frame.area());
-    frame.render_widget(Clear, popup_area);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints([
-            Constraint::Length(4),
-            Constraint::Min(14),
-            Constraint::Length(block_height_for_lines(&status_lines, 6, 11)),
-            Constraint::Length(block_height_for_lines(&key_lines, 5, 7)),
-        ])
-        .split(popup_area);
-
-    let header = Paragraph::new(header_lines).block(AkraTheme::panel_block("Automation"));
-    frame.render_widget(header, layout[0]);
-
-    let content_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
-        .split(layout[1]);
-
-    let preview_scroll = clamp_scroll_offset(
-        app.followup_overlay_ui_state.preview_scroll,
-        &preview_lines,
-        content_layout[1].width.saturating_sub(2),
-        content_layout[1].height.saturating_sub(2),
-    );
-    app.followup_overlay_ui_state.preview_scroll = preview_scroll;
-
-    draw_automation_list_panel(frame, content_layout[0], app, list_view);
-    frame.render_widget(
-        Paragraph::new(preview_lines)
-            .block(AkraTheme::panel_block("Preview"))
-            .scroll((preview_scroll, 0))
-            .wrap(Wrap { trim: false }),
-        content_layout[1],
-    );
-
-    frame.render_widget(
-        Paragraph::new(status_lines)
-            .block(AkraTheme::panel_block("Auto Follow-Up State"))
-            .wrap(Wrap { trim: false }),
-        layout[2],
-    );
-
     frame.render_widget(
         Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
         layout[3],

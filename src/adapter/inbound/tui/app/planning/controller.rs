@@ -621,7 +621,7 @@ impl NativeTuiApp {
             .reset_workspace(&workspace_directory, parsed.target)
         {
             Ok(result) => {
-                self.stop_post_turn_automation();
+                self.pause_post_turn_continuation();
                 self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
                     &workspace_directory,
                 );

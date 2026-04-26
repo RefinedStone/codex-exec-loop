@@ -32,7 +32,6 @@ const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 20;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
-const FOLLOWUP_TEMPLATE_PREVIEW_SCROLL_STEP: u16 = 6;
 #[cfg(test)]
 const SHELL_FRAME_MARGIN: u16 = 1;
 #[cfg(test)]
@@ -167,14 +166,15 @@ use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
 use shell_frontend::ShellFrontendMode;
-use shell_layout::build_conversation_scroll_offset;
 #[cfg(test)]
-use shell_layout::{block_height_for_lines, build_input_block_height, build_shell_footer_height};
+use shell_layout::{
+    block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
+    build_shell_footer_height,
+};
 #[cfg(test)]
 use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{
-    build_automation_overlay_view, build_automation_preview_lines, build_automation_status_lines,
     build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
 };
 use task_intake_overlay_ui::{TaskIntakeOverlayStep, TaskIntakeOverlayUiState};

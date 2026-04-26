@@ -4,21 +4,21 @@ use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::super::shell_presentation::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, HelpOverlayView, OverlayListView,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
     StartupOverlayView, SupersessionOverlayView, TaskIntakeOverlayView,
-    build_automation_overlay_view, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, build_supersession_overlay_view, build_task_intake_overlay_view,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view, build_task_intake_overlay_view,
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep,
     ShellOverlay,
 };
 use super::inline_layout::{
-    clamp_scroll_offset, inline_section_height, render_inline_scrolled_section,
-    render_inline_section, set_cursor_if_visible, split_inline_section, take_panel_body_lines,
+    inline_section_height, render_inline_scrolled_section, render_inline_section,
+    set_cursor_if_visible, split_inline_section, take_panel_body_lines,
 };
 
 fn inline_overlay_title(name: &'static str) -> Line<'static> {
@@ -42,7 +42,6 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::DirectionsMaintenance => {
             draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
         }
-        ShellOverlay::Automation => draw_inline_automation_inspection(frame, inspection_area, app),
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
@@ -314,65 +313,6 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
-fn draw_inline_automation_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let overlay_view = build_automation_overlay_view(app);
-    let AutomationOverlayView {
-        header_lines,
-        list_view,
-        preview_lines,
-        status_lines,
-        key_lines,
-    } = overlay_view;
-    let body_lines = take_panel_body_lines(header_lines);
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Min(10),
-            Constraint::Length(inline_section_height(&status_lines, 11)),
-            Constraint::Length(inline_section_height(&key_lines, 6)),
-        ])
-        .split(area);
-
-    render_inline_section(
-        frame,
-        layout[0],
-        inline_overlay_title("Automation Controls"),
-        body_lines,
-        true,
-    );
-
-    let content_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
-        .split(layout[1]);
-    let preview_content_area = split_inline_section(content_layout[1])[1];
-    let preview_scroll = clamp_scroll_offset(
-        app.followup_overlay_ui_state.preview_scroll,
-        &preview_lines,
-        preview_content_area.width,
-        preview_content_area.height,
-    );
-    app.followup_overlay_ui_state.preview_scroll = preview_scroll;
-
-    draw_inline_automation_list_panel(frame, content_layout[0], app, list_view);
-    render_inline_scrolled_section(
-        frame,
-        content_layout[1],
-        Line::from("Preview"),
-        preview_lines,
-        preview_scroll,
-    );
-    render_inline_section(
-        frame,
-        layout[2],
-        Line::from("Auto Follow-Up State"),
-        status_lines,
-        false,
-    );
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
-}
-
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_queue_overlay_view(app);
     let QueueOverlayView {
@@ -601,44 +541,5 @@ fn draw_inline_session_list_panel(
         list,
         section_layout[1],
         &mut app.session_overlay_ui_state.list_state,
-    );
-}
-
-fn draw_inline_automation_list_panel(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &mut NativeTuiApp,
-    list_view: OverlayListView,
-) {
-    let section_layout = split_inline_section(area);
-    frame.render_widget(
-        Paragraph::new(vec![Line::from("Automation")]),
-        section_layout[0],
-    );
-
-    if let Some(message_lines) = list_view.message_lines {
-        frame.render_widget(
-            Paragraph::new(message_lines).wrap(Wrap { trim: true }),
-            section_layout[1],
-        );
-        return;
-    }
-
-    let list = List::new(
-        list_view
-            .items
-            .into_iter()
-            .map(|item| ListItem::new(item.lines)),
-    )
-    .highlight_style(AkraTheme::selected())
-    .highlight_symbol(AkraTheme::list_highlight_symbol());
-
-    app.followup_overlay_ui_state
-        .list_state
-        .select(list_view.selected_index);
-    frame.render_stateful_widget(
-        list,
-        section_layout[1],
-        &mut app.followup_overlay_ui_state.list_state,
     );
 }

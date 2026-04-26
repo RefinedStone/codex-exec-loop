@@ -7,7 +7,6 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::{
     AkraTheme, MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, NativeTuiApp, ShellOverlay,
-    build_conversation_scroll_offset,
 };
 
 const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
@@ -160,19 +159,6 @@ pub(super) fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec
         header_lines.remove(0);
     }
     header_lines
-}
-
-pub(super) fn clamp_scroll_offset(
-    current_scroll: u16,
-    lines: &[Line<'static>],
-    content_width: u16,
-    visible_height: u16,
-) -> u16 {
-    current_scroll.min(build_conversation_scroll_offset(
-        lines,
-        content_width,
-        visible_height,
-    ))
 }
 
 pub(super) fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
