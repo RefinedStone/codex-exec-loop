@@ -136,14 +136,13 @@ pub(super) fn compact_auto_follow_status_summary(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
 ) -> String {
-    let summary = if conversation.auto_follow_state.enabled {
-        format!(
-            "{}/{}",
-            conversation.auto_follow_state.status_label(),
-            conversation.auto_follow_state.activity_label()
-        )
+    let summary = if conversation
+        .auto_follow_state
+        .post_turn_continuation_paused()
+    {
+        "paused/internal".to_string()
     } else {
-        conversation.auto_follow_state.status_label().to_string()
+        format!("queue/{}", conversation.auto_follow_state.activity_label())
     };
     compact_inline_detail(&summary, max_detail_len)
 }

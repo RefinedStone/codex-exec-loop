@@ -40,7 +40,7 @@ Must always answer:
 
 - what the shell is doing right now
 - whether the operator can submit
-- whether automation is active, paused, or stopped
+- whether internal continuation is active, paused, or stopped
 
 ### Diagnostics Overlay
 
@@ -63,16 +63,16 @@ Owns:
 
 Must not expose planning state directly. It should remain a session-resume tool.
 
-### Automation Overlay
+### Continuation Status
 
 Owns:
 
-- current automation policy
+- current continuation policy
 - next-turn preview
 - pause reason
 - explicit resume path
 
-Must not be the only place where pause reason is visible. It is the control plane, not the only explanation surface.
+Must not be the only place where pause reason is visible. It is status projection, not a separate user-facing control plane.
 
 ### Queue Overlay
 
@@ -144,7 +144,7 @@ Target flow:
 1. Operator opens sessions.
 2. Operator filters and opens a prior thread.
 3. Shell restores conversation context and current-work context together.
-4. The operator can immediately tell whether planning is active for this workspace and whether automation can continue.
+4. The operator can immediately tell whether planning is active for this workspace and whether continuation can proceed.
 
 Required UX qualities:
 
@@ -225,6 +225,6 @@ For example:
 ## Acceptance Criteria
 
 - Every pause state maps to exactly one primary recovery surface.
-- Queue and automation surfaces use the same vocabulary for task, proposal, blocked, paused, and next action.
+- Queue and planning surfaces use the same vocabulary for task, proposal, blocked, paused, and next action.
 - A first-time power user can infer the next safe action from the shell without opening source files or docs.
 - Overlay purpose is distinct enough that the operator rarely needs to open more than one overlay to understand a single problem.

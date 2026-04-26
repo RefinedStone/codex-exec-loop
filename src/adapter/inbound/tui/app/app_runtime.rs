@@ -208,7 +208,10 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn dispatch_conversation_runtime(&mut self, event: ConversationRuntimeEvent) {
+    pub(super) fn dispatch_conversation_runtime(
+        &mut self,
+        event: ConversationRuntimeEvent,
+    ) -> bool {
         let clear_turn_snapshot = matches!(
             &event,
             ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
@@ -219,11 +222,14 @@ impl NativeTuiApp {
                 | ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
         );
         let Some(conversation) = self.take_ready_conversation_state() else {
-            return;
+            return false;
         };
 
         let reduction = reduce_conversation_runtime(conversation, event);
         let mut effects = reduction.effects;
+        let started_stream = effects
+            .iter()
+            .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
         if clear_turn_snapshot {
             self.active_turn_planning_capture = None;
@@ -236,6 +242,7 @@ impl NativeTuiApp {
         for effect in effects {
             self.execute_conversation_runtime_effect(effect);
         }
+        started_stream
     }
 
     pub(super) fn should_apply_post_turn_evaluation(

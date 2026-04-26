@@ -85,7 +85,7 @@ impl NativeTuiApp {
                 handoff_task,
             } => {
                 let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
-                self.submit_prompt(
+                let _ = self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
                         queued_from_turn_id,
@@ -180,16 +180,16 @@ impl NativeTuiApp {
             return;
         };
 
-        self.submit_prompt_with_transcript(prompt, transcript_text, PromptOrigin::Manual);
+        let _ = self.submit_prompt_with_transcript(prompt, transcript_text, PromptOrigin::Manual);
     }
 
-    pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) {
+    pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) -> bool {
         let transcript_text = match &prompt_origin {
             PromptOrigin::Manual => prompt.trim().to_string(),
             PromptOrigin::AutoFollow(context) => context.transcript_text.clone(),
             PromptOrigin::ParallelDispatch(context) => context.transcript_text.clone(),
         };
-        self.submit_prompt_with_transcript(prompt, transcript_text, prompt_origin);
+        self.submit_prompt_with_transcript(prompt, transcript_text, prompt_origin)
     }
 
     pub(super) fn submit_prompt_with_transcript(
@@ -197,7 +197,7 @@ impl NativeTuiApp {
         prompt: String,
         transcript_text: String,
         prompt_origin: PromptOrigin,
-    ) {
+    ) -> bool {
         if matches!(prompt_origin, PromptOrigin::Manual)
             && matches!(
                 self.shell_action_availability(),
@@ -207,21 +207,21 @@ impl NativeTuiApp {
             self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
                 status_text: "prompt queued until startup checks finish".to_string(),
             });
-            return;
+            return false;
         }
 
         if !self.shell_action_availability().allows_actions() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: self.submission_blocked_status(prompt_origin),
             });
-            return;
+            return false;
         }
 
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
             prompt,
             transcript_text,
             origin: prompt_origin,
-        });
+        })
     }
 
     fn ensure_manual_planning_workspace(&mut self, manual_prompt: &str) -> bool {

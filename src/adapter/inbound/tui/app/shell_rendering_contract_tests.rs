@@ -115,7 +115,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Prompt / ready"));
     assert!(rendered.contains("Akra  |  thread: new draft  |  turn: idle"));
     assert!(rendered.contains("input: draft"));
-    assert!(rendered.contains("auto: on/idle"));
+    assert!(rendered.contains("auto: queue/idle"));
     assert!(rendered.contains("done: 0/20"));
     assert!(!rendered.contains("stable history should stay above the live region"));
     assert!(!rendered.contains("No messages in this thread yet."));

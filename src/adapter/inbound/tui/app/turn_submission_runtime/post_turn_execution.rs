@@ -105,11 +105,13 @@ impl PostTurnEvaluationExecutor {
             request,
             &reconciliation_result,
         );
-        let automation_enabled = conversation.auto_follow_state.enabled;
+        let continuation_enabled = !conversation
+            .auto_follow_state
+            .post_turn_continuation_paused();
         let official_completion_report =
             self.begin_official_completion_if_needed(conversation, request);
 
-        if (automation_enabled || official_completion_report.is_some())
+        if (continuation_enabled || official_completion_report.is_some())
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
         {
             let repair_outcome = self.run_hidden_planning_repairs(
@@ -137,7 +139,7 @@ impl PostTurnEvaluationExecutor {
                 false
             };
 
-        if !handled_parallel_completion && automation_enabled {
+        if !handled_parallel_completion && continuation_enabled {
             let refresh_outcome = self.run_builtin_next_task_refresh(
                 conversation,
                 request,
@@ -759,6 +761,15 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> ConversationPostTurnAction {
+        if conversation
+            .auto_follow_state
+            .post_turn_continuation_paused()
+        {
+            return ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::PostTurnContinuationPaused,
+            };
+        }
+
         if planning_runtime_snapshot.workspace_status()
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
@@ -895,7 +906,10 @@ impl NativeTuiApp {
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
     ) {
-        if !conversation.auto_follow_state.enabled {
+        if conversation
+            .auto_follow_state
+            .post_turn_continuation_paused()
+        {
             return;
         }
 

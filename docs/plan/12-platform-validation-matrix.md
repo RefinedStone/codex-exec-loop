@@ -122,8 +122,8 @@ Run the full `terminal-baseline` checklist plus these additional checks:
 9. Resumed session context
    - load an existing session in a workspace with accepted planning
    - confirm the shell immediately surfaces planning status and queue summary after the thread loads
-10. Queue and automation explanation
-   - open the queue and automation surfaces
+10. Queue and continuation explanation
+   - open the queue and planning surfaces
    - confirm they explain current state, cause, and next action in operator language
    - confirm executable work, proposals, and blocked work read like work framing rather than file dumps
 11. Lifecycle command parity

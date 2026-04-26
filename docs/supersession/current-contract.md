@@ -8,7 +8,7 @@ directions behavior on the current branch.
 - `origin/prerelease` already ships the first operator-facing supersession loop.
 - The current branch adds repo-scoped planning authority follow-through on top of that loop.
 - One inline shell now carries startup readiness, session resume, accepted planning, queue state,
-  post-turn automation, and supersession supervision together.
+  internal post-turn continuation, and supersession supervision together.
 
 ## Operator Surfaces
 
@@ -50,7 +50,7 @@ Key artifacts:
 
 Queue behavior:
 
-- Builtin `next-task` and post-turn automation use the accepted queue head only.
+- Builtin `next-task` and internal post-turn continuation use the accepted queue head only.
 - Proposed tasks stay visible but are not executable queue items yet.
 - Runtime task intake creates accepted `ready` tasks through a structured draft, validation, and
   revision-safe commit path; LLM output may only produce `TaskDraft` data and must not write SQL or

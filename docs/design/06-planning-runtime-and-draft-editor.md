@@ -82,7 +82,7 @@ the operator prompt, sets `status=ready`, `created_by=user`, `last_updated_by=us
 `source_turn_id` from the active turn when present. The default direction is `general-workstream`
 when it is active; otherwise it uses the first active direction. If no active direction exists, or if
 the planning workspace is missing, intake is rejected with guidance to open `:directions` or
-`:planning`. Intake is allowed while planning automation is off, but it does not turn automation on.
+`:planning`. Intake can pause the current internal continuation cycle, but it does not expose a user-facing automation toggle.
 
 Task ids use `task-user-<UTC timestamp>-<prompt hash>` with a numeric suffix on collision. The
 timestamp must be UTC in compact sortable `YYYYMMDDTHHMMSSZ` form, and the hash must be derived from

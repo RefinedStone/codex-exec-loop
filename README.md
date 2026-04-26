@@ -4,7 +4,7 @@ Akra is the native Rust terminal client in this repository for `codex app-server
 The repository name remains `codex-exec-loop`; the operator-facing command is `akra`.
 
 It is built for long-lived solo work: startup diagnostics, session resume, accepted planning,
-the current queue task, proposed tasks, and post-turn automation all stay inside one inline shell.
+the current queue task, proposed tasks, and internal post-turn continuation all stay inside one inline shell.
 
 ## Why this repo exists
 
@@ -90,7 +90,7 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 3. Launch `akra`.
 4. Use `Ctrl+o` or `:sessions` to resume an existing thread, or start typing into a fresh draft.
 5. Use `:doctor` to inspect planning state, or `:init` to create the default planning scaffold.
-6. Use `Ctrl+f` or `:auto` to inspect post-turn automation and `:queue` to inspect the current queue task and proposed tasks.
+6. Use `:queue` to inspect the current queue task and proposed tasks, and `:planning` or `:directions` to manage accepted planning.
 
 ## Core Surfaces
 
@@ -103,7 +103,6 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | `Ctrl+t` | open a new draft |
 | `Ctrl+o` | open recent sessions |
 | `Ctrl+d` | open diagnostics |
-| `Ctrl+f` | open automation controls |
 | `Ctrl+r` | rerun startup diagnostics |
 | `Ctrl+q` | quit the app |
 
@@ -115,7 +114,6 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | --- | --- |
 | `:diag` | show startup diagnostics |
 | `:sessions` | browse recent sessions |
-| `:auto` | open automation controls |
 | `:queue` | inspect the current queue task, proposed tasks, and skipped work |
 | `:planning` | open planning controls |
 | `:directions` | manage direction-side planning artifacts |
@@ -125,8 +123,7 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | `:new` | start a new draft |
 | `:help` | list available shell commands |
 
-Supported aliases remain available for common commands such as `:q`, `:diagnostics`, `:session`,
-`:automation`, `:turn 10`, and `:auto-turns 10`.
+Supported aliases remain available for common commands such as `:q`, `:diagnostics`, and `:session`.
 
 ### External planning lifecycle commands
 
@@ -136,9 +133,9 @@ Supported aliases remain available for common commands such as `:q`, `:diagnosti
 | `akra init [workspace_dir]` | create the default simple planning scaffold |
 | `akra reset <queue|directions|all> [workspace_dir]` | rewrite planning state with shared reset rules |
 
-## Planning And Automation
+## Planning And Internal Continuation
 
-Planning and automation are organized around accepted planning rather than ad hoc prompt files.
+Planning and post-turn continuation are organized around accepted planning rather than ad hoc prompt files.
 
 - The operator owns staged drafts and explicit promotion.
 - Runtime derives the current queue task and proposed tasks from accepted planning.

@@ -104,12 +104,12 @@ impl NativeTuiApp {
                 let status_text = if snapshot.allows_parallel_mode() {
                     self.parallel_mode_enabled = true;
                     self.sync_parallel_mode_supervisor_snapshot(true);
-                    let base_status = format!(
-                        "parallel mode: on / readiness: {} / control tower opened",
-                        snapshot.readiness_label()
-                    );
-                    self.dispatch_next_parallel_queue_head()
-                        .unwrap_or(base_status)
+                    self.dispatch_next_parallel_queue_head().unwrap_or_else(|| {
+                        format!(
+                            "parallel mode: on / readiness: {} / control tower opened",
+                            snapshot.readiness_label()
+                        )
+                    })
                 } else {
                     self.parallel_mode_enabled = false;
                     self.sync_parallel_mode_supervisor_snapshot(false);
@@ -165,16 +165,30 @@ impl NativeTuiApp {
             .runtime
             .build_builtin_next_task_handoff(&planning_snapshot)?;
         let task_title = handoff.task.task_title.clone();
-        self.submit_prompt(
-            handoff.prompt,
-            PromptOrigin::ParallelDispatch(Box::new(ParallelDispatchSubmitContext {
-                transcript_text: handoff.transcript_text,
-                handoff_task: handoff.task,
-            })),
-        );
-        Some(format!(
-            "parallel mode: on / dispatched queue head / task: {task_title}"
-        ))
+        let origin = PromptOrigin::ParallelDispatch(Box::new(ParallelDispatchSubmitContext {
+            transcript_text: handoff.transcript_text,
+            handoff_task: handoff.task,
+        }));
+        if self.conversation_has_running_turn() {
+            return Some(format!(
+                "parallel mode: on / queue head not dispatched / active turn still running / task: {task_title}"
+            ));
+        }
+        if !self.shell_action_availability().allows_actions() {
+            return Some(format!(
+                "parallel mode: on / queue head not dispatched / {}",
+                self.submission_blocked_status(origin)
+            ));
+        }
+        if self.submit_prompt(handoff.prompt, origin) {
+            Some(format!(
+                "parallel mode: on / dispatched queue head / task: {task_title}"
+            ))
+        } else {
+            Some(format!(
+                "parallel mode: on / queue head not dispatched / task: {task_title}"
+            ))
+        }
     }
 
     pub(super) fn handle_supersession_overlay_key(&mut self, key: event::KeyEvent) -> bool {

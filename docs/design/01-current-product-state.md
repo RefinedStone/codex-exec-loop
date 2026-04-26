@@ -9,16 +9,16 @@ The canonical current contract for supersession, planning, and directions lives 
 
 - The product is optimized for long-lived solo work sessions, not one-shot prompt submission.
 - Inline shell is the primary surface and the host terminal scrollback is the durable history view.
-- The distinctive value is continuity across startup diagnostics, session resume, planning files, and queue-driven auto follow-up inside one terminal.
-- Planning is not an optional side panel anymore. Accepted planning state shapes follow-up preview, queue inspection, and post-turn automation.
+- The distinctive value is continuity across startup diagnostics, session resume, planning files, and queue-driven continuation inside one terminal.
+- Planning is not an optional side panel anymore. Accepted planning state shapes follow-up preview, queue inspection, and internal post-turn continuation.
 
 ## Surface Map
 
 - Inline shell is the only frontend.
-- Startup diagnostics, session resume, queue inspection, automation, planning, directions, and
+- Startup diagnostics, session resume, queue inspection, planning, directions, and
   supersession supervision all stay inside that one shell.
 - Planning is part of the main operator loop rather than an optional side workflow.
-- Accepted planning shapes queue state, follow-up preview, and automation behavior.
+- Accepted planning shapes queue state, follow-up preview, and continuation behavior.
 - Supersession adds the worker pool, supervisor board, and distributor delivery lane on top of the
   same shell model.
 

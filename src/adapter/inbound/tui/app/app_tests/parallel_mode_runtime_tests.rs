@@ -170,7 +170,7 @@ fn parallel_mode_handoff_launch_uses_leased_slot_workspace_and_new_thread_stream
 }
 
 #[test]
-fn parallel_on_dispatches_queue_head_without_post_turn_automation() {
+fn parallel_on_dispatches_queue_head_without_auto_turn_budget() {
     let repo = TempGitWorkspace::new("parallel-mode-on-dispatch");
     commit_active_planning_workspace_into_akra(repo.workspace_dir());
     replace_active_planning_workspace_file(
@@ -184,7 +184,6 @@ fn parallel_on_dispatches_queue_head_without_post_turn_automation() {
     let mut conversation = ready_conversation();
     conversation.cwd = repo.workspace_dir().to_string();
     conversation.draft_workspace_directory = repo.workspace_dir().to_string();
-    conversation.auto_follow_state.enabled = false;
     app.conversation_state = ConversationState::ready(conversation);
 
     app.handle_parallel_shell_command(Some("on"));
@@ -192,8 +191,8 @@ fn parallel_on_dispatches_queue_head_without_post_turn_automation() {
     assert!(app.parallel_mode_enabled);
     let leased_workspace = match &app.conversation_state {
         ConversationState::Ready(conversation) => {
-            assert!(!conversation.auto_follow_state.enabled);
             assert_eq!(conversation.auto_follow_state.completed_auto_turns, 0);
+            assert!(!conversation.auto_follow_state.has_live_activity());
             conversation
                 .active_turn_workspace_directory
                 .clone()
@@ -225,6 +224,51 @@ fn parallel_on_dispatches_queue_head_without_post_turn_automation() {
         new_thread_calls[0]
             .1
             .contains("Continue distributor queue wiring")
+    );
+}
+
+#[test]
+fn parallel_on_does_not_report_dispatched_queue_head_when_turn_is_running() {
+    let repo = TempGitWorkspace::new("parallel-mode-on-running-turn");
+    commit_active_planning_workspace_into_akra(repo.workspace_dir());
+    replace_active_planning_workspace_file(
+        repo.workspace_dir(),
+        TASK_LEDGER_FILE_PATH,
+        &official_completion_task_ledger(),
+    );
+    let (mut app, codex_port) = make_test_app();
+    install_ready_github_automation(&mut app);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(repo.workspace_dir(), true));
+    let mut conversation = ready_conversation();
+    conversation.cwd = repo.workspace_dir().to_string();
+    conversation.draft_workspace_directory = repo.workspace_dir().to_string();
+    conversation.input_state =
+        crate::adapter::inbound::tui::app::conversation_model::ConversationInputState::StreamingTurn;
+    conversation.active_turn_id = Some("turn-active".to_string());
+    app.conversation_state = ConversationState::ready(conversation);
+
+    app.handle_parallel_shell_command(Some("on"));
+
+    assert!(app.parallel_mode_enabled);
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready")
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("queue head not dispatched")
+    );
+    assert!(
+        conversation
+            .status_text
+            .contains("active turn still running")
+    );
+    assert!(
+        codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread calls mutex poisoned")
+            .is_empty()
     );
 }
 
