@@ -1119,7 +1119,9 @@ mod tests {
     use crate::application::port::outbound::planning_task_repository_port::{
         PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
     };
-    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
     use crate::application::service::planning::{
         PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
         PlanningAdminDraftKind, PlanningAdminFacadeService, PlanningAdminTaskMutationRequest,
@@ -1127,8 +1129,8 @@ mod tests {
     };
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::domain::planning::{
-        DirectionCatalogDocument, DirectionDefinition, DirectionState, TaskActor, TaskDefinition,
-        TaskLedgerDocument, TaskStatus,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueSnapshot,
+        TaskActor, TaskDefinition, TaskLedgerDocument, TaskStatus,
     };
 
     struct TempGitRepo {
@@ -1506,6 +1508,212 @@ mod tests {
     }
 
     #[test]
+    fn admin_delete_last_non_default_direction_restores_default_direction() {
+        let repo = TempGitRepo::new("admin-delete-last-direction");
+        init_workspace(&repo.repo_root);
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        seed_active_admin_documents(
+            &repo.repo_root,
+            &adapter,
+            DirectionCatalogDocument {
+                version: 1,
+                queue_idle: Default::default(),
+                directions: vec![direction("custom-direction", "Custom Direction")],
+            },
+            TaskLedgerDocument {
+                version: 1,
+                tasks: vec![task("task-custom", "custom-direction")],
+            },
+        );
+        let facade = PlanningAdminFacadeService::new(
+            repo.repo_root.display().to_string(),
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        );
+
+        facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "custom-direction".to_string(),
+            })
+            .expect("last non-default direction delete should restore default direction");
+
+        let record = adapter
+            .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
+            .expect("workspace should load");
+        let directions: DirectionCatalogDocument =
+            toml::from_str(&record.directions_toml.expect("directions should exist"))
+                .expect("directions should parse");
+        let task_ledger: TaskLedgerDocument =
+            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
+                .expect("task ledger should parse");
+
+        assert!(directions.directions.iter().any(|direction| {
+            direction.id == "general-workstream" && direction.state == DirectionState::Active
+        }));
+        assert!(
+            directions
+                .directions
+                .iter()
+                .all(|direction| direction.id != "custom-direction")
+        );
+        assert!(task_ledger.tasks.is_empty());
+    }
+
+    #[test]
+    fn admin_task_create_defaults_to_restored_general_direction() {
+        let repo = TempGitRepo::new("admin-task-default-restored");
+        init_workspace(&repo.repo_root);
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        seed_active_admin_documents(
+            &repo.repo_root,
+            &adapter,
+            DirectionCatalogDocument {
+                version: 1,
+                queue_idle: Default::default(),
+                directions: vec![direction("custom-direction", "Custom Direction")],
+            },
+            TaskLedgerDocument {
+                version: 1,
+                tasks: Vec::new(),
+            },
+        );
+        let facade = PlanningAdminFacadeService::new(
+            repo.repo_root.display().to_string(),
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        );
+
+        facade
+            .upsert_task(PlanningAdminTaskMutationRequest {
+                id: String::new(),
+                direction_id: String::new(),
+                title: "Defaulted after restore".to_string(),
+                description: String::new(),
+                status: "ready".to_string(),
+                base_priority: "10".to_string(),
+                dynamic_priority_delta: String::new(),
+                priority_reason: String::new(),
+                depends_on_text: String::new(),
+                blocked_by_text: String::new(),
+            })
+            .expect("blank task direction should restore and use general workstream");
+
+        let record = adapter
+            .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
+            .expect("workspace should load");
+        let directions: DirectionCatalogDocument =
+            toml::from_str(&record.directions_toml.expect("directions should exist"))
+                .expect("directions should parse");
+        let task_ledger: TaskLedgerDocument =
+            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
+                .expect("task ledger should parse");
+
+        assert!(
+            directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == "general-workstream")
+        );
+        assert_eq!(task_ledger.tasks.len(), 1);
+        assert_eq!(task_ledger.tasks[0].direction_id, "general-workstream");
+    }
+
+    #[test]
+    fn admin_delete_last_direction_reassigns_unrestorable_orphan_tasks_to_default() {
+        let repo = TempGitRepo::new("admin-delete-last-with-orphan");
+        init_workspace(&repo.repo_root);
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let existing = adapter
+            .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
+            .expect("existing workspace should load");
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: Default::default(),
+            directions: vec![direction("custom-direction", "Custom Direction")],
+        };
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![task("task-orphan", "already-deleted-direction")],
+        };
+        adapter
+            .commit_planning_workspace_files(
+                repo.repo_root.display().to_string().as_str(),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some(
+                        toml::to_string_pretty(&directions).expect("directions should serialize"),
+                    ),
+                    task_ledger_json: Some(
+                        serde_json::to_string_pretty(&task_ledger)
+                            .expect("task ledger should serialize"),
+                    ),
+                    task_ledger_schema_json: existing.task_ledger_schema_json,
+                    queue_snapshot_json: Some(
+                        serde_json::to_string_pretty(&PriorityQueueSnapshot {
+                            next_task: None,
+                            active_tasks: Vec::new(),
+                            proposed_tasks: Vec::new(),
+                            skipped_tasks: Vec::new(),
+                        })
+                        .expect("queue snapshot should serialize"),
+                    ),
+                    result_output_markdown: existing.result_output_markdown,
+                },
+            )
+            .expect("stale active admin documents should seed");
+        let facade = PlanningAdminFacadeService::new(
+            repo.repo_root.display().to_string(),
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        );
+
+        facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "custom-direction".to_string(),
+            })
+            .expect("delete should reassign orphan tasks to default direction");
+
+        let record = adapter
+            .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
+            .expect("workspace should load");
+        let directions: DirectionCatalogDocument =
+            toml::from_str(&record.directions_toml.expect("directions should exist"))
+                .expect("directions should parse");
+        let task_ledger: TaskLedgerDocument =
+            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
+                .expect("task ledger should parse");
+
+        assert!(
+            directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == "general-workstream")
+        );
+        assert_eq!(task_ledger.tasks.len(), 1);
+        assert_eq!(task_ledger.tasks[0].direction_id, "general-workstream");
+    }
+
+    #[test]
+    fn admin_delete_default_direction_is_retained() {
+        let repo = TempGitRepo::new("admin-delete-default-direction");
+        init_workspace(&repo.repo_root);
+        let facade = PlanningAdminFacadeService::new(
+            repo.repo_root.display().to_string(),
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        );
+
+        let outcome = facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "general-workstream".to_string(),
+            })
+            .expect("default direction delete should be retained");
+
+        assert!(
+            outcome
+                .management
+                .directions
+                .iter()
+                .any(|direction| direction.id == "general-workstream")
+        );
+    }
+
+    #[test]
     fn admin_delete_direction_preserves_task_referenced_tracked_directions() {
         let repo = TempGitRepo::new("admin-delete-stale-directions");
         init_workspace(&repo.repo_root);
@@ -1637,5 +1845,39 @@ mod tests {
             source_turn_id: None,
             updated_at: "2026-04-26T00:00:00Z".to_string(),
         }
+    }
+
+    fn seed_active_admin_documents(
+        repo_root: &Path,
+        adapter: &FilesystemPlanningWorkspaceAdapter,
+        directions: DirectionCatalogDocument,
+        task_ledger: TaskLedgerDocument,
+    ) {
+        let existing = adapter
+            .load_planning_workspace_files(repo_root.display().to_string().as_str())
+            .expect("existing workspace should load");
+        let queue_snapshot = PriorityQueueService::new()
+            .build_snapshot(&directions, &task_ledger)
+            .expect("seed queue snapshot should build");
+        adapter
+            .commit_planning_workspace_files(
+                repo_root.display().to_string().as_str(),
+                &PlanningWorkspaceLoadRecord {
+                    directions_toml: Some(
+                        toml::to_string_pretty(&directions).expect("directions should serialize"),
+                    ),
+                    task_ledger_json: Some(
+                        serde_json::to_string_pretty(&task_ledger)
+                            .expect("task ledger should serialize"),
+                    ),
+                    task_ledger_schema_json: existing.task_ledger_schema_json,
+                    queue_snapshot_json: Some(
+                        serde_json::to_string_pretty(&queue_snapshot)
+                            .expect("queue snapshot should serialize"),
+                    ),
+                    result_output_markdown: existing.result_output_markdown,
+                },
+            )
+            .expect("active admin documents should seed");
     }
 }

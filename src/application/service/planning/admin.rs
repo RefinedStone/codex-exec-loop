@@ -19,6 +19,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
 };
+use crate::application::service::planning::authoring::bootstrap::{
+    PlanningBootstrapMode, PlanningBootstrapService,
+};
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
@@ -522,8 +525,14 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         let direction_id = normalized_required_id(&request.id, "direction id")?;
         let mut documents = self.load_admin_documents()?;
-        if documents.directions.directions.len() <= 1 {
-            bail!("at least one direction must remain");
+        if direction_id == DEFAULT_DIRECTION_ID {
+            ensure_default_direction(&mut documents.directions)?;
+            self.commit_admin_documents(documents)?;
+            let management = self.load_management_view()?;
+            return Ok(PlanningAdminCrudOutcome {
+                notice: format!("default direction `{DEFAULT_DIRECTION_ID}` is retained"),
+                management,
+            });
         }
         let original_count = documents.directions.directions.len();
         documents
@@ -548,6 +557,7 @@ impl PlanningAdminFacadeService {
         remove_task_references(&mut documents.task_ledger, &removed_task_ids);
 
         let removed_task_count = removed_task_ids.len();
+        ensure_default_direction(&mut documents.directions)?;
         self.commit_admin_documents(documents)?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
@@ -563,6 +573,7 @@ impl PlanningAdminFacadeService {
         request: PlanningAdminTaskMutationRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
         let mut documents = self.load_admin_documents()?;
+        ensure_default_direction(&mut documents.directions)?;
         let default_direction_id = default_direction_id(&documents.directions)?;
         let task = task_from_request(request, &documents.task_ledger, default_direction_id)?;
         ensure_direction_exists(&documents.directions, &task.direction_id)?;
@@ -831,9 +842,11 @@ impl PlanningAdminFacadeService {
     }
 
     fn commit_admin_documents(&self, mut documents: PlanningAdminDocuments) -> Result<()> {
+        ensure_default_direction(&mut documents.directions)?;
         if documents.uses_task_repository {
             self.restore_task_referenced_directions_from_tracked_file(&mut documents)?;
         }
+        reassign_unresolved_task_directions_to_default(&mut documents)?;
 
         let directions_toml = toml::to_string_pretty(&documents.directions)?;
         let task_ledger_json = serde_json::to_string_pretty(&documents.task_ledger)?;
@@ -1332,6 +1345,48 @@ fn task_from_request(
         source_turn_id: existing.and_then(|task| task.source_turn_id),
         updated_at: now,
     })
+}
+
+fn ensure_default_direction(directions: &mut DirectionCatalogDocument) -> Result<()> {
+    if directions
+        .directions
+        .iter()
+        .any(|direction| direction.id.trim() == DEFAULT_DIRECTION_ID)
+    {
+        return Ok(());
+    }
+    directions.directions.push(default_direction_definition()?);
+    Ok(())
+}
+
+fn default_direction_definition() -> Result<DirectionDefinition> {
+    let artifacts =
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+    let directions = toml::from_str::<DirectionCatalogDocument>(&artifacts.directions_toml)
+        .context("failed to parse bootstrap default directions")?;
+    directions
+        .directions
+        .into_iter()
+        .find(|direction| direction.id.trim() == DEFAULT_DIRECTION_ID)
+        .ok_or_else(|| anyhow!("bootstrap default direction `{DEFAULT_DIRECTION_ID}` is missing"))
+}
+
+fn reassign_unresolved_task_directions_to_default(
+    documents: &mut PlanningAdminDocuments,
+) -> Result<()> {
+    ensure_default_direction(&mut documents.directions)?;
+    let direction_ids = documents
+        .directions
+        .directions
+        .iter()
+        .map(|direction| direction.id.trim().to_string())
+        .collect::<BTreeSet<_>>();
+    for task in &mut documents.task_ledger.tasks {
+        if !direction_ids.contains(task.direction_id.trim()) {
+            task.direction_id = DEFAULT_DIRECTION_ID.to_string();
+        }
+    }
+    Ok(())
 }
 
 fn parse_direction_state(raw: &str) -> Result<DirectionState> {
