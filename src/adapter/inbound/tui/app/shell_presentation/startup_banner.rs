@@ -3,11 +3,12 @@ use super::Line;
 use super::ShellCorePresentationContext;
 
 const STARTUP_ASCII_ART_DEFAULT: &str = r#"
-    _    _  __ ____    _
-   / \  | |/ /|  _ \  / \
-  / _ \ | ' / | |_) |/ _ \
- / ___ \| . \ |  _ </ ___ \
-/_/   \_\_|\_\|_| \_\_/   \_\
+ █████╗ ██╗  ██╗██████╗  █████╗
+██╔══██╗██║ ██╔╝██╔══██╗██╔══██╗
+███████║█████╔╝ ██████╔╝███████║
+██╔══██║██╔═██╗ ██╔══██╗██╔══██║
+██║  ██║██║  ██╗██║  ██║██║  ██║
+╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
 "#;
 
 #[cfg(test)]
@@ -44,4 +45,23 @@ pub(in super::super) fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<
     }
 
     art_lines.iter().map(|line| Line::from(*line)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::startup_ascii_art_lines;
+
+    #[test]
+    fn startup_ascii_art_uses_plain_terminal_safe_glyphs() {
+        let rendered = startup_ascii_art_lines(None)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered.len(), 6);
+        assert!(rendered.iter().any(|line| line.contains("██████")));
+        assert!(rendered.iter().all(|line| line.chars().all(|ch| {
+            matches!(ch, ' ' | '█' | '╗' | '╔' | '╝' | '╚' | '═' | '║')
+        })));
+    }
 }

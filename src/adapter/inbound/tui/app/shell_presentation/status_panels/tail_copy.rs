@@ -316,21 +316,28 @@ fn build_inline_startup_overlay_tail_lines_with_context(
 
 fn startup_masthead_lines() -> Vec<Line<'static>> {
     vec![
-        Line::from(Span::styled("    _    _  __ ____    _", AkraTheme::brand())),
         Line::from(Span::styled(
-            "   / \\  | |/ /|  _ \\  / \\",
+            " █████╗ ██╗  ██╗██████╗  █████╗",
             AkraTheme::brand(),
         )),
         Line::from(Span::styled(
-            "  / _ \\ | ' / | |_) |/ _ \\",
+            "██╔══██╗██║ ██╔╝██╔══██╗██╔══██╗",
             AkraTheme::brand(),
         )),
         Line::from(Span::styled(
-            " / ___ \\| . \\ |  _ </ ___ \\",
+            "███████║█████╔╝ ██████╔╝███████║",
             AkraTheme::brand(),
         )),
         Line::from(Span::styled(
-            "/_/   \\_\\_|\\_\\|_| \\_\\_/   \\_\\",
+            "██╔══██║██╔═██╗ ██╔══██╗██╔══██║",
+            AkraTheme::brand(),
+        )),
+        Line::from(Span::styled(
+            "██║  ██║██║  ██╗██║  ██║██║  ██║",
+            AkraTheme::brand(),
+        )),
+        Line::from(Span::styled(
+            "╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
             AkraTheme::brand(),
         )),
     ]

@@ -1296,8 +1296,8 @@ mod tests {
             .collect::<Vec<_>>();
         let rendered = lines.join("\n");
 
-        assert!(rendered.contains("    _    _  __ ____    _"));
-        assert!(rendered.contains("/_/   \\_\\_|\\_\\|_| \\_\\_/   \\_\\"));
+        assert!(rendered.contains(" █████╗ ██╗  ██╗██████╗  █████╗"));
+        assert!(rendered.contains("╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝"));
         assert!(!rendered.contains("No messages in this thread yet."));
     }
 

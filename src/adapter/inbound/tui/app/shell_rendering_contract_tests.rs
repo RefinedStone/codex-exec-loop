@@ -246,7 +246,7 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 13));
+        .assert_cursor_position(Position::new(2, 14));
 }
 
 #[test]
