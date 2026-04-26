@@ -10,7 +10,7 @@ Codex:
   let ok = true;
   ```
 
-Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto: on/idle  |  done:
+Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto: queue/idle  |  done:
 0/20  |  Plan setup / idle
 status: new thread draft  |  startup: startup ready  |  gh: off
 runtime: clear  |  warn: none

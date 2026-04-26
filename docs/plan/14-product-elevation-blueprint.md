@@ -92,9 +92,9 @@ Repair, rollback, validation, and operator runbooks should be part of the main v
 
 ### C. Long-Session Continuity
 
-- tighten the relationship between session resume, accepted planning state, and automation continuity
+- tighten the relationship between session resume, accepted planning state, and continuation continuity
 - make "come back to work" faster than "start over and rediscover state"
-- expose next-task intent more clearly in queue and automation surfaces
+- expose next-task intent more clearly in queue and planning surfaces
 - build on the shipped workspace lifecycle commands so planning recovery and bootstrap feel lighter during interactive use
 
 ### D. Reliability And Distribution
@@ -120,7 +120,7 @@ Primary work:
 Acceptance signals:
 
 - a new operator can explain the difference between planning invalid, queue idle, and repeated queue head
-- queue and automation overlays show next action explicitly
+- queue and planning overlays show next action explicitly
 - support and debugging burden shifts from "what does this mean?" to "why did this specific workspace reach this state?"
 
 ### Phase 2: Make Planning Feel Lighter And Safer

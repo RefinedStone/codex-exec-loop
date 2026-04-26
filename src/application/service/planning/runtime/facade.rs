@@ -147,7 +147,7 @@ impl PlanningRuntimeFacadeService {
             .unwrap_or_else(|| {
                 match snapshot.queue_idle_policy() {
                     crate::domain::planning::QueueIdlePolicy::Stop => {
-                        "The current planning queue has no actionable head and queue-idle policy is stop, so post-turn automation will end after the current turn.".to_string()
+                        "The current planning queue has no actionable head and queue-idle policy is stop, so internal continuation will end after the current turn.".to_string()
                     }
                     crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue => {
                         "A queue-manager planning worker reviews the direction goals after the current turn and re-enqueues follow-up work only when a justified actionable task exists.".to_string()

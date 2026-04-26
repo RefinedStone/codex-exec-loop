@@ -34,8 +34,8 @@ pub(super) fn reduce_followup_controls(
             }
         }
         FollowupControlEvent::AutoFollowPaused => {
-            state.auto_follow_state.clear_runtime_phase();
-            state.record_automation_stopped();
+            state.pause_post_turn_continuation();
+            state.record_internal_continuation_paused();
             state.status_text = "internal continuation paused".to_string();
         }
         FollowupControlEvent::MaxAutoTurnsUpdated { value } => {
@@ -135,5 +135,22 @@ mod tests {
             DEFAULT_AUTO_FOLLOW_MAX_TURNS
         );
         assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn pausing_internal_continuation_keeps_running_phase_for_turn_budget() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.auto_follow_state.mark_auto_turn_submitted();
+
+        let reduced = reduce_followup_controls(state, FollowupControlEvent::AutoFollowPaused);
+
+        assert!(reduced.state.auto_follow_state.has_live_activity());
+        assert!(
+            reduced
+                .state
+                .auto_follow_state
+                .post_turn_continuation_paused()
+        );
+        assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 0);
     }
 }

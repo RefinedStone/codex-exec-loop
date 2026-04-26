@@ -728,7 +728,7 @@ mod tests {
                     planning_repair_state: None,
                     runtime_notices: vec!["stale notice".to_string()],
                     action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollowup {
-                        reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::Disabled,
+                        reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::PostTurnContinuationPaused,
                     },
                 }),
                 planner_worker_panel_state: crate::adapter::inbound::tui::app::PlannerWorkerPanelState {

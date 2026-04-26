@@ -41,16 +41,15 @@ interaction flow and surface roles.
 3. Live stream output stays in the inline tail until turn completion.
 4. Tool activity, runtime notices, approval-review state, and warnings update the same shell surface.
 5. When the turn completes, assistant output is committed into normal scrollback history.
-6. Post-turn evaluation decides whether automation continues, pauses, or stops.
+6. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
 
-## Planning And Automation Flow
+## Planning And Continuation Flow
 
-- Automation controls own stop rules, max-turn policy, preview rendering, and planner debug visibility.
 - Builtin `next-task` uses the current queue task derived from accepted planning.
 - Detailed `:planning`, `:directions`, and lifecycle command semantics live in
   `docs/supersession/current-contract.md`.
-- Accepted planning, the current queue task, proposed tasks, and repair status are reflected in the footer, automation overlay, queue overlay, and post-turn automation.
-- When the queue is actionable, automation targets the current queue task.
+- Accepted planning, the current queue task, proposed tasks, and repair status are reflected in the footer, queue overlay, and internal post-turn continuation.
+- When the queue is actionable, continuation targets the current queue task.
 - When the queue is valid but idle, behavior follows the queue-idle policy.
 
 ## Pause And Recovery States
@@ -58,13 +57,13 @@ interaction flow and surface roles.
 - Startup blocked:
   the shell can render, but submit and session actions may remain gated.
 - Planning invalid:
-  post-turn automation pauses until accepted planning validates again.
+  post-turn continuation pauses until accepted planning validates again.
 - Queue idle with `stop`:
-  automation ends after the current turn.
+  continuation ends after the current turn.
 - Queue idle with the `review_and_enqueue` policy:
   a hidden planning worker may derive justified follow-up work.
 - Repeated queue task:
-  queue-driven automation pauses until the planning queue advances beyond the previously handed-off task.
+  queue-driven continuation pauses until the planning queue advances beyond the previously handed-off task.
 - Manual approval review:
   approval state is surfaced, but the shell still lacks interactive approve or deny actions.
 

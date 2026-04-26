@@ -663,6 +663,7 @@ impl ConversationViewModel {
     pub(crate) fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
         let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
         self.auto_follow_state.clear_runtime_phase();
+        self.auto_follow_state.clear_post_turn_continuation_pause();
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
             summary: reason.activity_summary().to_string(),
             detail,
@@ -673,9 +674,13 @@ impl ConversationViewModel {
         self.last_auto_followup_activity = None;
     }
 
-    pub(crate) fn record_automation_stopped(&mut self) {
+    pub(crate) fn pause_post_turn_continuation(&mut self) {
+        self.auto_follow_state.pause_post_turn_continuation();
+    }
+
+    pub(crate) fn record_internal_continuation_paused(&mut self) {
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: "paused: internal continuation off".to_string(),
+            summary: "paused: internal continuation".to_string(),
             detail: "post-turn continuation is paused for this internal runtime cycle".to_string(),
         });
     }
@@ -726,7 +731,7 @@ impl ConversationViewModel {
     }
 
     pub(crate) fn begin_auto_followup_evaluation(&mut self) {
-        if !self.auto_follow_state.enabled
+        if self.auto_follow_state.post_turn_continuation_paused()
             || !self.auto_follow_state.can_queue_next()
             || self.latest_agent_message_text().is_none()
         {
@@ -785,8 +790,8 @@ impl ConversationViewModel {
         planning_runtime: &PlanningRuntimeUseCases,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> AutoFollowupDecision {
-        if !self.auto_follow_state.enabled {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::Disabled);
+        if self.auto_follow_state.post_turn_continuation_paused() {
+            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::PostTurnContinuationPaused);
         }
 
         if !self.auto_follow_state.can_queue_next() {

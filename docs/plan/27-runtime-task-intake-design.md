@@ -6,8 +6,9 @@ opening the broader planning draft editor.
 ## Goal
 
 Operators need a low-friction way to enqueue a new task while work is already underway. The command
-must work while a turn is streaming, while queue evaluation is running, and while automation is
-stopped. It should add a normal `ready` task and leave the current `in_progress` task alone.
+must work while a turn is streaming, while queue evaluation is running, and while internal
+continuation is paused. It should add a normal `ready` task and leave the current `in_progress`
+task alone.
 
 The first implementation is local and deterministic. Future hidden Codex sessions or LLM structured
 output adapters may help draft a task, but they must plug into the same draft and validation path.

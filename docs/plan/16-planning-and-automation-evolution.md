@@ -1,12 +1,12 @@
-# Planning And Automation Evolution
+# Planning And Continuation Evolution
 
-This document chooses how planning, queue inspection, and post-turn automation should evolve in the next product stage.
+This document chooses how planning, queue inspection, and internal post-turn continuation should evolve in the next product stage.
 
 ## Desired Outcome
 
 Planning should become the lightest reliable way to keep a workspace moving across multiple turns.
 
-Automation should feel trustworthy because it is understandable, not because it is opaque and powerful.
+Continuation should feel trustworthy because it is understandable, not because it is opaque and powerful.
 
 ## Chosen Defaults
 
@@ -15,7 +15,7 @@ Automation should feel trustworthy because it is understandable, not because it 
 - Simple mode becomes the main onboarding path and should be treated as the default narrative.
 - Detail mode remains for power users and deliberate authoring.
 - `llm-assisted` planning stays out of the active roadmap until manual and simple mode are clearly successful.
-- Queue-driven automation stays enabled only through accepted planning state.
+- Queue-driven continuation stays driven only through accepted planning state.
 
 ## Operator Vocabulary To Standardize
 
@@ -66,9 +66,9 @@ The operator should be able to answer:
 - what is optional
 - what is prevented and why
 
-### 3. Make Automation Pause Reasons Actionable
+### 3. Make Continuation Pause Reasons Actionable
 
-The automation surface should explicitly separate:
+Continuation status should explicitly separate:
 
 - policy
 - next-turn preview
@@ -107,7 +107,7 @@ The operator should not need to rediscover:
 - whether planning is active
 - whether the queue is actionable
 - whether proposals remain
-- whether automation is currently safe to continue
+- whether continuation is currently safe to continue
 
 ## Planned Capability Changes
 

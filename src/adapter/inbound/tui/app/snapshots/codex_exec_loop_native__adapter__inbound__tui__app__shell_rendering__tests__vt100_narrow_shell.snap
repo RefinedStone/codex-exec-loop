@@ -3,7 +3,7 @@ source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: rendered
 ---
 Akra  |  thread: new draft  |  turn: working  |
-input: streaming  |  auto: on/idle  |  done:
+input: streaming  |  auto: queue/idle  |  done:
 0/20  |  Plan setup / idle
 status: new thread draft  |  startup: startup
 ready  |  gh: off

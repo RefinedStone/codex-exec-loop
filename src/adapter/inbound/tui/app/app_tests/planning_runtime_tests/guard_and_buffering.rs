@@ -262,10 +262,10 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
 }
 
 #[test]
-fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
+fn internal_continuation_pause_stops_hidden_planning_repair_and_followup() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
-    let workspace_dir = create_temp_workspace("automation-off-no-hidden-repair");
+    let workspace_dir = create_temp_workspace("internal-pause-no-hidden-repair");
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning");
@@ -291,7 +291,9 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
     .expect("result output should write");
 
     let mut conversation = ready_conversation();
-    conversation.auto_follow_state.enabled = false;
+    conversation
+        .auto_follow_state
+        .pause_post_turn_continuation();
     conversation.cwd = workspace_dir.clone();
     conversation.input_state = ConversationInputState::StreamingTurn;
     conversation.active_turn_id = Some("turn-repair-4".to_string());
@@ -339,7 +341,7 @@ fn automation_off_stops_hidden_planning_repair_and_auto_followup() {
     };
     assert_eq!(
         conversation.status_text,
-        "turn completed / auto follow-up stopped: planning queue idle policy is stop"
+        "turn completed / internal continuation paused"
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
