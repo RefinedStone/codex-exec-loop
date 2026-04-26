@@ -1617,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_delete_last_direction_reassigns_unrestorable_orphan_tasks_to_default() {
+    fn admin_delete_last_direction_removes_unrestorable_orphan_tasks() {
         let repo = TempGitRepo::new("admin-delete-last-with-orphan");
         init_workspace(&repo.repo_root);
         let adapter = FilesystemPlanningWorkspaceAdapter::new();
@@ -1667,7 +1667,7 @@ mod tests {
             .delete_direction(PlanningAdminDirectionDeleteRequest {
                 id: "custom-direction".to_string(),
             })
-            .expect("delete should reassign orphan tasks to default direction");
+            .expect("delete should remove orphan tasks");
 
         let record = adapter
             .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
@@ -1685,8 +1685,7 @@ mod tests {
                 .iter()
                 .any(|direction| direction.id == "general-workstream")
         );
-        assert_eq!(task_ledger.tasks.len(), 1);
-        assert_eq!(task_ledger.tasks[0].direction_id, "general-workstream");
+        assert!(task_ledger.tasks.is_empty());
     }
 
     #[test]

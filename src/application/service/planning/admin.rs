@@ -846,7 +846,7 @@ impl PlanningAdminFacadeService {
         if documents.uses_task_repository {
             self.restore_task_referenced_directions_from_tracked_file(&mut documents)?;
         }
-        reassign_unresolved_task_directions_to_default(&mut documents)?;
+        remove_tasks_with_unresolved_directions(&mut documents);
 
         let directions_toml = toml::to_string_pretty(&documents.directions)?;
         let task_ledger_json = serde_json::to_string_pretty(&documents.task_ledger)?;
@@ -1371,22 +1371,28 @@ fn default_direction_definition() -> Result<DirectionDefinition> {
         .ok_or_else(|| anyhow!("bootstrap default direction `{DEFAULT_DIRECTION_ID}` is missing"))
 }
 
-fn reassign_unresolved_task_directions_to_default(
-    documents: &mut PlanningAdminDocuments,
-) -> Result<()> {
-    ensure_default_direction(&mut documents.directions)?;
+fn remove_tasks_with_unresolved_directions(documents: &mut PlanningAdminDocuments) {
     let direction_ids = documents
         .directions
         .directions
         .iter()
         .map(|direction| direction.id.trim().to_string())
         .collect::<BTreeSet<_>>();
-    for task in &mut documents.task_ledger.tasks {
-        if !direction_ids.contains(task.direction_id.trim()) {
-            task.direction_id = DEFAULT_DIRECTION_ID.to_string();
-        }
+    let removed_task_ids = documents
+        .task_ledger
+        .tasks
+        .iter()
+        .filter(|task| !direction_ids.contains(task.direction_id.trim()))
+        .map(|task| task.id.trim().to_string())
+        .collect::<BTreeSet<_>>();
+    if removed_task_ids.is_empty() {
+        return;
     }
-    Ok(())
+    documents
+        .task_ledger
+        .tasks
+        .retain(|task| direction_ids.contains(task.direction_id.trim()));
+    remove_task_references(&mut documents.task_ledger, &removed_task_ids);
 }
 
 fn parse_direction_state(raw: &str) -> Result<DirectionState> {
