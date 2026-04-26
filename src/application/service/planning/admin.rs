@@ -830,7 +830,11 @@ impl PlanningAdminFacadeService {
         })
     }
 
-    fn commit_admin_documents(&self, documents: PlanningAdminDocuments) -> Result<()> {
+    fn commit_admin_documents(&self, mut documents: PlanningAdminDocuments) -> Result<()> {
+        if documents.uses_task_repository {
+            self.restore_task_referenced_directions_from_tracked_file(&mut documents)?;
+        }
+
         let directions_toml = toml::to_string_pretty(&documents.directions)?;
         let task_ledger_json = serde_json::to_string_pretty(&documents.task_ledger)?;
         let validation_result =
@@ -904,6 +908,54 @@ impl PlanningAdminFacadeService {
                 result_output_markdown: Some(documents.result_output_markdown),
             },
         )
+    }
+
+    fn restore_task_referenced_directions_from_tracked_file(
+        &self,
+        documents: &mut PlanningAdminDocuments,
+    ) -> Result<()> {
+        let existing_direction_ids = documents
+            .directions
+            .directions
+            .iter()
+            .map(|direction| direction.id.trim().to_string())
+            .collect::<BTreeSet<_>>();
+        let missing_direction_ids = documents
+            .task_ledger
+            .tasks
+            .iter()
+            .map(|task| task.direction_id.trim().to_string())
+            .filter(|direction_id| !direction_id.is_empty())
+            .filter(|direction_id| !existing_direction_ids.contains(direction_id))
+            .collect::<BTreeSet<_>>();
+        if missing_direction_ids.is_empty() {
+            return Ok(());
+        }
+
+        let tracked_path = Path::new(&self.workspace_dir).join(DIRECTIONS_FILE_PATH);
+        let tracked_directions_toml = match fs::read_to_string(&tracked_path) {
+            Ok(body) => body,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read tracked {}", tracked_path.display()));
+            }
+        };
+        let tracked_directions =
+            toml::from_str::<DirectionCatalogDocument>(&tracked_directions_toml)
+                .with_context(|| format!("failed to parse tracked {}", tracked_path.display()))?;
+        let tracked_by_id = tracked_directions
+            .directions
+            .into_iter()
+            .map(|direction| (direction.id.trim().to_string(), direction))
+            .collect::<BTreeMap<_, _>>();
+
+        for direction_id in missing_direction_ids {
+            if let Some(direction) = tracked_by_id.get(&direction_id) {
+                documents.directions.directions.push(direction.clone());
+            }
+        }
+        Ok(())
     }
 
     fn ensure_no_parallel_working(&self, action: &str) -> Result<()> {

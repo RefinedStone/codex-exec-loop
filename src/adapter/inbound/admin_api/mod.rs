@@ -1063,7 +1063,7 @@ fn render_fragment<T: Template>(template: T) -> std::result::Result<Response, St
 }
 
 fn internal_server_error(error: impl Into<anyhow::Error>) -> StatusCode {
-    let _ = error.into();
+    eprintln!("admin server error: {:#}", error.into());
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
@@ -1111,15 +1111,25 @@ mod tests {
     use axum::response::Response;
     use tower::ServiceExt;
 
-    use super::{AdminAppState, CSRF_COOKIE_NAME, DEFAULT_PORT, build_router, parse_args};
+    use super::{
+        AdminAppState, CSRF_COOKIE_NAME, DEFAULT_PORT, build_admin_facade, build_router, parse_args,
+    };
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::{
         PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
         PlanningAdminDraftKind, PlanningAdminFacadeService, PlanningAdminTaskMutationRequest,
         PlanningServices,
     };
-    use crate::domain::planning::{DirectionCatalogDocument, TaskLedgerDocument};
+    use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, TaskActor, TaskDefinition,
+        TaskLedgerDocument, TaskStatus,
+    };
 
     struct TempGitRepo {
         root: PathBuf,
@@ -1493,5 +1503,139 @@ mod tests {
         );
         assert_eq!(task_ledger.tasks[0].id, "task-defaulted-task");
         assert_eq!(task_ledger.tasks[0].direction_id, "general-workstream");
+    }
+
+    #[test]
+    fn admin_delete_direction_preserves_task_referenced_tracked_directions() {
+        let repo = TempGitRepo::new("admin-delete-stale-directions");
+        init_workspace(&repo.repo_root);
+        let facade = build_admin_facade(repo.repo_root.display().to_string());
+        facade
+            .upsert_direction(PlanningAdminDirectionMutationRequest {
+                id: "remove-me".to_string(),
+                title: "Remove Me".to_string(),
+                summary: "Direction being deleted.".to_string(),
+                success_criteria_text: "Delete this direction through admin CRUD.".to_string(),
+                scope_hints_text: String::new(),
+                detail_doc_path: String::new(),
+                state: "paused".to_string(),
+            })
+            .expect("removable direction should be added to authority catalog");
+
+        let tracked_directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: Default::default(),
+            directions: vec![
+                direction("general-workstream", "General Workstream"),
+                direction("remove-me", "Remove Me"),
+                direction("fs-only-direction", "Filesystem Only Direction"),
+            ],
+        };
+        let tracked_directions_path = repo
+            .repo_root
+            .join(".codex-exec-loop")
+            .join("planning")
+            .join("directions.toml");
+        std::fs::create_dir_all(
+            tracked_directions_path
+                .parent()
+                .expect("tracked directions should have parent"),
+        )
+        .expect("tracked planning directory should exist");
+        std::fs::write(
+            &tracked_directions_path,
+            toml::to_string_pretty(&tracked_directions).expect("directions should serialize"),
+        )
+        .expect("tracked directions should write");
+
+        let task_ledger = TaskLedgerDocument {
+            version: 1,
+            tasks: vec![
+                task("task-remove-me", "remove-me"),
+                task("task-fs-only", "fs-only-direction"),
+            ],
+        };
+        let queue_snapshot = PriorityQueueService::new()
+            .build_snapshot(&tracked_directions, &task_ledger)
+            .expect("queue snapshot should build with tracked directions");
+        let task_repository = SqlitePlanningAuthorityAdapter::new();
+        task_repository
+            .commit_task_authority_snapshot(
+                repo.repo_root.display().to_string().as_str(),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger: &task_ledger,
+                    queue_snapshot: &queue_snapshot,
+                },
+            )
+            .expect("task authority snapshot should commit");
+
+        facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "remove-me".to_string(),
+            })
+            .expect("delete should restore unrelated tracked direction references");
+
+        let record = FilesystemPlanningWorkspaceAdapter::new()
+            .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
+            .expect("workspace should load");
+        let directions: DirectionCatalogDocument =
+            toml::from_str(&record.directions_toml.expect("directions should exist"))
+                .expect("directions should parse");
+        let snapshot = task_repository
+            .load_task_authority_snapshot(repo.repo_root.display().to_string().as_str())
+            .expect("task authority should load")
+            .expect("task authority snapshot should exist");
+
+        assert!(
+            directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == "fs-only-direction")
+        );
+        assert!(
+            directions
+                .directions
+                .iter()
+                .all(|direction| direction.id != "remove-me")
+        );
+        assert_eq!(snapshot.task_ledger.tasks.len(), 1);
+        assert_eq!(snapshot.task_ledger.tasks[0].id, "task-fs-only");
+        assert_eq!(
+            snapshot.task_ledger.tasks[0].direction_id,
+            "fs-only-direction"
+        );
+    }
+
+    fn direction(id: &str, title: &str) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: title.to_string(),
+            summary: format!("{title} summary."),
+            success_criteria: vec![format!("{title} succeeds.")],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state: DirectionState::Active,
+        }
+    }
+
+    fn task(id: &str, direction_id: &str) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            direction_relation_note: String::new(),
+            title: id.to_string(),
+            description: format!("{id} description."),
+            status: TaskStatus::Ready,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            updated_at: "2026-04-26T00:00:00Z".to_string(),
+        }
     }
 }
