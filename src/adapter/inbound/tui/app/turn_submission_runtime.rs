@@ -187,6 +187,7 @@ impl NativeTuiApp {
         let transcript_text = match &prompt_origin {
             PromptOrigin::Manual => prompt.trim().to_string(),
             PromptOrigin::AutoFollow(context) => context.transcript_text.clone(),
+            PromptOrigin::ParallelDispatch(context) => context.transcript_text.clone(),
         };
         self.submit_prompt_with_transcript(prompt, transcript_text, prompt_origin);
     }

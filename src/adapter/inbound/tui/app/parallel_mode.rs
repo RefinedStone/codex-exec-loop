@@ -4,7 +4,7 @@ use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay}
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
-use super::{ConversationInputEvent, NativeTuiApp};
+use super::{ConversationInputEvent, NativeTuiApp, ParallelDispatchSubmitContext, PromptOrigin};
 
 impl NativeTuiApp {
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
@@ -104,10 +104,12 @@ impl NativeTuiApp {
                 let status_text = if snapshot.allows_parallel_mode() {
                     self.parallel_mode_enabled = true;
                     self.sync_parallel_mode_supervisor_snapshot(true);
-                    format!(
+                    let base_status = format!(
                         "parallel mode: on / readiness: {} / control tower opened",
                         snapshot.readiness_label()
-                    )
+                    );
+                    self.dispatch_next_parallel_queue_head()
+                        .unwrap_or(base_status)
                 } else {
                     self.parallel_mode_enabled = false;
                     self.sync_parallel_mode_supervisor_snapshot(false);
@@ -150,6 +152,29 @@ impl NativeTuiApp {
                 });
             }
         }
+    }
+
+    fn dispatch_next_parallel_queue_head(&mut self) -> Option<String> {
+        let workspace_directory = self.planning_workspace_directory();
+        let planning_snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            &workspace_directory,
+        );
+        let handoff = self
+            .planning
+            .runtime
+            .build_builtin_next_task_handoff(&planning_snapshot)?;
+        let task_title = handoff.task.task_title.clone();
+        self.submit_prompt(
+            handoff.prompt,
+            PromptOrigin::ParallelDispatch(Box::new(ParallelDispatchSubmitContext {
+                transcript_text: handoff.transcript_text,
+                handoff_task: handoff.task,
+            })),
+        );
+        Some(format!(
+            "parallel mode: on / dispatched queue head / task: {task_title}"
+        ))
     }
 
     pub(super) fn handle_supersession_overlay_key(&mut self, key: event::KeyEvent) -> bool {
