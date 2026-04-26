@@ -139,28 +139,12 @@ impl NativeTuiApp {
                 self.handle_directions_shell_command(command_input.argument())
             }
             InlineShellCommand::Task => self.handle_task_shell_command(command_input.argument()),
-            InlineShellCommand::Stop => self.stop_post_turn_automation(),
-            InlineShellCommand::Automation => self.show_automation_overlay(),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::Init => self.handle_init_shell_command(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
             }
             InlineShellCommand::Reset => self.handle_reset_shell_command(command_input.argument()),
-            InlineShellCommand::MaxAutoTurns => {
-                let Some(value) = command_input.argument().map(str::to_string) else {
-                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text:
-                            "usage: :turns <n|infinite>  |  alias: :auto-turns <n|infinite>"
-                                .to_string(),
-                    });
-                    self.clear_input_buffer();
-                    return;
-                };
-                self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
-                    value,
-                });
-            }
             InlineShellCommand::NewDraft => self.open_new_conversation_shell(),
             InlineShellCommand::Help => self.show_help_overlay(),
         }
@@ -211,7 +195,7 @@ impl NativeTuiApp {
         command_input: InlineShellCommandInput,
     ) {
         self.pending_task_intake_command = Some(command_input);
-        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowStopped);
+        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowPaused);
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: "task intake queued until the current turn reaches a planning-safe point"
                 .to_string(),
@@ -409,10 +393,6 @@ impl NativeTuiApp {
             return true;
         }
 
-        if self.handle_stop_keyword_editor_key(key) {
-            return true;
-        }
-
         if self.handle_session_search_query_editor_key(key) {
             return true;
         }
@@ -447,10 +427,6 @@ impl NativeTuiApp {
                 }
                 _ => {}
             }
-            return true;
-        }
-
-        if self.handle_automation_overlay_key(key) {
             return true;
         }
 

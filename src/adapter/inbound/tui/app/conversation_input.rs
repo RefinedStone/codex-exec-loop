@@ -250,17 +250,17 @@ mod tests {
     #[test]
     fn command_palette_inserted_command_switches_to_argument_entry() {
         let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        state.input_buffer = ":t".to_string();
+        state.input_buffer = ":r".to_string();
         state.sync_inline_shell_command_palette();
 
         let reduced = reduce_conversation_input(
             state,
             ConversationInputEvent::InlineCommandPaletteCommandInserted {
-                command: InlineShellCommand::MaxAutoTurns,
+                command: InlineShellCommand::Reset,
             },
         );
 
-        assert_eq!(reduced.state.input_buffer, ":turns ");
+        assert_eq!(reduced.state.input_buffer, ":reset ");
         assert!(!reduced.state.inline_shell_command_palette_state.is_active());
     }
 

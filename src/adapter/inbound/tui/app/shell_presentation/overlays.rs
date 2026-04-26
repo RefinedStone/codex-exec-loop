@@ -25,9 +25,9 @@ pub(crate) use directions::{
 pub(crate) use help::{HelpOverlayView, build_help_overlay_view};
 pub(crate) use list_projection::{OverlayListEntryView, OverlayListView};
 pub(crate) use popup::{
-    AutomationOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
-    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    TaskIntakeOverlayView, build_automation_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, build_supersession_overlay_view, build_task_intake_overlay_view,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, SupersessionOverlayView, TaskIntakeOverlayView,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view, build_task_intake_overlay_view,
 };

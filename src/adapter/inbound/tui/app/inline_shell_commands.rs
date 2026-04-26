@@ -1,5 +1,3 @@
-use super::AutoFollowState;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
     Diagnostics,
@@ -8,13 +6,10 @@ pub(crate) enum InlineShellCommand {
     Queue,
     Directions,
     Task,
-    Stop,
-    Automation,
     Doctor,
     Init,
     PlanningInit,
     Reset,
-    MaxAutoTurns,
     NewDraft,
     Help,
 }
@@ -50,9 +45,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
 }
 
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :stop  :auto  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :turns <n|infinite>  :new  :help";
-const MAX_AUTO_TURNS_USAGE: &str =
-    "Type `:turns <n|infinite>` and press Enter to update max auto turns.";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -112,24 +105,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         requires_argument: false,
     },
     InlineShellCommandSpec {
-        command: InlineShellCommand::Stop,
-        primary_name: ":stop",
-        aliases: &[":stop"],
-        suggestion_detail: "stop automation",
-        buffered_hint: "Press Enter to stop post-turn automation.",
-        execution_status: None,
-        requires_argument: false,
-    },
-    InlineShellCommandSpec {
-        command: InlineShellCommand::Automation,
-        primary_name: ":auto",
-        aliases: &[":auto", ":automation"],
-        suggestion_detail: "automation controls",
-        buffered_hint: "Press Enter to open the automation controls.",
-        execution_status: Some("opened automation controls"),
-        requires_argument: false,
-    },
-    InlineShellCommandSpec {
         command: InlineShellCommand::Doctor,
         primary_name: ":doctor",
         aliases: &[":doctor"],
@@ -162,15 +137,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":reset"],
         suggestion_detail: "planning reset",
         buffered_hint: RESET_USAGE,
-        execution_status: None,
-        requires_argument: true,
-    },
-    InlineShellCommandSpec {
-        command: InlineShellCommand::MaxAutoTurns,
-        primary_name: ":turns",
-        aliases: &[":turn", ":turns", ":auto-turns"],
-        suggestion_detail: "set max auto turns",
-        buffered_hint: MAX_AUTO_TURNS_USAGE,
         execution_status: None,
         requires_argument: true,
     },
@@ -276,15 +242,6 @@ impl InlineShellCommandInput {
                 ResetArgument::Invalid(value) => format!(
                     "Press Enter to apply `:reset {value}`. Supported arguments: queue, directions, all."
                 ),
-            },
-            InlineShellCommand::MaxAutoTurns => match self.argument() {
-                Some(value) if is_valid_max_auto_turn_argument(value) => {
-                    format!("Press Enter to set max auto turns to {value}.")
-                }
-                Some(value) => format!(
-                    "Press Enter to apply `:turns {value}`. Max auto turns must be a whole number greater than 0 or `infinite`."
-                ),
-                None => MAX_AUTO_TURNS_USAGE.to_string(),
             },
             _ => self.command.spec().buffered_hint.to_string(),
         }
@@ -419,15 +376,12 @@ impl InlineShellCommand {
     pub(super) fn completion_text(self) -> &'static str {
         match self {
             InlineShellCommand::Reset => ":reset ",
-            InlineShellCommand::MaxAutoTurns => ":turns ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
             | InlineShellCommand::Sessions
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
             | InlineShellCommand::Task
-            | InlineShellCommand::Stop
-            | InlineShellCommand::Automation
             | InlineShellCommand::Doctor
             | InlineShellCommand::Init
             | InlineShellCommand::PlanningInit
@@ -454,11 +408,8 @@ impl InlineShellCommand {
             InlineShellCommand::Task => ":task [prompt]",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
-            InlineShellCommand::MaxAutoTurns => ":turns <n|infinite>",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Sessions
-            | InlineShellCommand::Stop
-            | InlineShellCommand::Automation
             | InlineShellCommand::Doctor
             | InlineShellCommand::Init
             | InlineShellCommand::NewDraft
@@ -540,15 +491,10 @@ fn parse_reset_argument(argument: Option<&str>) -> ResetArgument<'_> {
     }
 }
 
-fn is_valid_max_auto_turn_argument(value: &str) -> bool {
-    AutoFollowState::normalize_max_auto_turns_candidate(value).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState,
-        MAX_AUTO_TURNS_USAGE, RESET_USAGE,
+        InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState, RESET_USAGE,
     };
 
     #[test]
@@ -587,9 +533,9 @@ mod tests {
                 ":task add a release checklist",
                 Some((InlineShellCommand::Task, Some("add a release checklist"))),
             ),
-            (":stop", Some((InlineShellCommand::Stop, None))),
-            (":auto", Some((InlineShellCommand::Automation, None))),
-            (":automation", Some((InlineShellCommand::Automation, None))),
+            (":stop", None),
+            (":auto", None),
+            (":automation", None),
             (":doctor", Some((InlineShellCommand::Doctor, None))),
             (":init", Some((InlineShellCommand::Init, None))),
             (":planning", Some((InlineShellCommand::PlanningInit, None))),
@@ -609,19 +555,10 @@ mod tests {
                 ":reset directions confirm",
                 Some((InlineShellCommand::Reset, Some("directions confirm"))),
             ),
-            (
-                ":turns 5",
-                Some((InlineShellCommand::MaxAutoTurns, Some("5"))),
-            ),
-            (
-                ":turns infinite",
-                Some((InlineShellCommand::MaxAutoTurns, Some("infinite"))),
-            ),
-            (
-                ":auto-turns 12",
-                Some((InlineShellCommand::MaxAutoTurns, Some("12"))),
-            ),
-            (":turns", Some((InlineShellCommand::MaxAutoTurns, None))),
+            (":turns 5", None),
+            (":turns infinite", None),
+            (":auto-turns 12", None),
+            (":turns", None),
             (":new", Some((InlineShellCommand::NewDraft, None))),
             (":help", Some((InlineShellCommand::Help, None))),
             ("  :help  ", Some((InlineShellCommand::Help, None))),
@@ -650,13 +587,10 @@ mod tests {
                 InlineShellCommand::Queue,
                 InlineShellCommand::Directions,
                 InlineShellCommand::Task,
-                InlineShellCommand::Stop,
-                InlineShellCommand::Automation,
                 InlineShellCommand::Doctor,
                 InlineShellCommand::Init,
                 InlineShellCommand::PlanningInit,
                 InlineShellCommand::Reset,
-                InlineShellCommand::MaxAutoTurns,
                 InlineShellCommand::NewDraft,
                 InlineShellCommand::Help,
             ]
@@ -688,13 +622,10 @@ mod tests {
             InlineShellCommand::suggestions(":re"),
             vec![InlineShellCommand::Reset]
         );
-        assert_eq!(
-            InlineShellCommand::suggestions(":st"),
-            vec![InlineShellCommand::Stop]
-        );
+        assert_eq!(InlineShellCommand::suggestions(":st"), Vec::new());
         assert_eq!(
             InlineShellCommand::suggestions(":t"),
-            vec![InlineShellCommand::Task, InlineShellCommand::MaxAutoTurns]
+            vec![InlineShellCommand::Task]
         );
     }
 
@@ -719,7 +650,7 @@ mod tests {
     fn palette_state_keeps_selected_command_when_input_refines() {
         let mut state = InlineShellCommandPaletteState::default();
         state.sync_to_input(":", None);
-        assert!(state.move_selection(10));
+        assert!(state.move_selection(8));
         assert_eq!(
             state.selected_command(),
             Some(InlineShellCommand::PlanningInit)
@@ -745,33 +676,6 @@ mod tests {
         assert_eq!(InlineShellCommand::Init.completion_text(), ":init");
         assert_eq!(InlineShellCommand::Task.completion_text(), ":task");
         assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
-        assert_eq!(
-            InlineShellCommand::MaxAutoTurns.completion_text(),
-            ":turns "
-        );
-    }
-
-    #[test]
-    fn max_auto_turn_command_hint_is_argument_aware() {
-        let no_arg = InlineShellCommandInput::parse(":turns").expect("command should parse");
-        let valid_arg = InlineShellCommandInput::parse(":turns 7").expect("command should parse");
-        let infinite_arg =
-            InlineShellCommandInput::parse(":turns infinite").expect("command should parse");
-        let invalid_arg = InlineShellCommandInput::parse(":turns 0").expect("command should parse");
-
-        assert_eq!(no_arg.buffered_hint(), MAX_AUTO_TURNS_USAGE);
-        assert_eq!(
-            valid_arg.buffered_hint(),
-            "Press Enter to set max auto turns to 7."
-        );
-        assert_eq!(
-            infinite_arg.buffered_hint(),
-            "Press Enter to set max auto turns to infinite."
-        );
-        assert_eq!(
-            invalid_arg.buffered_hint(),
-            "Press Enter to apply `:turns 0`. Max auto turns must be a whole number greater than 0 or `infinite`."
-        );
     }
 
     #[test]
@@ -794,7 +698,8 @@ mod tests {
 
         assert!(rendered.contains(":diag - diagnostics"));
         assert!(rendered.contains(":parallel [on|off] - parallel mode"));
-        assert!(rendered.contains(":turns <n|infinite> - set max auto turns"));
+        assert!(!rendered.contains(":turns"));
+        assert!(!rendered.contains(":auto"));
         assert!(rendered.contains(":help - command help"));
         assert!(!rendered.contains(InlineShellCommand::command_list_line()));
     }
@@ -933,14 +838,11 @@ mod tests {
             (":diag", Some("opened diagnostics inspection")),
             (":sessions", Some("opened recent sessions inspection")),
             (":queue", Some("opened planning queue inspection")),
-            (":stop", None),
-            (":auto", Some("opened automation controls")),
             (":doctor", None),
             (":init", None),
             (":planning", None),
             (":task", None),
             (":reset queue", None),
-            (":turns 5", None),
         ];
 
         for (input, expected) in cases {

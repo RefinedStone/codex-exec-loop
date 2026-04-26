@@ -4,7 +4,6 @@ use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_status_text, approval_review_summary_text, control_support_label,
-    runtime_control_summary_text,
 };
 use crate::application::service::planning::{
     PlanningAutoFollowBlockReason, PlanningRepairRequest, PlanningRuntimeAutoFollowDecision,
@@ -303,10 +302,6 @@ impl ConversationViewModel {
 
     pub(crate) fn turn_control_truth(&self) -> ConversationRuntimeControlTruth {
         self.turn_control_truth
-    }
-
-    pub(crate) fn turn_control_summary(&self) -> String {
-        runtime_control_summary_text(self.turn_control_truth)
     }
 
     pub(crate) fn interrupt_support_label(&self) -> &'static str {
@@ -680,8 +675,8 @@ impl ConversationViewModel {
 
     pub(crate) fn record_automation_stopped(&mut self) {
         self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
-            summary: "stopped: automation off".to_string(),
-            detail: "post-turn automation is off; toggle Ctrl+a to re-enable it".to_string(),
+            summary: "paused: internal continuation off".to_string(),
+            detail: "post-turn continuation is paused for this internal runtime cycle".to_string(),
         });
     }
 

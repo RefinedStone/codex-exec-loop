@@ -28,14 +28,6 @@ pub(crate) struct SupersessionOverlayView {
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
-pub(crate) struct AutomationOverlayView {
-    pub(crate) header_lines: Vec<Line<'static>>,
-    pub(crate) list_view: OverlayListView,
-    pub(crate) preview_lines: Vec<Line<'static>>,
-    pub(crate) status_lines: Vec<Line<'static>>,
-    pub(crate) key_lines: Vec<Line<'static>>,
-}
-
 pub(crate) struct QueueOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) summary_lines: Vec<Line<'static>>,

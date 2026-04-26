@@ -1,4 +1,3 @@
-pub(super) use super::planning::{build_automation_preview_lines, build_automation_status_lines};
 use super::*;
 use crate::domain::planning::{
     PlanningValidationSeverity, PriorityQueueSkippedTask, PriorityQueueTask,
@@ -31,8 +30,6 @@ const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
 const QUEUE_INSPECTION_TITLE_DETAIL_LIMIT: usize = 56;
 const QUEUE_INSPECTION_NOTE_DETAIL_LIMIT: usize = 56;
 
-#[path = "shell_presentation/automation_copy.rs"]
-mod automation_copy;
 #[path = "shell_presentation/capability_copy.rs"]
 mod capability_copy;
 #[path = "shell_presentation/capability_projection.rs"]
@@ -57,7 +54,6 @@ mod status_panels;
 #[path = "shell_presentation/transcript_copy.rs"]
 mod transcript_copy;
 
-pub(super) use automation_copy::{build_automation_key_lines, build_automation_list_view};
 #[cfg(test)]
 use runtime_status_copy::{auto_follow_prompt_lines, input_state_style};
 use runtime_status_copy::{
@@ -68,18 +64,16 @@ use runtime_status_copy::{
 #[cfg(test)]
 pub(super) use overlays::build_conversation_shell_frame_view;
 pub(super) use overlays::{
-    AutomationOverlayView, DirectionsMaintenanceOverlayView, HelpOverlayView, OverlayListView,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
     StartupOverlayView, SupersessionOverlayView, TaskIntakeOverlayView,
-    build_automation_overlay_view, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
-    build_task_intake_overlay_view,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_banner_lines,
+    build_startup_overlay_view, build_supersession_overlay_view, build_task_intake_overlay_view,
 };
 #[cfg(test)]
 pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
-pub(super) use runtime_status_copy::format_elapsed;
 #[cfg(test)]
 pub(super) use shell_core::{
     ConversationShellFrameView, ConversationShellView, TranscriptPanelView,

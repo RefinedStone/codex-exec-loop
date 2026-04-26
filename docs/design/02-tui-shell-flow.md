@@ -12,7 +12,7 @@ interaction flow and surface roles.
 - The operator can type before startup diagnostics finish.
 - Once diagnostics allow submission, the active prompt is submitted and live stream output stays attached to the bottom of the shell.
 - Completed assistant output moves into scrollback history while the live tail keeps the active prompt, transient stream text, and compact notices together.
-- The operator alternates between conversation, inspection overlays, planning authoring, and post-turn automation without leaving the same terminal session.
+- The operator alternates between conversation, inspection overlays, planning authoring, and queue/parallel execution without leaving the same terminal session.
 
 ## Current Shell Modes
 
@@ -21,7 +21,6 @@ interaction flow and surface roles.
 | Conversation | typing prompts, watching stream output, reading compact status | default shell surface | submit a prompt or open an overlay |
 | Diagnostics | checking startup readiness and failures | `Ctrl+d`, `:diag` | `Esc`, `Ctrl+c`, or toggle again |
 | Sessions | searching and reopening previous threads | `Ctrl+o`, `:sessions` | open a session, start a draft, or close |
-| Automation | editing post-turn automation policy and preview | `Ctrl+f`, `:auto` | close overlay |
 | Queue Inspection | reading the current queue task, proposed tasks, and skip summary | `:queue`, `:q` | close overlay |
 | Planning Controls | staging or reopening planning workspace flows | `:planning` | close overlay or enter editor/review flow |
 | Directions Maintenance | editing supporting direction and queue-idle artifacts | `:directions` | close overlay or enter staged editor flow |
