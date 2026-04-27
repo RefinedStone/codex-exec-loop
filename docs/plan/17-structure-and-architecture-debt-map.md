@@ -36,6 +36,34 @@ If a change starts with a later hotspot, record why an earlier hotspot was skipp
 | outbound infrastructure layout | `src/adapter/outbound/` as one flat directory | DB, GitHub, filesystem, and app-server details are harder to skip when tracing feature logic | group outbound adapters by infrastructure boundary and keep composition near entrypoints |
 | broad integration-style tests | `src/adapter/inbound/tui/app/app_tests.rs` and planning runtime test clusters | behavior is well-covered, but intent is harder to discover for future changes | split tests by operator journey and subsystem contract |
 
+## Planning Hotspot Audit
+
+Composition wiring is no longer the planning hotspot. The planning feature composition now delegates
+shared services plus workspace, runtime, and worker dependency bundles before constructing public
+use-case groups.
+
+The remaining planning hotspots by current implementation size and mixed responsibility are:
+
+| Rank | Hotspot | Current pressure | Narrow next slice |
+| --- | --- | --- | --- |
+| 1 | `src/application/service/planning/admin.rs` | admin DTOs, facade methods, document mutation, draft/session sync, validation, and projection mapping are all in one file | split admin projection mapping into a child module while keeping `PlanningAdminFacadeService` and exported DTOs unchanged |
+| 2 | `src/application/service/planning/repair/reconciliation.rs` | repair orchestration, protected-file restore, prompt construction, focused ledger excerpts, and tests share one module | split repair prompt construction and focused excerpt helpers behind the repair boundary |
+| 3 | `src/adapter/inbound/tui/app/planning/controller.rs` | shell command dispatch, setup flow, draft editor close-risk handling, reset parsing, and status copy share one controller impl | split reset/status-copy helpers before moving effectful controller paths |
+| 4 | `src/application/service/planning/authoring/directions.rs` | direction summary, supporting-file staging, doctor repair, and path rewriting share one authoring service | split supporting-file path rewrite helpers from the service methods |
+| 5 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation rules and runtime projection assembly are large but already stay inside runtime boundaries | extract rule groups only after admin and repair boundaries are clearer |
+
+Queued next narrow slice:
+
+- **Task:** Split planning admin projection mapping from `PlanningAdminFacadeService`.
+- **Why next:** `admin.rs` is the largest planning service file and mixes public boundary DTOs with
+  pure mapping functions. Moving the mapping functions first reduces review context without
+  changing behavior, ports, or operator flows.
+- **Target write set:** `src/application/service/planning/admin.rs` and a new
+  `src/application/service/planning/admin/projection.rs`.
+- **Acceptance:** admin public exports remain unchanged; `load_overview`, `load_runtime_summary`,
+  `load_management_view`, draft validation, and queue preview callers use the new projection module;
+  existing planning/admin tests continue to pass.
+
 ## Chosen Boundary Model
 
 ### 1. Shell Runtime Boundary
