@@ -8,6 +8,7 @@ mod crud;
 mod documents;
 mod draft_session;
 mod file_sync;
+mod overview;
 mod projection;
 
 use crate::application::port::outbound::planning_authority_port::{
@@ -23,7 +24,7 @@ use crate::application::service::planning::{
 };
 use crate::application::service::priority_queue_service::PriorityQueueService;
 
-use self::projection::{map_directions_summary, map_doctor_report, map_runtime_snapshot};
+use self::projection::map_doctor_report;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -426,38 +427,6 @@ impl PlanningAdminFacadeService {
 
     pub fn workspace_dir(&self) -> &str {
         &self.workspace_dir
-    }
-
-    pub fn load_overview(&self) -> Result<PlanningAdminOverview> {
-        let doctor = self
-            .planning
-            .workspace
-            .inspect_workspace(self.workspace_dir.as_str());
-        let runtime = self
-            .planning
-            .runtime
-            .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
-        let directions = self
-            .planning
-            .workspace
-            .load_summary(self.workspace_dir.as_str())
-            .ok()
-            .map(map_directions_summary);
-
-        Ok(PlanningAdminOverview {
-            workspace_dir: self.workspace_dir.clone(),
-            doctor: map_doctor_report(&doctor),
-            runtime: map_runtime_snapshot(&runtime),
-            directions,
-        })
-    }
-
-    pub fn load_runtime_summary(&self) -> Result<PlanningAdminRuntimeSummary> {
-        let runtime = self
-            .planning
-            .runtime
-            .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
-        Ok(map_runtime_snapshot(&runtime))
     }
 
     pub fn create_draft_session(
