@@ -9,10 +9,6 @@ impl PlanningAdminFacadeService {
             .planning
             .workspace
             .inspect_workspace(self.workspace_dir.as_str());
-        let runtime = self
-            .planning
-            .runtime
-            .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
         let directions = self
             .planning
             .workspace
@@ -23,7 +19,7 @@ impl PlanningAdminFacadeService {
         Ok(PlanningAdminOverview {
             workspace_dir: self.workspace_dir.clone(),
             doctor: map_doctor_report(&doctor),
-            runtime: map_runtime_snapshot(&runtime),
+            runtime: self.load_runtime_summary()?,
             directions,
         })
     }

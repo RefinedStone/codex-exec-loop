@@ -683,7 +683,9 @@
       "base_priority": 94,
       "dynamic_priority_delta": 1,
       "priority_reason": "The latest main-session reply says this boundary-adoption slice is merged, validated, and has no remaining work in scope, so it must close instead of being repeated as the queue head.",
-      "depends_on": [],
+      "depends_on": [
+        "planning-queue-projection-snapshot-compat-refactor"
+      ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",
@@ -700,7 +702,9 @@
       "base_priority": 89,
       "dynamic_priority_delta": 1,
       "priority_reason": "The latest main-session reply explicitly says this noop relocation is merged and has no remaining work in scope, so it must close and hand queue progression to the remaining planning composition slice.",
-      "depends_on": [],
+      "depends_on": [
+        "planning-public-boundary-test-harness-seam"
+      ],
       "blocked_by": [],
       "created_by": "llm",
       "last_updated_by": "llm",

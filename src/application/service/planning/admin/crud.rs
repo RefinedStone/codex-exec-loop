@@ -30,17 +30,18 @@ impl PlanningAdminFacadeService {
         let mut documents = self.load_admin_documents()?;
         let direction = direction_from_request(request, &documents.directions)?;
         let id = direction.id.clone();
-        let mut updated = false;
-        for existing in &mut documents.directions.directions {
-            if existing.id.trim() == id {
-                *existing = direction.clone();
-                updated = true;
-                break;
-            }
-        }
-        if !updated {
+        let updated = if let Some(existing) = documents
+            .directions
+            .directions
+            .iter_mut()
+            .find(|existing| existing.id.trim() == id)
+        {
+            *existing = direction;
+            true
+        } else {
             documents.directions.directions.push(direction);
-        }
+            false
+        };
         self.commit_admin_documents(documents)?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
@@ -112,17 +113,18 @@ impl PlanningAdminFacadeService {
         let task = task_from_request(request, &documents.task_ledger, default_direction_id)?;
         ensure_direction_exists(&documents.directions, &task.direction_id)?;
         let task_id = task.id.clone();
-        let mut updated = false;
-        for existing in &mut documents.task_ledger.tasks {
-            if existing.id.trim() == task_id {
-                *existing = task.clone();
-                updated = true;
-                break;
-            }
-        }
-        if !updated {
+        let updated = if let Some(existing) = documents
+            .task_ledger
+            .tasks
+            .iter_mut()
+            .find(|existing| existing.id.trim() == task_id)
+        {
+            *existing = task;
+            true
+        } else {
             documents.task_ledger.tasks.push(task);
-        }
+            false
+        };
         self.commit_admin_documents(documents)?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -57,14 +57,28 @@ pub(super) fn commit_accepted_task_ledger(
     committed_record.queue_snapshot_json = Some(queue_snapshot_json);
     planning_workspace_port
         .commit_planning_workspace_files(request.workspace_dir, &committed_record)?;
-    planning_task_repository_port.commit_task_authority_snapshot(
+    let authority_snapshot =
+        planning_task_repository_port.load_task_authority_snapshot(request.workspace_dir)?;
+    match planning_task_repository_port.commit_task_authority_snapshot(
         request.workspace_dir,
         PlanningTaskAuthorityCommit {
-            observed_planning_revision: None,
+            observed_planning_revision: authority_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.planning_revision),
             task_ledger,
             queue_projection: &queue_projection,
         },
-    )?;
+    )? {
+        PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+        PlanningTaskAuthorityCommitResult::Conflict {
+            observed_planning_revision,
+            current_planning_revision,
+        } => {
+            return Err(anyhow!(
+                "planning db changed while accepting reconciled task-ledger.json (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+            ));
+        }
+    }
 
     Ok(PlanningAcceptedLedgerCommitOutcome {
         queue_projection_action: PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning,

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow};
@@ -112,23 +113,24 @@ impl PlanningAdminFacadeService {
         &self,
         request: &PlanningAdminDraftMutationRequest,
     ) -> Result<Vec<PlanningDraftEditorFile>> {
-        let session = self.load_draft_session(PlanningAdminDraftLoadRequest {
-            draft_name: request.draft_name.clone(),
-            kind: request.kind,
-            direction_id: request.direction_id.clone(),
-        })?;
+        let loaded = self
+            .planning_workspace_port
+            .load_planning_draft_files(self.workspace_dir.as_str(), &request.draft_name)?;
         let update_map = request
             .files
             .iter()
             .map(|update| (update.key, update.body.clone()))
             .collect::<BTreeMap<_, _>>();
 
-        let mut files = Vec::with_capacity(session.files.len());
-        for file in session.files {
+        let mut files = Vec::with_capacity(loaded.staged_files.len());
+        for file in loaded.staged_files {
+            let Some(key) = file_key_for_kind(request.kind, &file.active_path) else {
+                continue;
+            };
             files.push(PlanningDraftEditorFile {
                 active_path: file.active_path,
-                staged_path: format!("{}#{}", request.draft_name, file.key.label()),
-                body: update_map.get(&file.key).cloned().unwrap_or(file.body),
+                staged_path: file.staged_path,
+                body: update_map.get(&key).cloned().unwrap_or(file.body),
             });
         }
         Ok(files)
@@ -230,7 +232,7 @@ impl PlanningAdminFacadeService {
                     .priority_queue_service
                     .build_projection(directions, task_ledger)
                     .ok()
-                    .map(map_queue_preview),
+                    .map(|projection| map_queue_preview(&projection)),
                 _ => None,
             }
         } else {
@@ -243,17 +245,18 @@ impl PlanningAdminFacadeService {
         })
     }
 
-    fn load_effective_draft_body(
+    fn load_effective_draft_body<'a>(
         &self,
-        staged_files: &BTreeMap<&str, &str>,
+        staged_files: &BTreeMap<&'a str, &'a str>,
         path: &'static str,
         file_kind: PlanningFileKind,
-    ) -> Result<String> {
+    ) -> Result<Cow<'a, str>> {
         if let Some(body) = staged_files.get(path) {
-            return Ok((*body).to_string());
+            return Ok(Cow::Borrowed(*body));
         }
         self.planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), path)?
+            .map(Cow::Owned)
             .ok_or_else(|| missing_core_draft_file_error(path, file_kind))
     }
 

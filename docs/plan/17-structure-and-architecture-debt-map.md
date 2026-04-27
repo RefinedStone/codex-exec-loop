@@ -31,8 +31,8 @@ If a change starts with a later hotspot, record why an earlier hotspot was skipp
 | conversation runtime | `src/adapter/inbound/tui/app/conversation_runtime.rs`, `conversation_model.rs`, `conversation_model/view_model.rs` | turn lifecycle, continuation state, and shell status compete in one runtime surface | separate conversation lifecycle from continuation lifecycle and surface projection |
 | planning controller | `src/adapter/inbound/tui/app/planning/controller.rs`, `planning_draft_editor_ui.rs` | planning setup, editor safety, and direction-side authoring feel coupled | separate planning setup flow, authoring flow, and close-risk handling |
 | parallel mode service | `src/application/service/parallel_mode_service.rs` | storage, recovery, queue, slot, and snapshot concerns compete in one hotspot, so safe edits require too much context | split into readiness, slots, distributor, recovery, snapshot, and completion boundaries |
-| planning runtime services | `src/application/service/planning_directions_service.rs`, `src/application/service/planning_validation_service.rs`, `src/application/service/planning_reconciliation_service.rs`, `src/application/service/planning_prompt_service.rs` | planning concepts are powerful but spread across many services with overlapping product language | distinguish authoring, validation, runtime projection, and recovery more sharply |
-| continuation policy and queue behavior | `src/application/service/planning_runtime_policy_service.rs`, `src/application/service/planning_runtime_facade_service.rs`, `src/application/service/planning_worker_orchestration_service.rs` | queue-driven continuation is hard to explain because policy, prompting, and recovery are separated differently than the operator sees them | align continuation policy surface with operator concepts such as next task, pause reason, and resume path |
+| planning runtime services | `src/application/service/planning/authoring/directions.rs`, `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/repair/reconciliation.rs`, `src/application/service/planning/runtime/prompt.rs` | planning concepts are powerful but spread across many services with overlapping product language | distinguish authoring, validation, runtime projection, and recovery more sharply |
+| continuation policy and queue behavior | `src/application/service/planning/runtime/policy.rs`, `src/application/service/planning/runtime/facade.rs`, `src/application/service/planning/worker/orchestration.rs` | queue-driven continuation is hard to explain because policy, prompting, and recovery are separated differently than the operator sees them | align continuation policy surface with operator concepts such as next task, pause reason, and resume path |
 | outbound infrastructure layout | `src/adapter/outbound/` as one flat directory | DB, GitHub, filesystem, and app-server details are harder to skip when tracing feature logic | group outbound adapters by infrastructure boundary and keep composition near entrypoints |
 | broad integration-style tests | `src/adapter/inbound/tui/app/app_tests.rs` and planning runtime test clusters | behavior is well-covered, but intent is harder to discover for future changes | split tests by operator journey and subsystem contract |
 
@@ -46,7 +46,7 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
-| 1 | `src/application/service/planning/admin.rs` plus `src/application/service/planning/admin/*` | admin DTOs still share the facade file with overview/runtime, file sync, draft wrapper, and reset orchestration; projection, document mutation, draft session internals, and CRUD orchestration are now behind child modules | split admin file sync orchestration into a child module while keeping `PlanningAdminFacadeService` and exported DTOs unchanged |
+| 1 | `src/application/service/planning/admin.rs` and `src/application/service/planning/admin/*` | admin DTOs still share the facade file with `PlanningAdminFacadeService` while overview/runtime, file sync, draft wrapper, and reset orchestration move behind child modules | keep shrinking admin child-module boundaries while preserving `PlanningAdminFacadeService` and exported DTOs |
 | 2 | `src/application/service/planning/repair/reconciliation.rs` | repair orchestration, protected-file restore, prompt construction, focused ledger excerpts, and tests share one module | split repair prompt construction and focused excerpt helpers behind the repair boundary |
 | 3 | `src/adapter/inbound/tui/app/planning/controller.rs` | shell command dispatch, setup flow, draft editor close-risk handling, reset parsing, and status copy share one controller impl | split reset/status-copy helpers before moving effectful controller paths |
 | 4 | `src/application/service/planning/authoring/directions.rs` | direction summary, supporting-file staging, doctor repair, and path rewriting share one authoring service | split supporting-file path rewrite helpers from the service methods |
@@ -55,7 +55,9 @@ The remaining planning hotspots by current implementation size and mixed respons
 Queued next narrow slice:
 
 - **Task:** Split planning admin file sync orchestration from `PlanningAdminFacadeService`.
-- **Why next:** after the projection, document mutation, draft session, and CRUD splits,
+- **Why next:** this planning-specific audit follows the already-started planning cleanup lane while
+  the current top TUI hotspots remain untouched by this document-only queue update. After the
+  projection, document mutation, draft session, and CRUD splits,
   `admin.rs` still owns effectful export/apply flows plus parallel-work blocking helpers. Moving
   that file sync orchestration next reduces the remaining facade context without changing behavior,
   ports, or operator flows.

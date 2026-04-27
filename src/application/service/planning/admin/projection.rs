@@ -21,11 +21,9 @@ pub(super) fn map_management_view(
     task_ledger: &TaskLedgerDocument,
     default_direction_id: &str,
 ) -> PlanningAdminManagementView {
-    let mut task_counts = BTreeMap::<String, usize>::new();
+    let mut task_counts = BTreeMap::<&str, usize>::new();
     for task in &task_ledger.tasks {
-        *task_counts
-            .entry(task.direction_id.trim().to_string())
-            .or_default() += 1;
+        *task_counts.entry(task.direction_id.trim()).or_default() += 1;
     }
 
     PlanningAdminManagementView {
@@ -82,7 +80,7 @@ pub(super) fn map_doctor_report(report: &PlanningDoctorReport) -> PlanningAdminD
 pub(super) fn map_runtime_snapshot(
     snapshot: &PlanningRuntimeSnapshot,
 ) -> PlanningAdminRuntimeSummary {
-    let queue_preview = snapshot.queue_projection().cloned().map(map_queue_preview);
+    let queue_preview = snapshot.queue_projection().map(map_queue_preview);
     PlanningAdminRuntimeSummary {
         workspace_present: snapshot.workspace_present(),
         preview_status_label: snapshot.preview_status_label().to_string(),
@@ -128,7 +126,11 @@ pub(super) fn map_directions_summary(
 pub(super) fn map_validation_report(
     report: &PlanningValidationReport,
 ) -> PlanningAdminValidationView {
-    let error_count = report.errors().len();
+    let error_count = report
+        .issues
+        .iter()
+        .filter(|issue| issue.severity == PlanningValidationSeverity::Error)
+        .count();
     let warning_count = report
         .issues
         .iter()
@@ -159,7 +161,7 @@ pub(super) fn map_validation_report(
     }
 }
 
-pub(super) fn map_queue_preview(snapshot: PriorityQueueProjection) -> PlanningAdminQueuePreview {
+pub(super) fn map_queue_preview(snapshot: &PriorityQueueProjection) -> PlanningAdminQueuePreview {
     PlanningAdminQueuePreview {
         queue_summary: match snapshot.next_task.as_ref() {
             Some(task) => format!("now: {}", task.task_title.trim()),

@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
-use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
-use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
 use crate::application::port::outbound::{
-    planning_authority_port::PlanningAuthorityPort,
-    planning_task_repository_port::PlanningTaskRepositoryPort,
+    planning_authority_port::{NoopPlanningAuthorityPort, PlanningAuthorityPort},
+    planning_task_repository_port::{NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort},
     planning_workspace_port::PlanningWorkspacePort,
 };
 use crate::application::service::planning::PlanningServices;

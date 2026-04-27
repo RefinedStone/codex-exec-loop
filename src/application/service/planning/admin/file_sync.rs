@@ -3,14 +3,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
+use super::{PlanningAdminFacadeService, PlanningAdminFileSyncOutcome};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
 use crate::application::service::planning::{
     DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
 };
-use crate::domain::parallel_mode::ParallelModeQueueItemState;
-
-use super::{PlanningAdminFacadeService, PlanningAdminFileSyncOutcome};
 
 impl PlanningAdminFacadeService {
     pub fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
@@ -105,21 +103,11 @@ fn describe_parallel_busy(runtime: &PlanningAuthorityRuntimeProjectionSnapshot) 
         .iter()
         .find(|record| record.queue_state.is_active())
     {
-        let state = match record.queue_state {
-            ParallelModeQueueItemState::Idle => "idle",
-            ParallelModeQueueItemState::Queued => "queued",
-            ParallelModeQueueItemState::Pushing => "pushing",
-            ParallelModeQueueItemState::PrPending => "pr pending",
-            ParallelModeQueueItemState::MergePending => "merge pending",
-            ParallelModeQueueItemState::Integrating => "integrating",
-            ParallelModeQueueItemState::Cleaning => "cleaning",
-            ParallelModeQueueItemState::Done => "done",
-            ParallelModeQueueItemState::Blocked => "blocked",
-            ParallelModeQueueItemState::Failed => "failed",
-        };
         return Some(format!(
             "distributor item {} is {} for task {}",
-            record.queue_item_id, state, record.task_id
+            record.queue_item_id,
+            record.queue_state.label(),
+            record.task_id
         ));
     }
     None

@@ -130,8 +130,11 @@ fn archive_rejected_task_ledger(
 fn validation_error_summaries(validation_result: &PlanningValidationResult) -> Vec<String> {
     validation_result
         .report
-        .errors()
-        .into_iter()
+        .issues
+        .iter()
+        .filter(|issue| {
+            issue.severity == crate::domain::planning::PlanningValidationSeverity::Error
+        })
         .map(|issue| issue.message.clone())
         .collect()
 }

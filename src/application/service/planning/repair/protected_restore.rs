@@ -133,7 +133,6 @@ fn restore_protected_file(
         request.turn_id,
         request.relative_path,
         request.current_body,
-        request.execution_snapshot_body,
     )?;
 
     let restoration = PlanningProtectedFileRestoration {
@@ -166,14 +165,10 @@ fn archive_changed_candidate(
     turn_id: &str,
     relative_path: &str,
     current_body: Option<&str>,
-    execution_snapshot_body: Option<&str>,
 ) -> Result<Option<String>> {
     let Some(current_body) = current_body else {
         return Ok(None);
     };
-    if Some(current_body) == execution_snapshot_body {
-        return Ok(None);
-    }
 
     planning_workspace_port
         .archive_rejected_planning_file(workspace_dir, turn_id, relative_path, current_body)

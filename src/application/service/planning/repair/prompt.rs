@@ -201,7 +201,7 @@ fn collect_focus_task_ids(
 
     for validation_error in validation_errors {
         for task_id in &known_task_ids {
-            if validation_error.contains(task_id) {
+            if validation_error_mentions_task_id(validation_error, task_id) {
                 focus_ids.insert(task_id.clone());
             }
         }
@@ -261,34 +261,46 @@ fn normalized_task_definition(task: &TaskDefinition) -> TaskDefinition {
     task.normalized()
 }
 
-fn expand_related_task_ids(focus_ids: &mut BTreeSet<String>, task_ledger: &TaskLedgerDocument) {
-    let seed_ids = focus_ids.clone();
-    for task in &task_ledger.tasks {
-        let task_id = task.id.trim();
-        let directly_related = seed_ids.contains(task_id)
-            || task
-                .depends_on
-                .iter()
-                .any(|dependency_id| seed_ids.contains(dependency_id.trim()))
-            || task
-                .blocked_by
-                .iter()
-                .any(|blocker_id| seed_ids.contains(blocker_id.trim()));
-        if !directly_related {
-            continue;
-        }
+fn validation_error_mentions_task_id(validation_error: &str, task_id: &str) -> bool {
+    validation_error
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '-' || character == '_')
+        })
+        .any(|token| token == task_id)
+}
 
-        focus_ids.insert(task_id.to_string());
-        for dependency_id in &task.depends_on {
-            let dependency_id = dependency_id.trim();
-            if !dependency_id.is_empty() {
-                focus_ids.insert(dependency_id.to_string());
+fn expand_related_task_ids(focus_ids: &mut BTreeSet<String>, task_ledger: &TaskLedgerDocument) {
+    let mut expanded = true;
+    while expanded {
+        expanded = false;
+        let seed_ids = focus_ids.clone();
+        for task in &task_ledger.tasks {
+            let task_id = task.id.trim();
+            let directly_related = seed_ids.contains(task_id)
+                || task
+                    .depends_on
+                    .iter()
+                    .any(|dependency_id| seed_ids.contains(dependency_id.trim()))
+                || task
+                    .blocked_by
+                    .iter()
+                    .any(|blocker_id| seed_ids.contains(blocker_id.trim()));
+            if !directly_related {
+                continue;
             }
-        }
-        for blocker_id in &task.blocked_by {
-            let blocker_id = blocker_id.trim();
-            if !blocker_id.is_empty() {
-                focus_ids.insert(blocker_id.to_string());
+
+            expanded |= focus_ids.insert(task_id.to_string());
+            for dependency_id in &task.depends_on {
+                let dependency_id = dependency_id.trim();
+                if !dependency_id.is_empty() {
+                    expanded |= focus_ids.insert(dependency_id.to_string());
+                }
+            }
+            for blocker_id in &task.blocked_by {
+                let blocker_id = blocker_id.trim();
+                if !blocker_id.is_empty() {
+                    expanded |= focus_ids.insert(blocker_id.to_string());
+                }
             }
         }
     }
