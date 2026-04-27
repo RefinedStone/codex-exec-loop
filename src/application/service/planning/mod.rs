@@ -36,7 +36,7 @@ pub use self::feature::PlanningFeature;
 pub use self::feature::PlanningFeature as PlanningServices;
 pub use self::repair::doctor::{PlanningDoctorReport, PlanningDoctorState};
 pub use self::repair::reconciliation::{
-    PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueSnapshotAction,
+    PlanningExecutionSnapshot, PlanningProtectedFileRestoration, PlanningQueueProjectionAction,
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
 pub use self::repair::reset::{PlanningResetTarget, PlanningWorkspaceResetResult};

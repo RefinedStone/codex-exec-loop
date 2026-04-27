@@ -38,7 +38,7 @@ use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::parallel_mode::ParallelModeQueueItemState;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningFileKind,
-    PlanningValidationReport, PlanningWorkspaceFiles, PriorityQueueSnapshot, TaskActor,
+    PlanningValidationReport, PlanningWorkspaceFiles, PriorityQueueProjection, TaskActor,
     TaskDefinition, TaskLedgerDocument, TaskStatus,
 };
 
@@ -873,9 +873,9 @@ impl PlanningAdminFacadeService {
                     .join("; ")
             );
         }
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(&documents.directions, &documents.task_ledger)
+            .build_projection(&documents.directions, &documents.task_ledger)
             .context("failed to rebuild planning queue")?;
 
         if documents.uses_task_repository {
@@ -886,7 +886,7 @@ impl PlanningAdminFacadeService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: documents.observed_planning_revision,
                         task_ledger: &documents.task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )? {
                 PlanningTaskAuthorityCommitResult::Committed { .. } => {}
@@ -920,7 +920,7 @@ impl PlanningAdminFacadeService {
                 directions_toml: Some(directions_toml),
                 task_ledger_json: Some(task_ledger_json),
                 task_ledger_schema_json: Some(documents.task_ledger_schema_json),
-                queue_snapshot_json: Some(serde_json::to_string_pretty(&queue_snapshot)?),
+                queue_snapshot_json: Some(serde_json::to_string_pretty(&queue_projection)?),
                 result_output_markdown: Some(documents.result_output_markdown),
             },
         )
@@ -1106,7 +1106,7 @@ impl PlanningAdminFacadeService {
             match (result.directions.as_ref(), result.task_ledger.as_ref()) {
                 (Some(directions), Some(task_ledger)) => self
                     .priority_queue_service
-                    .build_snapshot(directions, task_ledger)
+                    .build_projection(directions, task_ledger)
                     .ok()
                     .map(map_queue_preview),
                 _ => None,
@@ -1753,7 +1753,7 @@ fn map_doctor_report(report: &PlanningDoctorReport) -> PlanningAdminDoctorSummar
 }
 
 fn map_runtime_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanningAdminRuntimeSummary {
-    let queue_preview = snapshot.queue_snapshot().cloned().map(map_queue_preview);
+    let queue_preview = snapshot.queue_projection().cloned().map(map_queue_preview);
     PlanningAdminRuntimeSummary {
         workspace_present: snapshot.workspace_present(),
         preview_status_label: snapshot.preview_status_label().to_string(),
@@ -1834,7 +1834,7 @@ fn map_validation_report(report: &PlanningValidationReport) -> PlanningAdminVali
     }
 }
 
-fn map_queue_preview(snapshot: PriorityQueueSnapshot) -> PlanningAdminQueuePreview {
+fn map_queue_preview(snapshot: PriorityQueueProjection) -> PlanningAdminQueuePreview {
     PlanningAdminQueuePreview {
         queue_summary: match snapshot.next_task.as_ref() {
             Some(task) => format!("now: {}", task.task_title.trim()),

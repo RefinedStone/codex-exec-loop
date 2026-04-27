@@ -339,9 +339,9 @@ impl PlanningResetService {
             .task_ledger
             .as_ref()
             .ok_or_else(|| anyhow!("valid reset workspace did not include task-ledger"))?;
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(directions, task_ledger)
+            .build_projection(directions, task_ledger)
             .map_err(|error| anyhow!("valid reset queue build failed: {error}"))?;
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
@@ -349,7 +349,7 @@ impl PlanningResetService {
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
                     task_ledger,
-                    queue_snapshot: &queue_snapshot,
+                    queue_projection: &queue_projection,
                 },
             )
             .map(|_| ())
@@ -599,7 +599,7 @@ state = "active"
     }
 
     #[test]
-    fn reset_queue_rewrites_task_ledger_and_removes_queue_snapshot() {
+    fn reset_queue_rewrites_task_ledger_and_removes_queue_projection() {
         let (service, workspace_port) = reset_service();
         seed_active_workspace(
             &workspace_port,

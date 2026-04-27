@@ -267,9 +267,9 @@ impl PlanningInitService {
             .task_ledger
             .as_ref()
             .ok_or_else(|| anyhow!("valid staged draft did not include task-ledger"))?;
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(directions, task_ledger)
+            .build_projection(directions, task_ledger)
             .map_err(|error| anyhow!("valid staged draft queue build failed: {error}"))?;
         let mut previous_active_files = HashMap::new();
         for file in &loaded.staged_files {
@@ -296,7 +296,7 @@ impl PlanningInitService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: None,
                         task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )?;
             Ok(())
@@ -556,9 +556,9 @@ impl PlanningInitService {
             .task_ledger
             .as_ref()
             .ok_or_else(|| anyhow!("valid bootstrap did not include task-ledger"))?;
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(directions, task_ledger)
+            .build_projection(directions, task_ledger)
             .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
@@ -566,7 +566,7 @@ impl PlanningInitService {
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
                     task_ledger,
-                    queue_snapshot: &queue_snapshot,
+                    queue_projection: &queue_projection,
                 },
             )
             .map(|_| ())

@@ -974,8 +974,8 @@ fn official_refresh_repeated_queue_head_keeps_slot_reserved_until_ledger_advance
         ) {
             (Some(previous), Some(current)) => previous == current,
             _ => {
-                previous_snapshot.queue_snapshot()
-                    == conversation.planning_runtime_snapshot.queue_snapshot()
+                previous_snapshot.queue_projection()
+                    == conversation.planning_runtime_snapshot.queue_projection()
             }
         };
         last_repeated_gate_inputs = Some((

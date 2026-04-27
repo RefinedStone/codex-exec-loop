@@ -215,12 +215,12 @@ fn build_queue_framing_details_from_snapshot(
     snapshot: &PlanningRuntimeSnapshot,
     max_detail_len: usize,
 ) -> Option<QueueFramingDetails> {
-    let queue_snapshot = snapshot.queue_snapshot();
+    let queue_projection = snapshot.queue_projection();
     let has_queue_context = snapshot.workspace_present()
         || snapshot.queue_head().is_some()
         || snapshot.queue_summary().is_some()
         || snapshot.proposal_summary().is_some()
-        || queue_snapshot.is_some();
+        || queue_projection.is_some();
     if !has_queue_context {
         return None;
     }
@@ -232,11 +232,11 @@ fn build_queue_framing_details_from_snapshot(
         blocked_detail: "none".to_string(),
     };
 
-    if let Some(queue_snapshot) = queue_snapshot {
-        let current_task = queue_snapshot
+    if let Some(queue_projection) = queue_projection {
+        let current_task = queue_projection
             .next_task
             .as_ref()
-            .or_else(|| queue_snapshot.active_tasks.first())
+            .or_else(|| queue_projection.active_tasks.first())
             .or_else(|| snapshot.queue_head());
         let now_detail = current_task
             .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
@@ -244,13 +244,13 @@ fn build_queue_framing_details_from_snapshot(
 
         let remaining_tasks = current_task
             .map(|current| {
-                queue_snapshot
+                queue_projection
                     .active_tasks
                     .iter()
                     .filter(|task| task.task_id != current.task_id)
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_else(|| queue_snapshot.active_tasks.iter().collect::<Vec<_>>());
+            .unwrap_or_else(|| queue_projection.active_tasks.iter().collect::<Vec<_>>());
         let next_detail = remaining_tasks
             .first()
             .map(|task| {
@@ -263,13 +263,13 @@ fn build_queue_framing_details_from_snapshot(
             })
             .unwrap_or_else(|| "none".to_string());
 
-        let proposed_detail = queue_snapshot
+        let proposed_detail = queue_projection
             .proposed_tasks
             .first()
             .map(|task| {
                 compact_queue_task_summary(
                     task.task_title.as_str(),
-                    queue_snapshot.proposed_tasks.len(),
+                    queue_projection.proposed_tasks.len(),
                     1,
                     max_detail_len,
                 )
@@ -281,14 +281,14 @@ fn build_queue_framing_details_from_snapshot(
             })
             .unwrap_or_else(|| "none".to_string());
 
-        let blocked_detail = queue_snapshot
+        let blocked_detail = queue_projection
             .skipped_tasks
             .first()
             .map(|task| {
                 let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
                 let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
                 let mut summary = format!("{title} ({reason})");
-                let hidden_count = queue_snapshot.skipped_tasks.len().saturating_sub(1);
+                let hidden_count = queue_projection.skipped_tasks.len().saturating_sub(1);
                 if hidden_count > 0 {
                     summary.push_str(&format!(" (+{hidden_count} more)"));
                 }
@@ -380,7 +380,7 @@ mod tests {
         compact_queue_framing_summary,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
-    use crate::domain::planning::{PriorityQueueSnapshot, PriorityQueueTask, TaskStatus};
+    use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
 
     #[test]
     fn resumed_session_status_prefers_queue_summary_projection() {
@@ -401,12 +401,12 @@ mod tests {
 
     #[test]
     fn queue_framing_summary_skips_duplicate_next_when_snapshot_has_no_explicit_next_task() {
-        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_snapshot(
+        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
             "Planning Context".to_string(),
             "queue ready".to_string(),
             None,
             None,
-            PriorityQueueSnapshot {
+            PriorityQueueProjection {
                 next_task: None,
                 active_tasks: vec![
                     queue_task("task-1", "Ship resume status", 1),

@@ -31,7 +31,7 @@ use crate::domain::parallel_mode::{
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
     PlanningAuthorityShadowStoreInspection, PlanningAuthorityShadowStoreSyncState,
-    PriorityQueueSkippedTask, PriorityQueueSnapshot, PriorityQueueTask, TaskLedgerDocument,
+    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskLedgerDocument,
 };
 
 const AKRA_HOME_ENV: &str = "AKRA_HOME";
@@ -271,7 +271,7 @@ impl SqlitePlanningAuthorityAdapter {
             || raw_active_document(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?.is_some();
         if let Some(existing_snapshot) = existing_snapshot
             && existing_snapshot.task_ledger == *commit.task_ledger
-            && existing_snapshot.queue_snapshot == *commit.queue_snapshot
+            && existing_snapshot.queue_projection == *commit.queue_projection
             && !has_stale_task_documents
         {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
@@ -280,7 +280,7 @@ impl SqlitePlanningAuthorityAdapter {
         }
 
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
-        replace_task_authority_tables(&transaction, commit.task_ledger, commit.queue_snapshot)?;
+        replace_task_authority_tables(&transaction, commit.task_ledger, commit.queue_projection)?;
         remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
         remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
         let planning_revision = bump_planning_revision(&transaction)?;
@@ -324,8 +324,8 @@ impl SqlitePlanningAuthorityAdapter {
         } else {
             None
         };
-        let existing_queue_snapshot = if relative_path == TASK_LEDGER_FILE_PATH {
-            load_queue_snapshot_from_connection(&connection)?
+        let existing_queue_projection = if relative_path == TASK_LEDGER_FILE_PATH {
+            load_queue_projection_from_connection(&connection)?
         } else {
             None
         };
@@ -345,9 +345,9 @@ impl SqlitePlanningAuthorityAdapter {
                     {
                         prune_task_ledger_to_direction_ids(&mut task_ledger, &direction_ids);
                     }
-                    let queue_snapshot =
-                        existing_queue_snapshot.unwrap_or_else(empty_queue_snapshot);
-                    replace_task_authority_tables(&transaction, &task_ledger, &queue_snapshot)?;
+                    let queue_projection =
+                        existing_queue_projection.unwrap_or_else(empty_queue_projection);
+                    replace_task_authority_tables(&transaction, &task_ledger, &queue_projection)?;
                     remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
                     remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
                 }
@@ -361,15 +361,15 @@ impl SqlitePlanningAuthorityAdapter {
         } else if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
             match (existing_task_ledger, body) {
                 (Some(task_ledger), Some(body)) => {
-                    let queue_snapshot = parse_queue_snapshot_export(body);
-                    replace_task_authority_tables(&transaction, &task_ledger, &queue_snapshot)?;
+                    let queue_projection = parse_queue_projection_export(body);
+                    replace_task_authority_tables(&transaction, &task_ledger, &queue_projection)?;
                     remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
                 }
                 (Some(task_ledger), None) => {
                     replace_task_authority_tables(
                         &transaction,
                         &task_ledger,
-                        &empty_queue_snapshot(),
+                        &empty_queue_projection(),
                     )?;
                     remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
                 }
@@ -414,7 +414,11 @@ impl SqlitePlanningAuthorityAdapter {
             true
         } else if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
             if let Some(task_ledger) = load_task_ledger_from_connection(&transaction)? {
-                replace_task_authority_tables(&transaction, &task_ledger, &empty_queue_snapshot())?;
+                replace_task_authority_tables(
+                    &transaction,
+                    &task_ledger,
+                    &empty_queue_projection(),
+                )?;
                 remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
                 true
             } else {
@@ -849,7 +853,9 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(PlanningAuthorityExportView {
             snapshot_documents: load_planning_snapshot_export(location)?,
             task_ledger_view: read_optional_export_file(&task_ledger_export_path(location))?,
-            queue_snapshot_view: read_optional_export_file(&queue_snapshot_export_path(location))?,
+            queue_projection_view: read_optional_export_file(&queue_projection_export_path(
+                location,
+            ))?,
         })
     }
 
@@ -1303,14 +1309,14 @@ fn load_task_authority_snapshot_from_connection(
     let Some(task_ledger) = load_task_ledger_from_connection(connection)? else {
         return Ok(None);
     };
-    let queue_snapshot =
-        load_queue_snapshot_from_connection(connection)?.unwrap_or_else(empty_queue_snapshot);
+    let queue_projection =
+        load_queue_projection_from_connection(connection)?.unwrap_or_else(empty_queue_projection);
     let planning_revision =
         read_metadata_i64_connection(connection, "planning_revision")?.unwrap_or(0);
     Ok(Some(PlanningTaskAuthoritySnapshot {
         planning_revision,
         task_ledger,
-        queue_snapshot,
+        queue_projection,
     }))
 }
 
@@ -1321,8 +1327,8 @@ fn load_task_ledger_json_from_connection(connection: &Connection) -> Result<Opti
 }
 
 fn load_queue_snapshot_json_from_connection(connection: &Connection) -> Result<Option<String>> {
-    load_queue_snapshot_from_connection(connection)?
-        .map(|queue_snapshot| serialize_pretty_json(&queue_snapshot))
+    load_queue_projection_from_connection(connection)?
+        .map(|queue_projection| serialize_pretty_json(&queue_projection))
         .transpose()
 }
 
@@ -1357,9 +1363,9 @@ fn load_task_ledger_from_connection(connection: &Connection) -> Result<Option<Ta
     Ok(Some(TaskLedgerDocument { version, tasks }))
 }
 
-fn load_queue_snapshot_from_connection(
+fn load_queue_projection_from_connection(
     connection: &Connection,
-) -> Result<Option<PriorityQueueSnapshot>> {
+) -> Result<Option<PriorityQueueProjection>> {
     if !task_authority_exists(connection)? {
         return Ok(None);
     }
@@ -1412,7 +1418,7 @@ fn load_queue_snapshot_from_connection(
         }
     }
 
-    Ok(Some(PriorityQueueSnapshot {
+    Ok(Some(PriorityQueueProjection {
         next_task: active_tasks.first().cloned(),
         active_tasks,
         proposed_tasks,
@@ -1435,8 +1441,8 @@ fn serialize_pretty_json<T: serde::Serialize>(value: &T) -> Result<String> {
     serde_json::to_string_pretty(value).context("failed to serialize planning authority json")
 }
 
-fn empty_queue_snapshot() -> PriorityQueueSnapshot {
-    PriorityQueueSnapshot {
+fn empty_queue_projection() -> PriorityQueueProjection {
+    PriorityQueueProjection {
         next_task: None,
         active_tasks: Vec::new(),
         proposed_tasks: Vec::new(),
@@ -1444,8 +1450,9 @@ fn empty_queue_snapshot() -> PriorityQueueSnapshot {
     }
 }
 
-fn parse_queue_snapshot_export(body: &str) -> PriorityQueueSnapshot {
-    serde_json::from_str::<PriorityQueueSnapshot>(body).unwrap_or_else(|_| empty_queue_snapshot())
+fn parse_queue_projection_export(body: &str) -> PriorityQueueProjection {
+    serde_json::from_str::<PriorityQueueProjection>(body)
+        .unwrap_or_else(|_| empty_queue_projection())
 }
 
 fn reconcile_task_authority_with_directions(
@@ -1463,7 +1470,7 @@ fn reconcile_task_authority_with_directions(
     if !prune_task_ledger_to_direction_ids(&mut task_ledger, &direction_ids) {
         return Ok(());
     }
-    replace_task_authority_tables(transaction, &task_ledger, &empty_queue_snapshot())?;
+    replace_task_authority_tables(transaction, &task_ledger, &empty_queue_projection())?;
     remove_active_documents(transaction, TASK_LEDGER_FILE_PATH)?;
     remove_active_documents(transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
     Ok(())
@@ -1673,14 +1680,14 @@ fn append_runtime_event(
 struct PlanningAuthorityExportView {
     snapshot_documents: BTreeMap<String, String>,
     task_ledger_view: Option<String>,
-    queue_snapshot_view: Option<String>,
+    queue_projection_view: Option<String>,
 }
 
 impl PlanningAuthorityExportView {
     fn has_any_content(&self) -> bool {
         !self.snapshot_documents.is_empty()
             || self.task_ledger_view.is_some()
-            || self.queue_snapshot_view.is_some()
+            || self.queue_projection_view.is_some()
     }
 }
 
@@ -1765,15 +1772,15 @@ fn backfill_task_authority_from_active_documents(connection: &mut Connection) ->
             return Ok(());
         }
     };
-    let queue_snapshot = match raw_active_document(connection, QUEUE_SNAPSHOT_FILE_PATH)? {
-        Some(queue_snapshot_json) => parse_queue_snapshot_export(&queue_snapshot_json),
-        None => empty_queue_snapshot(),
+    let queue_projection = match raw_active_document(connection, QUEUE_SNAPSHOT_FILE_PATH)? {
+        Some(queue_snapshot_json) => parse_queue_projection_export(&queue_snapshot_json),
+        None => empty_queue_projection(),
     };
 
     let transaction = connection
         .transaction()
         .context("failed to open task authority backfill transaction")?;
-    replace_task_authority_tables(&transaction, &task_ledger, &queue_snapshot)?;
+    replace_task_authority_tables(&transaction, &task_ledger, &queue_projection)?;
     upsert_metadata(
         &transaction,
         "schema_version",
@@ -2069,11 +2076,11 @@ fn apply_active_workspace_record(
             .with_context(|| {
                 format!("failed to parse active authority document `{TASK_LEDGER_FILE_PATH}`")
             })?;
-        let queue_snapshot = match record.queue_snapshot_json.as_deref() {
-            Some(queue_snapshot_json) => parse_queue_snapshot_export(queue_snapshot_json),
-            None => empty_queue_snapshot(),
+        let queue_projection = match record.queue_snapshot_json.as_deref() {
+            Some(queue_snapshot_json) => parse_queue_projection_export(queue_snapshot_json),
+            None => empty_queue_projection(),
         };
-        replace_task_authority_tables(transaction, &task_ledger, &queue_snapshot)?;
+        replace_task_authority_tables(transaction, &task_ledger, &queue_projection)?;
         changed |= true;
     } else {
         clear_task_authority_tables(transaction)?;
@@ -2097,7 +2104,7 @@ fn apply_active_workspace_record(
 fn replace_task_authority_tables(
     transaction: &rusqlite::Transaction<'_>,
     task_ledger: &TaskLedgerDocument,
-    queue_snapshot: &PriorityQueueSnapshot,
+    queue_projection: &PriorityQueueProjection,
 ) -> Result<()> {
     clear_task_authority_rows(transaction)?;
     for (index, task) in task_ledger.tasks.iter().enumerate() {
@@ -2127,9 +2134,9 @@ fn replace_task_authority_tables(
         insert_task_edges(transaction, task_id, "depends_on", &task.depends_on)?;
         insert_task_edges(transaction, task_id, "blocked_by", &task.blocked_by)?;
     }
-    insert_queue_projection_tasks(transaction, "active", &queue_snapshot.active_tasks)?;
-    insert_queue_projection_tasks(transaction, "proposed", &queue_snapshot.proposed_tasks)?;
-    insert_queue_projection_skipped(transaction, &queue_snapshot.skipped_tasks)?;
+    insert_queue_projection_tasks(transaction, "active", &queue_projection.active_tasks)?;
+    insert_queue_projection_tasks(transaction, "proposed", &queue_projection.proposed_tasks)?;
+    insert_queue_projection_skipped(transaction, &queue_projection.skipped_tasks)?;
     upsert_metadata(
         transaction,
         TASK_LEDGER_VERSION_METADATA_KEY,
@@ -2351,7 +2358,7 @@ fn task_ledger_export_path(location: &PlanningAuthorityLocation) -> PathBuf {
     runtime_exports_root(location).join(TASK_LEDGER_EXPORT_FILE_NAME)
 }
 
-fn queue_snapshot_export_path(location: &PlanningAuthorityLocation) -> PathBuf {
+fn queue_projection_export_path(location: &PlanningAuthorityLocation) -> PathBuf {
     runtime_exports_root(location).join(QUEUE_SNAPSHOT_EXPORT_FILE_NAME)
 }
 
@@ -2420,7 +2427,7 @@ fn sync_exported_authority_documents(
             .map(String::as_str),
     )?;
     write_optional_export_file(
-        &queue_snapshot_export_path(location),
+        &queue_projection_export_path(location),
         source_documents
             .get(QUEUE_SNAPSHOT_FILE_PATH)
             .map(String::as_str),
@@ -2526,7 +2533,7 @@ fn compare_exported_documents(
         source_documents
             .get(QUEUE_SNAPSHOT_FILE_PATH)
             .map(String::as_str),
-        exported_view.queue_snapshot_view.as_deref(),
+        exported_view.queue_projection_view.as_deref(),
         &mut issues,
     );
 
@@ -2631,7 +2638,7 @@ mod tests {
     };
     use crate::domain::parallel_mode::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
     use crate::domain::planning::{
-        PlanningAuthorityShadowStoreSyncState, PriorityQueueSnapshot, TaskLedgerDocument,
+        PlanningAuthorityShadowStoreSyncState, PriorityQueueProjection, TaskLedgerDocument,
     };
 
     struct TempGitRepo {
@@ -2723,7 +2730,7 @@ mod tests {
         runtime_exports_root(repo_root).join("task-ledger.json")
     }
 
-    fn queue_snapshot_export_path(repo_root: &Path) -> PathBuf {
+    fn queue_projection_export_path(repo_root: &Path) -> PathBuf {
         runtime_exports_root(repo_root).join("queue.snapshot.json")
     }
 
@@ -2760,7 +2767,7 @@ mod tests {
         .to_string()
     }
 
-    fn queue_snapshot_with_ready_task_json() -> String {
+    fn queue_projection_with_ready_task_json() -> String {
         r#"{
   "next_task": {
     "rank": 1,
@@ -2802,8 +2809,8 @@ mod tests {
         serde_json::from_str(body).expect("task ledger should parse")
     }
 
-    fn parse_queue_snapshot(body: &str) -> PriorityQueueSnapshot {
-        serde_json::from_str(body).expect("queue snapshot should parse")
+    fn parse_queue_projection(body: &str) -> PriorityQueueProjection {
+        serde_json::from_str(body).expect("queue projection should parse")
     }
 
     #[test]
@@ -3052,7 +3059,7 @@ mod tests {
     fn active_commit_updates_repo_scoped_documents_for_linked_worktree() {
         let repo = TempGitRepo::new("authority-active-commit");
         let task_ledger_json = task_ledger_with_ready_task_json();
-        let queue_snapshot_json = queue_snapshot_with_ready_task_json();
+        let queue_snapshot_json = queue_projection_with_ready_task_json();
 
         SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
             repo.worktree_root.to_str().expect("valid worktree path"),
@@ -3078,8 +3085,8 @@ mod tests {
                 .contains("\"id\": \"task-1\"")
         );
         assert!(
-            !fs::read_to_string(queue_snapshot_export_path(&repo.repo_root))
-                .expect("runtime export queue snapshot should exist")
+            !fs::read_to_string(queue_projection_export_path(&repo.repo_root))
+                .expect("runtime export queue projection should exist")
                 .contains("\"bucket\"")
         );
         let location = SqlitePlanningAuthorityAdapter::new()
@@ -3111,7 +3118,7 @@ mod tests {
         let adapter = SqlitePlanningAuthorityAdapter::new();
         let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
         let task_ledger = parse_task_ledger(&task_ledger_with_ready_task_json());
-        let queue_snapshot = parse_queue_snapshot(&queue_snapshot_with_ready_task_json());
+        let queue_projection = parse_queue_projection(&queue_projection_with_ready_task_json());
 
         adapter
             .commit_task_authority_snapshot(
@@ -3119,7 +3126,7 @@ mod tests {
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
                     task_ledger: &task_ledger,
-                    queue_snapshot: &queue_snapshot,
+                    queue_projection: &queue_projection,
                 },
             )
             .expect("task authority should commit");
@@ -3129,15 +3136,15 @@ mod tests {
             .expect("task authority should load")
             .expect("task authority should exist");
         assert_eq!(snapshot.task_ledger, task_ledger);
-        assert_eq!(snapshot.queue_snapshot, queue_snapshot);
+        assert_eq!(snapshot.queue_projection, queue_projection);
         assert!(
             !fs::read_to_string(task_ledger_export_path(&repo.repo_root))
                 .expect("task ledger export should exist")
                 .contains("\"task_id\"")
         );
         assert!(
-            fs::read_to_string(queue_snapshot_export_path(&repo.repo_root))
-                .expect("queue snapshot export should exist")
+            fs::read_to_string(queue_projection_export_path(&repo.repo_root))
+                .expect("queue projection export should exist")
                 .contains("\"task_id\": \"task-1\"")
         );
     }
@@ -3148,14 +3155,14 @@ mod tests {
         let adapter = SqlitePlanningAuthorityAdapter::new();
         let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
         let task_ledger = parse_task_ledger(&task_ledger_with_ready_task_json());
-        let queue_snapshot = parse_queue_snapshot(&queue_snapshot_with_ready_task_json());
+        let queue_projection = parse_queue_projection(&queue_projection_with_ready_task_json());
         let first_result = adapter
             .commit_task_authority_snapshot(
                 workspace_dir,
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
                     task_ledger: &task_ledger,
-                    queue_snapshot: &queue_snapshot,
+                    queue_projection: &queue_projection,
                 },
             )
             .expect("initial task authority should commit");
@@ -3173,7 +3180,7 @@ mod tests {
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: Some(0),
                     task_ledger: &stale_task_ledger,
-                    queue_snapshot: &queue_snapshot,
+                    queue_projection: &queue_projection,
                 },
             )
             .expect("stale task authority commit should return a conflict");
@@ -3283,14 +3290,14 @@ state = "active"
         assert_eq!(pruned_task_ledger.tasks[0].id, "task-1");
         assert!(pruned_task_ledger.tasks[0].depends_on.is_empty());
         assert!(pruned_task_ledger.tasks[0].blocked_by.is_empty());
-        let queue_snapshot = parse_queue_snapshot(
+        let queue_projection = parse_queue_projection(
             loaded
                 .queue_snapshot_json
                 .as_deref()
-                .expect("queue snapshot should load"),
+                .expect("queue projection should load"),
         );
-        assert_eq!(queue_snapshot.next_task, None);
-        assert!(queue_snapshot.active_tasks.is_empty());
+        assert_eq!(queue_projection.next_task, None);
+        assert!(queue_projection.active_tasks.is_empty());
     }
 
     #[test]
@@ -3413,10 +3420,10 @@ state = "active"
                 "INSERT INTO active_documents (relative_path, content) VALUES (?1, ?2)",
                 [
                     QUEUE_SNAPSHOT_FILE_PATH,
-                    queue_snapshot_with_ready_task_json().as_str(),
+                    queue_projection_with_ready_task_json().as_str(),
                 ],
             )
-            .expect("legacy queue snapshot should insert");
+            .expect("legacy queue projection should insert");
         drop(connection);
 
         let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(

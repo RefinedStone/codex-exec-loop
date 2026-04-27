@@ -119,9 +119,9 @@ impl PlanningDirectionsApplyService {
             .task_ledger
             .as_ref()
             .expect("valid tracked directions should include task ledger");
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(directions, task_ledger)
+            .build_projection(directions, task_ledger)
             .context("failed to rebuild planning queue after tracked directions apply")?;
 
         let authority_snapshot = self
@@ -135,7 +135,7 @@ impl PlanningDirectionsApplyService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: Some(snapshot.planning_revision),
                         task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )? {
                 PlanningTaskAuthorityCommitResult::Committed { .. } => {}
@@ -173,7 +173,7 @@ impl PlanningDirectionsApplyService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: None,
                         task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )?;
         }

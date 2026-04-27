@@ -18,7 +18,7 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
-    PlanningWorkspaceFiles, PriorityQueueSnapshot, PriorityQueueTask, TaskActor, TaskDefinition,
+    PlanningWorkspaceFiles, PriorityQueueProjection, PriorityQueueTask, TaskActor, TaskDefinition,
     TaskLedgerDocument, TaskStatus,
 };
 
@@ -322,7 +322,7 @@ impl PlanningTaskIntakeService {
             } else {
                 self.generate_valid_draft(&proposal.request, &context, generated_at, next_suffix)?
             };
-            let (next_task_ledger, queue_snapshot) =
+            let (next_task_ledger, queue_projection) =
                 self.build_accepted_mutation(&proposal.request, &draft, &context)?;
 
             if context.uses_task_repository {
@@ -333,14 +333,14 @@ impl PlanningTaskIntakeService {
                         PlanningTaskAuthorityCommit {
                             observed_planning_revision: Some(observed_revision),
                             task_ledger: &next_task_ledger,
-                            queue_snapshot: &queue_snapshot,
+                            queue_projection: &queue_projection,
                         },
                     )? {
                     PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
                         return Ok(PlanningTaskIntakeCommitResult {
                             committed_task_id: draft.task.id,
                             committed_planning_revision: planning_revision,
-                            queue_head: queue_snapshot.next_task,
+                            queue_head: queue_projection.next_task,
                             runtime_exports_refreshed: true,
                         });
                     }
@@ -359,7 +359,7 @@ impl PlanningTaskIntakeService {
             committed_record.task_ledger_json =
                 Some(serde_json::to_string_pretty(&next_task_ledger)?);
             committed_record.queue_snapshot_json =
-                Some(serde_json::to_string_pretty(&queue_snapshot)?);
+                Some(serde_json::to_string_pretty(&queue_projection)?);
             self.planning_workspace_port
                 .commit_planning_workspace_files(
                     &proposal.request.workspace_directory,
@@ -368,7 +368,7 @@ impl PlanningTaskIntakeService {
             return Ok(PlanningTaskIntakeCommitResult {
                 committed_task_id: draft.task.id,
                 committed_planning_revision: context.planning_revision + 1,
-                queue_head: queue_snapshot.next_task,
+                queue_head: queue_projection.next_task,
                 runtime_exports_refreshed: false,
             });
         }
@@ -510,7 +510,7 @@ impl PlanningTaskIntakeService {
         request: &PlanningTaskIntakeRequest,
         draft: &PlanningTaskIntakeDraft,
         context: &PlanningTaskIntakeContext,
-    ) -> Result<(TaskLedgerDocument, PriorityQueueSnapshot)> {
+    ) -> Result<(TaskLedgerDocument, PriorityQueueProjection)> {
         self.intake_validation_service
             .validate_draft(request, draft, &context.directions, &context.task_ledger)
             .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
@@ -550,12 +550,12 @@ impl PlanningTaskIntakeService {
                     .unwrap_or("planning validation failed")
             ));
         }
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(&context.directions, &next_task_ledger)
+            .build_projection(&context.directions, &next_task_ledger)
             .map_err(|error| anyhow!("Runtime task intake queue rebuild failed: {error}"))?;
 
-        Ok((next_task_ledger, queue_snapshot))
+        Ok((next_task_ledger, queue_projection))
     }
 }
 

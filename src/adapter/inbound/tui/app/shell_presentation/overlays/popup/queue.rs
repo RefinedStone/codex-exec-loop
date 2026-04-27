@@ -39,11 +39,11 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         },
         ConversationState::Ready(conversation) => {
             let snapshot = &conversation.planning_runtime_snapshot;
-            let queue_snapshot = snapshot.queue_snapshot();
-            let queue_lines = queue_snapshot
-                .map(|queue_snapshot| {
+            let queue_projection = snapshot.queue_projection();
+            let queue_lines = queue_projection
+                .map(|queue_projection| {
                     build_queue_task_lines(
-                        &queue_snapshot.active_tasks,
+                        &queue_projection.active_tasks,
                         "No executable tasks in the current planning queue.",
                         QUEUE_INSPECTION_TASK_LIMIT,
                     )
@@ -58,10 +58,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                         "No executable tasks in the current planning queue.",
                     )],
                 });
-            let proposal_lines = queue_snapshot
-                .map(|queue_snapshot| {
+            let proposal_lines = queue_projection
+                .map(|queue_projection| {
                     build_queue_task_lines(
-                        &queue_snapshot.proposed_tasks,
+                        &queue_projection.proposed_tasks,
                         "No promotable proposals are queued right now.",
                         QUEUE_INSPECTION_PROPOSAL_LIMIT,
                     )
@@ -139,8 +139,8 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
-            if let Some(detail) = queue_snapshot.and_then(|queue_snapshot| {
-                build_skipped_queue_note_line(&queue_snapshot.skipped_tasks)
+            if let Some(detail) = queue_projection.and_then(|queue_projection| {
+                build_skipped_queue_note_line(&queue_projection.skipped_tasks)
             }) {
                 note_lines.push(detail);
             }

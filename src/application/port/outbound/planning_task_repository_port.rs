@@ -1,19 +1,19 @@
 use anyhow::Result;
 
-use crate::domain::planning::{PriorityQueueSnapshot, TaskLedgerDocument};
+use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskAuthoritySnapshot {
     pub planning_revision: i64,
     pub task_ledger: TaskLedgerDocument,
-    pub queue_snapshot: PriorityQueueSnapshot,
+    pub queue_projection: PriorityQueueProjection,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningTaskAuthorityCommit<'a> {
     pub observed_planning_revision: Option<i64>,
     pub task_ledger: &'a TaskLedgerDocument,
-    pub queue_snapshot: &'a PriorityQueueSnapshot,
+    pub queue_projection: &'a PriorityQueueProjection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -84,10 +84,10 @@ impl PlanningProposalPromotionService {
             .load_planning_workspace_files(request.workspace_directory)?;
         let (directions, mut task_ledger) =
             self.load_valid_workspace_documents(&workspace_record)?;
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(&directions, &task_ledger)?;
-        if queue_snapshot.next_task.is_some() || queue_snapshot.proposed_tasks.is_empty() {
+            .build_projection(&directions, &task_ledger)?;
+        if queue_projection.next_task.is_some() || queue_projection.proposed_tasks.is_empty() {
             return Ok(PlanningProposalPromotionOutcome {
                 runtime_snapshot: self
                     .planning_prompt_service
@@ -98,7 +98,7 @@ impl PlanningProposalPromotionService {
             });
         }
 
-        let top_proposal = queue_snapshot
+        let top_proposal = queue_projection
             .proposed_tasks
             .into_iter()
             .next()
@@ -119,10 +119,10 @@ impl PlanningProposalPromotionService {
         promoted_task.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
         let next_task_ledger = serde_json::to_string_pretty(&task_ledger)?;
-        let next_queue_snapshot = self
+        let next_queue_projection = self
             .priority_queue_service
-            .build_snapshot(&directions, &task_ledger)?;
-        let next_queue_snapshot_json = serde_json::to_string_pretty(&next_queue_snapshot)?;
+            .build_projection(&directions, &task_ledger)?;
+        let next_queue_snapshot_json = serde_json::to_string_pretty(&next_queue_projection)?;
         let mut committed_record = workspace_record.clone();
         committed_record.task_ledger_json = Some(next_task_ledger);
         committed_record.queue_snapshot_json = Some(next_queue_snapshot_json);
@@ -134,7 +134,7 @@ impl PlanningProposalPromotionService {
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
                     task_ledger: &task_ledger,
-                    queue_snapshot: &next_queue_snapshot,
+                    queue_projection: &next_queue_projection,
                 },
             )?;
 
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn promote_top_proposal_to_ready_rebuilds_queue_snapshot() {
+    fn promote_top_proposal_to_ready_rebuilds_queue_projection() {
         let workspace_dir = create_temp_workspace("planning-proposal-promotion");
         write_bootstrap_workspace(&workspace_dir);
         let task_ledger = r#"{

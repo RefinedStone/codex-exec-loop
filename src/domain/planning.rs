@@ -237,7 +237,7 @@ pub enum TaskActor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PriorityQueueSnapshot {
+pub struct PriorityQueueProjection {
     pub next_task: Option<PriorityQueueTask>,
     pub active_tasks: Vec<PriorityQueueTask>,
     pub proposed_tasks: Vec<PriorityQueueTask>,
@@ -483,7 +483,7 @@ impl PlanningValidationResult {
     }
 }
 
-impl PriorityQueueSnapshot {
+impl PriorityQueueProjection {
     pub fn visible_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.active_tasks.iter().take(limit).cloned().collect()
     }

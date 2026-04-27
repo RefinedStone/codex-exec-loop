@@ -101,9 +101,9 @@ impl PlanningTaskLedgerApplyService {
         let task_ledger = validation_result.task_ledger.as_ref().ok_or_else(|| {
             anyhow!("planning validation reported success without parsed task-ledger.json")
         })?;
-        let queue_snapshot = self
+        let queue_projection = self
             .priority_queue_service
-            .build_snapshot(directions, task_ledger)
+            .build_projection(directions, task_ledger)
             .map_err(|error| {
                 anyhow!("planning validation passed but queue build failed: {error}")
             })?;
@@ -118,7 +118,7 @@ impl PlanningTaskLedgerApplyService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: Some(snapshot.planning_revision),
                         task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )? {
                 PlanningTaskAuthorityCommitResult::Committed { .. } => {}
@@ -139,7 +139,7 @@ impl PlanningTaskLedgerApplyService {
                 TASK_LEDGER_FILE_PATH,
                 Some(&candidate_task_ledger),
             )?;
-        let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)?;
+        let queue_snapshot_json = serde_json::to_string_pretty(&queue_projection)?;
         self.planning_workspace_port
             .replace_planning_workspace_file(
                 workspace_dir,
@@ -154,7 +154,7 @@ impl PlanningTaskLedgerApplyService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: None,
                         task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )?;
         }
@@ -246,7 +246,7 @@ mod tests {
         QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
     use crate::application::service::priority_queue_service::PriorityQueueService;
-    use crate::domain::planning::{PriorityQueueSnapshot, TaskLedgerDocument};
+    use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = std::time::SystemTime::now()
@@ -323,8 +323,8 @@ mod tests {
         }
     }
 
-    fn empty_queue_snapshot() -> PriorityQueueSnapshot {
-        PriorityQueueSnapshot {
+    fn empty_queue_projection() -> PriorityQueueProjection {
+        PriorityQueueProjection {
             next_task: None,
             active_tasks: Vec::new(),
             proposed_tasks: Vec::new(),
@@ -549,7 +549,7 @@ mod tests {
                         .map(|task| task.id.clone())
                         .collect(),
                     next_task_id: commit
-                        .queue_snapshot
+                        .queue_projection
                         .next_task
                         .as_ref()
                         .map(|task| task.task_id.clone()),
@@ -562,7 +562,7 @@ mod tests {
                 Some(PlanningTaskAuthoritySnapshot {
                     planning_revision: next_revision,
                     task_ledger: commit.task_ledger.clone(),
-                    queue_snapshot: commit.queue_snapshot.clone(),
+                    queue_projection: commit.queue_projection.clone(),
                 });
             Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: next_revision,
@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn applies_tracked_task_ledger_and_rebuilds_queue_snapshot() {
+    fn applies_tracked_task_ledger_and_rebuilds_queue_projection() {
         let workspace_dir = create_temp_workspace("task-ledger-apply-success");
         write_bootstrap_candidate_workspace(&workspace_dir);
         fs::write(
@@ -596,9 +596,9 @@ mod tests {
         .apply_tracked_task_ledger(&workspace_dir)
         .expect("task-ledger apply should succeed");
 
-        let queue_snapshot =
+        let queue_projection =
             fs::read_to_string(Path::new(&workspace_dir).join(QUEUE_SNAPSHOT_FILE_PATH))
-                .expect("queue snapshot should exist");
+                .expect("queue projection should exist");
 
         assert!(result.applied());
         assert_eq!(
@@ -608,7 +608,7 @@ mod tests {
                 QUEUE_SNAPSHOT_FILE_PATH.to_string()
             ]
         );
-        assert!(queue_snapshot.contains("\"task_id\": \"task-1\""));
+        assert!(queue_projection.contains("\"task_id\": \"task-1\""));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
@@ -632,7 +632,7 @@ mod tests {
                         .expect("bootstrap task catalog should exist"),
                 )
                 .expect("bootstrap task catalog should parse"),
-                queue_snapshot: empty_queue_snapshot(),
+                queue_projection: empty_queue_projection(),
             },
         )));
 
@@ -668,7 +668,7 @@ mod tests {
             replaced_files[1]
                 .1
                 .as_ref()
-                .expect("queue snapshot should be committed")
+                .expect("queue projection should be committed")
                 .contains("\"task_id\": \"task-1\"")
         );
         assert_eq!(authority_commits.len(), 1);

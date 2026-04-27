@@ -3,8 +3,8 @@ use std::{collections::HashMap, fmt};
 use chrono::DateTime;
 
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionDefinition, PriorityQueueSkippedTask, PriorityQueueSnapshot,
-    PriorityQueueTask, TaskDefinition, TaskLedgerDocument,
+    DirectionCatalogDocument, DirectionDefinition, PriorityQueueProjection,
+    PriorityQueueSkippedTask, PriorityQueueTask, TaskDefinition, TaskLedgerDocument,
 };
 
 #[derive(Default, Clone)]
@@ -93,11 +93,11 @@ impl PriorityQueueService {
         Self
     }
 
-    pub fn build_snapshot(
+    pub fn build_projection(
         &self,
         directions: &DirectionCatalogDocument,
         task_ledger: &TaskLedgerDocument,
-    ) -> Result<PriorityQueueSnapshot, PriorityQueueBuildError> {
+    ) -> Result<PriorityQueueProjection, PriorityQueueBuildError> {
         let direction_map = directions
             .directions
             .iter()
@@ -240,7 +240,7 @@ impl PriorityQueueService {
             })
             .collect::<Vec<_>>();
 
-        Ok(PriorityQueueSnapshot {
+        Ok(PriorityQueueProjection {
             next_task,
             active_tasks,
             proposed_tasks,
@@ -528,8 +528,8 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_snapshot(&directions, &task_ledger)
-            .expect("queue snapshot should build");
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
 
         assert_eq!(
             snapshot
@@ -621,8 +621,8 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_snapshot(&directions, &task_ledger)
-            .expect("queue snapshot should build");
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
 
         assert_eq!(
             snapshot
@@ -701,8 +701,8 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_snapshot(&directions, &task_ledger)
-            .expect("queue snapshot should build");
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
 
         assert_eq!(
             snapshot
@@ -760,8 +760,8 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_snapshot(&directions, &task_ledger)
-            .expect("queue snapshot should build");
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
 
         assert_eq!(
             snapshot
@@ -811,8 +811,8 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_snapshot(&directions, &task_ledger)
-            .expect("queue snapshot should build");
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
 
         assert_eq!(
             snapshot
@@ -861,8 +861,8 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_snapshot(&directions, &task_ledger)
-            .expect("queue snapshot should build");
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
 
         assert_eq!(
             snapshot
@@ -897,7 +897,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_snapshot(&directions, &task_ledger)
+            .build_projection(&directions, &task_ledger)
             .expect_err("queue build should reject unknown directions");
 
         assert_eq!(
@@ -928,7 +928,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_snapshot(&directions, &task_ledger)
+            .build_projection(&directions, &task_ledger)
             .expect_err("queue build should reject missing dependency references");
 
         assert_eq!(
@@ -957,7 +957,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_snapshot(&directions, &task_ledger)
+            .build_projection(&directions, &task_ledger)
             .expect_err("queue build should reject invalid updated_at values");
 
         assert_eq!(
@@ -996,7 +996,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_snapshot(&directions, &task_ledger)
+            .build_projection(&directions, &task_ledger)
             .expect_err("queue build should reject multiple in_progress tasks");
 
         assert_eq!(

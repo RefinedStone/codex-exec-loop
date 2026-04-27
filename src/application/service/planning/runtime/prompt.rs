@@ -14,7 +14,7 @@ use crate::application::service::planning::shared::contract::{
 };
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueSnapshot,
+    DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueProjection,
     PriorityQueueTask, QueueIdlePolicy, TaskDefinition, TaskLedgerDocument,
 };
 
@@ -51,7 +51,7 @@ pub struct PlanningRuntimeSnapshot {
     queue_idle_policy: QueueIdlePolicy,
     queue_idle_prompt_path: Option<String>,
     queue_head: Option<PriorityQueueTask>,
-    queue_snapshot: Option<PriorityQueueSnapshot>,
+    queue_projection: Option<PriorityQueueProjection>,
     task_ledger_signature: Option<u64>,
     queue_head_task_signature: Option<u64>,
     failure_reason: Option<String>,
@@ -69,7 +69,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_policy: QueueIdlePolicy::Stop,
             queue_idle_prompt_path: None,
             queue_head: None,
-            queue_snapshot: None,
+            queue_projection: None,
             task_ledger_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
@@ -87,7 +87,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_policy: QueueIdlePolicy::Stop,
             queue_idle_prompt_path: None,
             queue_head: None,
-            queue_snapshot: None,
+            queue_projection: None,
             task_ledger_signature: None,
             queue_head_task_signature: None,
             failure_reason: Some(reason.into()),
@@ -122,7 +122,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_policy: QueueIdlePolicy::Stop,
             queue_idle_prompt_path: None,
             queue_head,
-            queue_snapshot: None,
+            queue_projection: None,
             task_ledger_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
@@ -130,12 +130,12 @@ impl PlanningRuntimeSnapshot {
         }
     }
 
-    pub fn ready_with_queue_snapshot(
+    pub fn ready_with_queue_projection(
         prompt_fragment: String,
         queue_summary: String,
         proposal_summary: Option<String>,
         queue_head: Option<PriorityQueueTask>,
-        queue_snapshot: PriorityQueueSnapshot,
+        queue_projection: PriorityQueueProjection,
     ) -> Self {
         Self {
             workspace_present: true,
@@ -150,7 +150,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_policy: QueueIdlePolicy::Stop,
             queue_idle_prompt_path: None,
             queue_head,
-            queue_snapshot: Some(queue_snapshot),
+            queue_projection: Some(queue_projection),
             task_ledger_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
@@ -205,8 +205,8 @@ impl PlanningRuntimeSnapshot {
         self.queue_idle_prompt_path.as_deref()
     }
 
-    pub fn queue_snapshot(&self) -> Option<&PriorityQueueSnapshot> {
-        self.queue_snapshot.as_ref()
+    pub fn queue_projection(&self) -> Option<&PriorityQueueProjection> {
+        self.queue_projection.as_ref()
     }
 
     pub fn task_ledger_signature(&self) -> Option<u64> {
@@ -367,12 +367,13 @@ impl PlanningPromptService {
         let task_ledger = validation_result
             .task_ledger
             .expect("valid planning task ledger should be available");
-        let stored_queue_snapshot = task_authority_snapshot.map(|snapshot| snapshot.queue_snapshot);
-        let current_queue_snapshot = match self
+        let stored_queue_projection =
+            task_authority_snapshot.map(|snapshot| snapshot.queue_projection);
+        let current_queue_projection = match self
             .priority_queue_service
-            .build_snapshot(&directions, &task_ledger)
+            .build_projection(&directions, &task_ledger)
         {
-            Ok(queue_snapshot) => queue_snapshot,
+            Ok(queue_projection) => queue_projection,
             Err(error) => {
                 return Ok(PlanningRuntimeSnapshot::invalid(format!(
                     "planning queue build failed: {error}"
@@ -380,24 +381,26 @@ impl PlanningPromptService {
                 .with_workspace_present(workspace_present));
             }
         };
-        let queue_snapshot = match stored_queue_snapshot {
-            Some(stored_queue_snapshot) if stored_queue_snapshot == current_queue_snapshot => {
-                stored_queue_snapshot
+        let queue_projection = match stored_queue_projection {
+            Some(stored_queue_projection)
+                if stored_queue_projection == current_queue_projection =>
+            {
+                stored_queue_projection
             }
-            _ => current_queue_snapshot,
+            _ => current_queue_projection,
         };
         let result_output_markdown = workspace_record
             .result_output_markdown
             .as_deref()
             .expect("complete planning workspace should include result output");
-        let queue_summary = build_queue_summary(&queue_snapshot);
-        let proposal_summary = build_proposal_summary(&queue_snapshot);
+        let queue_summary = build_queue_summary(&queue_projection);
+        let proposal_summary = build_proposal_summary(&queue_projection);
         let prompt_fragment =
-            build_prompt_fragment(&directions, &queue_snapshot, result_output_markdown);
+            build_prompt_fragment(&directions, &queue_projection, result_output_markdown);
         let queue_idle_prompt_path =
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
         let task_ledger_signature = normalized_task_ledger_signature(&task_ledger);
-        let queue_head_task_signature = queue_snapshot
+        let queue_head_task_signature = queue_projection
             .next_task
             .as_ref()
             .and_then(|queue_head| {
@@ -410,7 +413,7 @@ impl PlanningPromptService {
 
         Ok(PlanningRuntimeSnapshot {
             workspace_present,
-            workspace_status: if queue_snapshot.next_task.is_some() {
+            workspace_status: if queue_projection.next_task.is_some() {
                 PlanningRuntimeWorkspaceStatus::ReadyWithTask
             } else {
                 PlanningRuntimeWorkspaceStatus::ReadyNoTask
@@ -420,8 +423,8 @@ impl PlanningPromptService {
             proposal_summary,
             queue_idle_policy: directions.queue_idle.policy,
             queue_idle_prompt_path,
-            queue_head: queue_snapshot.next_task.clone(),
-            queue_snapshot: Some(queue_snapshot),
+            queue_head: queue_projection.next_task.clone(),
+            queue_projection: Some(queue_projection),
             task_ledger_signature: Some(task_ledger_signature),
             queue_head_task_signature,
             failure_reason: None,
@@ -503,7 +506,7 @@ fn missing_workspace_paths(workspace_record: &PlanningWorkspaceLoadRecord) -> Ve
 
 fn build_prompt_fragment(
     directions: &DirectionCatalogDocument,
-    queue_snapshot: &PriorityQueueSnapshot,
+    queue_projection: &PriorityQueueProjection,
     result_output_markdown: &str,
 ) -> String {
     let mut lines = vec![
@@ -547,7 +550,7 @@ fn build_prompt_fragment(
 
     lines.push(String::new());
     lines.push("Queue Summary".to_string());
-    match queue_snapshot.next_task.as_ref() {
+    match queue_projection.next_task.as_ref() {
         Some(task) => {
             lines.push(format!(
                 "- next_task: rank {} | {} | {} | direction={} | status={} | combined_priority={}",
@@ -563,14 +566,14 @@ fn build_prompt_fragment(
         None => lines.push("- next_task: none".to_string()),
     }
 
-    if queue_snapshot.active_tasks.is_empty() {
+    if queue_projection.active_tasks.is_empty() {
         lines.push("- visible_tasks: none".to_string());
     } else {
-        let visible_tasks = queue_snapshot.visible_tasks(MAX_VISIBLE_QUEUE_TASKS);
+        let visible_tasks = queue_projection.visible_tasks(MAX_VISIBLE_QUEUE_TASKS);
         lines.push(format!(
             "- visible_tasks: top {} of {}",
             visible_tasks.len(),
-            queue_snapshot.active_tasks.len()
+            queue_projection.active_tasks.len()
         ));
         for task in visible_tasks {
             lines.push(format!(
@@ -589,12 +592,12 @@ fn build_prompt_fragment(
         }
     }
 
-    if !queue_snapshot.proposed_tasks.is_empty() {
-        let proposed_tasks = queue_snapshot.visible_proposed_tasks(MAX_VISIBLE_PROPOSED_TASKS);
+    if !queue_projection.proposed_tasks.is_empty() {
+        let proposed_tasks = queue_projection.visible_proposed_tasks(MAX_VISIBLE_PROPOSED_TASKS);
         lines.push(format!(
             "- proposed_tasks: top {} of {} promotable proposals",
             proposed_tasks.len(),
-            queue_snapshot.proposed_tasks.len()
+            queue_projection.proposed_tasks.len()
         ));
         for proposed_task in proposed_tasks {
             lines.push(format!(
@@ -613,8 +616,8 @@ fn build_prompt_fragment(
         }
     }
 
-    if !queue_snapshot.skipped_tasks.is_empty() {
-        let skipped_tasks = queue_snapshot
+    if !queue_projection.skipped_tasks.is_empty() {
+        let skipped_tasks = queue_projection
             .skipped_tasks
             .iter()
             .take(MAX_SKIPPED_QUEUE_TASKS)
@@ -622,7 +625,7 @@ fn build_prompt_fragment(
         lines.push(format!(
             "- skipped_tasks: showing {} of {}",
             skipped_tasks.len(),
-            queue_snapshot.skipped_tasks.len()
+            queue_projection.skipped_tasks.len()
         ));
         for skipped_task in skipped_tasks {
             lines.push(format!(
@@ -685,8 +688,8 @@ fn build_prompt_fragment(
     lines.join("\n")
 }
 
-fn build_queue_summary(queue_snapshot: &PriorityQueueSnapshot) -> String {
-    match queue_snapshot.next_task.as_ref() {
+fn build_queue_summary(queue_projection: &PriorityQueueProjection) -> String {
+    match queue_projection.next_task.as_ref() {
         Some(task) => format!(
             "next task: rank {} / {} / {} / priority {}",
             task.rank,
@@ -698,19 +701,19 @@ fn build_queue_summary(queue_snapshot: &PriorityQueueSnapshot) -> String {
     }
 }
 
-fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<String> {
-    if queue_snapshot.proposed_tasks.is_empty() {
+fn build_proposal_summary(queue_projection: &PriorityQueueProjection) -> Option<String> {
+    if queue_projection.proposed_tasks.is_empty() {
         return None;
     }
 
-    let task_titles = queue_snapshot
+    let task_titles = queue_projection
         .proposed_tasks
         .iter()
         .map(|task| task.task_title.trim())
         .filter(|title| !title.is_empty())
         .take(MAX_PROPOSAL_SUMMARY_TITLES)
         .collect::<Vec<_>>();
-    let remaining_count = queue_snapshot
+    let remaining_count = queue_projection
         .proposed_tasks
         .len()
         .saturating_sub(task_titles.len());
@@ -726,8 +729,8 @@ fn build_proposal_summary(queue_snapshot: &PriorityQueueSnapshot) -> Option<Stri
 
     Some(format!(
         "{} promotable follow-up proposal{} available{}",
-        queue_snapshot.proposed_tasks.len(),
-        if queue_snapshot.proposed_tasks.len() == 1 {
+        queue_projection.proposed_tasks.len(),
+        if queue_projection.proposed_tasks.len() == 1 {
             ""
         } else {
             "s"
@@ -773,7 +776,7 @@ mod tests {
     };
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::domain::planning::{
-        PriorityQueueSnapshot, PriorityQueueTask, TaskLedgerDocument, TaskStatus,
+        PriorityQueueProjection, PriorityQueueTask, TaskLedgerDocument, TaskStatus,
     };
 
     #[derive(Default)]
@@ -1192,7 +1195,7 @@ state = "paused"
     }
 
     #[test]
-    fn stored_queue_snapshot_is_rebuilt_when_current_directions_change() {
+    fn stored_queue_projection_is_rebuilt_when_current_directions_change() {
         let bootstrap_artifacts =
             PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
         let task_ledger_json = r#"{
@@ -1241,7 +1244,7 @@ state = "paused"
             PlanningTaskAuthoritySnapshot {
                 planning_revision: 1,
                 task_ledger,
-                queue_snapshot: PriorityQueueSnapshot {
+                queue_projection: PriorityQueueProjection {
                     next_task: Some(stored_queue_task.clone()),
                     active_tasks: vec![stored_queue_task],
                     proposed_tasks: Vec::new(),

@@ -16,7 +16,7 @@ use crate::application::service::planning::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
-use crate::domain::planning::{PriorityQueueSnapshot, TaskLedgerDocument};
+use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
 
 #[test]
 fn task_command_with_prompt_previews_and_commits_ready_task() {
@@ -367,7 +367,7 @@ fn commit_task_authority_with_claude_runner_task(workspace_dir: &str) {
 }"#,
     )
     .expect("task authority fixture should parse");
-    let queue_snapshot = PriorityQueueSnapshot {
+    let queue_projection = PriorityQueueProjection {
         next_task: None,
         active_tasks: Vec::new(),
         proposed_tasks: Vec::new(),
@@ -378,7 +378,7 @@ fn commit_task_authority_with_claude_runner_task(workspace_dir: &str) {
         PlanningTaskAuthorityCommit {
             observed_planning_revision: None,
             task_ledger: &task_ledger,
-            queue_snapshot: &queue_snapshot,
+            queue_projection: &queue_projection,
         },
     )
     .expect("task authority fixture should commit");

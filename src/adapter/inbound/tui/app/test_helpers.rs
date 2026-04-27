@@ -12,7 +12,7 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
 use crate::domain::planning::{
-    PriorityQueueSkippedTask, PriorityQueueSnapshot, PriorityQueueTask, TaskStatus,
+    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
 };
 
 pub(crate) fn sample_queue_head() -> PriorityQueueTask {
@@ -34,12 +34,12 @@ pub(crate) fn sample_planning_runtime_snapshot(
     queue_summary: &str,
 ) -> PlanningRuntimeSnapshot {
     let queue_head = sample_queue_head();
-    PlanningRuntimeSnapshot::ready_with_queue_snapshot(
+    PlanningRuntimeSnapshot::ready_with_queue_projection(
         prompt_fragment.to_string(),
         queue_summary.to_string(),
         None,
         Some(queue_head.clone()),
-        PriorityQueueSnapshot {
+        PriorityQueueProjection {
             next_task: Some(queue_head.clone()),
             active_tasks: vec![
                 queue_head,
@@ -72,12 +72,12 @@ pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
     queue_summary: &str,
     proposal_summary: &str,
 ) -> PlanningRuntimeSnapshot {
-    PlanningRuntimeSnapshot::ready_with_queue_snapshot(
+    PlanningRuntimeSnapshot::ready_with_queue_projection(
         prompt_fragment.to_string(),
         queue_summary.to_string(),
         Some(proposal_summary.to_string()),
         None,
-        PriorityQueueSnapshot {
+        PriorityQueueProjection {
             next_task: None,
             active_tasks: Vec::new(),
             proposed_tasks: vec![PriorityQueueTask {

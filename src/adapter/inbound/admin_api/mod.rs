@@ -1129,7 +1129,7 @@ mod tests {
     };
     use crate::application::service::priority_queue_service::PriorityQueueService;
     use crate::domain::planning::{
-        DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueSnapshot,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
         TaskActor, TaskDefinition, TaskLedgerDocument, TaskStatus,
     };
 
@@ -1646,13 +1646,13 @@ mod tests {
                     ),
                     task_ledger_schema_json: existing.task_ledger_schema_json,
                     queue_snapshot_json: Some(
-                        serde_json::to_string_pretty(&PriorityQueueSnapshot {
+                        serde_json::to_string_pretty(&PriorityQueueProjection {
                             next_task: None,
                             active_tasks: Vec::new(),
                             proposed_tasks: Vec::new(),
                             skipped_tasks: Vec::new(),
                         })
-                        .expect("queue snapshot should serialize"),
+                        .expect("queue projection should serialize"),
                     ),
                     result_output_markdown: existing.result_output_markdown,
                 },
@@ -1762,9 +1762,9 @@ mod tests {
                 task("task-fs-only", "fs-only-direction"),
             ],
         };
-        let queue_snapshot = PriorityQueueService::new()
-            .build_snapshot(&tracked_directions, &task_ledger)
-            .expect("queue snapshot should build with tracked directions");
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&tracked_directions, &task_ledger)
+            .expect("queue projection should build with tracked directions");
         let task_repository = SqlitePlanningAuthorityAdapter::new();
         task_repository
             .commit_task_authority_snapshot(
@@ -1772,7 +1772,7 @@ mod tests {
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
                     task_ledger: &task_ledger,
-                    queue_snapshot: &queue_snapshot,
+                    queue_projection: &queue_projection,
                 },
             )
             .expect("task authority snapshot should commit");
@@ -1855,9 +1855,9 @@ mod tests {
         let existing = adapter
             .load_planning_workspace_files(repo_root.display().to_string().as_str())
             .expect("existing workspace should load");
-        let queue_snapshot = PriorityQueueService::new()
-            .build_snapshot(&directions, &task_ledger)
-            .expect("seed queue snapshot should build");
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_ledger)
+            .expect("seed queue projection should build");
         adapter
             .commit_planning_workspace_files(
                 repo_root.display().to_string().as_str(),
@@ -1871,8 +1871,8 @@ mod tests {
                     ),
                     task_ledger_schema_json: existing.task_ledger_schema_json,
                     queue_snapshot_json: Some(
-                        serde_json::to_string_pretty(&queue_snapshot)
-                            .expect("queue snapshot should serialize"),
+                        serde_json::to_string_pretty(&queue_projection)
+                            .expect("queue projection should serialize"),
                     ),
                     result_output_markdown: existing.result_output_markdown,
                 },

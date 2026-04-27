@@ -1201,7 +1201,7 @@ mod tests {
                 ".codex-exec-loop/planning/queue.snapshot.json",
                 "{\"next_task\":null}",
             )
-            .expect("queue snapshot should write");
+            .expect("queue projection should write");
         let mut stdout = Vec::new();
 
         let exit_code = run_with_args(reset_args("queue", &workspace), &mut stdout)

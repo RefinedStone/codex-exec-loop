@@ -764,15 +764,15 @@ fn refresh_test_task_authority_projection(
         .task_ledger
         .as_ref()
         .expect("valid planning should include task ledger");
-    let queue_snapshot = PriorityQueueService::new()
-        .build_snapshot(directions, task_ledger)
-        .expect("valid planning should build queue snapshot");
+    let queue_projection = PriorityQueueService::new()
+        .build_projection(directions, task_ledger)
+        .expect("valid planning should build queue projection");
     SqlitePlanningAuthorityAdapter::commit_task_authority_snapshot(
         workspace_dir,
         PlanningTaskAuthorityCommit {
             observed_planning_revision: None,
             task_ledger,
-            queue_snapshot: &queue_snapshot,
+            queue_projection: &queue_projection,
         },
     )
     .expect("test task authority projection should commit");

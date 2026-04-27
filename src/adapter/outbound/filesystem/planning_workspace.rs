@@ -679,7 +679,7 @@ mod tests {
             planning_dir.join("queue.snapshot.json"),
             "{\"next_task\":null}",
         )
-        .expect("queue snapshot should write");
+        .expect("queue projection should write");
         fs::write(planning_dir.join("result-output.md"), "# result")
             .expect("result output should write");
 

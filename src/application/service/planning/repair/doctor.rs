@@ -141,8 +141,8 @@ fn doctor_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
 
 fn doctor_proposal_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
     snapshot
-        .queue_snapshot()
-        .and_then(|queue_snapshot| queue_snapshot.proposed_tasks.first())
+        .queue_projection()
+        .and_then(|queue_projection| queue_projection.proposed_tasks.first())
         .map(|task| compact_whitespace_detail(task.task_title.trim(), 80))
         .or_else(|| snapshot.proposal_summary().map(str::to_string))
 }

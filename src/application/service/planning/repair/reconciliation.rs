@@ -42,7 +42,7 @@ impl PlanningExecutionSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlanningQueueSnapshotAction {
+pub enum PlanningQueueProjectionAction {
     RebuiltFromAcceptedPlanning,
     RestoredFromExecutionSnapshot,
 }
@@ -59,7 +59,7 @@ pub struct PlanningReconciliationResult {
     pub restored_protected_files: Vec<PlanningProtectedFileRestoration>,
     pub rejected_task_ledger: bool,
     pub rejected_archive_path: Option<String>,
-    pub queue_snapshot_action: Option<PlanningQueueSnapshotAction>,
+    pub queue_projection_action: Option<PlanningQueueProjectionAction>,
     pub repair_request: Option<PlanningRepairRequest>,
     pub auto_followup_block_reason: Option<String>,
 }
@@ -95,7 +95,7 @@ struct PlanningChangeSet {
     task_ledger_changed: bool,
     task_ledger_schema_changed: bool,
     result_output_changed: bool,
-    queue_snapshot_changed: bool,
+    queue_projection_changed: bool,
 }
 
 impl PlanningChangeSet {
@@ -107,7 +107,7 @@ impl PlanningChangeSet {
                 Some(TASK_LEDGER_FILE_PATH) => change_set.task_ledger_changed = true,
                 Some(TASK_LEDGER_SCHEMA_FILE_PATH) => change_set.task_ledger_schema_changed = true,
                 Some(RESULT_OUTPUT_FILE_PATH) => change_set.result_output_changed = true,
-                Some(QUEUE_SNAPSHOT_FILE_PATH) => change_set.queue_snapshot_changed = true,
+                Some(QUEUE_SNAPSHOT_FILE_PATH) => change_set.queue_projection_changed = true,
                 _ => {}
             }
         }
@@ -119,7 +119,7 @@ impl PlanningChangeSet {
             || self.task_ledger_changed
             || self.task_ledger_schema_changed
             || self.result_output_changed
-            || self.queue_snapshot_changed
+            || self.queue_projection_changed
     }
 }
 
@@ -221,8 +221,8 @@ impl PlanningReconciliationService {
                 &reconciled_workspace,
                 &mut result,
             )?;
-        } else if change_set.queue_snapshot_changed {
-            self.restore_queue_snapshot(
+        } else if change_set.queue_projection_changed {
+            self.restore_queue_projection(
                 candidate_workspace_record.queue_snapshot_json.as_deref(),
                 execution_snapshot,
                 &mut result,
@@ -230,7 +230,7 @@ impl PlanningReconciliationService {
         }
 
         if !change_set.task_ledger_changed
-            && (change_set.queue_snapshot_changed || !result.restored_protected_files.is_empty())
+            && (change_set.queue_projection_changed || !result.restored_protected_files.is_empty())
         {
             self.planning_workspace_port
                 .commit_planning_workspace_files(
@@ -380,14 +380,14 @@ impl PlanningReconciliationService {
             let task_ledger = validation_result.task_ledger.as_ref().ok_or_else(|| {
                 anyhow!("planning validation reported success without parsed task-ledger.json")
             })?;
-            let queue_snapshot = self
+            let queue_projection = self
                 .priority_queue_service
-                .build_snapshot(directions, task_ledger)
+                .build_projection(directions, task_ledger)
                 .map_err(|error| {
                     anyhow!("planning validation passed but queue build failed: {error}")
                 })?;
-            let queue_snapshot_json = serde_json::to_string_pretty(&queue_snapshot)
-                .context("failed to serialize queue snapshot")?;
+            let queue_snapshot_json = serde_json::to_string_pretty(&queue_projection)
+                .context("failed to serialize queue projection")?;
             let mut committed_record = execution_snapshot_to_workspace_record(execution_snapshot);
             committed_record.task_ledger_json = workspace_record.task_ledger_json.clone();
             committed_record.queue_snapshot_json = Some(queue_snapshot_json);
@@ -399,11 +399,11 @@ impl PlanningReconciliationService {
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: None,
                         task_ledger,
-                        queue_snapshot: &queue_snapshot,
+                        queue_projection: &queue_projection,
                     },
                 )?;
-            result.queue_snapshot_action =
-                Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning);
+            result.queue_projection_action =
+                Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
             result.notices.push(
                 "planning reconciliation accepted task-ledger.json and rebuilt queue.snapshot.json"
                     .to_string(),
@@ -423,7 +423,7 @@ impl PlanningReconciliationService {
             result.rejected_archive_path = Some(archive_path);
         }
 
-        self.restore_queue_snapshot(
+        self.restore_queue_projection(
             workspace_record.queue_snapshot_json.as_deref(),
             execution_snapshot,
             result,
@@ -463,7 +463,7 @@ impl PlanningReconciliationService {
         Ok(())
     }
 
-    fn restore_queue_snapshot(
+    fn restore_queue_projection(
         &self,
         current_queue_snapshot_json: Option<&str>,
         execution_snapshot: &PlanningExecutionSnapshot,
@@ -473,8 +473,8 @@ impl PlanningReconciliationService {
             return Ok(());
         }
 
-        result.queue_snapshot_action =
-            Some(PlanningQueueSnapshotAction::RestoredFromExecutionSnapshot);
+        result.queue_projection_action =
+            Some(PlanningQueueProjectionAction::RestoredFromExecutionSnapshot);
         result.notices.push(
             "planning reconciliation restored queue.snapshot.json to the last accepted state"
                 .to_string(),
@@ -850,7 +850,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PlanningExecutionSnapshot, PlanningQueueSnapshotAction, PlanningReconciliationService,
+        PlanningExecutionSnapshot, PlanningQueueProjectionAction, PlanningReconciliationService,
         PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -886,11 +886,11 @@ mod tests {
             toml::from_str(&artifacts.directions_toml).expect("bootstrap directions should parse");
         let task_ledger = serde_json::from_str(&artifacts.task_ledger_json)
             .expect("bootstrap task ledger should parse");
-        let queue_snapshot = PriorityQueueService::new()
-            .build_snapshot(&directions, &task_ledger)
-            .expect("bootstrap queue snapshot should build");
-        let queue_snapshot_json =
-            serde_json::to_string_pretty(&queue_snapshot).expect("queue snapshot should serialize");
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_ledger)
+            .expect("bootstrap queue projection should build");
+        let queue_snapshot_json = serde_json::to_string_pretty(&queue_projection)
+            .expect("queue projection should serialize");
         fs::write(
             planning_dir.join("directions.toml"),
             &artifacts.directions_toml,
@@ -910,7 +910,7 @@ mod tests {
             planning_dir.join("queue.snapshot.json"),
             &queue_snapshot_json,
         )
-        .expect("queue snapshot should write");
+        .expect("queue projection should write");
         fs::write(
             planning_dir.join("result-output.md"),
             &artifacts.result_output_markdown,
@@ -1004,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_task_ledger_change_rebuilds_queue_snapshot() {
+    fn valid_task_ledger_change_rebuilds_queue_projection() {
         let workspace_dir = create_temp_workspace("planning-reconcile-valid");
         let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
         let valid_task_ledger = serde_json::to_string_pretty(&json!({
@@ -1045,17 +1045,17 @@ mod tests {
             )
             .expect("reconciliation should succeed");
 
-        let queue_snapshot = fs::read_to_string(
+        let queue_projection = fs::read_to_string(
             Path::new(&workspace_dir).join(".codex-exec-loop/planning/queue.snapshot.json"),
         )
-        .expect("queue snapshot should exist");
+        .expect("queue projection should exist");
 
         assert_eq!(
-            result.queue_snapshot_action,
-            Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning)
+            result.queue_projection_action,
+            Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning)
         );
         assert!(!result.rejected_task_ledger);
-        assert!(queue_snapshot.contains("\"task_id\": \"task-1\""));
+        assert!(queue_projection.contains("\"task_id\": \"task-1\""));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
@@ -1075,11 +1075,11 @@ mod tests {
             toml::from_str(&artifacts.directions_toml).expect("bootstrap directions should parse");
         let empty_task_ledger =
             serde_json::from_str(&empty_task_ledger_json).expect("empty task ledger should parse");
-        let empty_queue_snapshot = PriorityQueueService::new()
-            .build_snapshot(&directions, &empty_task_ledger)
-            .expect("empty queue snapshot should build");
-        let empty_queue_snapshot_json = serde_json::to_string_pretty(&empty_queue_snapshot)
-            .expect("empty queue snapshot should serialize");
+        let empty_queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &empty_task_ledger)
+            .expect("empty queue projection should build");
+        let empty_queue_snapshot_json = serde_json::to_string_pretty(&empty_queue_projection)
+            .expect("empty queue projection should serialize");
         FilesystemPlanningWorkspaceAdapter::new()
             .commit_planning_workspace_files(
                 workspace_dir,
@@ -1151,8 +1151,8 @@ mod tests {
             .expect("active authority should load");
 
         assert_eq!(
-            result.queue_snapshot_action,
-            Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning)
+            result.queue_projection_action,
+            Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning)
         );
         assert!(!result.rejected_task_ledger);
         assert!(
@@ -1178,7 +1178,7 @@ mod tests {
             planning_dir.join("queue.snapshot.json"),
             "{\"next_task\":\"broken\"}",
         )
-        .expect("mutated queue snapshot should write");
+        .expect("mutated queue projection should write");
         fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
             .expect("invalid task ledger should write");
 
@@ -1196,15 +1196,16 @@ mod tests {
 
         let restored_task_ledger = fs::read_to_string(planning_dir.join("task-ledger.json"))
             .expect("restored task ledger should be readable");
-        let restored_queue_snapshot = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
-            .expect("restored queue snapshot should be readable");
+        let restored_queue_projection =
+            fs::read_to_string(planning_dir.join("queue.snapshot.json"))
+                .expect("restored queue projection should be readable");
 
         assert!(result.rejected_task_ledger);
         assert!(result.rejected_archive_path.is_some());
         assert!(result.repair_request.is_some());
         assert_eq!(
-            result.queue_snapshot_action,
-            Some(PlanningQueueSnapshotAction::RestoredFromExecutionSnapshot)
+            result.queue_projection_action,
+            Some(PlanningQueueProjectionAction::RestoredFromExecutionSnapshot)
         );
         assert_eq!(
             restored_task_ledger,
@@ -1213,10 +1214,10 @@ mod tests {
                 .expect("execution snapshot should keep the accepted task ledger")
         );
         assert_eq!(
-            restored_queue_snapshot,
+            restored_queue_projection,
             execution_snapshot
                 .queue_snapshot_json
-                .expect("execution snapshot should keep the accepted queue snapshot")
+                .expect("execution snapshot should keep the accepted queue projection")
         );
         assert!(
             Path::new(
@@ -1457,7 +1458,7 @@ mod tests {
                 .as_deref()
                 .is_some()
         );
-        assert_eq!(result.queue_snapshot_action, None);
+        assert_eq!(result.queue_projection_action, None);
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
@@ -1497,7 +1498,7 @@ mod tests {
             result.restored_protected_files[0].archived_candidate_path,
             None
         );
-        assert_eq!(result.queue_snapshot_action, None);
+        assert_eq!(result.queue_projection_action, None);
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
@@ -1549,8 +1550,8 @@ mod tests {
 
         let restored_schema = fs::read_to_string(planning_dir.join("task-ledger.schema.json"))
             .expect("restored schema should read");
-        let queue_snapshot = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
-            .expect("rebuilt queue snapshot should read");
+        let queue_projection = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
+            .expect("rebuilt queue projection should read");
 
         assert_eq!(
             restored_schema,
@@ -1559,17 +1560,17 @@ mod tests {
                 .expect("execution snapshot should keep the accepted task-ledger schema")
         );
         assert_eq!(
-            result.queue_snapshot_action,
-            Some(PlanningQueueSnapshotAction::RebuiltFromAcceptedPlanning)
+            result.queue_projection_action,
+            Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning)
         );
         assert!(!result.rejected_task_ledger);
-        assert!(queue_snapshot.contains("\"task_id\": \"task-restore-schema\""));
+        assert!(queue_projection.contains("\"task_id\": \"task-restore-schema\""));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
 
     #[test]
-    fn queue_snapshot_change_without_task_ledger_change_is_restored() {
+    fn queue_projection_change_without_task_ledger_change_is_restored() {
         let workspace_dir = create_temp_workspace("planning-reconcile-queue-only");
         let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
         let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
@@ -1577,7 +1578,7 @@ mod tests {
             planning_dir.join("queue.snapshot.json"),
             "{\"next_task\":\"stale\"}",
         )
-        .expect("mutated queue snapshot should write");
+        .expect("mutated queue projection should write");
 
         let result = service()
             .reconcile_after_turn(
@@ -1588,25 +1589,26 @@ mod tests {
             )
             .expect("reconciliation should succeed");
 
-        let restored_queue_snapshot = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
-            .expect("restored queue snapshot should read");
+        let restored_queue_projection =
+            fs::read_to_string(planning_dir.join("queue.snapshot.json"))
+                .expect("restored queue projection should read");
 
         assert_eq!(
-            result.queue_snapshot_action,
-            Some(PlanningQueueSnapshotAction::RestoredFromExecutionSnapshot)
+            result.queue_projection_action,
+            Some(PlanningQueueProjectionAction::RestoredFromExecutionSnapshot)
         );
         assert_eq!(
-            restored_queue_snapshot,
+            restored_queue_projection,
             execution_snapshot
                 .queue_snapshot_json
-                .expect("execution snapshot should keep the accepted queue snapshot")
+                .expect("execution snapshot should keep the accepted queue projection")
         );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
 
     #[test]
-    fn absolute_queue_snapshot_path_is_canonicalized_for_change_detection() {
+    fn absolute_queue_projection_path_is_canonicalized_for_change_detection() {
         let workspace_dir = create_temp_workspace("planning-reconcile-absolute-queue");
         let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
         let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
@@ -1614,37 +1616,38 @@ mod tests {
             planning_dir.join("queue.snapshot.json"),
             "{\"next_task\":\"stale\"}",
         )
-        .expect("mutated queue snapshot should write");
+        .expect("mutated queue projection should write");
 
-        let absolute_queue_snapshot_path = planning_dir
+        let absolute_queue_projection_path = planning_dir
             .join("queue.snapshot.json")
             .display()
             .to_string();
         assert!(PlanningExecutionSnapshot::captures_path(
-            absolute_queue_snapshot_path.as_str()
+            absolute_queue_projection_path.as_str()
         ));
 
         let result = service()
             .reconcile_after_turn(
                 &workspace_dir,
                 "turn-absolute-queue",
-                &[absolute_queue_snapshot_path],
+                &[absolute_queue_projection_path],
                 &execution_snapshot,
             )
             .expect("reconciliation should succeed");
 
-        let restored_queue_snapshot = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
-            .expect("restored queue snapshot should read");
+        let restored_queue_projection =
+            fs::read_to_string(planning_dir.join("queue.snapshot.json"))
+                .expect("restored queue projection should read");
 
         assert_eq!(
-            result.queue_snapshot_action,
-            Some(PlanningQueueSnapshotAction::RestoredFromExecutionSnapshot)
+            result.queue_projection_action,
+            Some(PlanningQueueProjectionAction::RestoredFromExecutionSnapshot)
         );
         assert_eq!(
-            restored_queue_snapshot,
+            restored_queue_projection,
             execution_snapshot
                 .queue_snapshot_json
-                .expect("execution snapshot should keep the accepted queue snapshot")
+                .expect("execution snapshot should keep the accepted queue projection")
         );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
