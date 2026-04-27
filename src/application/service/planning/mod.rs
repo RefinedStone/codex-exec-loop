@@ -17,7 +17,9 @@ pub use self::admin::{
     PlanningAdminOverview, PlanningAdminResetOutcome, PlanningAdminSessionView,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
-pub use self::authoring::bootstrap::PlanningBootstrapMode;
+pub use self::authoring::bootstrap::{
+    PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
+};
 pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
@@ -55,6 +57,7 @@ pub use self::runtime::intake::{
 };
 pub use self::runtime::policy::PlanningAutoFollowBlockReason;
 pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
+pub use self::runtime::validation::PlanningValidationService;
 pub use self::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 pub use self::shared::contract::{
     ACTIVE_PLANNING_FILE_PATHS, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH,

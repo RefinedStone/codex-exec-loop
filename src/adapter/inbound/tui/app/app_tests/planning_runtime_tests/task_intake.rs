@@ -12,9 +12,8 @@ use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityCommit;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::TASK_LEDGER_FILE_PATH;
-use crate::application::service::planning::authoring::bootstrap::{
-    PlanningBootstrapMode, PlanningBootstrapService,
+use crate::application::service::planning::{
+    PlanningBootstrapMode, PlanningBootstrapService, TASK_LEDGER_FILE_PATH,
 };
 use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
 
