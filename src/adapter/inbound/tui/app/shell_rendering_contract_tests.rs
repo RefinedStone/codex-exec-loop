@@ -179,6 +179,29 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 }
 
 #[test]
+fn startup_prompt_command_palette_remains_visible_after_colon_input() {
+    let mut terminal = tui_testkit::inline_terminal(80, 10);
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start with a ready draft conversation");
+    };
+    conversation.input_buffer = ":".to_string();
+    conversation.sync_inline_shell_command_palette();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("> :"));
+    assert!(rendered.contains("command: palette"));
+    assert!(rendered.contains(":diag"));
+    assert!(rendered.contains(":queue"));
+}
+
+#[test]
 fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();

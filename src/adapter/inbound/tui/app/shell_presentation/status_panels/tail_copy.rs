@@ -45,7 +45,10 @@ pub(super) fn build_inline_tail_lines_with_context(
     let planner_panel_lines = build_planner_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
 
     if context.startup_screen_is_active() {
-        let mut lines = if app.shell_overlay == ShellOverlay::Hidden {
+        let has_buffered_input = context
+            .ready_conversation()
+            .is_some_and(|conversation| !conversation.input_buffer.is_empty());
+        let mut lines = if app.shell_overlay == ShellOverlay::Hidden && !has_buffered_input {
             build_inline_startup_screen_lines_with_context(context)
         } else {
             build_inline_startup_overlay_tail_lines_with_context(context)
