@@ -1,27 +1,22 @@
 use std::sync::Arc;
 
+mod shared_services;
+
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-use crate::application::service::priority_queue_service::PriorityQueueService;
-use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
 
+use self::shared_services::PlanningSharedServices;
 use super::authoring::bootstrap::PlanningBootstrapService;
-use super::authoring::directions::PlanningDirectionsService;
 use super::authoring::directions_apply::PlanningDirectionsApplyService;
 use super::authoring::init::PlanningInitService;
 use super::authoring::proposal_promotion::PlanningProposalPromotionService;
 use super::authoring::task_ledger_apply::PlanningTaskLedgerApplyService;
 use super::feature::PlanningFeature;
 use super::repair::doctor::PlanningDoctorService;
-use super::repair::reconciliation::PlanningReconciliationService;
 use super::repair::reset::PlanningResetService;
-use super::runtime::facade::PlanningRuntimeFacadeService;
 use super::runtime::intake::PlanningTaskIntakeService;
-use super::runtime::policy::PlanningRuntimePolicyService;
-use super::runtime::prompt::PlanningPromptService;
-use super::runtime::validation::PlanningValidationService;
 use super::use_cases::{
     PlanningRuntimeUseCases, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
@@ -66,49 +61,6 @@ impl PlanningFeatureComposition {
             workspace: PlanningWorkspaceUseCaseBuilder::new(&self.ports, &services).build(),
             runtime: PlanningRuntimeUseCaseBuilder::new(&self.ports, &services).build(),
             worker: PlanningWorkerUseCaseBuilder::new(self.ports, services).build(),
-        }
-    }
-}
-
-struct PlanningSharedServices {
-    validation: PlanningValidationService,
-    priority_queue: PriorityQueueService,
-    directions: PlanningDirectionsService,
-    prompt: PlanningPromptService,
-    runtime_facade: PlanningRuntimeFacadeService,
-}
-
-impl PlanningSharedServices {
-    fn new(ports: &PlanningFeaturePorts) -> Self {
-        let validation = PlanningValidationService::new();
-        let priority_queue = PriorityQueueService::new();
-        let directions =
-            PlanningDirectionsService::new(ports.workspace.clone(), validation.clone());
-        let prompt = PlanningPromptService::with_task_repository(
-            ports.workspace.clone(),
-            validation.clone(),
-            priority_queue.clone(),
-            ports.task_repository.clone(),
-        );
-        let reconciliation = PlanningReconciliationService::with_task_repository(
-            ports.workspace.clone(),
-            validation.clone(),
-            priority_queue.clone(),
-            ports.task_repository.clone(),
-        );
-        let runtime_facade = PlanningRuntimeFacadeService::new(
-            prompt.clone(),
-            reconciliation,
-            PlanningRuntimePolicyService::new(),
-            TurnPromptAssemblyService::new(),
-        );
-
-        Self {
-            validation,
-            priority_queue,
-            directions,
-            prompt,
-            runtime_facade,
         }
     }
 }
