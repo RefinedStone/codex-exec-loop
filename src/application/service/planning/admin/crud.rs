@@ -29,7 +29,7 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         let mut documents = self.load_admin_documents()?;
         let direction = direction_from_request(request, &documents.directions)?;
-        let id = direction.id.clone();
+        let id = direction.id.trim().to_string();
         let updated = if let Some(existing) = documents
             .directions
             .directions
@@ -112,7 +112,7 @@ impl PlanningAdminFacadeService {
         let default_direction_id = default_direction_id(&documents.directions)?;
         let task = task_from_request(request, &documents.task_ledger, default_direction_id)?;
         ensure_direction_exists(&documents.directions, &task.direction_id)?;
-        let task_id = task.id.clone();
+        let task_id = task.id.trim().to_string();
         let updated = if let Some(existing) = documents
             .task_ledger
             .tasks
