@@ -5,9 +5,8 @@ use anyhow::{Context, Result, anyhow};
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
-use crate::application::port::outbound::planning_workspace_port::{
-    PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
-};
+use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
+use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::shared::contract::{
     DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
@@ -15,6 +14,10 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::PlanningWorkspaceFiles;
 
+pub use super::ledger_recovery::PlanningQueueProjectionAction;
+use super::ledger_recovery::{
+    PlanningLedgerRejectionRequest, recover_queue_projection, reject_invalid_task_ledger,
+};
 pub use super::prompt::{
     PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
@@ -45,12 +48,6 @@ impl PlanningExecutionSnapshot {
     pub fn captures_path(path: &str) -> bool {
         canonical_active_planning_file_path(path).is_some()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlanningQueueProjectionAction {
-    RebuiltFromAcceptedPlanning,
-    RestoredFromExecutionSnapshot,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -196,11 +193,12 @@ impl PlanningReconciliationService {
                 &mut result,
             )?;
         } else if change_set.queue_projection_changed {
-            self.restore_queue_projection(
+            let queue_recovery = recover_queue_projection(
                 candidate_workspace_record.queue_snapshot_json.as_deref(),
                 execution_snapshot,
-                &mut result,
-            )?;
+            );
+            result.queue_projection_action = queue_recovery.action;
+            result.notices.extend(queue_recovery.notices);
         }
 
         if !change_set.task_ledger_changed
@@ -276,79 +274,28 @@ impl PlanningReconciliationService {
             return Ok(());
         }
 
-        if let Some(task_ledger_json) = workspace_record.task_ledger_json.as_deref() {
-            let archive_path = self
-                .planning_workspace_port
-                .archive_rejected_planning_file(
-                    workspace_dir,
-                    turn_id,
-                    TASK_LEDGER_FILE_PATH,
-                    task_ledger_json,
-                )?;
-            result.rejected_archive_path = Some(archive_path);
-        }
-
-        self.restore_queue_projection(
-            workspace_record.queue_snapshot_json.as_deref(),
-            execution_snapshot,
-            result,
-        )?;
-        self.planning_workspace_port
-            .commit_planning_workspace_files(
+        let rejection = reject_invalid_task_ledger(
+            self.planning_workspace_port.as_ref(),
+            PlanningLedgerRejectionRequest {
                 workspace_dir,
-                &execution_snapshot_to_workspace_record(execution_snapshot),
-            )?;
-        let validation_errors = validation_error_summaries(&validation_result);
+                turn_id,
+                workspace_record,
+                execution_snapshot,
+                reconciled_workspace,
+                validation_result: &validation_result,
+            },
+        )?;
         result.rejected_task_ledger = true;
-        result.repair_request = Some(PlanningRepairRequest {
-            failure_summary: validation_errors
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "unknown validation failure".to_string()),
-            validation_errors,
-            directions_toml: reconciled_workspace.directions_toml.clone(),
-            task_ledger_schema_json: reconciled_workspace.task_ledger_schema_json.clone(),
-            accepted_task_ledger_json: execution_snapshot
-                .task_ledger_json
-                .clone()
-                .unwrap_or_default(),
-            rejected_task_ledger_json: workspace_record.task_ledger_json.clone(),
-            rejected_archive_path: result.rejected_archive_path.clone(),
-        });
-        result.notices.push(format!(
-            "planning reconciliation rejected task-ledger.json and restored the last accepted ledger ({})",
-            first_validation_error_summary(&validation_result)
-        ));
-        if let Some(rejected_archive_path) = result.rejected_archive_path.as_deref() {
-            result.notices.push(format!(
-                "planning reconciliation archived rejected task-ledger at {rejected_archive_path}"
-            ));
-        }
+        result.rejected_archive_path = rejection.rejected_archive_path;
+        result.queue_projection_action = rejection.queue_projection_action;
+        result.repair_request = Some(rejection.repair_request);
+        result.notices.extend(rejection.notices);
 
-        Ok(())
-    }
-
-    fn restore_queue_projection(
-        &self,
-        current_queue_snapshot_json: Option<&str>,
-        execution_snapshot: &PlanningExecutionSnapshot,
-        result: &mut PlanningReconciliationResult,
-    ) -> Result<()> {
-        if current_queue_snapshot_json == execution_snapshot.queue_snapshot_json.as_deref() {
-            return Ok(());
-        }
-
-        result.queue_projection_action =
-            Some(PlanningQueueProjectionAction::RestoredFromExecutionSnapshot);
-        result.notices.push(
-            "planning reconciliation restored queue.snapshot.json to the last accepted state"
-                .to_string(),
-        );
         Ok(())
     }
 }
 
-fn execution_snapshot_to_workspace_record(
+pub(super) fn execution_snapshot_to_workspace_record(
     execution_snapshot: &PlanningExecutionSnapshot,
 ) -> PlanningWorkspaceLoadRecord {
     PlanningWorkspaceLoadRecord {
@@ -358,26 +305,6 @@ fn execution_snapshot_to_workspace_record(
         queue_snapshot_json: execution_snapshot.queue_snapshot_json.clone(),
         result_output_markdown: execution_snapshot.result_output_markdown.clone(),
     }
-}
-
-fn first_validation_error_summary(
-    validation_result: &crate::domain::planning::PlanningValidationResult,
-) -> String {
-    validation_error_summaries(validation_result)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| "unknown validation failure".to_string())
-}
-
-fn validation_error_summaries(
-    validation_result: &crate::domain::planning::PlanningValidationResult,
-) -> Vec<String> {
-    validation_result
-        .report
-        .errors()
-        .into_iter()
-        .map(|issue| issue.message.clone())
-        .collect()
 }
 
 #[cfg(test)]
