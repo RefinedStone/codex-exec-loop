@@ -191,6 +191,7 @@ pub(super) trait InlineResizeBackend: Backend {
 pub(super) struct InlineTerminalBackend<B> {
     inner: B,
     suppress_resize_append_lines: bool,
+    tracked_cursor_position: Option<Position>,
 }
 
 impl<B> InlineTerminalBackend<B> {
@@ -198,6 +199,7 @@ impl<B> InlineTerminalBackend<B> {
         Self {
             inner,
             suppress_resize_append_lines: false,
+            tracked_cursor_position: None,
         }
     }
 
@@ -234,7 +236,9 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
         if self.suppress_resize_append_lines {
             return Ok(());
         }
-        self.inner.append_lines(n)
+        self.inner.append_lines(n)?;
+        self.track_cursor_after_append_lines(n);
+        Ok(())
     }
 
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
@@ -246,11 +250,19 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
     }
 
     fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.inner.get_cursor_position()
+        if let Some(position) = self.tracked_cursor_position {
+            return Ok(position);
+        }
+        let position = self.inner.get_cursor_position()?;
+        self.tracked_cursor_position = Some(position);
+        Ok(position)
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.inner.set_cursor_position(position)
+        let position = position.into();
+        self.inner.set_cursor_position(position)?;
+        self.tracked_cursor_position = Some(position);
+        Ok(())
     }
 
     fn clear(&mut self) -> Result<(), Self::Error> {
@@ -283,6 +295,28 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
         line_count: u16,
     ) -> Result<(), Self::Error> {
         self.inner.scroll_region_down(region, line_count)
+    }
+}
+
+impl<B: Backend> InlineTerminalBackend<B> {
+    fn track_cursor_after_append_lines(&mut self, line_count: u16) {
+        if line_count == 0 {
+            return;
+        }
+        let Some(mut position) = self.tracked_cursor_position else {
+            return;
+        };
+        if let Ok(size) = self.inner.size() {
+            if size.height == 0 {
+                return;
+            }
+            position.x = 0;
+            position.y = position
+                .y
+                .saturating_add(line_count)
+                .min(size.height.saturating_sub(1));
+            self.tracked_cursor_position = Some(position);
+        }
     }
 }
 
@@ -585,11 +619,14 @@ impl HistoryFlushState {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use anyhow::Result;
-    use ratatui::backend::{Backend, TestBackend};
-    use ratatui::layout::Size;
+    use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+    use ratatui::buffer::Cell;
+    use ratatui::layout::{Position, Size};
     use ratatui::text::Line;
     use ratatui::{Terminal, Viewport};
 
@@ -1144,6 +1181,45 @@ mod tests {
     }
 
     #[test]
+    fn inline_backend_reuses_tracked_cursor_after_initial_query() {
+        let backend =
+            InlineTerminalBackend::new(CursorQueryCountingBackend::new(TestBackend::new(80, 24)));
+        let mut terminal = Terminal::with_options(
+            backend,
+            terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+        )
+        .expect("inline terminal should initialize");
+        let initial_query_count = terminal.backend_mut().inner().cursor_query_count();
+
+        terminal
+            .set_cursor_position(Position::new(3, 4))
+            .expect("cursor should move");
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor should read"),
+            Position::new(3, 4)
+        );
+        assert_eq!(
+            terminal.backend_mut().inner().cursor_query_count(),
+            initial_query_count,
+            "tracked cursor reads should not call the inner crossterm position query again"
+        );
+
+        terminal
+            .backend_mut()
+            .append_lines(2)
+            .expect("append should scroll from tracked cursor");
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor should read"),
+            Position::new(0, 6)
+        );
+        assert_eq!(
+            terminal.backend_mut().inner().cursor_query_count(),
+            initial_query_count,
+            "append-line cursor tracking should still avoid another terminal query"
+        );
+    }
+
+    #[test]
     fn viewport_replay_resize_does_not_push_tail_into_scrollback() {
         assert_resize_sequence_does_not_leak_live_tail(
             InlineHistoryRenderMode::ViewportReplay,
@@ -1362,6 +1438,95 @@ mod tests {
             .messages
             .push(ConversationMessage::new(kind, text.to_string(), None, None));
         conversation.refresh_conversation_lines();
+    }
+
+    struct CursorQueryCountingBackend {
+        inner: TestBackend,
+        cursor_query_count: usize,
+    }
+
+    impl CursorQueryCountingBackend {
+        fn new(inner: TestBackend) -> Self {
+            Self {
+                inner,
+                cursor_query_count: 0,
+            }
+        }
+
+        fn cursor_query_count(&self) -> usize {
+            self.cursor_query_count
+        }
+    }
+
+    impl Backend for CursorQueryCountingBackend {
+        type Error = Infallible;
+
+        fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.inner.draw(content)
+        }
+
+        fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+            self.inner.hide_cursor()
+        }
+
+        fn show_cursor(&mut self) -> Result<(), Self::Error> {
+            self.inner.show_cursor()
+        }
+
+        fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+            self.cursor_query_count += 1;
+            self.inner.get_cursor_position()
+        }
+
+        fn set_cursor_position<P: Into<Position>>(
+            &mut self,
+            position: P,
+        ) -> Result<(), Self::Error> {
+            self.inner.set_cursor_position(position)
+        }
+
+        fn clear(&mut self) -> Result<(), Self::Error> {
+            self.inner.clear()
+        }
+
+        fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+            self.inner.clear_region(clear_type)
+        }
+
+        fn append_lines(&mut self, line_count: u16) -> Result<(), Self::Error> {
+            self.inner.append_lines(line_count)
+        }
+
+        fn size(&self) -> Result<Size, Self::Error> {
+            self.inner.size()
+        }
+
+        fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+            self.inner.window_size()
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            self.inner.flush()
+        }
+
+        fn scroll_region_up(
+            &mut self,
+            region: Range<u16>,
+            line_count: u16,
+        ) -> Result<(), Self::Error> {
+            self.inner.scroll_region_up(region, line_count)
+        }
+
+        fn scroll_region_down(
+            &mut self,
+            region: Range<u16>,
+            line_count: u16,
+        ) -> Result<(), Self::Error> {
+            self.inner.scroll_region_down(region, line_count)
+        }
     }
 
     struct FakeCodexAppServerPort;
