@@ -18,6 +18,10 @@ use crate::domain::planning::PlanningWorkspaceFiles;
 pub use super::prompt::{
     PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
+pub use super::protected_restore::PlanningProtectedFileRestoration;
+use super::protected_restore::{
+    ReconciledPlanningWorkspaceFiles, restore_protected_workspace_files,
+};
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
 #[derive(Clone)]
@@ -49,12 +53,6 @@ pub enum PlanningQueueProjectionAction {
     RestoredFromExecutionSnapshot,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningProtectedFileRestoration {
-    pub relative_path: &'static str,
-    pub archived_candidate_path: Option<String>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanningReconciliationResult {
     pub notices: Vec<String>,
@@ -78,12 +76,12 @@ pub struct PlanningRepairRequest {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct PlanningChangeSet {
-    directions_changed: bool,
-    task_ledger_changed: bool,
-    task_ledger_schema_changed: bool,
-    result_output_changed: bool,
-    queue_projection_changed: bool,
+pub(super) struct PlanningChangeSet {
+    pub(super) directions_changed: bool,
+    pub(super) task_ledger_changed: bool,
+    pub(super) task_ledger_schema_changed: bool,
+    pub(super) result_output_changed: bool,
+    pub(super) queue_projection_changed: bool,
 }
 
 impl PlanningChangeSet {
@@ -109,23 +107,6 @@ impl PlanningChangeSet {
             || self.result_output_changed
             || self.queue_projection_changed
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ReconciledPlanningWorkspaceFiles {
-    directions_toml: String,
-    task_ledger_schema_json: String,
-    result_output_markdown: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ProtectedFileRestoreRequest<'a> {
-    workspace_dir: &'a str,
-    turn_id: &'a str,
-    relative_path: &'static str,
-    current_body: Option<&'a str>,
-    execution_snapshot_body: Option<&'a str>,
-    changed: bool,
 }
 
 impl PlanningReconciliationService {
@@ -191,14 +172,19 @@ impl PlanningReconciliationService {
             .planning_workspace_port
             .load_planning_workspace_candidate_files(workspace_dir)?;
 
-        let reconciled_workspace = self.restore_protected_workspace_files(
+        let protected_restore = restore_protected_workspace_files(
+            self.planning_workspace_port.as_ref(),
             workspace_dir,
             turn_id,
             &candidate_workspace_record,
             execution_snapshot,
             change_set,
-            &mut result,
         )?;
+        result
+            .restored_protected_files
+            .extend(protected_restore.restorations);
+        result.notices.extend(protected_restore.notices);
+        let reconciled_workspace = protected_restore.workspace_files;
 
         if change_set.task_ledger_changed {
             self.reconcile_task_ledger(
@@ -228,115 +214,6 @@ impl PlanningReconciliationService {
         }
 
         Ok(result)
-    }
-
-    fn restore_protected_workspace_files(
-        &self,
-        workspace_dir: &str,
-        turn_id: &str,
-        workspace_record: &PlanningWorkspaceLoadRecord,
-        execution_snapshot: &PlanningExecutionSnapshot,
-        change_set: PlanningChangeSet,
-        result: &mut PlanningReconciliationResult,
-    ) -> Result<ReconciledPlanningWorkspaceFiles> {
-        Ok(ReconciledPlanningWorkspaceFiles {
-            directions_toml: self.restore_protected_file(
-                ProtectedFileRestoreRequest {
-                    workspace_dir,
-                    turn_id,
-                    relative_path: DIRECTIONS_FILE_PATH,
-                    current_body: workspace_record.directions_toml.as_deref(),
-                    execution_snapshot_body: execution_snapshot.directions_toml.as_deref(),
-                    changed: change_set.directions_changed,
-                },
-                result,
-            )?,
-            task_ledger_schema_json: self.restore_protected_file(
-                ProtectedFileRestoreRequest {
-                    workspace_dir,
-                    turn_id,
-                    relative_path: TASK_LEDGER_SCHEMA_FILE_PATH,
-                    current_body: workspace_record.task_ledger_schema_json.as_deref(),
-                    execution_snapshot_body: execution_snapshot.task_ledger_schema_json.as_deref(),
-                    changed: change_set.task_ledger_schema_changed,
-                },
-                result,
-            )?,
-            result_output_markdown: self.restore_protected_file(
-                ProtectedFileRestoreRequest {
-                    workspace_dir,
-                    turn_id,
-                    relative_path: RESULT_OUTPUT_FILE_PATH,
-                    current_body: workspace_record.result_output_markdown.as_deref(),
-                    execution_snapshot_body: execution_snapshot.result_output_markdown.as_deref(),
-                    changed: change_set.result_output_changed,
-                },
-                result,
-            )?,
-        })
-    }
-
-    fn restore_protected_file(
-        &self,
-        request: ProtectedFileRestoreRequest<'_>,
-        result: &mut PlanningReconciliationResult,
-    ) -> Result<String> {
-        if !request.changed || request.current_body == request.execution_snapshot_body {
-            return Ok(request
-                .current_body
-                .or(request.execution_snapshot_body)
-                .unwrap_or_default()
-                .to_string());
-        }
-
-        let archived_candidate_path = self.archive_changed_candidate(
-            request.workspace_dir,
-            request.turn_id,
-            request.relative_path,
-            request.current_body,
-            request.execution_snapshot_body,
-        )?;
-
-        result
-            .restored_protected_files
-            .push(PlanningProtectedFileRestoration {
-                relative_path: request.relative_path,
-                archived_candidate_path: archived_candidate_path.clone(),
-            });
-        result.notices.push(format!(
-            "planning reconciliation restored protected {}",
-            request.relative_path
-        ));
-        if let Some(archived_candidate_path) = archived_candidate_path.as_deref() {
-            result.notices.push(format!(
-                "planning reconciliation archived protected-file candidate at {archived_candidate_path}"
-            ));
-        }
-
-        Ok(request
-            .execution_snapshot_body
-            .unwrap_or_default()
-            .to_string())
-    }
-
-    fn archive_changed_candidate(
-        &self,
-        workspace_dir: &str,
-        turn_id: &str,
-        relative_path: &str,
-        current_body: Option<&str>,
-        execution_snapshot_body: Option<&str>,
-    ) -> Result<Option<String>> {
-        let Some(current_body) = current_body else {
-            return Ok(None);
-        };
-        if Some(current_body) == execution_snapshot_body {
-            return Ok(None);
-        }
-
-        self.planning_workspace_port
-            .archive_rejected_planning_file(workspace_dir, turn_id, relative_path, current_body)
-            .map(Some)
     }
 
     fn reconcile_task_ledger(
