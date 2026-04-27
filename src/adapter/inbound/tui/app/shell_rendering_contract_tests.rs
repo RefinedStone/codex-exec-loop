@@ -382,7 +382,8 @@ fn inline_help_inspection_renders_command_help() {
     assert!(rendered.contains("Shell Commands / inline inspection"));
     assert!(rendered.contains(":diag"));
     assert!(rendered.contains("diagnostics"));
-    assert!(!rendered.contains(":turns"));
+    assert!(rendered.contains(":turns"));
+    assert!(rendered.contains("auto turn budget"));
     assert!(!rendered.contains(":auto"));
     assert!(rendered.contains("Esc/Ctrl+C: close"));
     assert!(!rendered.contains("Shell commands: :diag  :parallel"));

@@ -711,9 +711,18 @@ impl ConversationViewModel {
         &mut self,
         handoff_task: &PlanningTaskHandoff,
     ) {
+        let turn_index = self.auto_follow_state.mark_auto_turn_submitted();
+        let progress = format!(
+            "{turn_index}/{}",
+            self.auto_follow_state.max_auto_turns_label()
+        );
         self.last_planning_task_handoff = Some(handoff_task.clone());
-        self.last_auto_followup_activity = None;
         self.clear_auto_followup_skip();
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: format!("submitted parallel turn {progress}"),
+            detail: "parallel session submitted from the supervisor queue; shared auto-turn budget is reserved"
+                .to_string(),
+        });
     }
 
     pub(crate) fn record_auto_followup_queue(&mut self, _queued_from_turn_id: &str) {

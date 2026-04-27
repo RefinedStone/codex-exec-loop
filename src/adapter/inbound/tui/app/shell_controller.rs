@@ -139,6 +139,7 @@ impl NativeTuiApp {
                 self.handle_directions_shell_command(command_input.argument())
             }
             InlineShellCommand::Task => self.handle_task_shell_command(command_input.argument()),
+            InlineShellCommand::Turns => self.handle_turns_shell_command(command_input.argument()),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::Init => self.handle_init_shell_command(),
             InlineShellCommand::PlanningInit => {
@@ -166,6 +167,12 @@ impl NativeTuiApp {
 
     fn show_help_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
+    }
+
+    fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
+        self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
+            value: argument.unwrap_or_default().to_string(),
+        });
     }
 
     fn handle_task_shell_command(&mut self, prompt: Option<&str>) {

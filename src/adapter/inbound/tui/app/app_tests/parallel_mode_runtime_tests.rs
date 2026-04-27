@@ -170,7 +170,7 @@ fn parallel_mode_handoff_launch_uses_leased_slot_workspace_and_new_thread_stream
 }
 
 #[test]
-fn parallel_on_dispatches_queue_head_without_auto_turn_budget() {
+fn parallel_on_dispatches_queue_head_with_shared_auto_turn_budget() {
     let repo = TempGitWorkspace::new("parallel-mode-on-dispatch");
     commit_active_planning_workspace_into_akra(repo.workspace_dir());
     replace_active_planning_workspace_file(
@@ -192,7 +192,13 @@ fn parallel_on_dispatches_queue_head_without_auto_turn_budget() {
     let leased_workspace = match &app.conversation_state {
         ConversationState::Ready(conversation) => {
             assert_eq!(conversation.auto_follow_state.completed_auto_turns, 0);
-            assert!(!conversation.auto_follow_state.has_live_activity());
+            assert_eq!(conversation.auto_follow_state.active_turn_index(), Some(1));
+            assert!(conversation.auto_follow_state.has_live_activity());
+            assert!(
+                conversation.status_text.contains("turn 1/20"),
+                "parallel dispatch status should expose shared budget progress: {}",
+                conversation.status_text
+            );
             conversation
                 .active_turn_workspace_directory
                 .clone()
@@ -224,6 +230,47 @@ fn parallel_on_dispatches_queue_head_without_auto_turn_budget() {
         new_thread_calls[0]
             .1
             .contains("Continue distributor queue wiring")
+    );
+}
+
+#[test]
+fn parallel_on_does_not_dispatch_queue_head_after_shared_turn_budget_is_exhausted() {
+    let repo = TempGitWorkspace::new("parallel-mode-on-turn-budget-exhausted");
+    commit_active_planning_workspace_into_akra(repo.workspace_dir());
+    replace_active_planning_workspace_file(
+        repo.workspace_dir(),
+        TASK_LEDGER_FILE_PATH,
+        &official_completion_task_ledger(),
+    );
+    let (mut app, codex_port) = make_test_app();
+    install_ready_github_automation(&mut app);
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(repo.workspace_dir(), true));
+    let mut conversation = ready_conversation();
+    conversation.cwd = repo.workspace_dir().to_string();
+    conversation.draft_workspace_directory = repo.workspace_dir().to_string();
+    conversation.auto_follow_state.set_max_auto_turns(1);
+    conversation.auto_follow_state.completed_auto_turns = 1;
+    app.conversation_state = ConversationState::ready(conversation);
+
+    app.handle_parallel_shell_command(Some("on"));
+
+    assert!(app.parallel_mode_enabled);
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("conversation should remain ready")
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("auto-turn budget exhausted"),
+        "parallel dispatch should report shared budget exhaustion: {}",
+        conversation.status_text
+    );
+    assert!(
+        codex_port
+            .new_thread_calls
+            .lock()
+            .expect("new-thread calls mutex poisoned")
+            .is_empty()
     );
 }
 

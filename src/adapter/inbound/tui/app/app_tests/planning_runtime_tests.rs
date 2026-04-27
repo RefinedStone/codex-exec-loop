@@ -47,3 +47,20 @@ fn open_planning_manual_editor(app: &mut NativeTuiApp) {
         PlanningInitOverlayStep::ManualEditor
     );
 }
+
+#[test]
+fn turns_command_updates_auto_follow_budget() {
+    let (mut app, _) = super::make_test_app();
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":turns 9").expect("command should parse"),
+    );
+
+    assert_eq!(app.current_max_auto_turns_label(), "9");
+
+    app.execute_inline_shell_command_input(
+        InlineShellCommandInput::parse(":turns infinite").expect("command should parse"),
+    );
+
+    assert_eq!(app.current_max_auto_turns_label(), "infinite");
+}

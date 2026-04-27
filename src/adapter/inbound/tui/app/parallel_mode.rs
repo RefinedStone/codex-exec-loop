@@ -4,7 +4,10 @@ use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay}
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
-use super::{ConversationInputEvent, NativeTuiApp, ParallelDispatchSubmitContext, PromptOrigin};
+use super::{
+    ConversationInputEvent, ConversationState, NativeTuiApp, ParallelDispatchSubmitContext,
+    PromptOrigin,
+};
 
 impl NativeTuiApp {
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
@@ -165,6 +168,11 @@ impl NativeTuiApp {
             .runtime
             .build_builtin_next_task_handoff(&planning_snapshot)?;
         let task_title = handoff.task.task_title.clone();
+        let Some(auto_turn_progress) = self.reserve_parallel_auto_turn_status() else {
+            return Some(format!(
+                "parallel mode: on / queue head not dispatched / auto-turn budget exhausted / task: {task_title}"
+            ));
+        };
         let origin = PromptOrigin::ParallelDispatch(Box::new(ParallelDispatchSubmitContext {
             transcript_text: handoff.transcript_text,
             handoff_task: handoff.task,
@@ -182,13 +190,26 @@ impl NativeTuiApp {
         }
         if self.submit_prompt(handoff.prompt, origin) {
             Some(format!(
-                "parallel mode: on / dispatched queue head / task: {task_title}"
+                "parallel mode: on / dispatched queue head / turn {auto_turn_progress} / task: {task_title}"
             ))
         } else {
             Some(format!(
                 "parallel mode: on / queue head not dispatched / task: {task_title}"
             ))
         }
+    }
+
+    fn reserve_parallel_auto_turn_status(&self) -> Option<String> {
+        let ConversationState::Ready(conversation) = &self.conversation_state else {
+            return None;
+        };
+        conversation.auto_follow_state.can_queue_next().then(|| {
+            format!(
+                "{}/{}",
+                conversation.auto_follow_state.next_auto_turn_index(),
+                conversation.auto_follow_state.max_auto_turns_label()
+            )
+        })
     }
 
     pub(super) fn handle_supersession_overlay_key(&mut self, key: event::KeyEvent) -> bool {

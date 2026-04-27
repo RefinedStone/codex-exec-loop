@@ -6,6 +6,7 @@ pub(crate) enum InlineShellCommand {
     Queue,
     Directions,
     Task,
+    Turns,
     Doctor,
     Init,
     PlanningInit,
@@ -45,7 +46,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
 }
 
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -103,6 +104,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         buffered_hint: "Press Enter to draft a runtime planning task.",
         execution_status: None,
         requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Turns,
+        primary_name: ":turns",
+        aliases: &[":turns", ":auto-turns"],
+        suggestion_detail: "auto turn budget",
+        buffered_hint: "Type `:turns <number|infinite>` to set the auto follow-up turn budget.",
+        execution_status: None,
+        requires_argument: true,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Doctor,
@@ -212,6 +222,12 @@ impl InlineShellCommandInput {
                 Some(value) => format!("Press Enter to preview a runtime task for `{value}`."),
                 None => self.command.spec().buffered_hint.to_string(),
             },
+            InlineShellCommand::Turns => match self.argument() {
+                Some(value) => {
+                    format!("Press Enter to set the auto follow-up turn budget to `{value}`.")
+                }
+                None => self.command.spec().buffered_hint.to_string(),
+            },
             InlineShellCommand::Queue => match self.argument() {
                 Some(value) if value.eq_ignore_ascii_case("apply") => {
                     "Press Enter to import tracked task-ledger.json into active planning."
@@ -250,6 +266,7 @@ impl InlineShellCommandInput {
     pub(super) fn execution_status(&self) -> Option<String> {
         match self.command {
             InlineShellCommand::Queue if self.argument().is_some() => None,
+            InlineShellCommand::Turns => None,
             _ => self.command.spec().execution_status.map(str::to_string),
         }
     }
@@ -376,6 +393,7 @@ impl InlineShellCommand {
     pub(super) fn completion_text(self) -> &'static str {
         match self {
             InlineShellCommand::Reset => ":reset ",
+            InlineShellCommand::Turns => ":turns ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
             | InlineShellCommand::Sessions
@@ -406,6 +424,7 @@ impl InlineShellCommand {
             InlineShellCommand::Queue => ":queue [apply]",
             InlineShellCommand::Directions => ":directions [apply]",
             InlineShellCommand::Task => ":task [prompt]",
+            InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
             InlineShellCommand::Diagnostics
@@ -533,6 +552,16 @@ mod tests {
                 ":task add a release checklist",
                 Some((InlineShellCommand::Task, Some("add a release checklist"))),
             ),
+            (":turns 5", Some((InlineShellCommand::Turns, Some("5")))),
+            (
+                ":turns infinite",
+                Some((InlineShellCommand::Turns, Some("infinite"))),
+            ),
+            (
+                ":auto-turns 12",
+                Some((InlineShellCommand::Turns, Some("12"))),
+            ),
+            (":turns", Some((InlineShellCommand::Turns, None))),
             (":stop", None),
             (":auto", None),
             (":automation", None),
@@ -555,10 +584,6 @@ mod tests {
                 ":reset directions confirm",
                 Some((InlineShellCommand::Reset, Some("directions confirm"))),
             ),
-            (":turns 5", None),
-            (":turns infinite", None),
-            (":auto-turns 12", None),
-            (":turns", None),
             (":new", Some((InlineShellCommand::NewDraft, None))),
             (":help", Some((InlineShellCommand::Help, None))),
             ("  :help  ", Some((InlineShellCommand::Help, None))),
@@ -587,6 +612,7 @@ mod tests {
                 InlineShellCommand::Queue,
                 InlineShellCommand::Directions,
                 InlineShellCommand::Task,
+                InlineShellCommand::Turns,
                 InlineShellCommand::Doctor,
                 InlineShellCommand::Init,
                 InlineShellCommand::PlanningInit,
@@ -625,7 +651,11 @@ mod tests {
         assert_eq!(InlineShellCommand::suggestions(":st"), Vec::new());
         assert_eq!(
             InlineShellCommand::suggestions(":t"),
-            vec![InlineShellCommand::Task]
+            vec![InlineShellCommand::Task, InlineShellCommand::Turns]
+        );
+        assert_eq!(
+            InlineShellCommand::suggestions(":tu"),
+            vec![InlineShellCommand::Turns]
         );
     }
 
@@ -650,7 +680,7 @@ mod tests {
     fn palette_state_keeps_selected_command_when_input_refines() {
         let mut state = InlineShellCommandPaletteState::default();
         state.sync_to_input(":", None);
-        assert!(state.move_selection(8));
+        assert!(state.move_selection(9));
         assert_eq!(
             state.selected_command(),
             Some(InlineShellCommand::PlanningInit)
@@ -675,6 +705,7 @@ mod tests {
         assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
         assert_eq!(InlineShellCommand::Init.completion_text(), ":init");
         assert_eq!(InlineShellCommand::Task.completion_text(), ":task");
+        assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
         assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
     }
 
@@ -698,7 +729,7 @@ mod tests {
 
         assert!(rendered.contains(":diag - diagnostics"));
         assert!(rendered.contains(":parallel [on|off] - parallel mode"));
-        assert!(!rendered.contains(":turns"));
+        assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
         assert!(!rendered.contains(":auto"));
         assert!(rendered.contains(":help - command help"));
         assert!(!rendered.contains(InlineShellCommand::command_list_line()));
@@ -842,6 +873,7 @@ mod tests {
             (":init", None),
             (":planning", None),
             (":task", None),
+            (":turns 5", None),
             (":reset queue", None),
         ];
 

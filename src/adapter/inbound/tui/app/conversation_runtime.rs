@@ -159,7 +159,7 @@ pub(super) fn reduce_conversation_runtime(
                     context.mode_label
                 ),
                 PromptOrigin::ParallelDispatch(context) => format!(
-                    "parallel dispatch submitted / task: {}",
+                    "parallel dispatch submitted / turn {auto_follow_progress} / task: {}",
                     context.handoff_task.task_title
                 ),
             };
@@ -277,7 +277,8 @@ mod tests {
     use crate::adapter::inbound::tui::app::conversation_model::PlanningRepairState;
     use crate::adapter::inbound::tui::app::{
         AutoFollowRuntimePhase, AutoFollowState, AutoFollowupSubmitContext, ConversationInputState,
-        INFINITE_AUTO_FOLLOW_MAX_TURNS, TurnActivityState, format_conversation_lines,
+        INFINITE_AUTO_FOLLOW_MAX_TURNS, ParallelDispatchSubmitContext, TurnActivityState,
+        format_conversation_lines,
     };
     use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
     use crate::application::service::planning::PlanningRepairRequest;
@@ -441,6 +442,70 @@ mod tests {
             reduced.state.status_text,
             "turn completed / auto follow-up evaluating next turn"
         );
+    }
+
+    #[test]
+    fn parallel_dispatch_uses_shared_auto_turn_progress() {
+        let state = sample_conversation();
+        let handoff_task = sample_handoff_task();
+
+        let submitted = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue queued task".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                origin: PromptOrigin::ParallelDispatch(Box::new(ParallelDispatchSubmitContext {
+                    transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                    handoff_task: handoff_task.clone(),
+                })),
+            },
+        );
+
+        assert_eq!(submitted.state.auto_follow_state.completed_auto_turns, 0);
+        assert_eq!(
+            submitted.state.auto_follow_state.active_turn_index(),
+            Some(1)
+        );
+        assert_eq!(
+            submitted.state.status_text,
+            "parallel dispatch submitted / turn 1/20 / task: Wire runtime into slot lease lifecycle"
+        );
+        assert_eq!(
+            submitted
+                .state
+                .last_auto_followup_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("submitted parallel turn 1/20")
+        );
+
+        let mut running = reduce_conversation_runtime(
+            submitted.state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-2".to_string(),
+            }),
+        )
+        .state;
+        running.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "parallel work finished",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        ));
+
+        let completed = reduce_conversation_runtime(
+            running,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-2".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            }),
+        );
+
+        assert_eq!(completed.state.auto_follow_state.completed_auto_turns, 1);
+        assert!(matches!(
+            completed.state.auto_follow_state.runtime_phase,
+            AutoFollowRuntimePhase::Evaluating { .. }
+        ));
     }
 
     #[test]
@@ -1395,5 +1460,16 @@ mod tests {
         state.active_turn_workspace_directory = Some("/tmp/workspace".to_string());
         state.active_turn_started_at = Some(std::time::Instant::now());
         state
+    }
+
+    fn sample_handoff_task() -> PlanningTaskHandoff {
+        PlanningTaskHandoff {
+            task_id: "task-supersession-runtime".to_string(),
+            task_title: "Wire runtime into slot lease lifecycle".to_string(),
+            direction_id: "supersession-git-worktree-pool".to_string(),
+            combined_priority: 96,
+            updated_at: "2026-04-17T05:20:00Z".to_string(),
+            status_label: "ready".to_string(),
+        }
     }
 }
