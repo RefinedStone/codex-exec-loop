@@ -46,7 +46,7 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
-| 1 | `src/application/service/planning/admin.rs` | admin DTOs, facade methods, document mutation, draft/session sync, validation, and projection mapping are all in one file | split admin projection mapping into a child module while keeping `PlanningAdminFacadeService` and exported DTOs unchanged |
+| 1 | `src/application/service/planning/admin.rs` plus `src/application/service/planning/admin/*` | admin DTOs still share the facade file with overview/runtime, file sync, draft wrapper, and reset orchestration; projection, document mutation, draft session internals, and CRUD orchestration are now behind child modules | split admin file sync orchestration into a child module while keeping `PlanningAdminFacadeService` and exported DTOs unchanged |
 | 2 | `src/application/service/planning/repair/reconciliation.rs` | repair orchestration, protected-file restore, prompt construction, focused ledger excerpts, and tests share one module | split repair prompt construction and focused excerpt helpers behind the repair boundary |
 | 3 | `src/adapter/inbound/tui/app/planning/controller.rs` | shell command dispatch, setup flow, draft editor close-risk handling, reset parsing, and status copy share one controller impl | split reset/status-copy helpers before moving effectful controller paths |
 | 4 | `src/application/service/planning/authoring/directions.rs` | direction summary, supporting-file staging, doctor repair, and path rewriting share one authoring service | split supporting-file path rewrite helpers from the service methods |
@@ -54,15 +54,16 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 Queued next narrow slice:
 
-- **Task:** Split planning admin projection mapping from `PlanningAdminFacadeService`.
-- **Why next:** `admin.rs` is the largest planning service file and mixes public boundary DTOs with
-  pure mapping functions. Moving the mapping functions first reduces review context without
-  changing behavior, ports, or operator flows.
+- **Task:** Split planning admin file sync orchestration from `PlanningAdminFacadeService`.
+- **Why next:** after the projection, document mutation, draft session, and CRUD splits,
+  `admin.rs` still owns effectful export/apply flows plus parallel-work blocking helpers. Moving
+  that file sync orchestration next reduces the remaining facade context without changing behavior,
+  ports, or operator flows.
 - **Target write set:** `src/application/service/planning/admin.rs` and a new
-  `src/application/service/planning/admin/projection.rs`.
-- **Acceptance:** admin public exports remain unchanged; `load_overview`, `load_runtime_summary`,
-  `load_management_view`, draft validation, and queue preview callers use the new projection module;
-  existing planning/admin tests continue to pass.
+  `src/application/service/planning/admin/file_sync.rs`.
+- **Acceptance:** admin public exports remain unchanged; `export_active_files_for_edit` and
+  `apply_exported_files` move behind the new module; parallel-work blocking and candidate-file write
+  helpers move with the file sync flow; existing planning/admin tests continue to pass.
 
 ## Chosen Boundary Model
 
