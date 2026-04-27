@@ -4,6 +4,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
@@ -44,6 +45,8 @@ use crate::domain::planning::{
 const DEFAULT_DIRECTION_ID: &str = "general-workstream";
 const GENERATED_DIRECTION_ID_PREFIX: &str = "dir";
 const GENERATED_TASK_ID_PREFIX: &str = "task";
+static DEFAULT_DIRECTION_DEFINITION: OnceLock<Result<DirectionDefinition, String>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -931,13 +934,13 @@ impl PlanningAdminFacadeService {
             .directions
             .directions
             .iter()
-            .map(|direction| direction.id.trim().to_string())
+            .map(|direction| direction.id.trim())
             .collect::<BTreeSet<_>>();
         let missing_direction_ids = documents
             .task_ledger
             .tasks
             .iter()
-            .map(|task| task.direction_id.trim().to_string())
+            .map(|task| task.direction_id.trim())
             .filter(|direction_id| !direction_id.is_empty())
             .filter(|direction_id| !existing_direction_ids.contains(direction_id))
             .collect::<BTreeSet<_>>();
@@ -964,7 +967,7 @@ impl PlanningAdminFacadeService {
             .collect::<BTreeMap<_, _>>();
 
         for direction_id in missing_direction_ids {
-            if let Some(direction) = tracked_by_id.get(&direction_id) {
+            if let Some(direction) = tracked_by_id.get(direction_id) {
                 documents.directions.directions.push(direction.clone());
             }
         }
@@ -1360,15 +1363,22 @@ fn ensure_default_direction(directions: &mut DirectionCatalogDocument) -> Result
 }
 
 fn default_direction_definition() -> Result<DirectionDefinition> {
+    DEFAULT_DIRECTION_DEFINITION
+        .get_or_init(build_default_direction_definition)
+        .clone()
+        .map_err(|message| anyhow!(message))
+}
+
+fn build_default_direction_definition() -> Result<DirectionDefinition, String> {
     let artifacts =
         PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
     let directions = toml::from_str::<DirectionCatalogDocument>(&artifacts.directions_toml)
-        .context("failed to parse bootstrap default directions")?;
+        .map_err(|error| format!("failed to parse bootstrap default directions: {error}"))?;
     directions
         .directions
         .into_iter()
         .find(|direction| direction.id.trim() == DEFAULT_DIRECTION_ID)
-        .ok_or_else(|| anyhow!("bootstrap default direction `{DEFAULT_DIRECTION_ID}` is missing"))
+        .ok_or_else(|| format!("bootstrap default direction `{DEFAULT_DIRECTION_ID}` is missing"))
 }
 
 fn remove_tasks_with_unresolved_directions(documents: &mut PlanningAdminDocuments) {
@@ -1376,22 +1386,19 @@ fn remove_tasks_with_unresolved_directions(documents: &mut PlanningAdminDocument
         .directions
         .directions
         .iter()
-        .map(|direction| direction.id.trim().to_string())
+        .map(|direction| direction.id.trim())
         .collect::<BTreeSet<_>>();
-    let removed_task_ids = documents
-        .task_ledger
-        .tasks
-        .iter()
-        .filter(|task| !direction_ids.contains(task.direction_id.trim()))
-        .map(|task| task.id.trim().to_string())
-        .collect::<BTreeSet<_>>();
+    let mut removed_task_ids = BTreeSet::new();
+    documents.task_ledger.tasks.retain(|task| {
+        let should_keep = direction_ids.contains(task.direction_id.trim());
+        if !should_keep {
+            removed_task_ids.insert(task.id.trim().to_string());
+        }
+        should_keep
+    });
     if removed_task_ids.is_empty() {
         return;
     }
-    documents
-        .task_ledger
-        .tasks
-        .retain(|task| direction_ids.contains(task.direction_id.trim()));
     remove_task_references(&mut documents.task_ledger, &removed_task_ids);
 }
 
