@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 mod shared_services;
+mod workspace_dependencies;
 
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
@@ -8,7 +9,7 @@ use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
 use self::shared_services::PlanningSharedServices;
-use super::authoring::bootstrap::PlanningBootstrapService;
+use self::workspace_dependencies::PlanningWorkspaceUseCaseDependencies;
 use super::authoring::directions_apply::PlanningDirectionsApplyService;
 use super::authoring::init::PlanningInitService;
 use super::authoring::proposal_promotion::PlanningProposalPromotionService;
@@ -57,53 +58,54 @@ impl PlanningFeatureComposition {
 
     pub(super) fn build(self) -> PlanningFeature {
         let services = PlanningSharedServices::new(&self.ports);
+        let workspace_dependencies =
+            PlanningWorkspaceUseCaseDependencies::new(&self.ports, &services);
         PlanningFeature {
-            workspace: PlanningWorkspaceUseCaseBuilder::new(&self.ports, &services).build(),
+            workspace: PlanningWorkspaceUseCaseBuilder::new(workspace_dependencies).build(),
             runtime: PlanningRuntimeUseCaseBuilder::new(&self.ports, &services).build(),
             worker: PlanningWorkerUseCaseBuilder::new(self.ports, services).build(),
         }
     }
 }
 
-struct PlanningWorkspaceUseCaseBuilder<'a> {
-    ports: &'a PlanningFeaturePorts,
-    services: &'a PlanningSharedServices,
+struct PlanningWorkspaceUseCaseBuilder {
+    dependencies: PlanningWorkspaceUseCaseDependencies,
 }
 
-impl<'a> PlanningWorkspaceUseCaseBuilder<'a> {
-    fn new(ports: &'a PlanningFeaturePorts, services: &'a PlanningSharedServices) -> Self {
-        Self { ports, services }
+impl PlanningWorkspaceUseCaseBuilder {
+    fn new(dependencies: PlanningWorkspaceUseCaseDependencies) -> Self {
+        Self { dependencies }
     }
 
-    fn build(&self) -> PlanningWorkspaceUseCases {
+    fn build(self) -> PlanningWorkspaceUseCases {
         PlanningWorkspaceUseCases::new(
             PlanningInitService::with_task_repository(
-                self.ports.workspace.clone(),
-                PlanningBootstrapService::new(),
-                self.services.validation.clone(),
-                self.ports.task_repository.clone(),
-                self.services.priority_queue.clone(),
+                self.dependencies.workspace.clone(),
+                self.dependencies.bootstrap.clone(),
+                self.dependencies.validation.clone(),
+                self.dependencies.task_repository.clone(),
+                self.dependencies.priority_queue.clone(),
             ),
             PlanningResetService::with_task_repository(
-                self.ports.workspace.clone(),
-                PlanningBootstrapService::new(),
-                self.ports.task_repository.clone(),
-                self.services.validation.clone(),
-                self.services.priority_queue.clone(),
+                self.dependencies.workspace.clone(),
+                self.dependencies.bootstrap,
+                self.dependencies.task_repository.clone(),
+                self.dependencies.validation.clone(),
+                self.dependencies.priority_queue.clone(),
             ),
-            PlanningDoctorService::new(self.services.prompt.clone()),
-            self.services.directions.clone(),
+            PlanningDoctorService::new(self.dependencies.prompt),
+            self.dependencies.directions,
             PlanningDirectionsApplyService::with_task_repository(
-                self.ports.workspace.clone(),
-                self.services.validation.clone(),
-                self.services.priority_queue.clone(),
-                self.ports.task_repository.clone(),
+                self.dependencies.workspace.clone(),
+                self.dependencies.validation.clone(),
+                self.dependencies.priority_queue.clone(),
+                self.dependencies.task_repository.clone(),
             ),
             PlanningTaskLedgerApplyService::with_task_repository(
-                self.ports.workspace.clone(),
-                self.services.validation.clone(),
-                self.services.priority_queue.clone(),
-                self.ports.task_repository.clone(),
+                self.dependencies.workspace,
+                self.dependencies.validation,
+                self.dependencies.priority_queue,
+                self.dependencies.task_repository,
             ),
         )
     }
