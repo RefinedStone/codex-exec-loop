@@ -1,7 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 mod crud;
@@ -10,6 +9,7 @@ mod draft_session;
 mod file_sync;
 mod overview;
 mod projection;
+mod reset;
 
 use crate::application::port::outbound::planning_authority_port::{
     NoopPlanningAuthorityPort, PlanningAuthorityPort,
@@ -18,11 +18,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
     NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
-use crate::application::service::planning::{PlanningResetTarget, PlanningServices};
 use crate::application::service::priority_queue_service::PriorityQueueService;
-
-use self::projection::map_doctor_report;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -425,25 +423,5 @@ impl PlanningAdminFacadeService {
 
     pub fn workspace_dir(&self) -> &str {
         &self.workspace_dir
-    }
-
-    pub fn reset_workspace(
-        &self,
-        target: PlanningResetTarget,
-    ) -> Result<PlanningAdminResetOutcome> {
-        let result = self
-            .planning
-            .workspace
-            .reset_workspace(self.workspace_dir.as_str(), target)?;
-        let doctor = self
-            .planning
-            .workspace
-            .inspect_workspace(self.workspace_dir.as_str());
-        Ok(PlanningAdminResetOutcome {
-            target: result.target.label().to_string(),
-            rewritten_paths: result.rewritten_paths,
-            removed_paths: result.removed_paths,
-            doctor: map_doctor_report(&doctor),
-        })
     }
 }
