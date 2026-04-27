@@ -29,9 +29,9 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
 };
 use crate::domain::planning::{
-    PLANNING_FORMAT_VERSION, PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
-    PlanningAuthorityShadowStoreSyncState, PriorityQueueSkippedTask, PriorityQueueSnapshot,
-    PriorityQueueTask, TaskLedgerDocument,
+    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
+    PlanningAuthorityShadowStoreInspection, PlanningAuthorityShadowStoreSyncState,
+    PriorityQueueSkippedTask, PriorityQueueSnapshot, PriorityQueueTask, TaskLedgerDocument,
 };
 
 const AKRA_HOME_ENV: &str = "AKRA_HOME";
@@ -337,8 +337,14 @@ impl SqlitePlanningAuthorityAdapter {
         let changed = if relative_path == TASK_LEDGER_FILE_PATH {
             match body {
                 Some(body) => {
-                    let task_ledger = serde_json::from_str::<TaskLedgerDocument>(body)
+                    let mut task_ledger = serde_json::from_str::<TaskLedgerDocument>(body)
                         .with_context(|| format!("failed to parse `{TASK_LEDGER_FILE_PATH}`"))?;
+                    if let Some(directions_toml) =
+                        load_active_document(&transaction, DIRECTIONS_FILE_PATH)?
+                        && let Ok(direction_ids) = parse_direction_ids(&directions_toml)
+                    {
+                        prune_task_ledger_to_direction_ids(&mut task_ledger, &direction_ids);
+                    }
                     let queue_snapshot =
                         existing_queue_snapshot.unwrap_or_else(empty_queue_snapshot);
                     replace_task_authority_tables(&transaction, &task_ledger, &queue_snapshot)?;
@@ -373,7 +379,11 @@ impl SqlitePlanningAuthorityAdapter {
             }
             true
         } else {
-            set_active_document(&transaction, relative_path, body)?
+            let changed = set_active_document(&transaction, relative_path, body)?;
+            if changed && relative_path == DIRECTIONS_FILE_PATH {
+                reconcile_task_authority_with_directions(&transaction, body)?;
+            }
+            changed
         };
         if changed {
             bump_planning_revision(&transaction)?;
@@ -1436,6 +1446,59 @@ fn empty_queue_snapshot() -> PriorityQueueSnapshot {
 
 fn parse_queue_snapshot_export(body: &str) -> PriorityQueueSnapshot {
     serde_json::from_str::<PriorityQueueSnapshot>(body).unwrap_or_else(|_| empty_queue_snapshot())
+}
+
+fn reconcile_task_authority_with_directions(
+    transaction: &rusqlite::Transaction<'_>,
+    directions_toml: Option<&str>,
+) -> Result<()> {
+    let Some(mut task_ledger) = load_task_ledger_from_connection(transaction)? else {
+        return Ok(());
+    };
+    let direction_ids = match directions_toml {
+        Some(directions_toml) => parse_direction_ids(directions_toml)
+            .with_context(|| format!("failed to parse `{DIRECTIONS_FILE_PATH}`"))?,
+        None => BTreeSet::new(),
+    };
+    if !prune_task_ledger_to_direction_ids(&mut task_ledger, &direction_ids) {
+        return Ok(());
+    }
+    replace_task_authority_tables(transaction, &task_ledger, &empty_queue_snapshot())?;
+    remove_active_documents(transaction, TASK_LEDGER_FILE_PATH)?;
+    remove_active_documents(transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
+    Ok(())
+}
+
+fn parse_direction_ids(directions_toml: &str) -> Result<BTreeSet<String>> {
+    Ok(toml::from_str::<DirectionCatalogDocument>(directions_toml)?
+        .directions
+        .into_iter()
+        .map(|direction| direction.id.trim().to_string())
+        .collect())
+}
+
+fn prune_task_ledger_to_direction_ids(
+    task_ledger: &mut TaskLedgerDocument,
+    direction_ids: &BTreeSet<String>,
+) -> bool {
+    let mut removed_task_ids = BTreeSet::new();
+    task_ledger.tasks.retain(|task| {
+        let keep = direction_ids.contains(task.direction_id.trim());
+        if !keep {
+            removed_task_ids.insert(task.id.trim().to_string());
+        }
+        keep
+    });
+    if removed_task_ids.is_empty() {
+        return false;
+    }
+    for task in &mut task_ledger.tasks {
+        task.depends_on
+            .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
+        task.blocked_by
+            .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
+    }
+    true
 }
 
 fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Connection> {
@@ -3122,6 +3185,188 @@ mod tests {
                 current_planning_revision: 1,
             }
         );
+    }
+
+    #[test]
+    fn replacing_directions_prunes_task_authority_for_removed_direction_ids() {
+        let repo = TempGitRepo::new("authority-direction-prune");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+        let initial_directions = r#"version = 1
+
+[[directions]]
+id = "direction-1"
+title = "Direction One"
+summary = "Keep this direction."
+success_criteria = ["kept"]
+state = "active"
+
+[[directions]]
+id = "direction-2"
+title = "Direction Two"
+summary = "Remove this direction."
+success_criteria = ["removed"]
+state = "active"
+"#;
+        let pruned_directions = r#"version = 1
+
+[[directions]]
+id = "direction-1"
+title = "Direction One"
+summary = "Keep this direction."
+success_criteria = ["kept"]
+state = "active"
+"#;
+        let task_ledger = r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-1",
+      "direction_id": "direction-1",
+      "title": "Task One",
+      "description": "Keep task one.",
+      "status": "ready",
+      "base_priority": 10,
+      "dynamic_priority_delta": 0,
+      "depends_on": ["task-2"],
+      "blocked_by": ["task-2"],
+      "created_by": "user",
+      "last_updated_by": "system",
+      "updated_at": "2026-04-20T10:00:00Z"
+    },
+    {
+      "id": "task-2",
+      "direction_id": "direction-2",
+      "title": "Task Two",
+      "description": "Drop task two.",
+      "status": "ready",
+      "base_priority": 9,
+      "dynamic_priority_delta": 0,
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "system",
+      "updated_at": "2026-04-20T10:01:00Z"
+    }
+  ]
+}"#;
+
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace_dir,
+            DIRECTIONS_FILE_PATH,
+            Some(initial_directions),
+        )
+        .expect("initial directions should write");
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace_dir,
+            TASK_LEDGER_FILE_PATH,
+            Some(task_ledger),
+        )
+        .expect("initial task authority should write");
+
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace_dir,
+            DIRECTIONS_FILE_PATH,
+            Some(pruned_directions),
+        )
+        .expect("directions replacement should prune task authority");
+
+        let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(workspace_dir)
+            .expect("active workspace should load");
+        let pruned_task_ledger = parse_task_ledger(
+            loaded
+                .task_ledger_json
+                .as_deref()
+                .expect("task authority should remain present"),
+        );
+
+        assert_eq!(pruned_task_ledger.tasks.len(), 1);
+        assert_eq!(pruned_task_ledger.tasks[0].id, "task-1");
+        assert!(pruned_task_ledger.tasks[0].depends_on.is_empty());
+        assert!(pruned_task_ledger.tasks[0].blocked_by.is_empty());
+        let queue_snapshot = parse_queue_snapshot(
+            loaded
+                .queue_snapshot_json
+                .as_deref()
+                .expect("queue snapshot should load"),
+        );
+        assert_eq!(queue_snapshot.next_task, None);
+        assert!(queue_snapshot.active_tasks.is_empty());
+    }
+
+    #[test]
+    fn replacing_task_ledger_ignores_tasks_for_unknown_active_direction_ids() {
+        let repo = TempGitRepo::new("authority-task-ledger-prune");
+        let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
+        let active_directions = r#"version = 1
+
+[[directions]]
+id = "direction-1"
+title = "Direction One"
+summary = "Keep this direction."
+success_criteria = ["kept"]
+state = "active"
+"#;
+        let task_ledger = r#"{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-1",
+      "direction_id": "direction-1",
+      "title": "Task One",
+      "description": "Keep task one.",
+      "status": "ready",
+      "base_priority": 10,
+      "dynamic_priority_delta": 0,
+      "depends_on": ["task-2"],
+      "blocked_by": ["task-2"],
+      "created_by": "user",
+      "last_updated_by": "system",
+      "updated_at": "2026-04-20T10:00:00Z"
+    },
+    {
+      "id": "task-2",
+      "direction_id": "removed-direction",
+      "title": "Task Two",
+      "description": "Drop task two.",
+      "status": "ready",
+      "base_priority": 9,
+      "dynamic_priority_delta": 0,
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "system",
+      "updated_at": "2026-04-20T10:01:00Z"
+    }
+  ]
+}"#;
+
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace_dir,
+            DIRECTIONS_FILE_PATH,
+            Some(active_directions),
+        )
+        .expect("active directions should write");
+
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace_dir,
+            TASK_LEDGER_FILE_PATH,
+            Some(task_ledger),
+        )
+        .expect("task ledger replacement should prune unknown directions");
+
+        let loaded = SqlitePlanningAuthorityAdapter::load_active_workspace_files(workspace_dir)
+            .expect("active workspace should load");
+        let pruned_task_ledger = parse_task_ledger(
+            loaded
+                .task_ledger_json
+                .as_deref()
+                .expect("task authority should load"),
+        );
+
+        assert_eq!(pruned_task_ledger.tasks.len(), 1);
+        assert_eq!(pruned_task_ledger.tasks[0].id, "task-1");
+        assert!(pruned_task_ledger.tasks[0].depends_on.is_empty());
+        assert!(pruned_task_ledger.tasks[0].blocked_by.is_empty());
     }
 
     #[test]
