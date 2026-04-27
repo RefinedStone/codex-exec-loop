@@ -1,5 +1,6 @@
 pub mod admin;
 pub(crate) mod authoring;
+mod composition;
 pub mod control;
 mod feature;
 pub(crate) mod repair;
