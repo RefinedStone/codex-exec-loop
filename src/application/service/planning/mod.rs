@@ -2,7 +2,6 @@ pub mod admin;
 pub(crate) mod authoring;
 pub mod control;
 mod feature;
-mod noop_ports;
 pub(crate) mod repair;
 pub(crate) mod runtime;
 pub(crate) mod shared;

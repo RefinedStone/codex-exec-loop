@@ -26,3 +26,18 @@ pub trait PlanningWorkerPort: Send + Sync {
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse>;
 }
+
+pub struct NoopPlanningWorkerPort;
+
+impl PlanningWorkerPort for NoopPlanningWorkerPort {
+    fn run_planning_session(
+        &self,
+        request: PlanningWorkerRequest,
+    ) -> Result<PlanningWorkerResponse> {
+        Ok(PlanningWorkerResponse {
+            operation: request.operation,
+            final_agent_message: Some("planner worker disabled".to_string()),
+            changed_planning_file_paths: Vec::new(),
+        })
+    }
+}

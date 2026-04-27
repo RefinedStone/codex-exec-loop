@@ -11,7 +11,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::outbound::planning_authority_port::{
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+    NoopPlanningAuthorityPort, PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
@@ -416,7 +416,7 @@ impl PlanningAdminFacadeService {
             workspace_dir,
             planning,
             planning_workspace_port,
-            Arc::new(super::noop_ports::NoopPlanningAuthorityPort::default()),
+            Arc::new(NoopPlanningAuthorityPort::default()),
             Arc::new(NoopPlanningTaskRepositoryPort),
         )
     }

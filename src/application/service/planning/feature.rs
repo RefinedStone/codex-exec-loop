@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    NoopPlanningAuthorityPort, PlanningAuthorityPort,
+};
 use crate::application::port::outbound::planning_task_repository_port::{
     NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
 };
-use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
+use crate::application::port::outbound::planning_worker_port::{
+    NoopPlanningWorkerPort, PlanningWorkerPort,
+};
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
 use super::authoring::bootstrap::PlanningBootstrapService;
@@ -13,7 +17,6 @@ use super::authoring::directions_apply::PlanningDirectionsApplyService;
 use super::authoring::init::PlanningInitService;
 use super::authoring::proposal_promotion::PlanningProposalPromotionService;
 use super::authoring::task_ledger_apply::PlanningTaskLedgerApplyService;
-use super::noop_ports::{NoopPlanningAuthorityPort, NoopPlanningWorkerPort};
 use super::repair::doctor::PlanningDoctorService;
 use super::repair::reconciliation::PlanningReconciliationService;
 use super::repair::reset::PlanningResetService;
