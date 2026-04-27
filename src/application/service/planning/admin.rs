@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+mod draft_session;
 mod projection;
 
 use crate::application::port::outbound::planning_authority_port::{
@@ -19,32 +20,27 @@ use crate::application::port::outbound::planning_task_repository_port::{
     NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
     PlanningTaskRepositoryPort,
 };
-use crate::application::port::outbound::planning_workspace_port::{
-    PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
-};
+use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
-    PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::application::service::planning::{
-    PlanningDraftEditorFile, PlanningDraftPromoteResult, PlanningDraftSaveResult,
-    PlanningResetTarget, PlanningServices,
+    PlanningDraftPromoteResult, PlanningDraftSaveResult, PlanningResetTarget, PlanningServices,
 };
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::parallel_mode::ParallelModeQueueItemState;
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningFileKind,
-    PlanningWorkspaceFiles, TaskActor, TaskDefinition, TaskLedgerDocument, TaskStatus,
+    DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningWorkspaceFiles,
+    TaskActor, TaskDefinition, TaskLedgerDocument, TaskStatus,
 };
 
 use self::projection::{
-    map_directions_summary, map_doctor_report, map_management_view, map_queue_preview,
-    map_runtime_snapshot, map_validation_report,
+    map_directions_summary, map_doctor_report, map_management_view, map_runtime_snapshot,
 };
 
 const DEFAULT_DIRECTION_ID: &str = "general-workstream";
@@ -749,12 +745,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<(PlanningDraftSaveResult, PlanningAdminSessionView)> {
-        let visible_files = self.resolve_mutated_visible_files(
-            &request.draft_name,
-            request.kind,
-            request.direction_id.as_deref(),
-            &request.files,
-        )?;
+        let visible_files = self.resolve_mutated_visible_files(&request)?;
         let result = self.planning.workspace.save_draft_editor_files(
             self.workspace_dir.as_str(),
             &request.draft_name,
@@ -772,12 +763,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<(PlanningDraftPromoteResult, PlanningAdminSessionView)> {
-        let visible_files = self.resolve_mutated_visible_files(
-            &request.draft_name,
-            request.kind,
-            request.direction_id.as_deref(),
-            &request.files,
-        )?;
+        let visible_files = self.resolve_mutated_visible_files(&request)?;
         let result = self.planning.workspace.promote_draft_editor_files(
             self.workspace_dir.as_str(),
             &request.draft_name,
@@ -987,224 +973,6 @@ impl PlanningAdminFacadeService {
             bail!("{action} is blocked while parallel work is active: {reason}");
         }
         Ok(())
-    }
-
-    fn resolve_mutated_visible_files(
-        &self,
-        draft_name: &str,
-        kind: PlanningAdminDraftKind,
-        direction_id: Option<&str>,
-        updates: &[PlanningAdminDraftFileUpdate],
-    ) -> Result<Vec<PlanningDraftEditorFile>> {
-        let session = self.load_draft_session(PlanningAdminDraftLoadRequest {
-            draft_name: draft_name.to_string(),
-            kind,
-            direction_id: direction_id.map(str::to_string),
-        })?;
-        let update_map = updates
-            .iter()
-            .map(|update| (update.key, update.body.clone()))
-            .collect::<BTreeMap<_, _>>();
-
-        let mut files = Vec::with_capacity(session.files.len());
-        for file in session.files {
-            files.push(PlanningDraftEditorFile {
-                active_path: file.active_path,
-                staged_path: format!("{}#{}", draft_name, file.key.label()),
-                body: update_map.get(&file.key).cloned().unwrap_or(file.body),
-            });
-        }
-        Ok(files)
-    }
-
-    fn build_session_view(
-        &self,
-        kind: PlanningAdminDraftKind,
-        direction_id: Option<String>,
-        loaded: PlanningDraftLoadRecord,
-    ) -> Result<PlanningAdminSessionView> {
-        let validation = self.validate_loaded_draft(&loaded)?;
-        let files = loaded
-            .staged_files
-            .into_iter()
-            .filter_map(|file| {
-                file_key_for_kind(kind, &file.active_path).map(|key| PlanningAdminDraftFileView {
-                    key,
-                    label: key.label().to_string(),
-                    active_path: file.active_path,
-                    editor_language: key.editor_language().to_string(),
-                    body: file.body,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        Ok(PlanningAdminSessionView {
-            kind,
-            direction_id,
-            draft_name: loaded.draft_name,
-            draft_directory: loaded.draft_directory,
-            editor_heading: kind.editor_heading().to_string(),
-            return_path: kind.return_path().to_string(),
-            files,
-            validation: validation.validation,
-            queue_preview: validation.queue_preview,
-        })
-    }
-
-    fn validate_loaded_draft(
-        &self,
-        loaded: &PlanningDraftLoadRecord,
-    ) -> Result<PlanningAdminDraftValidationSnapshot> {
-        let staged_files = loaded
-            .staged_files
-            .iter()
-            .map(|file| (file.active_path.as_str(), file.body.as_str()))
-            .collect::<BTreeMap<_, _>>();
-        let directions_toml = self.load_effective_draft_body(
-            &staged_files,
-            DIRECTIONS_FILE_PATH,
-            PlanningFileKind::Directions,
-        )?;
-        let task_ledger_json = self.load_effective_draft_body(
-            &staged_files,
-            TASK_LEDGER_FILE_PATH,
-            PlanningFileKind::TaskLedger,
-        )?;
-        let task_ledger_schema_json = self.load_effective_draft_body(
-            &staged_files,
-            TASK_LEDGER_SCHEMA_FILE_PATH,
-            PlanningFileKind::TaskLedgerSchema,
-        )?;
-        let result_output_markdown = self.load_effective_draft_body(
-            &staged_files,
-            RESULT_OUTPUT_FILE_PATH,
-            PlanningFileKind::ResultOutput,
-        )?;
-
-        let mut result =
-            self.planning_validation_service
-                .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml: &directions_toml,
-                    task_ledger_json: &task_ledger_json,
-                    task_ledger_schema_json: &task_ledger_schema_json,
-                    result_output_markdown: &result_output_markdown,
-                });
-
-        if let Some(directions) = result.directions.as_ref() {
-            self.planning_validation_service
-                .validate_direction_supporting_files(
-                    directions,
-                    |path| {
-                        staged_files.contains_key(path)
-                            || self
-                                .planning_workspace_port
-                                .load_optional_planning_file(self.workspace_dir.as_str(), path)
-                                .ok()
-                                .flatten()
-                                .is_some()
-                    },
-                    &mut result.report,
-                );
-        }
-
-        let queue_preview = if result.report.is_valid() {
-            match (result.directions.as_ref(), result.task_ledger.as_ref()) {
-                (Some(directions), Some(task_ledger)) => self
-                    .priority_queue_service
-                    .build_projection(directions, task_ledger)
-                    .ok()
-                    .map(map_queue_preview),
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        Ok(PlanningAdminDraftValidationSnapshot {
-            validation: map_validation_report(&result.report),
-            queue_preview,
-        })
-    }
-
-    fn load_effective_draft_body(
-        &self,
-        staged_files: &BTreeMap<&str, &str>,
-        path: &'static str,
-        file_kind: PlanningFileKind,
-    ) -> Result<String> {
-        if let Some(body) = staged_files.get(path) {
-            return Ok((*body).to_string());
-        }
-        self.planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), path)?
-            .ok_or_else(|| missing_core_draft_file_error(path, file_kind))
-    }
-
-    fn stage_active_manual_editor_draft(&self) -> Result<String> {
-        let directions_toml = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), DIRECTIONS_FILE_PATH)?
-            .ok_or_else(|| {
-                anyhow!("planning directions are unavailable; initialize planning first")
-            })?;
-        let task_ledger_json = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), TASK_LEDGER_FILE_PATH)?
-            .ok_or_else(|| anyhow!("task-ledger.json is unavailable; initialize planning first"))?;
-        let result_output_markdown = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
-            .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
-        let task_ledger_schema_json = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), TASK_LEDGER_SCHEMA_FILE_PATH)?
-            .ok_or_else(|| {
-                anyhow!("task-ledger.schema.json is unavailable; initialize planning first")
-            })?;
-        let mut files = vec![
-            PlanningDraftFileRecord {
-                active_path: DIRECTIONS_FILE_PATH.to_string(),
-                body: directions_toml.clone(),
-            },
-            PlanningDraftFileRecord {
-                active_path: TASK_LEDGER_FILE_PATH.to_string(),
-                body: task_ledger_json,
-            },
-            PlanningDraftFileRecord {
-                active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
-                body: result_output_markdown,
-            },
-            PlanningDraftFileRecord {
-                active_path: TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
-                body: task_ledger_schema_json,
-            },
-        ];
-
-        let supporting_paths = collect_direction_supporting_paths(&directions_toml);
-        for path in supporting_paths {
-            if let Some(body) = self
-                .planning_workspace_port
-                .load_optional_planning_file(self.workspace_dir.as_str(), &path)?
-            {
-                files.push(PlanningDraftFileRecord {
-                    active_path: path,
-                    body,
-                });
-            }
-        }
-
-        let now = Utc::now();
-        let draft_name = format!(
-            "admin-{}Z-{:09}",
-            now.format("%Y%m%dT%H%M%S"),
-            now.timestamp_subsec_nanos()
-        );
-        self.planning_workspace_port.stage_planning_draft_files(
-            self.workspace_dir.as_str(),
-            &draft_name,
-            &files,
-        )?;
-        Ok(draft_name)
     }
 }
 
@@ -1506,26 +1274,6 @@ fn split_references(raw: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{generated_unique_id, slugify_title};
-
-    #[test]
-    fn slugify_title_preserves_unicode_alphanumerics() {
-        assert_eq!(slugify_title("한글 작업 1"), "한글-작업-1");
-    }
-
-    #[test]
-    fn generated_unique_id_keeps_unicode_title_identity() {
-        let existing = ["task-한글-작업", "task-한글-작업-2"];
-
-        assert_eq!(
-            generated_unique_id("task", "한글 작업", existing),
-            "task-한글-작업-3"
-        );
-    }
-}
-
 fn remove_task_references(
     task_ledger: &mut TaskLedgerDocument,
     removed_task_ids: &BTreeSet<String>,
@@ -1595,93 +1343,22 @@ fn write_candidate_file(
     Ok(())
 }
 
-fn collect_direction_supporting_paths(directions_toml: &str) -> Vec<String> {
-    let Ok(directions) = toml::from_str::<DirectionCatalogDocument>(directions_toml) else {
-        return Vec::new();
-    };
+#[cfg(test)]
+mod tests {
+    use super::{generated_unique_id, slugify_title};
 
-    let mut paths = BTreeSet::new();
-    let prompt_path = directions.queue_idle.prompt_path.trim();
-    if !prompt_path.is_empty() {
-        paths.insert(prompt_path.to_string());
+    #[test]
+    fn slugify_title_preserves_unicode_alphanumerics() {
+        assert_eq!(slugify_title("한글 작업 1"), "한글-작업-1");
     }
 
-    for direction in directions.directions {
-        let detail_doc_path = direction.detail_doc_path.trim();
-        if !detail_doc_path.is_empty() {
-            paths.insert(detail_doc_path.to_string());
-        }
-    }
+    #[test]
+    fn generated_unique_id_keeps_unicode_title_identity() {
+        let existing = ["task-한글-작업", "task-한글-작업-2"];
 
-    paths.into_iter().collect()
-}
-
-#[derive(Debug, Clone)]
-struct PlanningAdminDraftValidationSnapshot {
-    validation: PlanningAdminValidationView,
-    queue_preview: Option<PlanningAdminQueuePreview>,
-}
-
-fn missing_core_draft_file_error(path: &'static str, file_kind: PlanningFileKind) -> anyhow::Error {
-    anyhow!(
-        "draft is missing required {} content at {}",
-        match file_kind {
-            PlanningFileKind::Directions => "directions",
-            PlanningFileKind::TaskLedger => "task catalog compatibility file",
-            PlanningFileKind::TaskLedgerSchema => "task catalog compatibility schema",
-            PlanningFileKind::ResultOutput => "result output",
-        },
-        path
-    )
-}
-
-fn file_key_for_kind(
-    kind: PlanningAdminDraftKind,
-    active_path: &str,
-) -> Option<PlanningAdminFileKey> {
-    let key = if active_path == DIRECTIONS_FILE_PATH {
-        PlanningAdminFileKey::Directions
-    } else if active_path == TASK_LEDGER_FILE_PATH {
-        PlanningAdminFileKey::TaskLedger
-    } else if active_path == RESULT_OUTPUT_FILE_PATH {
-        PlanningAdminFileKey::ResultOutput
-    } else if active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
-        || active_path.starts_with(&format!("{PLANNING_PROMPTS_DIRECTORY}/"))
-    {
-        PlanningAdminFileKey::QueueIdlePrompt
-    } else if active_path.starts_with(&format!("{PLANNING_DIRECTION_DOCS_DIRECTORY}/")) {
-        PlanningAdminFileKey::DirectionDetail
-    } else {
-        return None;
-    };
-
-    match kind {
-        PlanningAdminDraftKind::FullPlanning => matches!(
-            key,
-            PlanningAdminFileKey::Directions
-                | PlanningAdminFileKey::TaskLedger
-                | PlanningAdminFileKey::ResultOutput
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::Directions => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::QueueIdlePrompt
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::TaskLedger => matches!(
-            key,
-            PlanningAdminFileKey::TaskLedger | PlanningAdminFileKey::ResultOutput
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::QueueIdlePrompt => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::QueueIdlePrompt
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::DirectionDetail => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::DirectionDetail
-        )
-        .then_some(key),
+        assert_eq!(
+            generated_unique_id("task", "한글 작업", existing),
+            "task-한글-작업-3"
+        );
     }
 }
