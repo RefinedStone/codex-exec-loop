@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+mod runtime_dependencies;
 mod shared_services;
 mod workspace_dependencies;
 
@@ -8,6 +9,7 @@ use crate::application::port::outbound::planning_task_repository_port::PlanningT
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
+use self::runtime_dependencies::PlanningRuntimeUseCaseDependencies;
 use self::shared_services::PlanningSharedServices;
 use self::workspace_dependencies::PlanningWorkspaceUseCaseDependencies;
 use super::authoring::directions_apply::PlanningDirectionsApplyService;
@@ -17,7 +19,6 @@ use super::authoring::task_ledger_apply::PlanningTaskLedgerApplyService;
 use super::feature::PlanningFeature;
 use super::repair::doctor::PlanningDoctorService;
 use super::repair::reset::PlanningResetService;
-use super::runtime::intake::PlanningTaskIntakeService;
 use super::use_cases::{
     PlanningRuntimeUseCases, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
@@ -60,9 +61,10 @@ impl PlanningFeatureComposition {
         let services = PlanningSharedServices::new(&self.ports);
         let workspace_dependencies =
             PlanningWorkspaceUseCaseDependencies::new(&self.ports, &services);
+        let runtime_dependencies = PlanningRuntimeUseCaseDependencies::new(&self.ports, &services);
         PlanningFeature {
             workspace: PlanningWorkspaceUseCaseBuilder::new(workspace_dependencies).build(),
-            runtime: PlanningRuntimeUseCaseBuilder::new(&self.ports, &services).build(),
+            runtime: PlanningRuntimeUseCaseBuilder::new(runtime_dependencies).build(),
             worker: PlanningWorkerUseCaseBuilder::new(self.ports, services).build(),
         }
     }
@@ -111,25 +113,19 @@ impl PlanningWorkspaceUseCaseBuilder {
     }
 }
 
-struct PlanningRuntimeUseCaseBuilder<'a> {
-    ports: &'a PlanningFeaturePorts,
-    services: &'a PlanningSharedServices,
+struct PlanningRuntimeUseCaseBuilder {
+    dependencies: PlanningRuntimeUseCaseDependencies,
 }
 
-impl<'a> PlanningRuntimeUseCaseBuilder<'a> {
-    fn new(ports: &'a PlanningFeaturePorts, services: &'a PlanningSharedServices) -> Self {
-        Self { ports, services }
+impl PlanningRuntimeUseCaseBuilder {
+    fn new(dependencies: PlanningRuntimeUseCaseDependencies) -> Self {
+        Self { dependencies }
     }
 
-    fn build(&self) -> PlanningRuntimeUseCases {
+    fn build(self) -> PlanningRuntimeUseCases {
         PlanningRuntimeUseCases::new(
-            self.services.runtime_facade.clone(),
-            PlanningTaskIntakeService::new(
-                self.ports.workspace.clone(),
-                self.ports.task_repository.clone(),
-                self.services.validation.clone(),
-                self.services.priority_queue.clone(),
-            ),
+            self.dependencies.runtime_facade,
+            self.dependencies.task_intake,
         )
     }
 }
