@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 
-use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
-};
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::shared::contract::{
@@ -14,6 +12,7 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::PlanningWorkspaceFiles;
 
+use super::accepted_ledger::{PlanningAcceptedLedgerCommitRequest, commit_accepted_task_ledger};
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
 use super::ledger_recovery::{
     PlanningLedgerRejectionRequest, recover_queue_projection, reject_invalid_task_ledger,
@@ -237,40 +236,19 @@ impl PlanningReconciliationService {
                 });
 
         if validation_result.is_valid() {
-            let directions = validation_result.directions.as_ref().ok_or_else(|| {
-                anyhow!("planning validation reported success without parsed directions.toml")
-            })?;
-            let task_ledger = validation_result.task_ledger.as_ref().ok_or_else(|| {
-                anyhow!("planning validation reported success without parsed task-ledger.json")
-            })?;
-            let queue_projection = self
-                .priority_queue_service
-                .build_projection(directions, task_ledger)
-                .map_err(|error| {
-                    anyhow!("planning validation passed but queue build failed: {error}")
-                })?;
-            let queue_snapshot_json = serde_json::to_string_pretty(&queue_projection)
-                .context("failed to serialize queue projection")?;
-            let mut committed_record = execution_snapshot_to_workspace_record(execution_snapshot);
-            committed_record.task_ledger_json = workspace_record.task_ledger_json.clone();
-            committed_record.queue_snapshot_json = Some(queue_snapshot_json);
-            self.planning_workspace_port
-                .commit_planning_workspace_files(workspace_dir, &committed_record)?;
-            self.planning_task_repository_port
-                .commit_task_authority_snapshot(
+            let accepted_commit = commit_accepted_task_ledger(
+                self.planning_workspace_port.as_ref(),
+                self.planning_task_repository_port.as_ref(),
+                &self.priority_queue_service,
+                PlanningAcceptedLedgerCommitRequest {
                     workspace_dir,
-                    PlanningTaskAuthorityCommit {
-                        observed_planning_revision: None,
-                        task_ledger,
-                        queue_projection: &queue_projection,
-                    },
-                )?;
-            result.queue_projection_action =
-                Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
-            result.notices.push(
-                "planning reconciliation accepted task-ledger.json and rebuilt queue.snapshot.json"
-                    .to_string(),
-            );
+                    workspace_record,
+                    execution_snapshot,
+                    validation_result: &validation_result,
+                },
+            )?;
+            result.queue_projection_action = Some(accepted_commit.queue_projection_action);
+            result.notices.extend(accepted_commit.notices);
             return Ok(());
         }
 
