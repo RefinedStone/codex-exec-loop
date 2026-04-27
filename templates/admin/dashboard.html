@@ -22,7 +22,7 @@
   </article>
 
   <article class="card span-7">
-    <h2>Queue Snapshot</h2>
+    <h2>Queue Projection</h2>
     {% if let Some(queue_head) = overview.runtime.queue_head %}
     <p><strong>{{ queue_head.task_title }}</strong></p>
     <p class="mono">{{ queue_head.task_id }} / {{ queue_head.direction_id }} / priority {{ queue_head.combined_priority }}</p>

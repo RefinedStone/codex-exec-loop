@@ -23,12 +23,12 @@ The operator-facing current contract lives in
 | `.codex-exec-loop/planning/task-ledger.schema.json` | protected planning contract | task-ledger validation schema |
 | `.codex-exec-loop/planning/result-output.md` | protected planning contract | result-output guidance fragment |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | operator-owned through staged drafts | prompt used when queue-idle review is enabled |
-| `.codex-exec-loop/planning/queue.snapshot.json` | explicit import and review surface in git-backed mode | executable queue projection artifact only |
+| `.codex-exec-loop/planning/queue.snapshot.json` | legacy-named explicit import and review surface in git-backed mode | queue projection artifact only |
 | `.codex-exec-loop/planning/drafts/<draft>/...` | staged workspace | inactive edits awaiting validation and promotion |
 | `.codex-exec-loop/planning/rejected/<turn>/...` | runtime archive | rejected planning writes preserved for inspection |
 | `.codex-exec-loop/runtime/exports/planning-snapshot.json` | runtime-derived export | full store-backed planning snapshot for diagnostics and review |
 | `.codex-exec-loop/runtime/exports/task-ledger.json` | runtime-derived export | convenience export for the accepted task ledger |
-| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | runtime-derived export | convenience export for the accepted queue projection |
+| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | legacy-named runtime-derived export | convenience export for the accepted queue projection |
 
 ## Technical Rules
 
@@ -38,7 +38,8 @@ The operator-facing current contract lives in
   application `PlanningTaskRepositoryPort`; tracked `task-ledger.json` is accepted only through an
   explicit import or promoted draft.
 - Manual submit and auto follow-up both append the same accepted planning prompt fragment.
-- `queue.snapshot.json` is derived state only and is not treated as operator-authored source.
+- Queue projection exports are derived state only. The legacy `queue.snapshot.json` filename is a
+  compatibility artifact, not an operator-authored planning concept.
 - Proposed tasks do not enter the executable queue until they are promoted or otherwise moved into
   normal queue state.
 - Builtin `next-task` uses the accepted queue head only.
@@ -69,7 +70,7 @@ The intake authority flow is:
 5. `PlanningTaskRepositoryPort` commits the accepted ledger and rebuilt queue projection in one
    revision-aware task-authority mutation.
 6. Git-backed workspaces export `.codex-exec-loop/runtime/exports/task-ledger.json` and
-   `.codex-exec-loop/runtime/exports/queue.snapshot.json` from the committed store revision.
+   the legacy-named queue projection export from the committed store revision.
 
 LLM or hidden-session output is never allowed to write SQL, tracked JSON, or runtime exports
 directly. It may only implement `PlanningTaskDraftGenerator` and return a structured
@@ -89,7 +90,7 @@ timestamp must be UTC in compact sortable `YYYYMMDDTHHMMSSZ` form, and the hash 
 the normalized prompt, not from generated preview text.
 
 The task-authority commit must be revision-aware. The intake service loads a planning revision with
-the ledger and queue snapshot, validates against that view, and commits with compare-and-commit
+the ledger and queue projection, validates against that view, and commits with compare-and-commit
 semantics. If another accepted planning mutation lands first, user intake reloads the latest
 snapshot, regenerates any colliding id suffix, revalidates, and retries within a bounded loop. Queue
 refresh or export work that was computed from a stale revision must not overwrite a newer intake
@@ -97,7 +98,8 @@ task.
 
 ## Protection And Recovery Rules
 
-- `directions.toml`, `task-ledger.schema.json`, `result-output.md`, and `queue.snapshot.json` are protected during automated execution.
+- `directions.toml`, `task-ledger.schema.json`, `result-output.md`, and queue projection exports
+  are protected during automated execution.
 - Invalid `task-ledger.json` writes are rolled back, archived, and may trigger a bounded repair retry.
 - Queue refresh and repair work run through the planning worker boundary.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.

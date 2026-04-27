@@ -36,7 +36,7 @@ state is already repo-shared.
 | R5 | slot and session runtime state | file-backed lease and session detail can lose concurrent updates | high | temp-write plus rename avoids partial files | lost-update race still exists | versioned runtime projections inside the authority store |
 | R6 | git tracking | planning files can leak into agent branches when mutated from leased worktrees | high | protected-file restore after automated turns | authority still begins from tracked files | tracked files become export and explicit import artifacts only |
 | R7 | restart recovery | in-flight refresh or delivery state can be forgotten on restart | medium | some durable pool files and session detail | ordering and claims are not restart-safe | recovery sweep plus external truth reconciliation |
-| R8 | queue view drift | `queue.snapshot.json` can lag or disagree with runtime-derived queue | medium | runtime recalculates queue from ledger | humans and tools can still read stale exported files | revision-stamped exports generated from committed store state |
+| R8 | queue view drift | the legacy queue projection export can lag or disagree with runtime-derived queue | medium | runtime recalculates queue from ledger | humans and tools can still read stale exported files | revision-stamped exports generated from committed store state |
 
 ## R1. Worktree-Local Planning Authority
 
@@ -88,8 +88,8 @@ authority root.
 
 **Problem**
 
-`task-ledger.json` and `queue.snapshot.json` are accepted, restored, and rebuilt through separate
-file operations.
+The task ledger and queue projection export are accepted, restored, and rebuilt through separate file
+operations.
 
 **Why it happens**
 
@@ -100,7 +100,7 @@ file operations.
 **Failure scenario**
 
 - hidden planner refresh updates `task-ledger.json`
-- process crashes before `queue.snapshot.json` is rebuilt
+- process crashes before the queue projection export is rebuilt
 - runtime can recompute in memory later, but exported queue files and human inspection are stale
 
 **Current guardrails**
@@ -303,12 +303,12 @@ Some runtime state survives in files, but ordering, claims, and global delivery 
 - `src/application/service/parallel_mode_turn_service.rs`
 - `src/application/service/parallel_mode_distributor_service.rs`
 
-## R8. Queue Snapshot Drift
+## R8. Queue Projection Export Drift
 
 **Problem**
 
-`queue.snapshot.json` is derived but can still drift from what runtime would derive from the current
-ledger.
+The legacy queue projection export is derived but can still drift from what runtime would derive
+from the current ledger.
 
 **Why it happens**
 

@@ -99,8 +99,8 @@ operator prompt in readable form. The task id is
 retry.
 
 LLM output, hidden-session output, and future planner adapters may only return this structured draft.
-They must not write SQL, mutate `task-ledger.json`, update `queue.snapshot.json`, or generate runtime
-exports directly.
+They must not write SQL, mutate `task-ledger.json`, update queue projection exports, or generate
+runtime exports directly.
 
 ## Validation Layer
 
@@ -136,10 +136,9 @@ In git-backed workspaces, SQLite remains canonical:
 6. commit ledger, queue projection, and planning revision in one store transaction
 7. write runtime exports from the committed store state
 
-Tracked `.codex-exec-loop/planning/task-ledger.json` and
-`.codex-exec-loop/planning/queue.snapshot.json` stay import and review surfaces. Runtime intake does
-not make them authoritative and does not accept out-of-band edits without the existing explicit apply
-flow.
+Tracked task-ledger artifacts and the legacy-named queue projection artifact stay import and review
+surfaces. Runtime intake does not make them authoritative and does not accept out-of-band edits
+without the existing explicit apply flow.
 
 Non-git workspaces may keep their current direct-file authority path, but the service contract should
 still treat ledger plus queue projection as one accepted mutation.
@@ -186,7 +185,7 @@ commit a ledger or projection derived from an older revision over a newer runtim
 - unit: local prompt generator produces deterministic title, description, and default fields
 - unit: intake validation rejects blank prompt, missing direction, invalid priority, duplicate id,
   and invalid dependencies
-- service: adding one user task to an empty ledger updates task ledger and queue snapshot together
+- service: adding one user task to an empty ledger updates task ledger and queue projection together
 - service: concurrent planning revision conflict retries user intake against the latest snapshot
 - service: stale queue refresh cannot overwrite a newer intake mutation
 - TUI: `:task`, `:task <prompt>`, preview `Y`, `N`, `E`, and `Esc`
