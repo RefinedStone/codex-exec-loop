@@ -8,7 +8,8 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
-    PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    PLANNING_PROMPTS_DIRECTORY, PlanningDraftEditorFile, PlanningDraftPromoteResult,
+    PlanningDraftSaveResult, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::planning::{DirectionCatalogDocument, PlanningFileKind, PlanningWorkspaceFiles};
@@ -19,9 +20,94 @@ use super::{
     PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
     PlanningAdminQueuePreview, PlanningAdminSessionView, PlanningAdminValidationView,
 };
-use crate::application::service::planning::PlanningDraftEditorFile;
 
 impl PlanningAdminFacadeService {
+    pub fn create_draft_session(
+        &self,
+        kind: PlanningAdminDraftKind,
+        direction_id: Option<&str>,
+    ) -> Result<PlanningAdminSessionView> {
+        let draft_name = match kind {
+            PlanningAdminDraftKind::FullPlanning | PlanningAdminDraftKind::TaskLedger => {
+                self.stage_active_manual_editor_draft()?
+            }
+            PlanningAdminDraftKind::Directions => {
+                self.planning
+                    .workspace
+                    .stage_editor_session(self.workspace_dir.as_str())?
+                    .draft_name
+            }
+            PlanningAdminDraftKind::QueueIdlePrompt => {
+                self.planning
+                    .workspace
+                    .stage_queue_idle_prompt_editor_session(self.workspace_dir.as_str())?
+                    .draft_name
+            }
+            PlanningAdminDraftKind::DirectionDetail => {
+                self.planning
+                    .workspace
+                    .stage_detail_doc_editor_session(
+                        self.workspace_dir.as_str(),
+                        direction_id.ok_or_else(|| {
+                            anyhow!("direction detail drafts require direction_id")
+                        })?,
+                    )?
+                    .draft_name
+            }
+        };
+        self.load_draft_session(PlanningAdminDraftLoadRequest {
+            draft_name,
+            kind,
+            direction_id: direction_id.map(str::to_string),
+        })
+    }
+
+    pub fn load_draft_session(
+        &self,
+        request: PlanningAdminDraftLoadRequest,
+    ) -> Result<PlanningAdminSessionView> {
+        let loaded = self
+            .planning_workspace_port
+            .load_planning_draft_files(self.workspace_dir.as_str(), &request.draft_name)?;
+        self.build_session_view(request.kind, request.direction_id, loaded)
+    }
+
+    pub fn save_draft(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+    ) -> Result<(PlanningDraftSaveResult, PlanningAdminSessionView)> {
+        let visible_files = self.resolve_mutated_visible_files(&request)?;
+        let result = self.planning.workspace.save_draft_editor_files(
+            self.workspace_dir.as_str(),
+            &request.draft_name,
+            &visible_files,
+        )?;
+        let session = self.load_draft_session(PlanningAdminDraftLoadRequest {
+            draft_name: request.draft_name,
+            kind: request.kind,
+            direction_id: request.direction_id,
+        })?;
+        Ok((result, session))
+    }
+
+    pub fn promote_draft(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+    ) -> Result<(PlanningDraftPromoteResult, PlanningAdminSessionView)> {
+        let visible_files = self.resolve_mutated_visible_files(&request)?;
+        let result = self.planning.workspace.promote_draft_editor_files(
+            self.workspace_dir.as_str(),
+            &request.draft_name,
+            &visible_files,
+        )?;
+        let session = self.load_draft_session(PlanningAdminDraftLoadRequest {
+            draft_name: request.draft_name,
+            kind: request.kind,
+            direction_id: request.direction_id,
+        })?;
+        Ok((result, session))
+    }
+
     pub(super) fn resolve_mutated_visible_files(
         &self,
         request: &PlanningAdminDraftMutationRequest,
