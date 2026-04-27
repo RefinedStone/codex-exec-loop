@@ -282,9 +282,7 @@ mod tests {
     use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
     use crate::application::service::planning::PlanningRepairRequest;
     use crate::application::service::planning::PlanningRuntimeSnapshot;
-    use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    };
+    use crate::application::service::planning::{DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH};
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus,
         ConversationRuntimeControlTruth, ConversationToolActivity, ConversationToolActivityKind,

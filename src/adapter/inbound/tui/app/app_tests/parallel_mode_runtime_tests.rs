@@ -12,7 +12,7 @@ use super::{
     run_git, sample_startup_diagnostics,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
+use crate::application::service::planning::TASK_LEDGER_FILE_PATH;
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };

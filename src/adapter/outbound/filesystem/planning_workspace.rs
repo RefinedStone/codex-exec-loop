@@ -9,7 +9,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
     PlanningWorkspacePort,
 };
-use crate::application::service::planning::shared::contract::{
+use crate::application::service::planning::{
     ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY,
     PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
@@ -536,7 +536,7 @@ mod tests {
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning::shared::contract::{
+    use crate::application::service::planning::{
         DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
 

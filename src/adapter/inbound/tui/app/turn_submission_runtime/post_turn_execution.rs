@@ -1002,8 +1002,8 @@ fn repeated_queue_head_detail(
 
 #[cfg(test)]
 mod tests {
+    use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::application::service::planning::PlanningTaskHandoff;
-    use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
     use crate::domain::planning::{PriorityQueueTask, TaskStatus};
 
     use super::repeated_queue_head_detail;

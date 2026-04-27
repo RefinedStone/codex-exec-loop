@@ -26,6 +26,7 @@ every adapter and every helper file in the repo.
 ## Planning Boundary
 
 - TUI code should depend on `PlanningFeature` only.
+- External adapters should import planning contract constants and value types from `crate::application::service::planning`, not from planning's internal `authoring`, `runtime`, `repair`, `worker`, or `shared` modules.
 - `PlanningFeature` is split into `workspace`, `runtime`, and `worker` use cases.
 - Planning internals such as validation, prompt assembly, reconciliation, and proposal promotion stay behind those facades.
 - Planning-specific TUI flow lives under `src/adapter/inbound/tui/app/planning`.

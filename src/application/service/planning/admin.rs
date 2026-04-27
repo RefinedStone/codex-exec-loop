@@ -24,7 +24,7 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
-use crate::application::service::planning::shared::contract::{
+use crate::application::service::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
@@ -416,7 +416,7 @@ impl PlanningAdminFacadeService {
             workspace_dir,
             planning,
             planning_workspace_port,
-            Arc::new(super::NoopPlanningAuthorityPort::default()),
+            Arc::new(super::noop_ports::NoopPlanningAuthorityPort::default()),
             Arc::new(NoopPlanningTaskRepositoryPort),
         )
     }

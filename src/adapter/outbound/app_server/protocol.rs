@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::shared::contract::canonical_active_planning_file_path;
+use crate::application::service::planning::canonical_active_planning_file_path;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
     ConversationMessageKind, ConversationSnapshot, ConversationToolActivity,
@@ -832,7 +832,7 @@ mod tests {
         handle_turn_notification, partition_runtime_notices,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::application::service::planning::shared::contract::{
+    use crate::application::service::planning::{
         DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
     use crate::domain::conversation::{

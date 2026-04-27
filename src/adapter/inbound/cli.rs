@@ -787,7 +787,7 @@ mod tests {
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::application::service::planning::shared::contract::{
+    use crate::application::service::planning::{
         DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
