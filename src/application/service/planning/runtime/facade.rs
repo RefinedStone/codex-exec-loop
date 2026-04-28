@@ -10,9 +10,7 @@ use crate::application::service::planning::runtime::prompt::{
 };
 use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::turn_prompt_assembly_service::{
-    ManualPromptAssemblyRequest, PlanningAutoFollowOperation,
-    PlanningAutoFollowPromptAssemblyRequest, PlanningAutoFollowPromptPreviewRequest,
-    TurnPromptAssemblyService,
+    ManualPromptAssemblyRequest, TurnPromptAssemblyService,
 };
 use crate::domain::planning::PriorityQueueTask;
 use anyhow::Result;
@@ -181,11 +179,6 @@ impl PlanningRuntimeFacadeService {
                     PlanningAutoFollowBlockReason::ActionableQueueRequired,
                 ),
             },
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue,
-            ) => PlanningRuntimeAutoFollowDecision::QueuePrompt(
-                self.build_refresh_queue_prompt(&request),
-            ),
         }
     }
 
@@ -199,24 +192,7 @@ impl PlanningRuntimeFacadeService {
         let planning_view = self
             .planning_runtime_policy_service
             .build_preview_view_for_decision(policy_decision, request.snapshot);
-        let rendered_prompt = match policy_decision {
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue,
-            ) => self
-                .turn_prompt_assembly_service
-                .build_planning_auto_follow_prompt_preview(
-                    PlanningAutoFollowPromptPreviewRequest {
-                        operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
-                        stop_keyword: request.stop_keyword,
-                        last_message: request.last_message,
-                        planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                    },
-                ),
-            PlanningAutoFollowPolicyDecision::Blocked(_)
-            | PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::ContinueQueuedTask,
-            ) => self.builtin_next_task_preview_prompt(request.snapshot),
-        };
+        let rendered_prompt = self.builtin_next_task_preview_prompt(request.snapshot);
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
             planning_status_line: format!("planning: {}", planning_view.status_label),
@@ -240,29 +216,6 @@ impl PlanningRuntimeFacadeService {
     ) -> PlanningRuntimeStatusProjection {
         self.planning_runtime_policy_service
             .build_status_projection(request)
-    }
-
-    fn build_refresh_queue_prompt(
-        &self,
-        request: &PlanningRuntimeAutoFollowRequest<'_>,
-    ) -> PlanningRuntimeQueuedAutoFollowPrompt {
-        PlanningRuntimeQueuedAutoFollowPrompt {
-            prompt: self
-                .turn_prompt_assembly_service
-                .build_planning_auto_follow_prompt(PlanningAutoFollowPromptAssemblyRequest {
-                    operation: PlanningAutoFollowOperation::RefreshQueueFromLatestAnswer,
-                    stop_keyword: request.stop_keyword,
-                    last_message: request.last_message.trim(),
-                    planning_prompt_fragment: request.snapshot.prompt_fragment(),
-                }),
-            transcript_text: self
-                .planning_runtime_policy_service
-                .auto_follow_transcript_text(
-                    request.snapshot,
-                    PlanningAutoFollowPromptMode::RefreshPlanningQueue,
-                ),
-            handoff_task: None,
-        }
     }
 
     pub fn load_execution_snapshot(
