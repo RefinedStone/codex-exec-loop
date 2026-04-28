@@ -1,10 +1,6 @@
 use crate::application::service::planning::runtime::prompt::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
-use crate::application::service::planning::shared::auto_follow_copy::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT,
-    PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT,
-};
 use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
 
@@ -27,7 +23,6 @@ pub enum PlanningAutoFollowPolicyDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningAutoFollowPromptMode {
     ContinueQueuedTask,
-    RefreshPlanningQueue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,8 +113,8 @@ impl PlanningRuntimePolicyService {
                 )
             }
             PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
-                PlanningAutoFollowPolicyDecision::QueuePrompt(
-                    PlanningAutoFollowPromptMode::RefreshPlanningQueue,
+                PlanningAutoFollowPolicyDecision::Blocked(
+                    PlanningAutoFollowBlockReason::ActionableQueueRequired,
                 )
             }
             PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
@@ -130,25 +125,6 @@ impl PlanningRuntimePolicyService {
             PlanningRuntimeWorkspaceStatus::Invalid => PlanningAutoFollowPolicyDecision::Blocked(
                 PlanningAutoFollowBlockReason::InvalidWorkspace,
             ),
-        }
-    }
-
-    pub fn auto_follow_transcript_text(
-        &self,
-        snapshot: &PlanningRuntimeSnapshot,
-        prompt_mode: PlanningAutoFollowPromptMode,
-    ) -> String {
-        match prompt_mode {
-            PlanningAutoFollowPromptMode::ContinueQueuedTask => {
-                BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string()
-            }
-            PlanningAutoFollowPromptMode::RefreshPlanningQueue => {
-                if snapshot.has_proposal_candidates() {
-                    PLANNING_QUEUE_REFRESH_WITH_PROPOSALS_TRANSCRIPT_TEXT.to_string()
-                } else {
-                    PLANNING_QUEUE_REFRESH_WITHOUT_PROPOSALS_TRANSCRIPT_TEXT.to_string()
-                }
-            }
         }
     }
 
@@ -455,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_next_task_allows_proposals_when_queue_is_empty() {
+    fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
@@ -467,22 +443,23 @@ mod tests {
 
         assert_eq!(
             decision,
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue
+            PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
             )
         );
 
         let preview = service.build_preview_view_for_decision(decision, &snapshot);
 
-        assert_eq!(preview.status_label, "ready");
+        assert_eq!(preview.status_label, "queue-empty");
         assert!(preview.detail.as_deref().is_some_and(|detail| {
-            detail.contains("queue idle: no executable planning task")
+            detail
+                .contains("queue-driven auto follow-up requires an actionable planning queue head")
                 && detail.contains("promotable follow-up proposals available")
         }));
     }
 
     #[test]
-    fn builtin_next_task_allows_ready_no_task_state_without_existing_proposals() {
+    fn builtin_next_task_blocks_ready_no_task_state_without_existing_proposals() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
@@ -494,15 +471,15 @@ mod tests {
 
         assert_eq!(
             decision,
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue
+            PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
             )
         );
         assert_eq!(
             service
                 .build_preview_view_for_decision(decision, &snapshot)
                 .status_label,
-            "ready"
+            "queue-empty"
         );
     }
 
@@ -552,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_next_task_uses_refresh_mode_when_queue_is_idle() {
+    fn builtin_next_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
             "Planning Context".to_string(),
@@ -563,17 +540,9 @@ mod tests {
 
         assert_eq!(
             service.decide_auto_follow(&snapshot),
-            PlanningAutoFollowPolicyDecision::QueuePrompt(
-                PlanningAutoFollowPromptMode::RefreshPlanningQueue
+            PlanningAutoFollowPolicyDecision::Blocked(
+                PlanningAutoFollowBlockReason::ActionableQueueRequired
             )
-        );
-        assert!(
-            service
-                .auto_follow_transcript_text(
-                    &snapshot,
-                    PlanningAutoFollowPromptMode::RefreshPlanningQueue
-                )
-                .contains("existing proposal 작업 목록을 priority queue에 넣고")
         );
     }
 
@@ -591,13 +560,6 @@ mod tests {
             PlanningAutoFollowPolicyDecision::QueuePrompt(
                 PlanningAutoFollowPromptMode::ContinueQueuedTask
             )
-        );
-        assert_eq!(
-            service.auto_follow_transcript_text(
-                &snapshot,
-                PlanningAutoFollowPromptMode::ContinueQueuedTask,
-            ),
-            crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
         );
     }
 

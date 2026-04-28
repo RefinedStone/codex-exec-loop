@@ -401,7 +401,7 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
 }
 
 #[test]
-fn auto_followup_refresh_prompt_appends_planning_fragment_when_queue_is_idle() {
+fn auto_followup_skips_main_refresh_prompt_when_queue_is_idle() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
         "Planning Context\nRuntime Follow-up Proposal Rules",
@@ -415,16 +415,10 @@ fn auto_followup_refresh_prompt_appends_planning_fragment_when_queue_is_idle() {
         Some("agent-1".to_string()),
     ));
 
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime())
-    else {
-        panic!("planning refresh prompt should render");
-    };
-
-    assert!(prompt.prompt.contains("planning priority queue"));
-    assert!(prompt.prompt.contains("latest answer"));
-    assert!(prompt.prompt.contains("Planning Context"));
-    assert!(prompt.prompt.contains("Runtime Follow-up Proposal Rules"));
+    assert_eq!(
+        conversation.decide_auto_followup(&planning_runtime()),
+        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
+    );
 }
 
 #[test]
