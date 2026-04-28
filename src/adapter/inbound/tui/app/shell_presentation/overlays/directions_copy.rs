@@ -24,17 +24,17 @@ pub(super) fn build_overview_overlay_view(
         ],
         summary_lines: vec![
             Line::from(
-                "Use Enter to open the staged editor, `d` to create a detail-doc mapping, or `p` to create/edit the queue-idle prompt.",
+                "Use Enter or `p` to create/edit the queue-idle prompt, or `d` to create a detail-doc mapping.",
             ),
             Line::from(
-                "The active planning files do not change until you promote the staged draft.",
+                "Accepted planning state does not change until you promote the staged draft.",
             ),
         ],
         option_lines: vec![
             overlay_option_line(
                 "Enter",
-                "edit directions",
-                "open the DB-backed direction maintenance view and any existing queue-idle prompt",
+                "edit prompt",
+                "stage the queue-idle review prompt markdown and create or repair prompt_path if needed",
                 false,
                 false,
             ),
@@ -67,7 +67,7 @@ pub(super) fn build_overview_overlay_view(
         ],
         key_lines: vec![
             AkraTheme::key_line(
-                "Enter: edit directions    d: create or repair detail doc    p: edit queue-idle prompt",
+                "Enter/p: edit queue-idle prompt    d: create or repair detail doc",
             ),
             AkraTheme::key_line("r: reload summary    Esc/Ctrl+C: close"),
         ],
@@ -134,7 +134,7 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
             overlay_option_line(
                 "2",
                 "no",
-                "return without changing the active or staged planning files",
+                "return without changing accepted or staged support files",
                 selected_choice == DetailDocConfirmChoice::No,
                 false,
             ),

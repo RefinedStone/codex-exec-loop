@@ -28,12 +28,6 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminSessionView> {
         let draft_name = match kind {
             PlanningAdminDraftKind::FullPlanning => self.stage_active_manual_editor_draft()?,
-            PlanningAdminDraftKind::Directions => {
-                self.planning
-                    .workspace
-                    .stage_editor_session(self.workspace_dir.as_str())?
-                    .draft_name
-            }
             PlanningAdminDraftKind::QueueIdlePrompt => {
                 self.planning
                     .workspace
@@ -351,9 +345,6 @@ fn file_key_for_kind(
     match kind {
         PlanningAdminDraftKind::FullPlanning => {
             matches!(key, PlanningAdminFileKey::ResultOutput).then_some(key)
-        }
-        PlanningAdminDraftKind::Directions => {
-            matches!(key, PlanningAdminFileKey::QueueIdlePrompt).then_some(key)
         }
         PlanningAdminDraftKind::QueueIdlePrompt => {
             matches!(key, PlanningAdminFileKey::QueueIdlePrompt).then_some(key)

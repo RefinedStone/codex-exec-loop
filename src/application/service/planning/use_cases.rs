@@ -148,13 +148,6 @@ impl PlanningWorkspaceUseCases {
             .load_queue_idle_review_context(workspace_dir)
     }
 
-    pub fn stage_editor_session(
-        &self,
-        workspace_dir: &str,
-    ) -> anyhow::Result<PlanningDraftEditorSession> {
-        self.directions_service.stage_editor_session(workspace_dir)
-    }
-
     pub fn stage_detail_doc_editor_session(
         &self,
         workspace_dir: &str,

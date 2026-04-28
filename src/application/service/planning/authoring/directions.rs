@@ -221,23 +221,6 @@ impl PlanningDirectionsService {
         })
     }
 
-    pub fn stage_editor_session(&self, workspace_dir: &str) -> Result<PlanningDraftEditorSession> {
-        let workspace = self.load_complete_workspace(workspace_dir)?;
-        let editable_paths = if let Some(prompt_path) =
-            trimmed_non_empty(workspace.directions.queue_idle.prompt_path.as_str())
-            && workspace
-                .extra_files
-                .iter()
-                .any(|file| file.active_path == prompt_path)
-        {
-            vec![prompt_path.to_string()]
-        } else {
-            Vec::new()
-        };
-
-        self.stage_session_from_source(workspace_dir, workspace, &editable_paths)
-    }
-
     pub fn stage_detail_doc_editor_session(
         &self,
         workspace_dir: &str,

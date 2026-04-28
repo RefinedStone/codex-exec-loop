@@ -18,6 +18,6 @@ pub(super) fn build_simple_review_summary_lines() -> Vec<Line<'static>> {
         Line::from(
             "The default queue-idle review prompt is already staged so the first reply can justify follow-up work when needed.",
         ),
-        Line::from("No active planning files change until you explicitly promote this review."),
+        Line::from("No accepted planning state changes until you explicitly promote this review."),
     ]
 }

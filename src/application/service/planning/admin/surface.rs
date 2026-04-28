@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum PlanningAdminDraftKind {
     FullPlanning,
-    Directions,
     QueueIdlePrompt,
     DirectionDetail,
 }
@@ -15,7 +14,6 @@ impl PlanningAdminDraftKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::FullPlanning => "full planning",
-            Self::Directions => "directions",
             Self::QueueIdlePrompt => "queue-idle prompt",
             Self::DirectionDetail => "direction detail",
         }
@@ -24,7 +22,6 @@ impl PlanningAdminDraftKind {
     pub fn editor_heading(self) -> &'static str {
         match self {
             Self::FullPlanning => "Full Planning Draft",
-            Self::Directions => "Directions Draft",
             Self::QueueIdlePrompt => "Queue-Idle Prompt Draft",
             Self::DirectionDetail => "Direction Detail Draft",
         }
@@ -33,14 +30,13 @@ impl PlanningAdminDraftKind {
     pub fn return_path(self) -> &'static str {
         match self {
             Self::FullPlanning => "/admin",
-            Self::Directions | Self::QueueIdlePrompt | Self::DirectionDetail => "/admin/directions",
+            Self::QueueIdlePrompt | Self::DirectionDetail => "/admin/directions",
         }
     }
 
     pub fn slug(self) -> &'static str {
         match self {
             Self::FullPlanning => "full_planning",
-            Self::Directions => "directions",
             Self::QueueIdlePrompt => "queue_idle_prompt",
             Self::DirectionDetail => "direction_detail",
         }
@@ -56,7 +52,6 @@ impl fmt::Display for PlanningAdminDraftKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningAdminFileKey {
-    Directions,
     ResultOutput,
     QueueIdlePrompt,
     DirectionDetail,
@@ -65,7 +60,6 @@ pub enum PlanningAdminFileKey {
 impl PlanningAdminFileKey {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Directions => "Directions",
             Self::ResultOutput => "Result Output",
             Self::QueueIdlePrompt => "Queue-Idle Prompt",
             Self::DirectionDetail => "Direction Detail",
@@ -74,14 +68,12 @@ impl PlanningAdminFileKey {
 
     pub fn editor_language(self) -> &'static str {
         match self {
-            Self::Directions => "toml",
             Self::ResultOutput | Self::QueueIdlePrompt | Self::DirectionDetail => "markdown",
         }
     }
 
     pub fn slug(self) -> &'static str {
         match self {
-            Self::Directions => "directions",
             Self::ResultOutput => "result_output",
             Self::QueueIdlePrompt => "queue_idle_prompt",
             Self::DirectionDetail => "direction_detail",

@@ -17,7 +17,7 @@ pub(super) fn build_existing_workspace_overlay_view(
         header_lines: vec![
             planning_setup_title_line(" / existing workspace"),
             Line::from(
-                "This workspace already has active planning files. Manage the current runtime instead of restaging a bootstrap scaffold.",
+                "This workspace already has accepted planning state. Manage the current runtime instead of restaging a bootstrap scaffold.",
             ),
         ],
         summary_lines: vec![Line::from(

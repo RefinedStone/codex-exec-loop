@@ -19,7 +19,7 @@ impl NativeTuiApp {
     pub(crate) fn handle_directions_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match self.directions_maintenance_overlay_ui_state.step() {
             DirectionsMaintenanceOverlayStep::Overview => match key.code {
-                KeyCode::Enter if key.modifiers.is_empty() => self.open_directions_manual_editor(),
+                KeyCode::Enter if key.modifiers.is_empty() => self.open_queue_idle_prompt_editor(),
                 KeyCode::Char('d') if key.modifiers.is_empty() => {
                     if self
                         .directions_maintenance_overlay_ui_state
@@ -602,16 +602,6 @@ impl NativeTuiApp {
         );
     }
 
-    pub(super) fn open_directions_manual_editor(&mut self) {
-        let workspace_directory = self.planning_workspace_directory();
-        self.open_directions_editor_session(
-            self.planning
-                .workspace
-                .stage_editor_session(&workspace_directory),
-            "directions editor ready",
-        );
-    }
-
     pub(super) fn open_directions_detail_doc_editor(&mut self, direction_id: &str) {
         let workspace_directory = self.planning_workspace_directory();
         self.open_directions_editor_session(
@@ -662,7 +652,7 @@ impl NativeTuiApp {
                         "needs attention"
                     },
                     if validation_ok {
-                        "press Ctrl+P to promote into active planning files"
+                        "press Ctrl+P to promote into accepted planning state"
                     } else {
                         "fix validation issues before promoting"
                     },
@@ -705,7 +695,7 @@ impl NativeTuiApp {
                         "needs attention"
                     },
                     if validation_ok {
-                        "press Ctrl+P to promote into active planning files"
+                        "press Ctrl+P to promote into accepted planning state"
                     } else {
                         "fix validation issues before promoting"
                     },

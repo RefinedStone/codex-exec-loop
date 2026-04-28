@@ -911,7 +911,6 @@ fn extract_file_updates(values: HashMap<String, String>) -> Vec<PlanningAdminDra
         .filter_map(|(field_name, body)| {
             let raw_key = field_name.strip_prefix("file_")?;
             let key = match raw_key {
-                "directions" => PlanningAdminFileKey::Directions,
                 "result_output" => PlanningAdminFileKey::ResultOutput,
                 "queue_idle_prompt" => PlanningAdminFileKey::QueueIdlePrompt,
                 "direction_detail" => PlanningAdminFileKey::DirectionDetail,
@@ -933,9 +932,9 @@ fn parse_reset_target(target: &str) -> std::result::Result<PlanningResetTarget, 
 
 fn nav_for_kind(kind: PlanningAdminDraftKind) -> &'static str {
     match kind {
-        PlanningAdminDraftKind::Directions
-        | PlanningAdminDraftKind::QueueIdlePrompt
-        | PlanningAdminDraftKind::DirectionDetail => "directions",
+        PlanningAdminDraftKind::QueueIdlePrompt | PlanningAdminDraftKind::DirectionDetail => {
+            "directions"
+        }
         PlanningAdminDraftKind::FullPlanning => "dashboard",
     }
 }
@@ -1103,14 +1102,18 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn page_mutation_ignores_removed_task_authority_file_updates() {
+    fn page_mutation_ignores_removed_raw_authority_file_updates() {
         let updates = extract_file_updates(HashMap::from([
             ("file_task_authority".to_string(), "{}".to_string()),
             ("file_directions".to_string(), "version = 1".to_string()),
+            (
+                "file_queue_idle_prompt".to_string(),
+                "# Queue prompt".to_string(),
+            ),
         ]));
 
         assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].key, PlanningAdminFileKey::Directions);
+        assert_eq!(updates[0].key, PlanningAdminFileKey::QueueIdlePrompt);
     }
 
     #[test]
@@ -1120,7 +1123,7 @@ mod tests {
             "dashboard"
         );
         assert_eq!(
-            nav_for_kind(PlanningAdminDraftKind::Directions),
+            nav_for_kind(PlanningAdminDraftKind::QueueIdlePrompt),
             "directions"
         );
     }
