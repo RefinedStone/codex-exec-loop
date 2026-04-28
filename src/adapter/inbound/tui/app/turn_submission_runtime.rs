@@ -42,7 +42,7 @@ impl NativeTuiApp {
         }
 
         let operator_prompt = match &self.conversation_state {
-            ConversationState::Ready(conversation) if conversation.can_submit_prompt() => {
+            ConversationState::Ready(conversation) if conversation.can_accept_manual_prompt() => {
                 conversation.input_buffer.clone()
             }
             _ => return,

@@ -569,12 +569,16 @@ impl ConversationViewModel {
         }
     }
 
-    pub(crate) fn can_submit_prompt(&self) -> bool {
+    pub(crate) fn can_accept_runtime_prompt(&self) -> bool {
         self.input_state.can_submit_now()
     }
 
+    pub(crate) fn can_accept_manual_prompt(&self) -> bool {
+        self.can_accept_runtime_prompt() && !self.auto_follow_state.has_live_activity()
+    }
+
     pub(crate) fn has_running_turn(&self) -> bool {
-        !self.can_submit_prompt()
+        !self.can_accept_runtime_prompt()
     }
 
     pub(crate) fn live_activity_started_at(&self) -> Option<Instant> {

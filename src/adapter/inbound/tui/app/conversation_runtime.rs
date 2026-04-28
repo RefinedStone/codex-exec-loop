@@ -88,7 +88,10 @@ pub(super) fn reduce_conversation_runtime(
             origin,
         } => {
             let prompt = prompt.trim().to_string();
-            if prompt.is_empty() || state.has_running_turn() {
+            if prompt.is_empty() || !state.can_accept_runtime_prompt() {
+                return ConversationRuntimeReduction { state, effects };
+            }
+            if matches!(origin, PromptOrigin::Manual) && !state.can_accept_manual_prompt() {
                 return ConversationRuntimeReduction { state, effects };
             }
 
@@ -317,6 +320,68 @@ mod tests {
                 thread_id: Some("thread-1".to_string()),
                 prompt: "ship it".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn manual_prompt_is_blocked_while_post_turn_evaluation_is_running() {
+        let mut state = sample_conversation();
+        state.auto_follow_state.begin_post_turn_evaluation();
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "next manual prompt".to_string(),
+                transcript_text: "next manual prompt".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::ReadyToContinue
+        );
+        assert_eq!(reduced.state.input_buffer, "ship it");
+        assert!(matches!(
+            reduced.state.auto_follow_state.runtime_phase,
+            AutoFollowRuntimePhase::Evaluating { .. }
+        ));
+        assert!(reduced.state.messages.is_empty());
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn auto_follow_prompt_can_submit_while_auto_follow_queue_is_live() {
+        let mut state = sample_conversation();
+        state.input_buffer = "user draft stays buffered".to_string();
+        state.record_auto_followup_queue("turn-1");
+
+        let reduced = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue from queue".to_string(),
+                transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
+                    queued_from_turn_id: "turn-1".to_string(),
+                    mode_label: "planning queue".to_string(),
+                    transcript_text: "다음 queued task 1개를 이어서 진행합니다.".to_string(),
+                    debug_detail: None,
+                    handoff_task: None,
+                })),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.input_state,
+            ConversationInputState::SubmittingTurn
+        );
+        assert_eq!(reduced.state.input_buffer, "user draft stays buffered");
+        assert_eq!(reduced.state.auto_follow_state.active_turn_index(), Some(1));
+        assert!(
+            reduced
+                .effects
+                .iter()
+                .any(|effect| { matches!(effect, ConversationRuntimeEffect::StartStream { .. }) })
         );
     }
 
