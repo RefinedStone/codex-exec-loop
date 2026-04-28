@@ -1,4 +1,3 @@
-pub(crate) mod accepted_ledger;
 pub(crate) mod doctor;
 pub(crate) mod ledger_recovery;
 pub(crate) mod prompt;

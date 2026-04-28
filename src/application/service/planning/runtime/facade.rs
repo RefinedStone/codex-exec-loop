@@ -287,6 +287,20 @@ impl PlanningRuntimeFacadeService {
             execution_snapshot,
         )
     }
+
+    pub fn commit_task_authority_candidate(
+        &self,
+        workspace_directory: &str,
+        candidate_task_ledger_json: &str,
+        execution_snapshot: &PlanningExecutionSnapshot,
+    ) -> Result<PlanningReconciliationResult> {
+        self.planning_reconciliation_service
+            .commit_task_authority_candidate(
+                workspace_directory,
+                candidate_task_ledger_json,
+                execution_snapshot,
+            )
+    }
 }
 
 fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {

@@ -191,7 +191,7 @@ fn run_fake_stream(
     behavior: FakeStreamBehavior,
 ) -> Result<()> {
     let FakeStreamBehavior {
-        events,
+        mut events,
         error,
         planning_file_writes,
         merge_active_branch_into_akra_repo,
@@ -202,6 +202,13 @@ fn run_fake_stream(
         for (relative_path, body) in &planning_file_writes {
             replace_candidate_planning_workspace_file(workspace_directory, relative_path, body);
         }
+    }
+
+    if let Some((_, task_ledger_json)) = planning_file_writes
+        .iter()
+        .find(|(relative_path, _)| relative_path == TASK_LEDGER_FILE_PATH)
+    {
+        append_task_authority_payload_to_agent_completion(&mut events, task_ledger_json);
     }
 
     emit_fake_attachment_event(workspace_directory, &event_sender, attachment_event);
@@ -221,6 +228,22 @@ fn run_fake_stream(
         Err(anyhow::anyhow!(error))
     } else {
         Ok(())
+    }
+}
+
+fn append_task_authority_payload_to_agent_completion(
+    events: &mut [ConversationStreamEvent],
+    task_ledger_json: &str,
+) {
+    if let Some(ConversationStreamEvent::AgentMessageCompleted { text, .. }) = events
+        .iter_mut()
+        .rev()
+        .find(|event| matches!(event, ConversationStreamEvent::AgentMessageCompleted { .. }))
+        && !text.contains("\"task_ledger\"")
+    {
+        text.push_str("\n\n```json\n{\"task_ledger\":");
+        text.push_str(task_ledger_json);
+        text.push_str("}\n```");
     }
 }
 
@@ -620,6 +643,10 @@ fn bootstrap_active_planning_workspace(workspace_dir: &str) {
     assert!(
         promote_result.promoted_file_count > 0,
         "bootstrap planning workspace should become ready"
+    );
+    refresh_test_task_authority_projection(
+        workspace_dir,
+        &FilesystemPlanningWorkspaceAdapter::new(),
     );
 }
 

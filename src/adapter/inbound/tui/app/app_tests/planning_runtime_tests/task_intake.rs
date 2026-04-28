@@ -60,20 +60,17 @@ fn task_command_with_prompt_previews_and_commits_ready_task() {
             .is_some_and(|task| task.task_title.contains("Add a release checklist"))
     );
 
-    let workspace = FilesystemPlanningWorkspaceAdapter::new()
-        .load_planning_workspace_files(&workspace_dir)
-        .expect("workspace should load");
+    let authority_snapshot =
+        SqlitePlanningAuthorityAdapter::load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
     assert!(
-        workspace
-            .task_ledger_json
-            .as_deref()
-            .expect("task ledger should exist")
-            .contains("Add a release checklist")
+        authority_snapshot
+            .task_ledger
+            .tasks
+            .iter()
+            .any(|task| task.title.contains("Add a release checklist"))
     );
-    let exported_ledger =
-        std::fs::read_to_string(std::path::Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH))
-            .expect("task ledger export should be refreshed");
-    assert!(exported_ledger.contains("Add a release checklist"));
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }

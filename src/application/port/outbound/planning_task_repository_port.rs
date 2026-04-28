@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+
 use anyhow::Result;
 
 use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
@@ -48,22 +51,58 @@ pub struct NoopPlanningTaskRepositoryPort;
 impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
     fn load_task_authority_snapshot(
         &self,
-        _workspace_dir: &str,
+        workspace_dir: &str,
     ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-        Ok(None)
+        Ok(noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned")
+            .get(workspace_dir)
+            .cloned())
     }
 
     fn commit_task_authority_snapshot(
         &self,
-        _workspace_dir: &str,
+        workspace_dir: &str,
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
-        Ok(PlanningTaskAuthorityCommitResult::Committed {
-            planning_revision: commit.observed_planning_revision.unwrap_or(0),
-        })
+        let mut store = noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned");
+        let current_revision = store
+            .get(workspace_dir)
+            .map(|snapshot| snapshot.planning_revision)
+            .unwrap_or(0);
+        if let Some(observed_revision) = commit.observed_planning_revision
+            && observed_revision != current_revision
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: observed_revision,
+                current_planning_revision: current_revision,
+            });
+        }
+        let planning_revision = current_revision + 1;
+        store.insert(
+            workspace_dir.to_string(),
+            PlanningTaskAuthoritySnapshot {
+                planning_revision,
+                task_ledger: commit.task_ledger.clone(),
+                queue_projection: commit.queue_projection.clone(),
+            },
+        );
+        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
     }
 
-    fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+    fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
+        noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned")
+            .remove(workspace_dir);
         Ok(())
     }
+}
+
+fn noop_task_authority_store() -> &'static Mutex<BTreeMap<String, PlanningTaskAuthoritySnapshot>> {
+    static STORE: OnceLock<Mutex<BTreeMap<String, PlanningTaskAuthoritySnapshot>>> =
+        OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }

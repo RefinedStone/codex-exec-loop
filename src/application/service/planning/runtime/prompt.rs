@@ -9,7 +9,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
+    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::planning::PriorityQueueService;
@@ -323,14 +323,17 @@ impl PlanningPromptService {
 
         let task_authority_snapshot = self
             .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)?;
-        let authority_task_ledger_json = task_authority_snapshot
-            .as_ref()
-            .map(|snapshot| serde_json::to_string(&snapshot.task_ledger))
-            .transpose()
-            .context("failed to serialize task authority ledger")?;
+            .load_task_authority_snapshot(workspace_dir)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "planning task authority is unavailable; initialize or repair the planning database"
+                )
+            })?;
+        let authority_task_ledger_json =
+            serde_json::to_string(&task_authority_snapshot.task_ledger)
+                .context("failed to serialize task authority ledger")?;
         let workspace_files =
-            workspace_record_to_files(&workspace_record, authority_task_ledger_json.as_deref());
+            workspace_record_to_files(&workspace_record, &authority_task_ledger_json);
         let mut validation_result = self
             .planning_validation_service
             .validate_workspace_files(workspace_files);
@@ -367,8 +370,7 @@ impl PlanningPromptService {
         let task_ledger = validation_result
             .task_ledger
             .expect("valid planning task ledger should be available");
-        let stored_queue_projection =
-            task_authority_snapshot.map(|snapshot| snapshot.queue_projection);
+        let stored_queue_projection = Some(task_authority_snapshot.queue_projection);
         let current_queue_projection = match self
             .priority_queue_service
             .build_projection(&directions, &task_ledger)
@@ -463,19 +465,14 @@ where
 
 fn workspace_record_to_files<'a>(
     workspace_record: &'a PlanningWorkspaceLoadRecord,
-    task_ledger_json_override: Option<&'a str>,
+    task_ledger_json: &'a str,
 ) -> PlanningWorkspaceFiles<'a> {
     PlanningWorkspaceFiles {
         directions_toml: workspace_record
             .directions_toml
             .as_deref()
             .expect("complete planning workspace should include directions"),
-        task_ledger_json: task_ledger_json_override.unwrap_or_else(|| {
-            workspace_record
-                .task_ledger_json
-                .as_deref()
-                .expect("complete planning workspace should include task ledger")
-        }),
+        task_ledger_json,
         task_ledger_schema_json: workspace_record
             .task_ledger_schema_json
             .as_deref()
@@ -491,9 +488,6 @@ fn missing_workspace_paths(workspace_record: &PlanningWorkspaceLoadRecord) -> Ve
     let mut missing_paths = Vec::new();
     if workspace_record.directions_toml.is_none() {
         missing_paths.push(DIRECTIONS_FILE_PATH);
-    }
-    if workspace_record.task_ledger_json.is_none() {
-        missing_paths.push(TASK_LEDGER_FILE_PATH);
     }
     if workspace_record.task_ledger_schema_json.is_none() {
         missing_paths.push(TASK_LEDGER_SCHEMA_FILE_PATH);
@@ -641,7 +635,10 @@ fn build_prompt_fragment(
 
     lines.push(String::new());
     lines.push("Task Catalog Mutation Contract".to_string());
-    lines.push(format!("- You may edit only `{}`.", TASK_LEDGER_FILE_PATH));
+    lines.push(
+        "- Do not edit the checked-in `task-ledger.json`; it is a read-only export of DB task authority."
+            .to_string(),
+    );
     lines.push(format!(
         "- Do not edit `{}`, `{}`, `{}`, or `{}`.",
         DIRECTIONS_FILE_PATH,
@@ -658,7 +655,8 @@ fn build_prompt_fragment(
             .to_string(),
     );
     lines.push(
-        "- Keep `task-ledger.json` valid JSON that satisfies the checked-in schema.".to_string(),
+        "- Task catalog mutations must go through the runtime task authority flow, then queue validation will refresh prompt state."
+            .to_string(),
     );
 
     lines.push(String::new());
@@ -669,7 +667,7 @@ fn build_prompt_fragment(
     lines.push(String::new());
     lines.push("Runtime Follow-up Proposal Rules".to_string());
     lines.push(
-        "- If your final answer offers concrete follow-up options or variants, also add each option to `task-ledger.json` as a separate `proposed` task linked to an existing direction."
+        "- If your final answer offers concrete follow-up options or variants, create each option through the task authority flow as a separate `proposed` task linked to an existing direction."
             .to_string(),
     );
     lines.push(
@@ -917,10 +915,25 @@ mod tests {
     }
 
     fn sample_service(load_record: PlanningWorkspaceLoadRecord) -> PlanningPromptService {
-        PlanningPromptService::new(
+        let snapshot = load_record
+            .task_ledger_json
+            .as_deref()
+            .and_then(|task_ledger_json| serde_json::from_str(task_ledger_json).ok())
+            .map(|task_ledger| PlanningTaskAuthoritySnapshot {
+                planning_revision: 1,
+                task_ledger,
+                queue_projection: PriorityQueueProjection {
+                    next_task: None,
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: Vec::new(),
+                },
+            });
+        PlanningPromptService::with_task_repository(
             Arc::new(FakePlanningWorkspacePort { load_record }),
             PlanningValidationService::new(),
             PriorityQueueService::new(),
+            Arc::new(FakePlanningTaskRepositoryPort { snapshot }),
         )
     }
 
@@ -1275,7 +1288,20 @@ state = "paused"
   "version": 1,
   "tasks": [
     {
-      "id": "task-1"
+      "id": "task-1",
+      "direction_id": "missing-direction",
+      "title": "Invalid task",
+      "description": "References a missing direction.",
+      "status": "ready",
+      "base_priority": 10,
+      "dynamic_priority_delta": 0,
+      "priority_reason": "test",
+      "depends_on": [],
+      "blocked_by": [],
+      "created_by": "user",
+      "last_updated_by": "user",
+      "source_turn_id": null,
+      "updated_at": "2026-04-09T09:00:00Z"
     }
   ]
 }"#

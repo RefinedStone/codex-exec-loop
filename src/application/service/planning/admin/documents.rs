@@ -1,6 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::Path;
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -9,7 +7,6 @@ use chrono::Utc;
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
 };
-use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
@@ -38,9 +35,6 @@ impl PlanningAdminFacadeService {
         let directions_toml = workspace.directions_toml.ok_or_else(|| {
             anyhow!("planning directions are unavailable; initialize planning first")
         })?;
-        let task_ledger_json = workspace
-            .task_ledger_json
-            .ok_or_else(|| anyhow!("task-ledger.json is unavailable; initialize planning first"))?;
         let task_ledger_schema_json = workspace.task_ledger_schema_json.ok_or_else(|| {
             anyhow!("task-ledger.schema.json is unavailable; initialize planning first")
         })?;
@@ -49,23 +43,20 @@ impl PlanningAdminFacadeService {
             .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
         let task_authority_snapshot = self
             .planning_task_repository_port
-            .load_task_authority_snapshot(self.workspace_dir.as_str())?;
+            .load_task_authority_snapshot(self.workspace_dir.as_str())?
+            .ok_or_else(|| {
+                anyhow!(
+                    "planning task authority is unavailable; initialize or repair planning first"
+                )
+            })?;
         let directions = toml::from_str::<DirectionCatalogDocument>(&directions_toml)
             .context("failed to parse active directions.toml")?;
-        let task_ledger = match task_authority_snapshot.as_ref() {
-            Some(snapshot) => snapshot.task_ledger.clone(),
-            None => serde_json::from_str::<TaskLedgerDocument>(&task_ledger_json)
-                .context("failed to parse active task-ledger.json")?,
-        };
         Ok(PlanningAdminDocuments {
             directions,
-            task_ledger,
+            task_ledger: task_authority_snapshot.task_ledger,
             task_ledger_schema_json,
             result_output_markdown,
-            observed_planning_revision: task_authority_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.planning_revision),
-            uses_task_repository: task_authority_snapshot.is_some(),
+            observed_planning_revision: Some(task_authority_snapshot.planning_revision),
         })
     }
 
@@ -74,9 +65,6 @@ impl PlanningAdminFacadeService {
         mut documents: PlanningAdminDocuments,
     ) -> Result<()> {
         ensure_default_direction(&mut documents.directions)?;
-        if documents.uses_task_repository {
-            self.restore_task_referenced_directions_from_tracked_file(&mut documents)?;
-        }
         remove_tasks_with_unresolved_directions(&mut documents);
 
         let directions_toml = toml::to_string_pretty(&documents.directions)?;
@@ -106,100 +94,38 @@ impl PlanningAdminFacadeService {
             .build_projection(&documents.directions, &documents.task_ledger)
             .context("failed to rebuild planning queue")?;
 
-        if documents.uses_task_repository {
-            match self
-                .planning_task_repository_port
-                .commit_task_authority_snapshot(
-                    self.workspace_dir.as_str(),
-                    PlanningTaskAuthorityCommit {
-                        observed_planning_revision: documents.observed_planning_revision,
-                        task_ledger: &documents.task_ledger,
-                        queue_projection: &queue_projection,
-                    },
-                )? {
-                PlanningTaskAuthorityCommitResult::Committed { .. } => {}
-                PlanningTaskAuthorityCommitResult::Conflict {
-                    observed_planning_revision,
-                    current_planning_revision,
-                } => {
-                    bail!(
-                        "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
-                    );
-                }
-            }
-            self.planning_workspace_port
-                .replace_planning_workspace_file(
-                    self.workspace_dir.as_str(),
-                    DIRECTIONS_FILE_PATH,
-                    Some(&directions_toml),
-                )?;
-            self.planning_workspace_port
-                .replace_planning_workspace_file(
-                    self.workspace_dir.as_str(),
-                    RESULT_OUTPUT_FILE_PATH,
-                    Some(&documents.result_output_markdown),
-                )?;
-            return Ok(());
-        }
-
-        self.planning_workspace_port
-            .commit_planning_workspace_files(
+        match self
+            .planning_task_repository_port
+            .commit_task_authority_snapshot(
                 self.workspace_dir.as_str(),
-                &PlanningWorkspaceLoadRecord {
-                    directions_toml: Some(directions_toml),
-                    task_ledger_json: Some(task_ledger_json),
-                    task_ledger_schema_json: Some(documents.task_ledger_schema_json),
-                    queue_snapshot_json: Some(serde_json::to_string_pretty(&queue_projection)?),
-                    result_output_markdown: Some(documents.result_output_markdown),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: documents.observed_planning_revision,
+                    task_ledger: &documents.task_ledger,
+                    queue_projection: &queue_projection,
                 },
-            )
-    }
-
-    fn restore_task_referenced_directions_from_tracked_file(
-        &self,
-        documents: &mut PlanningAdminDocuments,
-    ) -> Result<()> {
-        let existing_direction_ids = documents
-            .directions
-            .directions
-            .iter()
-            .map(|direction| direction.id.trim())
-            .collect::<BTreeSet<_>>();
-        let missing_direction_ids = documents
-            .task_ledger
-            .tasks
-            .iter()
-            .map(|task| task.direction_id.trim())
-            .filter(|direction_id| !direction_id.is_empty())
-            .filter(|direction_id| !existing_direction_ids.contains(direction_id))
-            .collect::<BTreeSet<_>>();
-        if missing_direction_ids.is_empty() {
-            return Ok(());
-        }
-
-        let tracked_path = Path::new(&self.workspace_dir).join(DIRECTIONS_FILE_PATH);
-        let tracked_directions_toml = match fs::read_to_string(&tracked_path) {
-            Ok(body) => body,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to read tracked {}", tracked_path.display()));
-            }
-        };
-        let tracked_directions =
-            toml::from_str::<DirectionCatalogDocument>(&tracked_directions_toml)
-                .with_context(|| format!("failed to parse tracked {}", tracked_path.display()))?;
-        let tracked_by_id = tracked_directions
-            .directions
-            .into_iter()
-            .map(|direction| (direction.id.trim().to_string(), direction))
-            .collect::<BTreeMap<_, _>>();
-
-        for direction_id in missing_direction_ids {
-            if let Some(direction) = tracked_by_id.get(direction_id) {
-                documents.directions.directions.push(direction.clone());
+            )? {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => {
+                bail!(
+                    "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                );
             }
         }
+        self.planning_workspace_port
+            .replace_planning_workspace_file(
+                self.workspace_dir.as_str(),
+                DIRECTIONS_FILE_PATH,
+                Some(&directions_toml),
+            )?;
+        self.planning_workspace_port
+            .replace_planning_workspace_file(
+                self.workspace_dir.as_str(),
+                RESULT_OUTPUT_FILE_PATH,
+                Some(&documents.result_output_markdown),
+            )?;
         Ok(())
     }
 }
@@ -211,7 +137,6 @@ pub(super) struct PlanningAdminDocuments {
     pub(super) task_ledger_schema_json: String,
     pub(super) result_output_markdown: String,
     observed_planning_revision: Option<i64>,
-    uses_task_repository: bool,
 }
 
 pub(super) fn direction_from_request(

@@ -1037,14 +1037,13 @@ fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Con
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    let mut connection = Connection::open(authority_store_path)
+    let connection = Connection::open(authority_store_path)
         .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
     validate_authority_store_schema(&connection)?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .context("failed to enable authority-store foreign keys")?;
     ensure_schema(&connection)?;
-    backfill_task_authority_from_active_documents(&mut connection)?;
     Ok(connection)
 }
 
@@ -1208,10 +1207,6 @@ fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
         .context("failed to read authority-store schema version")
 }
 
-fn parsed_schema_version(connection: &Connection) -> Result<Option<i64>> {
-    Ok(load_schema_version(connection)?.and_then(|value| value.parse::<i64>().ok()))
-}
-
 fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
     let metadata_exists = table_exists(connection, "authority_metadata")?;
     if !metadata_exists {
@@ -1246,78 +1241,6 @@ fn read_metadata_string_connection(connection: &Connection, key: &str) -> Result
 fn read_metadata_i64_connection(connection: &Connection, key: &str) -> Result<Option<i64>> {
     read_metadata_string_connection(connection, key)
         .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
-}
-
-fn backfill_task_authority_from_active_documents(connection: &mut Connection) -> Result<()> {
-    let schema_version = parsed_schema_version(connection)?;
-    if read_metadata_string_connection(connection, TASK_LEDGER_VERSION_METADATA_KEY)?.is_some() {
-        record_current_schema_version_if_needed(connection, schema_version)?;
-        return Ok(());
-    }
-    if connection
-        .query_row("SELECT 1 FROM planning_tasks LIMIT 1", [], |_| Ok(()))
-        .optional()
-        .context("failed to inspect existing planning task rows")?
-        .is_some()
-    {
-        record_current_schema_version_if_needed(connection, schema_version)?;
-        return Ok(());
-    }
-    if schema_version.is_some_and(|version| version >= AUTHORITY_STORE_SCHEMA_VERSION) {
-        return Ok(());
-    }
-
-    let Some(task_ledger_json) = raw_active_document(connection, TASK_LEDGER_FILE_PATH)? else {
-        record_current_schema_version_if_needed(connection, schema_version)?;
-        return Ok(());
-    };
-    let task_ledger = match serde_json::from_str::<TaskLedgerDocument>(&task_ledger_json) {
-        Ok(task_ledger) => task_ledger,
-        Err(_) => {
-            record_current_schema_version_if_needed(connection, schema_version)?;
-            return Ok(());
-        }
-    };
-    let queue_projection = match raw_active_document(connection, QUEUE_SNAPSHOT_FILE_PATH)? {
-        Some(queue_snapshot_json) => parse_queue_projection_export(&queue_snapshot_json),
-        None => empty_queue_projection(),
-    };
-
-    let transaction = connection
-        .transaction()
-        .context("failed to open task authority backfill transaction")?;
-    replace_task_authority_tables(&transaction, &task_ledger, &queue_projection)?;
-    upsert_metadata(
-        &transaction,
-        "schema_version",
-        &AUTHORITY_STORE_SCHEMA_VERSION.to_string(),
-    )?;
-    transaction
-        .commit()
-        .context("failed to commit task authority backfill transaction")?;
-    Ok(())
-}
-
-fn record_current_schema_version_if_needed(
-    connection: &mut Connection,
-    schema_version: Option<i64>,
-) -> Result<()> {
-    if schema_version.is_some_and(|version| version >= AUTHORITY_STORE_SCHEMA_VERSION) {
-        return Ok(());
-    }
-
-    let transaction = connection
-        .transaction()
-        .context("failed to open authority-store schema migration transaction")?;
-    upsert_metadata(
-        &transaction,
-        "schema_version",
-        &AUTHORITY_STORE_SCHEMA_VERSION.to_string(),
-    )?;
-    transaction
-        .commit()
-        .context("failed to commit authority-store schema migration transaction")?;
-    Ok(())
 }
 
 #[derive(Debug)]

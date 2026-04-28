@@ -36,12 +36,12 @@ pub fn build_planning_repair_prompt(
     let mut lines = vec![
         "대리인입니다.".to_string(),
         format!("planning repair {attempt_number}/{max_attempts} 입니다."),
-        "이전 턴에서 `task-ledger.json` 후보가 validation을 통과하지 못했습니다.".to_string(),
-        "이번 턴에서는 `.codex-exec-loop/planning/task-ledger.json` 하나만 고치세요.".to_string(),
+        "이전 턴에서 DB task authority 후보가 validation을 통과하지 못했습니다.".to_string(),
+        "이번 턴에서는 `.codex-exec-loop/planning/task-ledger.json`을 수정하지 말고, 마지막 답변에 fenced JSON 하나를 포함하세요: `{\"task_ledger\": {...}}`.".to_string(),
         "- `directions.toml`, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.".to_string(),
-        "- 현재 작업공간에는 마지막 accepted `task-ledger.json` 이 이미 복원돼 있습니다."
+        "- 현재 task authority는 마지막 accepted DB snapshot 기준입니다."
             .to_string(),
-        "- 아래 validation 오류를 모두 해결하는 유효한 JSON으로 다시 작성하세요.".to_string(),
+        "- 아래 validation 오류를 모두 해결하는 전체 task ledger JSON을 `task_ledger` 값으로 반환하세요.".to_string(),
         "- 기존 direction frame 밖의 관련 없는 새 작업은 추가하지 마세요.".to_string(),
     ];
 
@@ -95,9 +95,9 @@ pub fn build_planning_repair_prompt(
 
     lines.push(String::new());
     lines.push(
-        prompt_context.accepted_heading.unwrap_or_else(|| {
-            "Current accepted `task-ledger.json` (restored on disk):".to_string()
-        }),
+        prompt_context
+            .accepted_heading
+            .unwrap_or_else(|| "Current accepted task authority snapshot:".to_string()),
     );
     lines.push(prompt_code_block("json", &accepted_excerpt));
 
@@ -121,7 +121,7 @@ pub fn build_planning_repair_prompt(
 
     lines.push(String::new());
     lines.push(
-        "수정이 끝나면 무엇을 고쳤는지 짧게 요약하세요. 더 이상 고칠 것이 없어도 `DONE` 만 단독으로 출력하지 말고 이유를 설명하세요."
+        "수정이 끝나면 무엇을 고쳤는지 짧게 요약하고, 반드시 갱신된 전체 task ledger를 fenced JSON으로 함께 반환하세요. 더 이상 고칠 것이 없어도 `DONE` 만 단독으로 출력하지 말고 이유를 설명하세요."
             .to_string(),
     );
 
@@ -345,10 +345,10 @@ impl PlanningRepairRetryReason {
     fn instruction(self) -> &'static str {
         match self {
             Self::TaskLedgerUnchanged => {
-                "직전 repair 시도에서 `task-ledger.json` 이 바뀌지 않았습니다. 이번 턴에서는 그 파일을 반드시 다시 작성하세요."
+                "직전 repair 시도에서 task authority payload가 바뀌지 않았습니다. 이번 턴에서는 갱신된 `task_ledger` JSON payload를 반드시 다시 반환하세요."
             }
             Self::TaskLedgerStillInvalid => {
-                "직전 repair 시도에서 `task-ledger.json` 을 수정했지만 여전히 유효하지 않습니다. 이번 턴에서는 validation 오류를 모두 해결하도록 그 파일을 다시 작성하세요."
+                "직전 repair 시도에서 task authority payload를 수정했지만 여전히 유효하지 않습니다. 이번 턴에서는 validation 오류를 모두 해결한 `task_ledger` JSON payload를 다시 반환하세요."
             }
         }
     }

@@ -1299,10 +1299,7 @@ fn tracked_directions_apply_status_text(result: &PlanningTrackedDirectionsApplyR
 
 fn tracked_task_ledger_apply_status_text(result: &PlanningTrackedTaskLedgerApplyResult) -> String {
     if result.applied() {
-        return format!(
-            "tracked task catalog applied / files: {} / next action: review the refreshed planning queue",
-            result.applied_paths.len()
-        );
+        return "tracked task-ledger.json is read-only / no files applied".to_string();
     }
 
     let issue = result

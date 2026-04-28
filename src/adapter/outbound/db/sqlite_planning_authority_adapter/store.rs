@@ -270,11 +270,9 @@ pub(super) fn load_active_workspace_record(
     let documents = load_active_documents(connection)?;
     Ok(PlanningWorkspaceLoadRecord {
         directions_toml: documents.get(DIRECTIONS_FILE_PATH).cloned(),
-        task_ledger_json: load_task_ledger_json_from_connection(connection)?
-            .or_else(|| documents.get(TASK_LEDGER_FILE_PATH).cloned()),
+        task_ledger_json: load_task_ledger_json_from_connection(connection)?,
         task_ledger_schema_json: documents.get(TASK_LEDGER_SCHEMA_FILE_PATH).cloned(),
-        queue_snapshot_json: load_queue_snapshot_json_from_connection(connection)?
-            .or_else(|| documents.get(QUEUE_SNAPSHOT_FILE_PATH).cloned()),
+        queue_snapshot_json: load_queue_snapshot_json_from_connection(connection)?,
         result_output_markdown: documents.get(RESULT_OUTPUT_FILE_PATH).cloned(),
     })
 }

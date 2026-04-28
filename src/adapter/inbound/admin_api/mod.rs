@@ -1117,7 +1117,7 @@ mod tests {
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_task_repository_port::{
-        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+        NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
     };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -1183,6 +1183,16 @@ mod tests {
             .workspace
             .initialize_simple_workspace(repo_root.to_string_lossy().as_ref())
             .expect("planning workspace should initialize");
+        let record = FilesystemPlanningWorkspaceAdapter::new()
+            .load_planning_workspace_files(repo_root.display().to_string().as_str())
+            .expect("initialized workspace should load");
+        let directions: DirectionCatalogDocument =
+            toml::from_str(&record.directions_toml.expect("directions should exist"))
+                .expect("directions should parse");
+        let task_ledger: TaskLedgerDocument =
+            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
+                .expect("task ledger should parse");
+        seed_task_authority(repo_root, &directions, &task_ledger);
     }
 
     fn build_test_app(repo_root: &Path) -> Router {
@@ -1487,9 +1497,7 @@ mod tests {
         let directions: DirectionCatalogDocument =
             toml::from_str(&record.directions_toml.expect("directions should exist"))
                 .expect("directions should parse");
-        let task_ledger: TaskLedgerDocument =
-            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
-                .expect("task ledger should parse");
+        let task_ledger = load_noop_task_authority(&repo.repo_root);
 
         assert!(
             directions
@@ -1542,9 +1550,7 @@ mod tests {
         let directions: DirectionCatalogDocument =
             toml::from_str(&record.directions_toml.expect("directions should exist"))
                 .expect("directions should parse");
-        let task_ledger: TaskLedgerDocument =
-            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
-                .expect("task ledger should parse");
+        let task_ledger = load_noop_task_authority(&repo.repo_root);
 
         assert!(directions.directions.iter().any(|direction| {
             direction.id == "general-workstream" && direction.state == DirectionState::Active
@@ -1602,9 +1608,7 @@ mod tests {
         let directions: DirectionCatalogDocument =
             toml::from_str(&record.directions_toml.expect("directions should exist"))
                 .expect("directions should parse");
-        let task_ledger: TaskLedgerDocument =
-            serde_json::from_str(&record.task_ledger_json.expect("task ledger should exist"))
-                .expect("task ledger should parse");
+        let task_ledger = load_noop_task_authority(&repo.repo_root);
 
         assert!(
             directions
@@ -1713,7 +1717,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_delete_direction_preserves_task_referenced_tracked_directions() {
+    fn admin_delete_direction_ignores_tracked_file_only_directions() {
         let repo = TempGitRepo::new("admin-delete-stale-directions");
         init_workspace(&repo.repo_root);
         let facade = build_admin_facade(repo.repo_root.display().to_string());
@@ -1781,7 +1785,7 @@ mod tests {
             .delete_direction(PlanningAdminDirectionDeleteRequest {
                 id: "remove-me".to_string(),
             })
-            .expect("delete should restore unrelated tracked direction references");
+            .expect("delete should ignore read-only tracked direction drift");
 
         let record = FilesystemPlanningWorkspaceAdapter::new()
             .load_planning_workspace_files(repo.repo_root.display().to_string().as_str())
@@ -1798,7 +1802,7 @@ mod tests {
             directions
                 .directions
                 .iter()
-                .any(|direction| direction.id == "fs-only-direction")
+                .all(|direction| direction.id != "fs-only-direction")
         );
         assert!(
             directions
@@ -1806,12 +1810,7 @@ mod tests {
                 .iter()
                 .all(|direction| direction.id != "remove-me")
         );
-        assert_eq!(snapshot.task_ledger.tasks.len(), 1);
-        assert_eq!(snapshot.task_ledger.tasks[0].id, "task-fs-only");
-        assert_eq!(
-            snapshot.task_ledger.tasks[0].direction_id,
-            "fs-only-direction"
-        );
+        assert!(snapshot.task_ledger.tasks.is_empty());
     }
 
     fn direction(id: &str, title: &str) -> DirectionDefinition {
@@ -1878,5 +1877,44 @@ mod tests {
                 },
             )
             .expect("active admin documents should seed");
+        seed_task_authority(repo_root, &directions, &task_ledger);
+    }
+
+    fn seed_task_authority(
+        repo_root: &Path,
+        directions: &DirectionCatalogDocument,
+        task_ledger: &TaskLedgerDocument,
+    ) {
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(directions, task_ledger)
+            .expect("task authority queue projection should build");
+        NoopPlanningTaskRepositoryPort
+            .commit_task_authority_snapshot(
+                repo_root.display().to_string().as_str(),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("noop task authority should seed");
+        SqlitePlanningAuthorityAdapter::new()
+            .commit_task_authority_snapshot(
+                repo_root.display().to_string().as_str(),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("sqlite task authority should seed");
+    }
+
+    fn load_noop_task_authority(repo_root: &Path) -> TaskLedgerDocument {
+        NoopPlanningTaskRepositoryPort
+            .load_task_authority_snapshot(repo_root.display().to_string().as_str())
+            .expect("task authority should load")
+            .expect("task authority should exist")
+            .task_ledger
     }
 }

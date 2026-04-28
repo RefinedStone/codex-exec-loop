@@ -757,7 +757,7 @@ state = "active"
 }
 
 #[test]
-fn legacy_active_task_ledger_blob_backfills_relational_tables() {
+fn legacy_active_task_ledger_blob_is_ignored_as_export_only_state() {
     let repo = TempGitRepo::new("authority-task-backfill");
     let location = SqlitePlanningAuthorityAdapter::new()
         .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
@@ -811,13 +811,8 @@ fn legacy_active_task_ledger_blob_backfills_relational_tables() {
     )
     .expect("active workspace should load");
 
-    assert!(
-        loaded
-            .task_ledger_json
-            .as_deref()
-            .expect("task ledger should load")
-            .contains("\"id\": \"task-1\"")
-    );
+    assert_eq!(loaded.task_ledger_json, None);
+    assert_eq!(loaded.queue_snapshot_json, None);
     let connection =
         Connection::open(&location.authority_store_path).expect("authority store should open");
     let stored_task_count = connection
@@ -832,8 +827,8 @@ fn legacy_active_task_ledger_blob_backfills_relational_tables() {
             |row| row.get::<_, i64>(0),
         )
         .expect("planning queue projection rows should be readable");
-    assert_eq!(stored_task_count, 1);
-    assert_eq!(active_projection_count, 1);
+    assert_eq!(stored_task_count, 0);
+    assert_eq!(active_projection_count, 0);
     let schema_version = connection
         .query_row(
             "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
@@ -841,11 +836,11 @@ fn legacy_active_task_ledger_blob_backfills_relational_tables() {
             |row| row.get::<_, String>(0),
         )
         .expect("schema version should be readable");
-    assert_eq!(schema_version, AUTHORITY_STORE_SCHEMA_VERSION.to_string());
+    assert_eq!(schema_version, "4");
 }
 
 #[test]
-fn legacy_invalid_task_ledger_blob_does_not_block_authority_open() {
+fn legacy_invalid_task_ledger_blob_is_ignored_as_export_only_state() {
     let repo = TempGitRepo::new("authority-task-backfill-invalid");
     let location = SqlitePlanningAuthorityAdapter::new()
         .resolve_authority_location(repo.worktree_root.to_str().expect("valid worktree path"))
@@ -887,10 +882,7 @@ fn legacy_invalid_task_ledger_blob_does_not_block_authority_open() {
     )
     .expect("active workspace should still load");
 
-    assert_eq!(
-        loaded.task_ledger_json.as_deref(),
-        Some("{\"version\":1,\"tasks\":[")
-    );
+    assert_eq!(loaded.task_ledger_json, None);
     let connection =
         Connection::open(&location.authority_store_path).expect("authority store should open");
     let stored_task_count = connection
@@ -906,7 +898,7 @@ fn legacy_invalid_task_ledger_blob_does_not_block_authority_open() {
         )
         .expect("schema version should be readable");
     assert_eq!(stored_task_count, 0);
-    assert_eq!(schema_version, AUTHORITY_STORE_SCHEMA_VERSION.to_string());
+    assert_eq!(schema_version, "4");
 }
 
 #[test]

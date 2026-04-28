@@ -137,7 +137,7 @@ fn directions_apply_command_surfaces_validation_reason() {
 }
 
 #[test]
-fn queue_apply_command_refreshes_queue_overlay_on_success() {
+fn queue_apply_command_reports_read_only_task_ledger_policy() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("queue-apply-command");
     bootstrap_active_planning_workspace(&workspace_dir);
@@ -151,18 +151,18 @@ fn queue_apply_command_refreshes_queue_overlay_on_success() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("app should stay in ready state");
     };
-    assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+    assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
     assert!(
         conversation
             .status_text
-            .contains("tracked task catalog applied")
+            .contains("tracked task-ledger.json is read-only")
     );
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn queue_apply_command_surfaces_validation_reason() {
+fn queue_apply_command_ignores_invalid_read_only_export() {
     let (mut app, _) = make_test_app();
     let workspace_dir = create_temp_workspace("queue-apply-invalid-command");
     bootstrap_active_planning_workspace(&workspace_dir);
@@ -205,10 +205,10 @@ fn queue_apply_command_surfaces_validation_reason() {
     assert!(
         conversation
             .status_text
-            .contains("tracked task catalog apply blocked")
+            .contains("tracked task-ledger.json is read-only")
     );
     assert!(
-        conversation
+        !conversation
             .status_text
             .contains("references unknown direction_id")
     );

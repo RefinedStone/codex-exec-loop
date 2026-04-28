@@ -12,8 +12,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
@@ -325,52 +324,33 @@ impl PlanningTaskIntakeService {
             let (next_task_ledger, queue_projection) =
                 self.build_accepted_mutation(&proposal.request, &draft, &context)?;
 
-            if context.uses_task_repository {
-                match self
-                    .planning_task_repository_port
-                    .commit_task_authority_snapshot(
-                        &proposal.request.workspace_directory,
-                        PlanningTaskAuthorityCommit {
-                            observed_planning_revision: Some(observed_revision),
-                            task_ledger: &next_task_ledger,
-                            queue_projection: &queue_projection,
-                        },
-                    )? {
-                    PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
-                        return Ok(PlanningTaskIntakeCommitResult {
-                            committed_task_id: draft.task.id,
-                            committed_planning_revision: planning_revision,
-                            queue_head: queue_projection.next_task,
-                            runtime_exports_refreshed: true,
-                        });
-                    }
-                    PlanningTaskAuthorityCommitResult::Conflict {
-                        current_planning_revision,
-                        ..
-                    } => {
-                        observed_revision = current_planning_revision;
-                        next_suffix = increment_suffix(next_suffix);
-                        continue;
-                    }
+            match self
+                .planning_task_repository_port
+                .commit_task_authority_snapshot(
+                    &proposal.request.workspace_directory,
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: Some(observed_revision),
+                        task_ledger: &next_task_ledger,
+                        queue_projection: &queue_projection,
+                    },
+                )? {
+                PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
+                    return Ok(PlanningTaskIntakeCommitResult {
+                        committed_task_id: draft.task.id,
+                        committed_planning_revision: planning_revision,
+                        queue_head: queue_projection.next_task,
+                        runtime_exports_refreshed: true,
+                    });
+                }
+                PlanningTaskAuthorityCommitResult::Conflict {
+                    current_planning_revision,
+                    ..
+                } => {
+                    observed_revision = current_planning_revision;
+                    next_suffix = increment_suffix(next_suffix);
+                    continue;
                 }
             }
-
-            let mut committed_record = context.workspace_record.clone();
-            committed_record.task_ledger_json =
-                Some(serde_json::to_string_pretty(&next_task_ledger)?);
-            committed_record.queue_snapshot_json =
-                Some(serde_json::to_string_pretty(&queue_projection)?);
-            self.planning_workspace_port
-                .commit_planning_workspace_files(
-                    &proposal.request.workspace_directory,
-                    &committed_record,
-                )?;
-            return Ok(PlanningTaskIntakeCommitResult {
-                committed_task_id: draft.task.id,
-                committed_planning_revision: context.planning_revision + 1,
-                queue_head: queue_projection.next_task,
-                runtime_exports_refreshed: false,
-            });
         }
 
         Err(anyhow!(
@@ -408,17 +388,14 @@ impl PlanningTaskIntakeService {
         )?;
         let repository_snapshot = self
             .planning_task_repository_port
-            .load_task_authority_snapshot(&request.workspace_directory)?;
-        let task_ledger_json = match repository_snapshot.as_ref() {
-            Some(snapshot) => serde_json::to_string_pretty(&snapshot.task_ledger)
-                .context("failed to serialize task authority ledger")?,
-            None => required_workspace_body(
-                &workspace_record,
-                TASK_LEDGER_FILE_PATH,
-                workspace_record.task_ledger_json.as_deref(),
-            )?
-            .to_string(),
-        };
+            .load_task_authority_snapshot(&request.workspace_directory)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Planning task authority is unavailable; initialize or repair the planning database before using :task."
+                )
+            })?;
+        let task_ledger_json = serde_json::to_string_pretty(&repository_snapshot.task_ledger)
+            .context("failed to serialize task authority ledger")?;
 
         let validation_result =
             self.planning_validation_service
@@ -437,7 +414,7 @@ impl PlanningTaskIntakeService {
                 .unwrap_or("planning validation failed");
             return Err(anyhow!(
                 "Planning workspace is invalid; {first_failure}. {}",
-                task_intake_repair_guidance(first_failure, repository_snapshot.is_some())
+                task_intake_repair_guidance(first_failure)
             ));
         }
 
@@ -454,18 +431,13 @@ impl PlanningTaskIntakeService {
                 PLANNING_FORMAT_VERSION
             ));
         }
-        let planning_revision = repository_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.planning_revision)
-            .unwrap_or_else(|| request.observed_planning_revision.unwrap_or(0));
-        let uses_task_repository = repository_snapshot.is_some();
+        let planning_revision = repository_snapshot.planning_revision;
 
         Ok(PlanningTaskIntakeContext {
             workspace_record,
             directions,
             task_ledger,
             planning_revision,
-            uses_task_repository,
         })
     }
 
@@ -565,7 +537,6 @@ struct PlanningTaskIntakeContext {
     directions: DirectionCatalogDocument,
     task_ledger: TaskLedgerDocument,
     planning_revision: i64,
-    uses_task_repository: bool,
 }
 
 fn required_workspace_body<'a>(
@@ -575,23 +546,20 @@ fn required_workspace_body<'a>(
 ) -> Result<&'a str> {
     body.ok_or_else(|| {
         anyhow!(
-            "Planning workspace is incomplete: missing {path}. Run :doctor to inspect the workspace, then use :directions apply or :queue apply if tracked planning files are newer."
+            "Planning workspace is incomplete: missing {path}. Run :doctor to inspect the workspace, then use :directions apply if tracked directions are newer."
         )
     })
 }
 
-fn task_intake_repair_guidance(first_failure: &str, uses_task_repository: bool) -> &'static str {
+fn task_intake_repair_guidance(first_failure: &str) -> &'static str {
     if first_failure.contains("references unknown direction_id") {
-        if uses_task_repository {
-            return "Next action: run :directions apply if tracked directions.toml contains the missing direction; otherwise run :doctor.";
-        }
-        return "Next action: run :directions apply if directions.toml is newer, or :queue apply if task-ledger.json is the stale file; use :doctor to inspect.";
+        return "Next action: run :directions apply if tracked directions.toml contains the missing direction; otherwise run :doctor.";
     }
     if first_failure.contains("task-ledger.json")
         || first_failure.contains("task ")
         || first_failure.contains("task-ledger")
     {
-        return "Next action: run :queue apply if tracked task-ledger.json is newer; otherwise run :doctor.";
+        return "Next action: run :doctor to inspect task authority; task-ledger.json is a read-only export.";
     }
     if first_failure.contains("directions.toml")
         || first_failure.contains("direction ")
@@ -599,7 +567,7 @@ fn task_intake_repair_guidance(first_failure: &str, uses_task_repository: bool) 
     {
         return "Next action: run :directions apply if tracked directions.toml is newer; otherwise run :doctor.";
     }
-    "Next action: run :doctor to inspect the workspace, then use :directions apply or :queue apply for tracked-file drift."
+    "Next action: run :doctor to inspect the workspace, then use :directions apply for tracked direction drift."
 }
 
 fn validate_task_link(

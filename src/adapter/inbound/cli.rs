@@ -239,14 +239,8 @@ impl QueueApplyReport {
     }
 
     fn success(workspace_path: String, result: PlanningTrackedTaskLedgerApplyResult) -> Self {
-        let status = if result.applied() {
-            Some(format!(
-                "tracked task catalog applied to active planning ({} files)",
-                result.applied_paths.len()
-            ))
-        } else {
-            Some("tracked task catalog apply blocked by validation".to_string())
-        };
+        let status =
+            Some("tracked task-ledger.json is read-only; no files were applied".to_string());
         let issue = if result.validation_report.is_valid() {
             None
         } else {
@@ -782,11 +776,18 @@ mod tests {
     use anyhow::{Context, Result};
 
     use super::run_with_args;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
     use crate::application::service::planning::{
         DIRECTIONS_FILE_PATH, PlanningBootstrapArtifacts, PlanningBootstrapMode,
         PlanningBootstrapService, PlanningServices, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
+    };
+    use crate::domain::planning::{
+        DirectionCatalogDocument, PriorityQueueService, TaskLedgerDocument,
     };
 
     struct TestWorkspace {
@@ -832,6 +833,24 @@ mod tests {
             for supplemental_file in &artifacts.supplemental_files {
                 self.write_file(&supplemental_file.active_path, &supplemental_file.body)?;
             }
+            self.seed_task_authority(artifacts)?;
+            Ok(())
+        }
+
+        fn seed_task_authority(&self, artifacts: &PlanningBootstrapArtifacts) -> Result<()> {
+            let directions: DirectionCatalogDocument = toml::from_str(&artifacts.directions_toml)?;
+            let task_ledger: TaskLedgerDocument =
+                serde_json::from_str(&artifacts.task_ledger_json)?;
+            let queue_projection =
+                PriorityQueueService::new().build_projection(&directions, &task_ledger)?;
+            SqlitePlanningAuthorityAdapter::new().commit_task_authority_snapshot(
+                self.path.to_string_lossy().as_ref(),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger: &task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )?;
             Ok(())
         }
     }
@@ -1003,13 +1022,11 @@ mod tests {
     fn directions_apply_reports_success_with_applied_paths() {
         let workspace =
             TestWorkspace::new("directions-apply-success").expect("test workspace should exist");
-        let planning = PlanningServices::from_workspace_port(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
-        planning
-            .workspace
-            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
-            .expect("planning workspace should initialize");
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+        workspace
+            .install_artifacts(&artifacts)
+            .expect("planning artifacts should be written");
         workspace
             .write_file(
                 DIRECTIONS_FILE_PATH,
@@ -1036,13 +1053,11 @@ mod tests {
     fn directions_apply_reports_validation_failure_reason() {
         let workspace =
             TestWorkspace::new("directions-apply-invalid").expect("test workspace should exist");
-        let planning = PlanningServices::from_workspace_port(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
-        planning
-            .workspace
-            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
-            .expect("planning workspace should initialize");
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+        workspace
+            .install_artifacts(&artifacts)
+            .expect("planning artifacts should be written");
         workspace
             .write_file(
                 DIRECTIONS_FILE_PATH,
@@ -1066,16 +1081,14 @@ mod tests {
     }
 
     #[test]
-    fn queue_apply_reports_success_with_applied_paths() {
+    fn queue_apply_reports_read_only_task_ledger_policy() {
         let workspace =
             TestWorkspace::new("queue-apply-success").expect("test workspace should exist");
-        let planning = PlanningServices::from_workspace_port(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
-        planning
-            .workspace
-            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
-            .expect("planning workspace should initialize");
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+        workspace
+            .install_artifacts(&artifacts)
+            .expect("planning artifacts should be written");
         workspace
             .write_file(
                 TASK_LEDGER_FILE_PATH,
@@ -1110,26 +1123,22 @@ mod tests {
             .expect("queue apply should produce an exit code");
         let output = String::from_utf8(stdout).expect("queue apply output should be valid utf-8");
 
-        assert_eq!(exit_code, 0);
+        assert_eq!(exit_code, 1);
         assert!(output.contains("command: queue apply"));
         assert!(output.contains("source: .codex-exec-loop/planning/task-ledger.json"));
-        assert!(output.contains(&format!("applied: {TASK_LEDGER_FILE_PATH}")));
-        assert!(output.contains("applied: .codex-exec-loop/planning/queue.snapshot.json"));
-        assert!(output.contains("validation: valid"));
-        assert!(output.contains("status: tracked task catalog applied to active planning"));
+        assert!(output.contains("issue: tracked task-ledger.json is read-only"));
+        assert!(output.contains("runtime task intake"));
     }
 
     #[test]
-    fn queue_apply_reports_validation_failure_reason() {
+    fn queue_apply_ignores_invalid_tracked_export_and_reports_read_only_policy() {
         let workspace =
             TestWorkspace::new("queue-apply-invalid").expect("test workspace should exist");
-        let planning = PlanningServices::from_workspace_port(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
-        planning
-            .workspace
-            .initialize_simple_workspace(workspace.path.to_string_lossy().as_ref())
-            .expect("planning workspace should initialize");
+        let artifacts =
+            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+        workspace
+            .install_artifacts(&artifacts)
+            .expect("planning artifacts should be written");
         workspace
             .write_file(
                 TASK_LEDGER_FILE_PATH,
@@ -1166,14 +1175,9 @@ mod tests {
 
         assert_eq!(exit_code, 1);
         assert!(output.contains("command: queue apply"));
-        assert!(output.contains("validation: invalid"));
-        assert!(output.contains(
-            "validation issue: task task-1 references unknown direction_id missing-direction"
-        ));
-        assert!(output.contains("status: tracked task catalog apply blocked by validation"));
-        assert!(
-            output.contains("issue: task task-1 references unknown direction_id missing-direction")
-        );
+        assert!(output.contains("issue: tracked task-ledger.json is read-only"));
+        assert!(!output.contains("validation: invalid"));
+        assert!(!output.contains("missing-direction"));
     }
 
     #[test]
@@ -1376,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_reports_invalid_workspace_validation_failure() {
+    fn doctor_ignores_invalid_read_only_task_ledger_without_db_authority() {
         let workspace =
             TestWorkspace::new("doctor-invalid").expect("test workspace should be created");
         let artifacts =
@@ -1415,6 +1419,6 @@ mod tests {
 
         assert_eq!(exit_code, 1);
         assert!(output.contains("planning state: invalid"));
-        assert!(output.contains("issue: planning validation failed"));
+        assert!(output.contains("planning task authority is unavailable"));
     }
 }

@@ -6,8 +6,7 @@ use anyhow::{Context, Result, bail};
 use super::{PlanningAdminFacadeService, PlanningAdminFileSyncOutcome};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
 use crate::application::service::planning::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
 
 impl PlanningAdminFacadeService {
@@ -19,12 +18,6 @@ impl PlanningAdminFacadeService {
             &self.workspace_dir,
             DIRECTIONS_FILE_PATH,
             &toml::to_string_pretty(&documents.directions)?,
-            &mut paths,
-        )?;
-        write_candidate_file(
-            &self.workspace_dir,
-            TASK_LEDGER_FILE_PATH,
-            &serde_json::to_string_pretty(&documents.task_ledger)?,
             &mut paths,
         )?;
         write_candidate_file(
@@ -54,15 +47,7 @@ impl PlanningAdminFacadeService {
         if !directions_result.validation_report.is_valid() {
             bail!("tracked directions apply failed validation");
         }
-        let task_result = self
-            .planning
-            .workspace
-            .apply_tracked_task_ledger(self.workspace_dir.as_str())?;
-        if !task_result.validation_report.is_valid() {
-            bail!("tracked task catalog apply failed validation");
-        }
         let mut paths = directions_result.applied_paths;
-        paths.extend(task_result.applied_paths);
         paths.sort();
         paths.dedup();
         Ok(PlanningAdminFileSyncOutcome {

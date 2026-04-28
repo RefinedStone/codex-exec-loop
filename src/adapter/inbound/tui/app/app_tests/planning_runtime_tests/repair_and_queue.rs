@@ -10,37 +10,17 @@ use super::super::{
 };
 
 #[test]
-fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair() {
+fn invalid_task_ledger_file_change_restores_read_only_export_without_hidden_repair() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-reconcile-app");
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning");
-    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    bootstrap_active_planning_workspace(&workspace_dir);
 
     let bootstrap_artifacts =
-        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    std::fs::write(
-        planning_dir.join("directions.toml"),
-        &bootstrap_artifacts.directions_toml,
-    )
-    .expect("directions should write");
-    std::fs::write(
-        planning_dir.join("task-ledger.json"),
-        &bootstrap_artifacts.task_ledger_json,
-    )
-    .expect("task ledger should write");
-    std::fs::write(
-        planning_dir.join("task-ledger.schema.json"),
-        &bootstrap_artifacts.task_ledger_schema_json,
-    )
-    .expect("schema should write");
-    std::fs::write(
-        planning_dir.join("result-output.md"),
-        &bootstrap_artifacts.result_output_markdown,
-    )
-    .expect("result output should write");
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
 
     let mut conversation = ready_conversation();
     conversation.cwd = workspace_dir.clone();
@@ -101,26 +81,12 @@ fn invalid_task_ledger_change_restores_snapshot_and_runs_hidden_planning_repair(
             .preview_status_label(),
         "ready"
     );
-    assert!(
-        repair_prompt
-            .as_deref()
-            .is_some_and(|prompt| prompt.contains("planning repair 1/2"))
-    );
-    assert!(
-        repair_prompt
-            .as_deref()
-            .is_some_and(|prompt| prompt.contains("Validation errors:"))
-    );
-    assert!(
-        repair_prompt
-            .as_deref()
-            .is_some_and(|prompt| prompt.contains("Rejected candidate excerpt"))
-    );
+    assert!(repair_prompt.is_none());
     assert!(
         conversation
             .runtime_notices
             .iter()
-            .any(|notice| notice.contains("archived rejected task-ledger"))
+            .any(|notice| notice.contains("read-only task-ledger.json export"))
     );
     assert!(conversation.planning_repair_state.is_none());
 

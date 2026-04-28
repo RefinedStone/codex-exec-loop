@@ -11,8 +11,8 @@ use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
 };
 use crate::application::service::planning::repair::reconciliation::{
-    PlanningRepairPromptHandoff, PlanningRepairRequest, PlanningRepairRetryReason,
-    build_planning_repair_prompt,
+    PlanningReconciliationResult, PlanningRepairPromptHandoff, PlanningRepairRequest,
+    PlanningRepairRetryReason, build_planning_repair_prompt,
 };
 use crate::application::service::planning::runtime::facade::{
     PlanningRuntimeFacadeService, PlanningTaskHandoff,
@@ -266,12 +266,26 @@ impl PlanningWorkerOrchestrationService {
                     workspace_directory: workspace_directory.to_string(),
                     prompt,
                 })?;
+        let task_authority_update = worker_response
+            .final_agent_message
+            .as_deref()
+            .and_then(extract_task_authority_update);
+        let mut authority_result = PlanningReconciliationResult::default();
+        if let Some(candidate_task_ledger) = task_authority_update.as_ref() {
+            authority_result = self.runtime_facade.commit_task_authority_candidate(
+                workspace_directory,
+                candidate_task_ledger,
+                &execution_snapshot,
+            )?;
+        }
         let reconciliation_result = self.runtime_facade.reconcile_after_turn(
             workspace_directory,
             synthetic_turn_id,
             &worker_response.changed_planning_file_paths,
             &execution_snapshot,
         )?;
+        let reconciliation_result =
+            merge_reconciliation_results(authority_result, reconciliation_result);
         let runtime_snapshot =
             if let Some(block_reason) = reconciliation_result.auto_followup_block_reason.clone() {
                 PlanningRuntimeSnapshot::invalid(block_reason)
@@ -291,7 +305,8 @@ impl PlanningWorkerOrchestrationService {
         let task_ledger_changed = worker_response
             .changed_planning_file_paths
             .iter()
-            .any(|path| path == TASK_LEDGER_FILE_PATH);
+            .any(|path| path == TASK_LEDGER_FILE_PATH)
+            || task_authority_update.is_some();
         let mut notices = reconciliation_result.notices;
         if let Some(worker_summary) = worker_summary.as_deref() {
             notices.push(format!(
@@ -324,10 +339,11 @@ fn build_planning_queue_refresh_prompt(
     format!(
         r#"planning worker refresh 입니다.
 
-이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 갱신하세요.
-- planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
+이번 세션은 planning 전용입니다. DB task authority를 기준으로 queue를 갱신하세요.
+- `.codex-exec-loop/planning/task-ledger.json`은 read-only export입니다. 직접 수정하지 마세요.
 - `directions.toml`, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
-- 현재 workspace의 planning 파일을 읽고, 아래 최신 사용자 요청과 main session의 최신 답변을 함께 보고 실행 가능한 후속 작업을 정리해 ledger에 반영하세요.
+- 현재 planning context와 아래 최신 사용자 요청, main session의 최신 답변을 함께 보고 실행 가능한 후속 작업을 task authority에 반영하세요.
+- 마지막 답변에는 fenced JSON 하나를 포함하세요: `{{"task_ledger": {{...}}}}`. `task_ledger` 값은 갱신된 전체 task ledger 문서입니다.
 - 최신 답변이 다음 순서, 이어서 할 일, 보완 항목, numbered checklist를 직접 제시하면 그것을 우선적인 후속 작업 근거로 사용하세요.
 - 기존 task/proposal과 의미가 겹치면 새 항목을 남발하지 말고 기존 항목을 갱신하세요.
 - 일반 queue에 올라가야 할 executable work만 `ready`/`blocked`/`in_progress`로 두고, 아직 operator 판단이 필요한 후보만 `proposed`로 남기세요.
@@ -357,10 +373,11 @@ fn build_planning_queue_idle_derive_prompt(
     format!(
         r#"planning worker queue-idle active-derivation review 입니다.
 
-이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 중심으로 queue를 재평가하고, 필요하면 다음 작업을 적극적으로 도출하세요.
-- planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
+이번 세션은 planning 전용입니다. DB task authority를 기준으로 queue를 재평가하고, 필요하면 다음 작업을 적극적으로 도출하세요.
+- `.codex-exec-loop/planning/task-ledger.json`은 read-only export입니다. 직접 수정하지 마세요.
 - `directions.toml`, direction detail docs, queue-idle review prompt, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
 - 현재 queue는 비어 있습니다. direction 목표와 success criteria, detail doc, 최신 사용자 요청, 최신 답변, 지금까지의 work list를 다시 비추어보고 다음 실행 가능한 작업이 실제로 남아 있는지 판단하세요.
+- 마지막 답변에는 fenced JSON 하나를 포함하세요: `{{"task_ledger": {{...}}}}`. `task_ledger` 값은 갱신된 전체 task ledger 문서입니다.
 - 최신 답변에 다음 순서, 이어서 만들 항목, 보완해야 할 목차, numbered checklist가 보이면 그것을 근거로 새 follow-up task를 만들어야 합니다.
 - simple mode처럼 directions가 generic 하더라도, 최신 사용자 요청과 최신 답변이 분명한 다음 단계를 암시하면 queue를 비워 두지 마세요.
 - 이미 done / in_progress / blocked / proposed 로 같은 의미가 관리되고 있으면 중복 생성 대신 기존 항목을 갱신하세요.
@@ -392,11 +409,12 @@ fn build_planning_official_completion_prompt(
     format!(
         r#"planning worker official completion refresh 입니다.
 
-이번 세션은 planning 전용입니다. `.codex-exec-loop/planning/task-ledger.json` 기준으로 agent completion을 공식 상태로 반영하세요.
-- planning control file 중 수정 가능한 대상은 `task-ledger.json` 하나뿐입니다.
+이번 세션은 planning 전용입니다. DB task authority 기준으로 agent completion을 공식 상태로 반영하세요.
+- `.codex-exec-loop/planning/task-ledger.json`은 read-only export입니다. 직접 수정하지 마세요.
 - `directions.toml`, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.
 - 아래 completion payload는 비공식 agent report입니다. ledger refresh가 성공하기 전까지 이 결과를 공식 완료로 간주하지 마세요.
 - payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
+- 마지막 답변에는 fenced JSON 하나를 포함하세요: `{{"task_ledger": {{...}}}}`. `task_ledger` 값은 갱신된 전체 task ledger 문서입니다.
 - follow-up work가 있으면 새 executable task를 queue에 반영하고, 없으면 queue를 비워 둘 수 있습니다.
 - 같은 task를 다시 queue head로 유지해야 한다면 그 task 자체의 title, description, priority_reason, updated_at 중 최소 하나는 completion 결과 기준으로 갱신해 반복 assignment를 피하세요.
 - 다른 blocked/proposed task만 추가한 것은 queue advancement로 간주되지 않습니다.
@@ -464,6 +482,65 @@ fn operation_label(operation: PlanningWorkerOperation) -> &'static str {
     }
 }
 
+fn extract_task_authority_update(message: &str) -> Option<String> {
+    candidate_json_sections(message)
+        .into_iter()
+        .find_map(parse_task_authority_update)
+}
+
+fn candidate_json_sections(message: &str) -> Vec<&str> {
+    let mut sections = Vec::new();
+    let mut remainder = message;
+    while let Some(start) = remainder.find("```") {
+        remainder = &remainder[start + 3..];
+        let body_start = remainder.find('\n').map(|index| index + 1).unwrap_or(0);
+        let after_header = &remainder[body_start..];
+        let Some(end) = after_header.find("```") else {
+            break;
+        };
+        sections.push(after_header[..end].trim());
+        remainder = &after_header[end + 3..];
+    }
+    sections.push(message.trim());
+    sections
+}
+
+fn parse_task_authority_update(candidate: &str) -> Option<String> {
+    if candidate.trim().is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(candidate).ok()?;
+    if let Some(task_ledger) = value.get("task_ledger") {
+        return serde_json::to_string_pretty(task_ledger).ok();
+    }
+    if value.get("version").is_some() && value.get("tasks").is_some() {
+        return serde_json::to_string_pretty(&value).ok();
+    }
+    None
+}
+
+fn merge_reconciliation_results(
+    mut primary: PlanningReconciliationResult,
+    secondary: PlanningReconciliationResult,
+) -> PlanningReconciliationResult {
+    primary.notices.extend(secondary.notices);
+    primary
+        .restored_protected_files
+        .extend(secondary.restored_protected_files);
+    primary.rejected_task_ledger |= secondary.rejected_task_ledger;
+    primary.rejected_archive_path = primary
+        .rejected_archive_path
+        .or(secondary.rejected_archive_path);
+    primary.queue_projection_action = primary
+        .queue_projection_action
+        .or(secondary.queue_projection_action);
+    primary.repair_request = primary.repair_request.or(secondary.repair_request);
+    primary.auto_followup_block_reason = primary
+        .auto_followup_block_reason
+        .or(secondary.auto_followup_block_reason);
+    primary
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -483,6 +560,9 @@ mod tests {
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     };
@@ -498,24 +578,23 @@ mod tests {
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+        DIRECTIONS_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
     };
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::domain::planning::PriorityQueueService;
     use crate::domain::planning::{
-        PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+        DirectionCatalogDocument, PlanningOfficialCompletionRefreshContract,
+        PlanningOfficialCompletionRefreshPayload, TaskLedgerDocument,
     };
 
     #[derive(Clone)]
     struct ScriptedPlanningWorkerPort {
-        workspace_port: Arc<dyn PlanningWorkspacePort>,
         replies: Arc<Mutex<VecDeque<String>>>,
     }
 
     impl ScriptedPlanningWorkerPort {
-        fn new(workspace_port: Arc<dyn PlanningWorkspacePort>, replies: Vec<String>) -> Self {
+        fn new(replies: Vec<String>) -> Self {
             Self {
-                workspace_port,
                 replies: Arc::new(Mutex::new(replies.into())),
             }
         }
@@ -532,35 +611,26 @@ mod tests {
                 .expect("reply mutex poisoned")
                 .pop_front()
                 .ok_or_else(|| anyhow!("missing scripted task-ledger body"))?;
-            self.workspace_port.replace_planning_workspace_file(
-                &request.workspace_directory,
-                TASK_LEDGER_FILE_PATH,
-                Some(next_body.as_str()),
-            )?;
+            let final_agent_message =
+                format!("updated planning queue\n\n```json\n{{\"task_ledger\":{next_body}}}\n```");
 
             Ok(PlanningWorkerResponse {
                 operation: request.operation,
-                final_agent_message: Some("updated planning queue".to_string()),
-                changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+                final_agent_message: Some(final_agent_message),
+                changed_planning_file_paths: Vec::new(),
             })
         }
     }
 
     #[derive(Clone)]
     struct RecordingPlanningWorkerPort {
-        workspace_port: Arc<dyn PlanningWorkspacePort>,
         replies: Arc<Mutex<VecDeque<String>>>,
         refresh_orders: Arc<Mutex<Vec<u64>>>,
     }
 
     impl RecordingPlanningWorkerPort {
-        fn new(
-            workspace_port: Arc<dyn PlanningWorkspacePort>,
-            replies: Vec<String>,
-            refresh_orders: Arc<Mutex<Vec<u64>>>,
-        ) -> Self {
+        fn new(replies: Vec<String>, refresh_orders: Arc<Mutex<Vec<u64>>>) -> Self {
             Self {
-                workspace_port,
                 replies: Arc::new(Mutex::new(replies.into())),
                 refresh_orders,
             }
@@ -583,16 +653,13 @@ mod tests {
                 .expect("reply mutex poisoned")
                 .pop_front()
                 .ok_or_else(|| anyhow!("missing scripted task-ledger body"))?;
-            self.workspace_port.replace_planning_workspace_file(
-                &request.workspace_directory,
-                TASK_LEDGER_FILE_PATH,
-                Some(next_body.as_str()),
-            )?;
+            let final_agent_message =
+                format!("updated planning queue\n\n```json\n{{\"task_ledger\":{next_body}}}\n```");
 
             Ok(PlanningWorkerResponse {
                 operation: request.operation,
-                final_agent_message: Some("updated planning queue".to_string()),
-                changed_planning_file_paths: vec![TASK_LEDGER_FILE_PATH.to_string()],
+                final_agent_message: Some(final_agent_message),
+                changed_planning_file_paths: Vec::new(),
             })
         }
     }
@@ -612,14 +679,21 @@ mod tests {
         fs::create_dir_all(&planning_dir).expect("planning directory should be created");
         let artifacts =
             PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+        let directions = toml::from_str::<DirectionCatalogDocument>(&artifacts.directions_toml)
+            .expect("bootstrap directions should parse");
+        let task_ledger = serde_json::from_str::<TaskLedgerDocument>(&artifacts.task_ledger_json)
+            .expect("bootstrap task ledger should parse");
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_ledger)
+            .expect("bootstrap queue projection should build");
         fs::write(
             planning_dir.join("directions.toml"),
-            artifacts.directions_toml,
+            &artifacts.directions_toml,
         )
         .expect("directions should write");
         fs::write(
             planning_dir.join("task-ledger.json"),
-            artifacts.task_ledger_json,
+            &artifacts.task_ledger_json,
         )
         .expect("task ledger should write");
         fs::write(
@@ -632,6 +706,16 @@ mod tests {
             artifacts.result_output_markdown,
         )
         .expect("result output should write");
+        NoopPlanningTaskRepositoryPort
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger: &task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("bootstrap task authority should seed");
     }
 
     fn ready_task_ledger(task_id: &str, source_turn_id: &str) -> String {
@@ -710,13 +794,8 @@ mod tests {
     fn refresh_queue_from_reply_accepts_valid_worker_candidate() {
         let workspace_dir = create_temp_workspace("planning-worker-refresh");
         write_bootstrap_workspace(&workspace_dir);
-        let workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
         let valid_task_ledger = ready_task_ledger("task-1", "turn-1");
-        let worker = Arc::new(ScriptedPlanningWorkerPort::new(
-            workspace_port,
-            vec![valid_task_ledger],
-        ));
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(vec![valid_task_ledger]));
         let service = service_with_worker(worker);
 
         let result = service
@@ -743,9 +822,7 @@ mod tests {
     fn render_refresh_queue_prompt_includes_latest_user_request_for_idle_derivation() {
         let workspace_dir = create_temp_workspace("planning-worker-render-prompt");
         write_bootstrap_workspace(&workspace_dir);
-        let workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(Vec::new()));
         let service = service_with_worker(worker);
 
         let prompt = service.render_refresh_queue_prompt(&PlanningQueueRefreshRequest {
@@ -768,9 +845,7 @@ mod tests {
     fn render_refresh_queue_prompt_includes_previous_handoff_context() {
         let workspace_dir = create_temp_workspace("planning-worker-render-handoff");
         write_bootstrap_workspace(&workspace_dir);
-        let workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(Vec::new()));
         let service = service_with_worker(worker);
         let previous_handoff = PlanningTaskHandoff {
             task_id: "task-7".to_string(),
@@ -800,9 +875,7 @@ mod tests {
     fn render_official_completion_prompt_includes_serialized_contract() {
         let workspace_dir = create_temp_workspace("planning-worker-render-completion");
         write_bootstrap_workspace(&workspace_dir);
-        let workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let worker = Arc::new(ScriptedPlanningWorkerPort::new(workspace_port, Vec::new()));
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(Vec::new()));
         let service = service_with_worker(worker);
 
         let contract = PlanningOfficialCompletionRefreshContract::new(
@@ -862,11 +935,8 @@ mod tests {
     fn official_completion_refreshes_run_in_reserved_order() {
         let workspace_dir = create_temp_workspace("planning-worker-official-order");
         write_bootstrap_workspace(&workspace_dir);
-        let workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
         let observed_orders = Arc::new(Mutex::new(Vec::new()));
         let worker = Arc::new(RecordingPlanningWorkerPort::new(
-            workspace_port,
             vec![
                 ready_task_ledger("task-1", "turn-1"),
                 ready_task_ledger("task-2", "turn-2"),
@@ -971,10 +1041,7 @@ mod tests {
   }]
 }"#
         .to_string();
-        let worker = Arc::new(ScriptedPlanningWorkerPort::new(
-            workspace_port.clone(),
-            vec![invalid_task_ledger],
-        ));
+        let worker = Arc::new(ScriptedPlanningWorkerPort::new(vec![invalid_task_ledger]));
         let service = service_with_worker(worker);
 
         let result = service

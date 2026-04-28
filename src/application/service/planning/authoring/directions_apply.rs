@@ -72,14 +72,21 @@ impl PlanningDirectionsApplyService {
     ) -> Result<PlanningTrackedDirectionsApplyResult> {
         let active_workspace = self.load_active_workspace(workspace_dir)?;
         let candidate_directions_toml = self.load_candidate_directions_toml(workspace_dir)?;
+        let authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "planning task authority is unavailable; initialize or repair the planning database before applying tracked directions"
+                )
+            })?;
+        let task_ledger_json = serde_json::to_string_pretty(&authority_snapshot.task_ledger)
+            .context("failed to serialize task authority ledger")?;
         let mut validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
                     directions_toml: &candidate_directions_toml,
-                    task_ledger_json: required_workspace_body(
-                        &active_workspace,
-                        WorkspaceBody::TaskLedger,
-                    )?,
+                    task_ledger_json: &task_ledger_json,
                     task_ledger_schema_json: required_workspace_body(
                         &active_workspace,
                         WorkspaceBody::TaskLedgerSchema,
@@ -124,29 +131,24 @@ impl PlanningDirectionsApplyService {
             .build_projection(directions, task_ledger)
             .context("failed to rebuild planning queue after tracked directions apply")?;
 
-        let authority_snapshot = self
+        match self
             .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)?;
-        if let Some(snapshot) = authority_snapshot.as_ref() {
-            match self
-                .planning_task_repository_port
-                .commit_task_authority_snapshot(
-                    workspace_dir,
-                    PlanningTaskAuthorityCommit {
-                        observed_planning_revision: Some(snapshot.planning_revision),
-                        task_ledger,
-                        queue_projection: &queue_projection,
-                    },
-                )? {
-                PlanningTaskAuthorityCommitResult::Committed { .. } => {}
-                PlanningTaskAuthorityCommitResult::Conflict {
-                    observed_planning_revision,
-                    current_planning_revision,
-                } => {
-                    return Err(anyhow!(
-                        "planning db changed while applying tracked directions (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
-                    ));
-                }
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: Some(authority_snapshot.planning_revision),
+                    task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )? {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => {
+                return Err(anyhow!(
+                    "planning db changed while applying tracked directions (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                ));
             }
         }
 
@@ -165,18 +167,6 @@ impl PlanningDirectionsApplyService {
         }
         applied_paths.sort();
         applied_paths.dedup();
-
-        if authority_snapshot.is_none() {
-            self.planning_task_repository_port
-                .commit_task_authority_snapshot(
-                    workspace_dir,
-                    PlanningTaskAuthorityCommit {
-                        observed_planning_revision: None,
-                        task_ledger,
-                        queue_projection: &queue_projection,
-                    },
-                )?;
-        }
 
         Ok(PlanningTrackedDirectionsApplyResult {
             applied_paths,
@@ -230,7 +220,6 @@ impl PlanningDirectionsApplyService {
 
 #[derive(Clone, Copy)]
 enum WorkspaceBody {
-    TaskLedger,
     TaskLedgerSchema,
     ResultOutput,
 }
@@ -240,10 +229,6 @@ fn required_workspace_body(
     body: WorkspaceBody,
 ) -> Result<&str> {
     match body {
-        WorkspaceBody::TaskLedger => workspace
-            .task_ledger_json
-            .as_deref()
-            .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.json")),
         WorkspaceBody::TaskLedgerSchema => workspace
             .task_ledger_schema_json
             .as_deref()
@@ -279,6 +264,9 @@ mod tests {
 
     use super::PlanningDirectionsApplyService;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
@@ -286,6 +274,9 @@ mod tests {
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::DIRECTIONS_FILE_PATH;
     use crate::application::service::planning::shared::contract::default_direction_detail_doc_path;
+    use crate::domain::planning::{
+        DirectionCatalogDocument, PriorityQueueService, TaskLedgerDocument,
+    };
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = std::time::SystemTime::now()
@@ -331,6 +322,26 @@ mod tests {
         .expect("prompt should write");
     }
 
+    fn seed_task_authority(workspace_dir: &str, directions_toml: &str, task_ledger_json: &str) {
+        let directions = toml::from_str::<DirectionCatalogDocument>(directions_toml)
+            .expect("directions should parse");
+        let task_ledger = serde_json::from_str::<TaskLedgerDocument>(task_ledger_json)
+            .expect("task ledger should parse");
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_ledger)
+            .expect("queue projection should build");
+        NoopPlanningTaskRepositoryPort
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_ledger: &task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("task authority should seed");
+    }
+
     #[test]
     fn applies_tracked_directions_and_supporting_files_into_active_workspace() {
         let workspace_dir = create_temp_workspace("planning-directions-apply");
@@ -371,6 +382,11 @@ mod tests {
                 Some(&bootstrap.result_output_markdown),
             )
             .expect("active result output should seed");
+        seed_task_authority(
+            &workspace_dir,
+            "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"\"\nstate = \"active\"\n",
+            &bootstrap.task_ledger_json,
+        );
 
         let detail_doc_path = default_direction_detail_doc_path("general-workstream");
         fs::create_dir_all(
@@ -455,6 +471,11 @@ mod tests {
                 Some(&bootstrap.result_output_markdown),
             )
             .expect("active result output should seed");
+        seed_task_authority(
+            &workspace_dir,
+            "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"\"\nstate = \"active\"\n",
+            &bootstrap.task_ledger_json,
+        );
 
         let candidate_directions = format!(
             "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"{}\"\nstate = \"active\"\n",

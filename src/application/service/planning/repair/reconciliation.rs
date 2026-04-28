@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::shared::contract::{
@@ -12,18 +14,13 @@ use crate::application::service::planning::shared::contract::{
 use crate::domain::planning::PlanningWorkspaceFiles;
 use crate::domain::planning::PriorityQueueService;
 
-use super::accepted_ledger::{PlanningAcceptedLedgerCommitRequest, commit_accepted_task_ledger};
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
-use super::ledger_recovery::{
-    PlanningLedgerRejectionRequest, recover_queue_projection, reject_invalid_task_ledger,
-};
+use super::ledger_recovery::recover_queue_projection;
 pub use super::prompt::{
     PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
 };
 pub use super::protected_restore::PlanningProtectedFileRestoration;
-use super::protected_restore::{
-    ReconciledPlanningWorkspaceFiles, restore_protected_workspace_files,
-};
+use super::protected_restore::restore_protected_workspace_files;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 
 #[derive(Clone)]
@@ -180,15 +177,13 @@ impl PlanningReconciliationService {
             .restored_protected_files
             .extend(protected_restore.restorations);
         result.notices.extend(protected_restore.notices);
-        let reconciled_workspace = protected_restore.workspace_files;
 
         if change_set.task_ledger_changed {
-            self.reconcile_task_ledger(
+            self.restore_read_only_task_ledger_change(
                 workspace_dir,
                 turn_id,
                 &candidate_workspace_record,
                 execution_snapshot,
-                &reconciled_workspace,
                 &mut result,
             )?;
         } else if change_set.queue_projection_changed {
@@ -213,62 +208,138 @@ impl PlanningReconciliationService {
         Ok(result)
     }
 
-    fn reconcile_task_ledger(
+    pub fn commit_task_authority_candidate(
         &self,
         workspace_dir: &str,
-        turn_id: &str,
-        workspace_record: &PlanningWorkspaceLoadRecord,
+        candidate_task_ledger_json: &str,
         execution_snapshot: &PlanningExecutionSnapshot,
-        reconciled_workspace: &ReconciledPlanningWorkspaceFiles,
-        result: &mut PlanningReconciliationResult,
-    ) -> Result<()> {
-        let task_ledger_candidate = workspace_record
-            .task_ledger_json
+    ) -> Result<PlanningReconciliationResult> {
+        let mut result = PlanningReconciliationResult::default();
+        let directions_toml = execution_snapshot
+            .directions_toml
+            .as_deref()
+            .unwrap_or_default();
+        let task_ledger_schema_json = execution_snapshot
+            .task_ledger_schema_json
+            .as_deref()
+            .unwrap_or_default();
+        let result_output_markdown = execution_snapshot
+            .result_output_markdown
             .as_deref()
             .unwrap_or_default();
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml: &reconciled_workspace.directions_toml,
-                    task_ledger_json: task_ledger_candidate,
-                    task_ledger_schema_json: &reconciled_workspace.task_ledger_schema_json,
-                    result_output_markdown: &reconciled_workspace.result_output_markdown,
+                    directions_toml,
+                    task_ledger_json: candidate_task_ledger_json,
+                    task_ledger_schema_json,
+                    result_output_markdown,
                 });
 
-        if validation_result.is_valid() {
-            let accepted_commit = commit_accepted_task_ledger(
-                self.planning_workspace_port.as_ref(),
-                self.planning_task_repository_port.as_ref(),
-                &self.priority_queue_service,
-                PlanningAcceptedLedgerCommitRequest {
-                    workspace_dir,
-                    workspace_record,
-                    execution_snapshot,
-                    validation_result: &validation_result,
-                },
-            )?;
-            result.queue_projection_action = Some(accepted_commit.queue_projection_action);
-            result.notices.extend(accepted_commit.notices);
-            return Ok(());
+        if !validation_result.is_valid() {
+            let validation_errors = validation_error_summaries(&validation_result);
+            let failure_summary = validation_errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown validation failure".to_string());
+            let accepted_task_ledger_json = self
+                .planning_task_repository_port
+                .load_task_authority_snapshot(workspace_dir)?
+                .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_ledger))
+                .transpose()?
+                .or_else(|| execution_snapshot.task_ledger_json.clone())
+                .unwrap_or_default();
+            result.repair_request = Some(PlanningRepairRequest {
+                failure_summary: failure_summary.clone(),
+                validation_errors,
+                directions_toml: directions_toml.to_string(),
+                task_ledger_schema_json: task_ledger_schema_json.to_string(),
+                accepted_task_ledger_json,
+                rejected_task_ledger_json: Some(candidate_task_ledger_json.to_string()),
+                rejected_archive_path: None,
+            });
+            result.rejected_task_ledger = true;
+            result.notices.push(format!(
+                "planning worker produced an invalid task authority update ({failure_summary})"
+            ));
+            return Ok(result);
         }
 
-        let rejection = reject_invalid_task_ledger(
-            self.planning_workspace_port.as_ref(),
-            PlanningLedgerRejectionRequest {
+        let directions = validation_result.directions.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("planning validation reported success without parsed directions.toml")
+        })?;
+        let task_ledger = validation_result.task_ledger.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("planning validation reported success without parsed task-ledger.json")
+        })?;
+        let queue_projection = self
+            .priority_queue_service
+            .build_projection(directions, task_ledger)
+            .map_err(|error| {
+                anyhow::anyhow!("planning validation passed but queue build failed: {error}")
+            })?;
+        let authority_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?;
+        match self
+            .planning_task_repository_port
+            .commit_task_authority_snapshot(
                 workspace_dir,
-                turn_id,
-                workspace_record,
-                execution_snapshot,
-                reconciled_workspace,
-                validation_result: &validation_result,
-            },
-        )?;
-        result.rejected_task_ledger = true;
-        result.rejected_archive_path = rejection.rejected_archive_path;
-        result.queue_projection_action = rejection.queue_projection_action;
-        result.repair_request = Some(rejection.repair_request);
-        result.notices.extend(rejection.notices);
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: authority_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.planning_revision),
+                    task_ledger,
+                    queue_projection: &queue_projection,
+                },
+            )? {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => {
+                anyhow::bail!(
+                    "planning db changed while committing worker task authority update (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                );
+            }
+        }
 
+        result.queue_projection_action =
+            Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
+        result
+            .notices
+            .push("planning worker committed DB task authority update".to_string());
+        Ok(result)
+    }
+
+    fn restore_read_only_task_ledger_change(
+        &self,
+        workspace_dir: &str,
+        turn_id: &str,
+        workspace_record: &PlanningWorkspaceLoadRecord,
+        execution_snapshot: &PlanningExecutionSnapshot,
+        result: &mut PlanningReconciliationResult,
+    ) -> Result<()> {
+        if let Some(task_ledger_json) = workspace_record.task_ledger_json.as_deref() {
+            result.rejected_archive_path = self
+                .planning_workspace_port
+                .archive_rejected_planning_file(
+                    workspace_dir,
+                    turn_id,
+                    TASK_LEDGER_FILE_PATH,
+                    task_ledger_json,
+                )
+                .ok();
+        }
+        self.planning_workspace_port
+            .commit_planning_workspace_files(
+                workspace_dir,
+                &execution_snapshot_to_workspace_record(execution_snapshot),
+            )?;
+        result.rejected_task_ledger = true;
+        result.notices.push(
+            "planning reconciliation restored read-only task-ledger.json export; task authority updates must be committed through DB"
+                .to_string(),
+        );
         Ok(())
     }
 }
@@ -283,6 +354,20 @@ pub(super) fn execution_snapshot_to_workspace_record(
         queue_snapshot_json: execution_snapshot.queue_snapshot_json.clone(),
         result_output_markdown: execution_snapshot.result_output_markdown.clone(),
     }
+}
+
+fn validation_error_summaries(
+    validation_result: &crate::domain::planning::PlanningValidationResult,
+) -> Vec<String> {
+    validation_result
+        .report
+        .issues
+        .iter()
+        .filter(|issue| {
+            issue.severity == crate::domain::planning::PlanningValidationSeverity::Error
+        })
+        .map(|issue| issue.message.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -300,6 +385,9 @@ mod tests {
         PlanningRepairPromptHandoff, PlanningRepairRetryReason, build_planning_repair_prompt,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
@@ -450,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_task_ledger_change_rebuilds_queue_projection() {
+    fn read_only_task_ledger_file_change_is_restored_without_queue_rebuild() {
         let workspace_dir = create_temp_workspace("planning-reconcile-valid");
         let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
         let valid_task_ledger = serde_json::to_string_pretty(&json!({
@@ -491,23 +579,103 @@ mod tests {
             )
             .expect("reconciliation should succeed");
 
+        let restored_task_ledger = fs::read_to_string(
+            Path::new(&workspace_dir).join(".codex-exec-loop/planning/task-ledger.json"),
+        )
+        .expect("task ledger should be restored");
         let queue_projection = fs::read_to_string(
             Path::new(&workspace_dir).join(".codex-exec-loop/planning/queue.snapshot.json"),
         )
         .expect("queue projection should exist");
+
+        assert_eq!(result.queue_projection_action, None);
+        assert!(result.rejected_task_ledger);
+        assert!(result.rejected_archive_path.is_some());
+        assert_eq!(
+            restored_task_ledger,
+            execution_snapshot
+                .task_ledger_json
+                .as_deref()
+                .expect("execution snapshot should keep accepted task ledger")
+        );
+        assert_eq!(
+            queue_projection,
+            execution_snapshot
+                .queue_snapshot_json
+                .as_deref()
+                .expect("execution snapshot should keep accepted queue projection")
+        );
+        assert!(!queue_projection.contains("\"task_id\": \"task-1\""));
+
+        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn valid_task_authority_candidate_rebuilds_queue_projection() {
+        let workspace_dir = create_temp_workspace("planning-reconcile-authority-candidate");
+        let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
+        NoopPlanningTaskRepositoryPort
+            .clear_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should clear");
+        let valid_task_ledger = serde_json::to_string_pretty(&json!({
+            "version": 1,
+            "tasks": [
+                {
+                    "id": "task-authority-1",
+                    "direction_id": "example-direction",
+                    "direction_relation_note": "implements the active example direction",
+                    "title": "Do the authority thing",
+                    "description": "Implement the next queued step through DB authority.",
+                    "status": "ready",
+                    "base_priority": 10,
+                    "dynamic_priority_delta": 0,
+                    "priority_reason": "",
+                    "depends_on": [],
+                    "blocked_by": [],
+                    "created_by": "llm",
+                    "last_updated_by": "llm",
+                    "source_turn_id": "turn-1",
+                    "updated_at": "2026-04-09T10:00:00Z"
+                }
+            ]
+        }))
+        .expect("valid task ledger should serialize");
+
+        let result = service()
+            .commit_task_authority_candidate(
+                &workspace_dir,
+                &valid_task_ledger,
+                &execution_snapshot,
+            )
+            .expect("authority candidate should commit");
+        let authority_snapshot = NoopPlanningTaskRepositoryPort
+            .load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
 
         assert_eq!(
             result.queue_projection_action,
             Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning)
         );
         assert!(!result.rejected_task_ledger);
-        assert!(queue_projection.contains("\"task_id\": \"task-1\""));
+        assert_eq!(
+            authority_snapshot.task_ledger.tasks[0].id,
+            "task-authority-1"
+        );
+        assert_eq!(
+            authority_snapshot
+                .queue_projection
+                .active_tasks
+                .first()
+                .map(|task| task.task_id.as_str()),
+            Some("task-authority-1")
+        );
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }
 
     #[test]
-    fn git_backed_task_ledger_change_accepts_tracked_candidate_into_authority() {
+    fn git_backed_task_ledger_file_change_restores_export_without_authority_commit() {
         let repo = TempGitRepo::new("planning-reconcile-git-backed");
         let workspace_dir = repo.worktree_root.to_str().expect("valid worktree path");
         let artifacts =
@@ -596,19 +764,22 @@ mod tests {
             .load_planning_workspace_files(workspace_dir)
             .expect("active authority should load");
 
+        assert_eq!(result.queue_projection_action, None);
+        assert!(result.rejected_task_ledger);
+        assert!(result.rejected_archive_path.is_some());
         assert_eq!(
-            result.queue_projection_action,
-            Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning)
+            serde_json::from_str::<serde_json::Value>(
+                active_workspace
+                    .task_ledger_json
+                    .as_deref()
+                    .expect("active task ledger should load")
+            )
+            .expect("active task ledger should parse"),
+            serde_json::from_str::<serde_json::Value>(&empty_task_ledger_json)
+                .expect("empty task ledger should parse")
         );
-        assert!(!result.rejected_task_ledger);
         assert!(
-            active_workspace
-                .task_ledger_json
-                .as_deref()
-                .is_some_and(|body| body.contains("\"task-1\""))
-        );
-        assert!(
-            active_workspace
+            !active_workspace
                 .queue_snapshot_json
                 .as_deref()
                 .is_some_and(|body| body.contains("\"task_id\": \"task-1\""))
@@ -648,11 +819,8 @@ mod tests {
 
         assert!(result.rejected_task_ledger);
         assert!(result.rejected_archive_path.is_some());
-        assert!(result.repair_request.is_some());
-        assert_eq!(
-            result.queue_projection_action,
-            Some(PlanningQueueProjectionAction::RestoredFromExecutionSnapshot)
-        );
+        assert!(result.repair_request.is_none());
+        assert_eq!(result.queue_projection_action, None);
         assert_eq!(
             restored_task_ledger,
             execution_snapshot
@@ -950,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn task_ledger_acceptance_uses_restored_schema_baseline() {
+    fn read_only_task_ledger_change_restores_schema_baseline_without_accepting_candidate() {
         let workspace_dir = create_temp_workspace("planning-reconcile-schema-restore");
         let execution_snapshot = write_bootstrap_workspace(&workspace_dir);
         let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
@@ -996,8 +1164,10 @@ mod tests {
 
         let restored_schema = fs::read_to_string(planning_dir.join("task-ledger.schema.json"))
             .expect("restored schema should read");
+        let restored_task_ledger = fs::read_to_string(planning_dir.join("task-ledger.json"))
+            .expect("restored task ledger should read");
         let queue_projection = fs::read_to_string(planning_dir.join("queue.snapshot.json"))
-            .expect("rebuilt queue projection should read");
+            .expect("queue projection should read");
 
         assert_eq!(
             restored_schema,
@@ -1005,12 +1175,23 @@ mod tests {
                 .task_ledger_schema_json
                 .expect("execution snapshot should keep the accepted task-ledger schema")
         );
+        assert_eq!(result.queue_projection_action, None);
+        assert!(result.rejected_task_ledger);
         assert_eq!(
-            result.queue_projection_action,
-            Some(PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning)
+            restored_task_ledger,
+            execution_snapshot
+                .task_ledger_json
+                .as_deref()
+                .expect("execution snapshot should keep accepted task ledger")
         );
-        assert!(!result.rejected_task_ledger);
-        assert!(queue_projection.contains("\"task_id\": \"task-restore-schema\""));
+        assert_eq!(
+            queue_projection,
+            execution_snapshot
+                .queue_snapshot_json
+                .as_deref()
+                .expect("execution snapshot should keep accepted queue projection")
+        );
+        assert!(!queue_projection.contains("\"task_id\": \"task-restore-schema\""));
 
         fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
     }

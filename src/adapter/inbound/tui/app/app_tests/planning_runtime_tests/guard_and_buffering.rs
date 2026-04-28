@@ -84,33 +84,18 @@ fn stale_planning_repair_state_does_not_queue_visible_retry() {
 }
 
 #[test]
-fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
+fn stale_repair_state_is_cleared_after_read_only_task_ledger_restore() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repair-still-invalid");
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning");
-    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    bootstrap_active_planning_workspace(&workspace_dir);
     let bootstrap_artifacts =
-        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    std::fs::write(
-        planning_dir.join("directions.toml"),
-        &bootstrap_artifacts.directions_toml,
-    )
-    .expect("directions should write");
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
     std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
         .expect("invalid task ledger should write");
-    std::fs::write(
-        planning_dir.join("task-ledger.schema.json"),
-        &bootstrap_artifacts.task_ledger_schema_json,
-    )
-    .expect("schema should write");
-    std::fs::write(
-        planning_dir.join("result-output.md"),
-        &bootstrap_artifacts.result_output_markdown,
-    )
-    .expect("result output should write");
 
     let mut conversation = ready_conversation();
     conversation.cwd = workspace_dir.clone();
@@ -170,44 +155,24 @@ fn stale_repair_state_does_not_change_hidden_repair_prompt_shape() {
         thread::sleep(Duration::from_millis(5));
     }
 
-    assert!(repair_prompt.is_some());
-    assert!(repair_prompt.as_deref().is_some_and(|prompt| {
-        !prompt.contains(
-            "직전 repair 시도에서 `task-ledger.json` 을 수정했지만 여전히 유효하지 않습니다",
-        )
-    }));
+    assert!(repair_prompt.is_none());
 
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 
 #[test]
-fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
+fn buffered_manual_input_survives_read_only_task_ledger_restore() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repair-manual-buffer");
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning");
-    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    bootstrap_active_planning_workspace(&workspace_dir);
     let bootstrap_artifacts =
-        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    std::fs::write(
-        planning_dir.join("directions.toml"),
-        &bootstrap_artifacts.directions_toml,
-    )
-    .expect("directions should write");
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
     std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
         .expect("invalid task ledger should write");
-    std::fs::write(
-        planning_dir.join("task-ledger.schema.json"),
-        &bootstrap_artifacts.task_ledger_schema_json,
-    )
-    .expect("schema should write");
-    std::fs::write(
-        planning_dir.join("result-output.md"),
-        &bootstrap_artifacts.result_output_markdown,
-    )
-    .expect("result output should write");
 
     let mut conversation = ready_conversation();
     conversation.cwd = workspace_dir.clone();
@@ -249,7 +214,7 @@ fn buffered_manual_input_does_not_pause_hidden_planning_repair() {
     assert!(
         hidden_prompts
             .iter()
-            .any(|prompt| prompt.contains("planning repair 1/2"))
+            .all(|prompt| !prompt.contains("planning repair"))
     );
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");
@@ -545,33 +510,18 @@ fn buffered_manual_text_is_preserved_while_auto_followup_submits() {
 }
 
 #[test]
-fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
+fn stale_exhausted_repair_state_is_cleared_after_read_only_task_ledger_restore() {
     let (mut app, codex_port) = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repair-exhausted");
     let planning_dir = std::path::Path::new(&workspace_dir)
         .join(".codex-exec-loop")
         .join("planning");
-    std::fs::create_dir_all(&planning_dir).expect("planning directory should be created");
+    bootstrap_active_planning_workspace(&workspace_dir);
     let bootstrap_artifacts =
-        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    std::fs::write(
-        planning_dir.join("directions.toml"),
-        &bootstrap_artifacts.directions_toml,
-    )
-    .expect("directions should write");
+        PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
     std::fs::write(planning_dir.join("task-ledger.json"), "{ invalid json")
         .expect("invalid task ledger should write");
-    std::fs::write(
-        planning_dir.join("task-ledger.schema.json"),
-        &bootstrap_artifacts.task_ledger_schema_json,
-    )
-    .expect("schema should write");
-    std::fs::write(
-        planning_dir.join("result-output.md"),
-        &bootstrap_artifacts.result_output_markdown,
-    )
-    .expect("result output should write");
 
     let mut conversation = ready_conversation();
     conversation.cwd = workspace_dir.clone();
@@ -622,7 +572,7 @@ fn stale_exhausted_repair_state_does_not_block_hidden_repair() {
             .lock()
             .expect("new-thread call mutex poisoned")
             .iter()
-            .any(|(_, prompt)| prompt.contains("planning repair 1/2"))
+            .all(|(_, prompt)| !prompt.contains("planning repair"))
     );
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("conversation should remain ready");

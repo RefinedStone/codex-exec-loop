@@ -6,7 +6,7 @@ use super::super::{
     ConversationState, ConversationStreamEvent, PlanningTaskHandoff, StartupState,
     TASK_LEDGER_FILE_PATH, bootstrap_active_planning_workspace, create_temp_workspace,
     enable_queue_idle_review_and_enqueue, make_test_app, ready_conversation,
-    sample_startup_diagnostics,
+    replace_active_planning_workspace_file, sample_startup_diagnostics,
 };
 
 #[test]
@@ -16,11 +16,9 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
     let workspace_dir = create_temp_workspace("planning-proposal-followup-app");
     bootstrap_active_planning_workspace(&workspace_dir);
     enable_queue_idle_review_and_enqueue(&workspace_dir);
-    let planning_dir = std::path::Path::new(&workspace_dir)
-        .join(".codex-exec-loop")
-        .join("planning");
-    std::fs::write(
-        planning_dir.join("task-ledger.json"),
+    replace_active_planning_workspace_file(
+        &workspace_dir,
+        TASK_LEDGER_FILE_PATH,
         r#"{
   "version": 1,
   "tasks": [
@@ -60,8 +58,7 @@ fn proposed_only_refresh_promotes_top_proposal_and_queues_auto_followup() {
     }
   ]
 }"#,
-    )
-    .expect("task ledger should write");
+    );
 
     codex_port
         .new_thread_stream_behavior
@@ -168,11 +165,9 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repeated-next-task");
     bootstrap_active_planning_workspace(&workspace_dir);
-    let planning_dir = std::path::Path::new(&workspace_dir)
-        .join(".codex-exec-loop")
-        .join("planning");
-    std::fs::write(
-        planning_dir.join("task-ledger.json"),
+    replace_active_planning_workspace_file(
+        &workspace_dir,
+        TASK_LEDGER_FILE_PATH,
         r#"{
   "version": 1,
   "tasks": [
@@ -195,8 +190,7 @@ fn repeated_builtin_next_task_refresh_pauses_auto_followup_until_queue_advances(
     }
   ]
 }"#,
-    )
-    .expect("task ledger should write");
+    );
 
     codex_port
         .new_thread_stream_behavior
@@ -307,11 +301,9 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repeated-next-task-updated");
     bootstrap_active_planning_workspace(&workspace_dir);
-    let planning_dir = std::path::Path::new(&workspace_dir)
-        .join(".codex-exec-loop")
-        .join("planning");
-    std::fs::write(
-        planning_dir.join("task-ledger.json"),
+    replace_active_planning_workspace_file(
+        &workspace_dir,
+        TASK_LEDGER_FILE_PATH,
         r#"{
   "version": 1,
   "tasks": [
@@ -334,8 +326,7 @@ fn refreshed_queue_head_with_same_task_id_but_new_timestamp_still_submits_auto_f
     }
   ]
 }"#,
-    )
-    .expect("task ledger should write");
+    );
 
     codex_port
         .new_thread_stream_behavior
@@ -461,11 +452,9 @@ fn refreshed_queue_head_with_same_projection_but_changed_ledger_still_submits_au
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repeated-next-task-description-updated");
     bootstrap_active_planning_workspace(&workspace_dir);
-    let planning_dir = std::path::Path::new(&workspace_dir)
-        .join(".codex-exec-loop")
-        .join("planning");
-    std::fs::write(
-        planning_dir.join("task-ledger.json"),
+    replace_active_planning_workspace_file(
+        &workspace_dir,
+        TASK_LEDGER_FILE_PATH,
         r#"{
   "version": 1,
   "tasks": [
@@ -488,8 +477,7 @@ fn refreshed_queue_head_with_same_projection_but_changed_ledger_still_submits_au
     }
   ]
 }"#,
-    )
-    .expect("task ledger should write");
+    );
 
     codex_port
         .new_thread_stream_behavior
@@ -615,11 +603,9 @@ fn refreshed_queue_head_with_only_unrelated_blocked_task_added_still_pauses_auto
     app.startup_state = StartupState::Ready(sample_startup_diagnostics("/tmp/root", true));
     let workspace_dir = create_temp_workspace("planning-repeated-next-task-unrelated-blocked");
     bootstrap_active_planning_workspace(&workspace_dir);
-    let planning_dir = std::path::Path::new(&workspace_dir)
-        .join(".codex-exec-loop")
-        .join("planning");
-    std::fs::write(
-        planning_dir.join("task-ledger.json"),
+    replace_active_planning_workspace_file(
+        &workspace_dir,
+        TASK_LEDGER_FILE_PATH,
         r#"{
   "version": 1,
   "tasks": [
@@ -642,8 +628,7 @@ fn refreshed_queue_head_with_only_unrelated_blocked_task_added_still_pauses_auto
     }
   ]
 }"#,
-    )
-    .expect("task ledger should write");
+    );
 
     codex_port
         .new_thread_stream_behavior
