@@ -1,8 +1,5 @@
 use super::authoring::directions::PlanningDirectionsService;
 use super::authoring::directions::{DirectionsMaintenanceSummary, QueueIdleReviewContext};
-use super::authoring::directions_apply::{
-    PlanningDirectionsApplyService, PlanningTrackedDirectionsApplyResult,
-};
 use super::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
     PlanningDraftSaveResult, PlanningInitService, PlanningInitStageResult,
@@ -39,7 +36,6 @@ pub struct PlanningWorkspaceUseCases {
     reset_service: PlanningResetService,
     doctor_service: PlanningDoctorService,
     directions_service: PlanningDirectionsService,
-    directions_apply_service: PlanningDirectionsApplyService,
 }
 
 impl PlanningWorkspaceUseCases {
@@ -48,14 +44,12 @@ impl PlanningWorkspaceUseCases {
         reset_service: PlanningResetService,
         doctor_service: PlanningDoctorService,
         directions_service: PlanningDirectionsService,
-        directions_apply_service: PlanningDirectionsApplyService,
     ) -> Self {
         Self {
             init_service,
             reset_service,
             doctor_service,
             directions_service,
-            directions_apply_service,
         }
     }
 
@@ -85,14 +79,6 @@ impl PlanningWorkspaceUseCases {
 
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
         self.doctor_service.inspect_workspace(workspace_dir)
-    }
-
-    pub fn apply_tracked_directions(
-        &self,
-        workspace_dir: &str,
-    ) -> anyhow::Result<PlanningTrackedDirectionsApplyResult> {
-        self.directions_apply_service
-            .apply_tracked_directions(workspace_dir)
     }
 
     pub fn stage_simple_mode_draft(

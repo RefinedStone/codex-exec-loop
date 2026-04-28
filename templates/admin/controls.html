@@ -11,7 +11,7 @@
 
   <article class="card span-6">
     <h2>File Import / Export</h2>
-    <p>Export writes the current DB authority documents to the workspace planning files. Apply reloads edited workspace files into the DB authority and is blocked while parallel work is active.</p>
+    <p>Export writes editable planning prompts to the workspace. Apply reloads edited prompt files and is blocked while parallel work is active.</p>
     <div class="actions">
       <form method="post" action="/admin/files/export">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

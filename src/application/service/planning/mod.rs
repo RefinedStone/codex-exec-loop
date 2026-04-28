@@ -24,7 +24,6 @@ pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
 };
-pub use self::authoring::directions_apply::PlanningTrackedDirectionsApplyResult;
 pub use self::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningDraftPromoteResult,
     PlanningDraftSaveResult, PlanningInitStageResult, PlanningWorkspaceInitResult,

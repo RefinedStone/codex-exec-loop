@@ -542,7 +542,7 @@ fn required_workspace_body<'a>(
 ) -> Result<&'a str> {
     body.ok_or_else(|| {
         anyhow!(
-            "Planning workspace is incomplete: missing {path}. Run :doctor to inspect the workspace, then use :directions apply if tracked directions are newer."
+            "Planning workspace is incomplete: missing {path}. Run :doctor to inspect the workspace, then use :init or admin controls to restore planning files."
         )
     })
 }

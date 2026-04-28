@@ -46,7 +46,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
 }
 
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions [apply]  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -209,12 +209,8 @@ impl InlineShellCommandInput {
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::Directions => match self.argument() {
-                Some(value) if value.eq_ignore_ascii_case("apply") => {
-                    "Press Enter to import tracked directions into active planning."
-                        .to_string()
-                }
                 Some(value) => format!(
-                    "Press Enter to apply `:directions {value}`. Supported arguments: apply."
+                    "Press Enter to apply `:directions {value}`. Supported command: :directions."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -422,7 +418,7 @@ impl InlineShellCommand {
         match self {
             InlineShellCommand::Parallel => ":parallel [on|off]",
             InlineShellCommand::Queue => ":queue [apply]",
-            InlineShellCommand::Directions => ":directions [apply]",
+            InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Task => ":task [prompt]",
             InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
@@ -543,10 +539,6 @@ mod tests {
                 Some((InlineShellCommand::Queue, Some("apply"))),
             ),
             (":directions", Some((InlineShellCommand::Directions, None))),
-            (
-                ":directions apply",
-                Some((InlineShellCommand::Directions, Some("apply"))),
-            ),
             (":task", Some((InlineShellCommand::Task, None))),
             (
                 ":task add a release checklist",
@@ -754,8 +746,6 @@ mod tests {
     #[test]
     fn directions_command_hint_is_argument_aware() {
         let plain = InlineShellCommandInput::parse(":directions").expect("command should parse");
-        let apply =
-            InlineShellCommandInput::parse(":directions apply").expect("command should parse");
         let invalid =
             InlineShellCommandInput::parse(":directions later").expect("command should parse");
 
@@ -764,12 +754,8 @@ mod tests {
             "Press Enter to review or edit planning directions."
         );
         assert_eq!(
-            apply.buffered_hint(),
-            "Press Enter to import tracked directions into active planning."
-        );
-        assert_eq!(
             invalid.buffered_hint(),
-            "Press Enter to apply `:directions later`. Supported arguments: apply."
+            "Press Enter to apply `:directions later`. Supported command: :directions."
         );
     }
 
