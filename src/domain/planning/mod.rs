@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+pub mod queue;
+pub mod validation;
+
+pub use queue::{PriorityQueueBuildError, PriorityQueueService};
+pub use validation::PlanningSemanticValidationService;
+
 pub const PLANNING_FORMAT_VERSION: u32 = 1;
 pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 

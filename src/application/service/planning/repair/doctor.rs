@@ -198,7 +198,7 @@ mod tests {
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::PriorityQueueService;
 
     fn create_temp_workspace(label: &str) -> String {
         let unique = format!(

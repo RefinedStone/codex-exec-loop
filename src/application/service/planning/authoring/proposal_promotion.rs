@@ -13,7 +13,7 @@ use crate::application::service::planning::runtime::prompt::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
-use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles, TaskActor,
     TaskLedgerDocument, TaskStatus,
@@ -233,7 +233,7 @@ mod tests {
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
-    use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()

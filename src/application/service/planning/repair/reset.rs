@@ -17,7 +17,7 @@ use crate::application::service::planning::shared::contract::{
     PLANNING_PROMPTS_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
-use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{TaskLedgerDocument, TaskStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

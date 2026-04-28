@@ -1127,7 +1127,7 @@ mod tests {
         PlanningAdminDraftKind, PlanningAdminFacadeService, PlanningAdminTaskMutationRequest,
         PlanningServices,
     };
-    use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::PriorityQueueService;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
         TaskActor, TaskDefinition, TaskLedgerDocument, TaskStatus,
