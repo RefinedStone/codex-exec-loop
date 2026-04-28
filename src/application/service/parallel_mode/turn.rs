@@ -306,6 +306,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
     use crate::adapter::outbound::github::GithubAutomationAdapter;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::parallel_mode::ParallelModeService;
@@ -374,6 +375,7 @@ mod tests {
         ParallelModeService::new(
             Arc::new(SqlitePlanningAuthorityAdapter::new()),
             Arc::new(GithubAutomationAdapter::new()),
+            Arc::new(GitParallelModeRuntimeAdapter::new()),
         )
     }
 

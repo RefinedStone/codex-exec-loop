@@ -6,6 +6,7 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
     PlanningAuthorityRuntimeProjectionSnapshot,
@@ -144,6 +145,7 @@ pub struct ParallelModeService {
     distributor_service: ParallelModeDistributorService,
     supervisor_service: ParallelModeSupervisorService,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
+    parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
 }
 
 impl std::fmt::Debug for ParallelModeService {
@@ -158,6 +160,7 @@ impl ParallelModeService {
     pub fn new(
         planning_authority: Arc<dyn PlanningAuthorityPort>,
         github_automation: Arc<dyn GithubAutomationPort>,
+        parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
     ) -> Self {
         Self {
             distributor_service: ParallelModeDistributorService::with_planning_authority(
@@ -166,6 +169,7 @@ impl ParallelModeService {
             ),
             supervisor_service: ParallelModeSupervisorService::new(),
             planning_authority,
+            parallel_runtime,
         }
     }
 
@@ -193,7 +197,7 @@ impl ParallelModeService {
         workspace_dir: &str,
         planning_snapshot: &PlanningRuntimeSnapshot,
     ) -> ParallelModeReadinessSnapshot {
-        let repo_root = detect_git_repo_root(workspace_dir);
+        let repo_root = self.parallel_runtime.detect_git_repo_root(workspace_dir);
         let git_repository = match &repo_root {
             Some(repo_root) => ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GitRepository,

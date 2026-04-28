@@ -10,6 +10,7 @@ use super::{
     short_sha, slot_id, slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
@@ -452,13 +453,18 @@ fn test_parallel_mode_service() -> ParallelModeService {
     ParallelModeService::new(
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
         Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
 }
 
 fn test_parallel_mode_service_with_github(
     github: Arc<dyn GithubAutomationPort>,
 ) -> ParallelModeService {
-    ParallelModeService::new(Arc::new(SqlitePlanningAuthorityAdapter::new()), github)
+    ParallelModeService::new(
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        github,
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    )
 }
 
 #[test]

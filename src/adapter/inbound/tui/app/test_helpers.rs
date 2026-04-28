@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
@@ -184,5 +185,6 @@ pub(crate) fn test_parallel_mode_service_with_github(
     ParallelModeService::new(
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
         github_automation,
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
 }
