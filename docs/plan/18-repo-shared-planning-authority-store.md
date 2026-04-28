@@ -79,9 +79,6 @@ The authority store lives under the canonical repo root:
 | --- | --- |
 | `.codex-exec-loop/runtime/planning-authority.db` | SQLite authority store |
 | `.codex-exec-loop/runtime/planning-authority.lock` | repo-scoped advisory lock for migration, import, and recovery sweep |
-| `.codex-exec-loop/runtime/exports/planning-snapshot.json` | full exported review snapshot |
-| `.codex-exec-loop/runtime/exports/task-ledger.json` | exported ledger view |
-| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | exported queue projection view |
 
 Tracked planning files under `.codex-exec-loop/planning/` remain valuable, but only as:
 

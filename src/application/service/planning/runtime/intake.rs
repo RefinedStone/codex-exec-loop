@@ -12,13 +12,13 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
-    PlanningWorkspaceFiles, PriorityQueueProjection, PriorityQueueTask, TaskActor, TaskDefinition,
-    TaskLedgerDocument, TaskStatus,
+    PlanningWorkspaceFiles, PriorityQueueProjection, PriorityQueueTask, TaskActor,
+    TaskAuthorityDocument, TaskDefinition, TaskStatus,
 };
 
 const DEFAULT_RUNTIME_TASK_PRIORITY: i32 = 80;
@@ -58,7 +58,7 @@ pub struct PlanningTaskIntakeCommitResult {
     pub committed_task_id: String,
     pub committed_planning_revision: i64,
     pub queue_head: Option<PriorityQueueTask>,
-    pub runtime_exports_refreshed: bool,
+    pub task_authority_committed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +166,7 @@ impl PlanningTaskIntakeValidationService {
         request: &PlanningTaskIntakeRequest,
         draft: &PlanningTaskIntakeDraft,
         directions: &DirectionCatalogDocument,
-        task_ledger: &TaskLedgerDocument,
+        task_authority: &TaskAuthorityDocument,
     ) -> std::result::Result<(), PlanningTaskIntakeValidationError> {
         if normalize_prompt(&request.raw_prompt).is_empty() {
             return Err(PlanningTaskIntakeValidationError::new(
@@ -221,7 +221,7 @@ impl PlanningTaskIntakeValidationService {
             ));
         }
 
-        let existing_task_ids = task_ledger
+        let existing_task_ids = task_authority
             .tasks
             .iter()
             .map(|task| task.id.trim().to_string())
@@ -321,7 +321,7 @@ impl PlanningTaskIntakeService {
             } else {
                 self.generate_valid_draft(&proposal.request, &context, generated_at, next_suffix)?
             };
-            let (next_task_ledger, queue_projection) =
+            let (next_task_authority, queue_projection) =
                 self.build_accepted_mutation(&proposal.request, &draft, &context)?;
 
             match self
@@ -330,7 +330,7 @@ impl PlanningTaskIntakeService {
                     &proposal.request.workspace_directory,
                     PlanningTaskAuthorityCommit {
                         observed_planning_revision: Some(observed_revision),
-                        task_ledger: &next_task_ledger,
+                        task_authority: &next_task_authority,
                         queue_projection: &queue_projection,
                     },
                 )? {
@@ -339,7 +339,7 @@ impl PlanningTaskIntakeService {
                         committed_task_id: draft.task.id,
                         committed_planning_revision: planning_revision,
                         queue_head: queue_projection.next_task,
-                        runtime_exports_refreshed: true,
+                        task_authority_committed: true,
                     });
                 }
                 PlanningTaskAuthorityCommitResult::Conflict {
@@ -376,11 +376,6 @@ impl PlanningTaskIntakeService {
             DIRECTIONS_FILE_PATH,
             workspace_record.directions_toml.as_deref(),
         )?;
-        let task_ledger_schema_json = required_workspace_body(
-            &workspace_record,
-            TASK_LEDGER_SCHEMA_FILE_PATH,
-            workspace_record.task_ledger_schema_json.as_deref(),
-        )?;
         let result_output_markdown = required_workspace_body(
             &workspace_record,
             RESULT_OUTPUT_FILE_PATH,
@@ -394,15 +389,14 @@ impl PlanningTaskIntakeService {
                     "Planning task authority is unavailable; initialize or repair the planning database before using :task."
                 )
             })?;
-        let task_ledger_json = serde_json::to_string_pretty(&repository_snapshot.task_ledger)
+        let task_authority_json = serde_json::to_string_pretty(&repository_snapshot.task_authority)
             .context("failed to serialize task authority ledger")?;
 
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
                     directions_toml,
-                    task_ledger_json: &task_ledger_json,
-                    task_ledger_schema_json,
+                    task_authority_json: &task_authority_json,
                     result_output_markdown,
                 });
         if !validation_result.is_valid() {
@@ -421,13 +415,13 @@ impl PlanningTaskIntakeService {
         let directions = validation_result
             .directions
             .ok_or_else(|| anyhow!("valid planning workspace did not include directions"))?;
-        let task_ledger = validation_result
-            .task_ledger
-            .ok_or_else(|| anyhow!("valid planning workspace did not include task-ledger"))?;
-        if task_ledger.version != PLANNING_FORMAT_VERSION {
+        let task_authority = validation_result
+            .task_authority
+            .ok_or_else(|| anyhow!("valid planning workspace did not include task-authority"))?;
+        if task_authority.version != PLANNING_FORMAT_VERSION {
             return Err(anyhow!(
-                "Unsupported task-ledger version {}; expected {}.",
-                task_ledger.version,
+                "Unsupported task-authority version {}; expected {}.",
+                task_authority.version,
                 PLANNING_FORMAT_VERSION
             ));
         }
@@ -436,7 +430,7 @@ impl PlanningTaskIntakeService {
         Ok(PlanningTaskIntakeContext {
             workspace_record,
             directions,
-            task_ledger,
+            task_authority,
             planning_revision,
         })
     }
@@ -462,7 +456,7 @@ impl PlanningTaskIntakeService {
                 request,
                 &draft,
                 &context.directions,
-                &context.task_ledger,
+                &context.task_authority,
             ) {
                 Ok(()) => return Ok(draft),
                 Err(error) if error.code == "duplicate_task_id" => {
@@ -482,14 +476,14 @@ impl PlanningTaskIntakeService {
         request: &PlanningTaskIntakeRequest,
         draft: &PlanningTaskIntakeDraft,
         context: &PlanningTaskIntakeContext,
-    ) -> Result<(TaskLedgerDocument, PriorityQueueProjection)> {
+    ) -> Result<(TaskAuthorityDocument, PriorityQueueProjection)> {
         self.intake_validation_service
-            .validate_draft(request, draft, &context.directions, &context.task_ledger)
+            .validate_draft(request, draft, &context.directions, &context.task_authority)
             .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
 
-        let mut next_task_ledger = context.task_ledger.clone();
-        next_task_ledger.tasks.push(draft.task.clone());
-        let next_task_ledger_json = serde_json::to_string_pretty(&next_task_ledger)
+        let mut next_task_authority = context.task_authority.clone();
+        next_task_authority.tasks.push(draft.task.clone());
+        let next_task_authority_json = serde_json::to_string_pretty(&next_task_authority)
             .context("failed to serialize runtime task intake ledger")?;
         let validation_result =
             self.planning_validation_service
@@ -499,12 +493,7 @@ impl PlanningTaskIntakeService {
                         DIRECTIONS_FILE_PATH,
                         context.workspace_record.directions_toml.as_deref(),
                     )?,
-                    task_ledger_json: &next_task_ledger_json,
-                    task_ledger_schema_json: required_workspace_body(
-                        &context.workspace_record,
-                        TASK_LEDGER_SCHEMA_FILE_PATH,
-                        context.workspace_record.task_ledger_schema_json.as_deref(),
-                    )?,
+                    task_authority_json: &next_task_authority_json,
                     result_output_markdown: required_workspace_body(
                         &context.workspace_record,
                         RESULT_OUTPUT_FILE_PATH,
@@ -524,10 +513,10 @@ impl PlanningTaskIntakeService {
         }
         let queue_projection = self
             .priority_queue_service
-            .build_projection(&context.directions, &next_task_ledger)
+            .build_projection(&context.directions, &next_task_authority)
             .map_err(|error| anyhow!("Runtime task intake queue rebuild failed: {error}"))?;
 
-        Ok((next_task_ledger, queue_projection))
+        Ok((next_task_authority, queue_projection))
     }
 }
 
@@ -535,7 +524,7 @@ impl PlanningTaskIntakeService {
 struct PlanningTaskIntakeContext {
     workspace_record: PlanningWorkspaceLoadRecord,
     directions: DirectionCatalogDocument,
-    task_ledger: TaskLedgerDocument,
+    task_authority: TaskAuthorityDocument,
     planning_revision: i64,
 }
 
@@ -555,11 +544,11 @@ fn task_intake_repair_guidance(first_failure: &str) -> &'static str {
     if first_failure.contains("references unknown direction_id") {
         return "Next action: run :directions apply if tracked directions.toml contains the missing direction; otherwise run :doctor.";
     }
-    if first_failure.contains("task-ledger.json")
+    if first_failure.contains("DB task authority")
         || first_failure.contains("task ")
-        || first_failure.contains("task-ledger")
+        || first_failure.contains("task-authority")
     {
-        return "Next action: run :doctor to inspect task authority; task-ledger.json is a read-only export.";
+        return "Next action: run :doctor to inspect task authority.";
     }
     if first_failure.contains("directions.toml")
         || first_failure.contains("direction ")
@@ -739,7 +728,7 @@ mod tests {
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig, TaskActor,
-        TaskLedgerDocument, TaskStatus,
+        TaskAuthorityDocument, TaskStatus,
     };
 
     fn directions() -> DirectionCatalogDocument {
@@ -826,7 +815,7 @@ mod tests {
             })
             .expect("draft should generate");
         let validation = PlanningTaskIntakeValidationService::new();
-        let mut ledger = TaskLedgerDocument {
+        let mut ledger = TaskAuthorityDocument {
             version: 1,
             tasks: vec![draft.task.clone()],
         };

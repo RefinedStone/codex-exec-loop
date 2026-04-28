@@ -191,7 +191,10 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
         )),
         Line::from(format!("latest: {}", detail.latest_summary)),
         Line::from(format!("validation: {}", detail.validation_summary)),
-        Line::from(format!("ledger refresh: {}", detail.ledger_refresh_outcome)),
+        Line::from(format!(
+            "ledger refresh: {}",
+            detail.authority_refresh_outcome
+        )),
         Line::from(format!(
             "distributor: {}",
             detail

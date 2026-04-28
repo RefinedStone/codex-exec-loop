@@ -230,7 +230,7 @@ impl InlineShellCommandInput {
             },
             InlineShellCommand::Queue => match self.argument() {
                 Some(value) if value.eq_ignore_ascii_case("apply") => {
-                    "Press Enter to import tracked task-ledger.json into active planning."
+                    "Tracked queue import was removed; use :task for structured task changes."
                         .to_string()
                 }
                 Some(value) => format!(
@@ -785,7 +785,7 @@ mod tests {
         );
         assert_eq!(
             apply.buffered_hint(),
-            "Press Enter to import tracked task-ledger.json into active planning."
+            "Tracked queue import was removed; use :task for structured task changes."
         );
         assert_eq!(
             invalid.buffered_hint(),

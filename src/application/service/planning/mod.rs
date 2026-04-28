@@ -32,7 +32,6 @@ pub use self::authoring::init::{
 pub use self::authoring::proposal_promotion::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
 };
-pub use self::authoring::task_ledger_apply::PlanningTrackedTaskLedgerApplyResult;
 pub use self::control::{PlanningControlCommand, PlanningControlReply, PlanningControlService};
 pub use self::feature::PlanningFeature;
 pub use self::feature::PlanningFeature as PlanningServices;
@@ -62,8 +61,7 @@ pub use self::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 pub use self::shared::contract::{
     ACTIVE_PLANNING_FILE_PATHS, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
-    PLANNING_REJECTED_DIRECTORY, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
+    PLANNING_REJECTED_DIRECTORY, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
     default_direction_detail_doc_path,
 };
 pub use self::use_cases::{

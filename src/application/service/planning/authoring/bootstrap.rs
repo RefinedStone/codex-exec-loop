@@ -1,12 +1,9 @@
-use serde_json::json;
-
 use crate::application::port::outbound::planning_workspace_port::PlanningDraftFileRecord;
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
 };
-use crate::domain::planning::{PLANNING_FORMAT_VERSION, TaskLedgerDocument};
+use crate::domain::planning::{PLANNING_FORMAT_VERSION, TaskAuthorityDocument};
 
 const DEFAULT_DIRECTIONS_TOML: &str = r#"version = 1
 
@@ -37,15 +34,15 @@ prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md"
 [[directions]]
 id = "general-workstream"
 title = "General workstream"
-summary = "No detailed direction taxonomy is defined yet. Derive the next actionable work from the latest user request and the latest accepted answer, capture it in the task catalog compatibility file, and work from the derived queue."
+summary = "No detailed direction taxonomy is defined yet. Derive the next actionable work from the latest user request and the latest accepted answer, capture it in DB task authority, and work from the derived queue."
 success_criteria = [
-    "Actionable goals are represented in the task catalog before execution.",
-    "When the latest answer clearly implies a next step, that follow-up is derived into the task catalog instead of leaving the queue idle.",
-    "Work advances by updating the task catalog instead of inventing unmanaged side tasks.",
+    "Actionable goals are represented in DB task authority before execution.",
+    "When the latest answer clearly implies a next step, that follow-up is derived into task authority instead of leaving the queue idle.",
+    "Work advances by updating task authority instead of inventing unmanaged side tasks.",
 ]
 scope_hints = [
     "Use this generic direction until the operator replaces it with a richer direction catalog.",
-    "Represent concrete next actions and proposals in the accepted task catalog.",
+    "Represent concrete next actions and proposals in accepted task authority.",
     "If the user asked for a multi-step artifact, convert the next obvious step from the latest answer into a queued task.",
 ]
 detail_doc_path = ""
@@ -55,7 +52,7 @@ state = "active"
 const DEFAULT_RESULT_OUTPUT_MARKDOWN: &str = r#"# Result Output Prompt
 
 - Summarize the work you actually completed in this turn.
-- If you updated the task catalog compatibility file, mention which tasks changed and why.
+- If you updated task authority, mention which tasks changed and why.
 - Do not claim unrelated work was added when it was rejected by validation.
 "#;
 
@@ -87,10 +84,7 @@ impl From<PlanningBootstrapSupplementalFile> for PlanningDraftFileRecord {
 pub struct PlanningBootstrapArtifacts {
     pub directions_path: String,
     pub directions_toml: String,
-    pub task_ledger_path: String,
-    pub task_ledger_json: String,
-    pub task_ledger_schema_path: String,
-    pub task_ledger_schema_json: String,
+    pub task_authority: TaskAuthorityDocument,
     pub result_output_path: String,
     pub result_output_markdown: String,
     pub supplemental_files: Vec<PlanningBootstrapSupplementalFile>,
@@ -120,100 +114,10 @@ impl PlanningBootstrapService {
         PlanningBootstrapArtifacts {
             directions_path: DIRECTIONS_FILE_PATH.to_string(),
             directions_toml: directions_toml.to_string(),
-            task_ledger_path: TASK_LEDGER_FILE_PATH.to_string(),
-            task_ledger_json: serde_json::to_string_pretty(&TaskLedgerDocument {
+            task_authority: TaskAuthorityDocument {
                 version: PLANNING_FORMAT_VERSION,
                 tasks: Vec::new(),
-            })
-            .expect("bootstrap task ledger should serialize"),
-            task_ledger_schema_path: TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
-            task_ledger_schema_json: serde_json::to_string_pretty(&json!({
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "title": "Task Catalog Compatibility File",
-                "type": "object",
-                "required": ["version", "tasks"],
-                "additionalProperties": false,
-                "properties": {
-                    "version": {
-                        "type": "integer",
-                        "const": PLANNING_FORMAT_VERSION,
-                    },
-                    "tasks": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": [
-                                "id",
-                                "direction_id",
-                                "title",
-                                "description",
-                                "status",
-                                "base_priority",
-                                "created_by",
-                                "last_updated_by",
-                                "updated_at"
-                            ],
-                            "properties": {
-                                "id": {
-                                    "type": "string",
-                                    "minLength": 1
-                                },
-                                "direction_id": {
-                                    "type": "string",
-                                    "minLength": 1
-                                },
-                                "direction_relation_note": { "type": "string" },
-                                "title": {
-                                    "type": "string",
-                                    "minLength": 1
-                                },
-                                "description": {
-                                    "type": "string",
-                                    "minLength": 1
-                                },
-                                "status": {
-                                    "type": "string",
-                                    "enum": [
-                                        "ready",
-                                        "blocked",
-                                        "in_progress",
-                                        "done",
-                                        "cancelled",
-                                        "awaiting_user",
-                                        "proposed"
-                                    ]
-                                },
-                                "base_priority": { "type": "integer" },
-                                "dynamic_priority_delta": { "type": "integer" },
-                                "priority_reason": { "type": "string" },
-                                "depends_on": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                },
-                                "blocked_by": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                },
-                                "created_by": {
-                                    "type": "string",
-                                    "enum": ["user", "llm", "system"]
-                                },
-                                "last_updated_by": {
-                                    "type": "string",
-                                    "enum": ["user", "llm", "system"]
-                                },
-                                "source_turn_id": { "type": ["string", "null"] },
-                                "updated_at": {
-                                    "type": "string",
-                                    "format": "date-time"
-                                }
-                            }
-                        }
-                    }
-                }
-            }))
-            .expect("bootstrap task-ledger schema should serialize"),
+            },
             result_output_path: RESULT_OUTPUT_FILE_PATH.to_string(),
             result_output_markdown: DEFAULT_RESULT_OUTPUT_MARKDOWN.to_string(),
             supplemental_files,
@@ -235,18 +139,8 @@ mod tests {
         let artifacts = service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         assert!(artifacts.directions_path.ends_with("directions.toml"));
-        assert!(artifacts.task_ledger_path.ends_with("task-ledger.json"));
-        assert!(
-            artifacts
-                .task_ledger_schema_path
-                .ends_with("task-ledger.schema.json")
-        );
         assert!(artifacts.result_output_path.ends_with("result-output.md"));
-        assert!(
-            artifacts
-                .task_ledger_json
-                .contains(&format!("\"version\": {PLANNING_FORMAT_VERSION}"))
-        );
+        assert_eq!(artifacts.task_authority.version, PLANNING_FORMAT_VERSION);
     }
 
     #[test]
@@ -285,7 +179,7 @@ mod tests {
         assert!(
             directions.directions[0]
                 .summary
-                .contains("task catalog compatibility file")
+                .contains("DB task authority")
         );
         assert_eq!(artifacts.supplemental_files.len(), 1);
         assert_eq!(

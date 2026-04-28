@@ -9,9 +9,9 @@ The operator-facing current contract lives in
 
 - Git-backed workspaces resolve one canonical repo authority root and persist planning authority under `.codex-exec-loop/runtime/planning-authority.db`.
 - Active planning, staged drafts, official refresh claims, distributor queue claims, and runtime slot, session, and distributor projections are repo-scoped authority-store data.
-- Git-backed runtime writes exported review views under `.codex-exec-loop/runtime/exports/` and no longer rewrites tracked planning files during normal authority updates.
-- Tracked planning files under `.codex-exec-loop/planning/` remain explicit import, review, and portability artifacts for git-backed workspaces, while non-git workspaces still use direct local planning files.
-- Authority inspection can repair runtime export views from store truth when they drift or disappear.
+- Git-backed runtime no longer writes task authority or queue projection JSON files during normal authority updates.
+- Tracked planning files under `.codex-exec-loop/planning/` remain operator-authored directions, prompts, and result-output guidance only.
+- Authority inspection reports store health directly from SQLite state.
 
 ## Planning Artifacts
 
@@ -19,27 +19,18 @@ The operator-facing current contract lives in
 | --- | --- | --- |
 | `.codex-exec-loop/planning/directions.toml` | operator-owned through staged drafts | defines directions, detail-doc mapping, and queue-idle policy |
 | `.codex-exec-loop/planning/directions/<direction-id>.md` | operator-owned through staged drafts | long-form direction detail |
-| `.codex-exec-loop/planning/task-ledger.json` | explicit import/review surface in git-backed mode | task ledger interchange artifact |
-| `.codex-exec-loop/planning/task-ledger.schema.json` | protected planning contract | task-ledger validation schema |
 | `.codex-exec-loop/planning/result-output.md` | protected planning contract | result-output guidance fragment |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | operator-owned through staged drafts | prompt used when queue-idle review is enabled |
-| `.codex-exec-loop/planning/queue.snapshot.json` | legacy-named explicit import and review surface in git-backed mode | queue projection artifact only |
 | `.codex-exec-loop/planning/drafts/<draft>/...` | staged workspace | inactive edits awaiting validation and promotion |
 | `.codex-exec-loop/planning/rejected/<turn>/...` | runtime archive | rejected planning writes preserved for inspection |
-| `.codex-exec-loop/runtime/exports/planning-snapshot.json` | runtime-derived export | full store-backed planning snapshot for diagnostics and review |
-| `.codex-exec-loop/runtime/exports/task-ledger.json` | runtime-derived export | convenience export for the accepted task ledger |
-| `.codex-exec-loop/runtime/exports/queue.snapshot.json` | legacy-named runtime-derived export | convenience export for the accepted queue projection |
 
 ## Technical Rules
 
 - Accepted planning still follows `draft -> validate -> promote`; direct active-state mutation is
   not the primary authoring path.
 - In git-backed workspaces, accepted task authority lives in relational task tables behind the
-  application `PlanningTaskRepositoryPort`; tracked `task-ledger.json` is accepted only through an
-  explicit import or promoted draft.
+  application `PlanningTaskRepositoryPort`.
 - Manual submit and auto follow-up both append the same accepted planning prompt fragment.
-- Queue projection exports are derived state only. The legacy `queue.snapshot.json` filename is a
-  compatibility artifact, not an operator-authored planning concept.
 - Proposed tasks do not enter the executable queue until they are promoted or otherwise moved into
   normal queue state.
 - Builtin `next-task` uses the accepted queue head only.
@@ -69,11 +60,9 @@ The intake authority flow is:
    `PlanningValidationService` and `PriorityQueueService` over the full ledger and direction catalog.
 5. `PlanningTaskRepositoryPort` commits the accepted ledger and rebuilt queue projection in one
    revision-aware task-authority mutation.
-6. Git-backed workspaces export `.codex-exec-loop/runtime/exports/task-ledger.json` and
-   the legacy-named queue projection export from the committed store revision.
 
-LLM or hidden-session output is never allowed to write SQL, tracked JSON, or runtime exports
-directly. It may only implement `PlanningTaskDraftGenerator` and return a structured
+LLM or hidden-session output is never allowed to write SQL or tracked planning JSON directly. It may
+only implement `PlanningTaskDraftGenerator` and return a structured
 `PlanningTaskIntakeDraft`; the same validation helper and accepted mutation path must handle every
 generator.
 
@@ -92,15 +81,12 @@ the normalized prompt, not from generated preview text.
 The task-authority commit must be revision-aware. The intake service loads a planning revision with
 the ledger and queue projection, validates against that view, and commits with compare-and-commit
 semantics. If another accepted planning mutation lands first, user intake reloads the latest
-snapshot, regenerates any colliding id suffix, revalidates, and retries within a bounded loop. Queue
-refresh or export work that was computed from a stale revision must not overwrite a newer intake
-task.
+snapshot, regenerates any colliding id suffix, revalidates, and retries within a bounded loop.
 
 ## Protection And Recovery Rules
 
-- `directions.toml`, `task-ledger.schema.json`, `result-output.md`, and queue projection exports
-  are protected during automated execution.
-- Invalid `task-ledger.json` writes are rolled back, archived, and may trigger a bounded repair retry.
+- `directions.toml` and `result-output.md` are protected during automated execution.
+- Invalid hidden-session task authority payloads are rejected and may trigger a bounded repair retry.
 - Queue refresh and repair work run through the planning worker boundary.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.
 - If automation sees the same accepted queue head again, queue-driven follow-up pauses until the queue advances.
@@ -108,7 +94,7 @@ task.
 ## Current Limits
 
 - Non-git workspaces still fall back to direct local planning files instead of the repo-scoped authority store.
-- Runtime export views can still drift when edited out of band and may require authority inspection to restore parity; tracked planning files require explicit import if the operator wants them accepted again.
+- Tracked planning files require explicit draft promotion if the operator wants them accepted.
 - Real-terminal validation is still required for restart recovery, distributor delivery, and multi-worktree operator flow.
 - The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
 

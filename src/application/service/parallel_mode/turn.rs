@@ -238,12 +238,12 @@ impl ParallelModeTurnService {
     pub fn finalize_official_completion_success(
         &self,
         workspace_directory: &str,
-        ledger_refresh_outcome: &str,
+        authority_refresh_outcome: &str,
     ) -> Vec<String> {
         let mut notices = Vec::new();
         if let Err(error) = self
             .parallel_mode_service
-            .mark_workspace_commit_ready(workspace_directory, ledger_refresh_outcome)
+            .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome)
         {
             notices.push(format!(
                 "commit-ready state could not be recorded after official refresh: {error}"

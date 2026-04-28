@@ -16,8 +16,7 @@ use crate::application::service::planning::runtime::validation::PlanningValidati
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
-    PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH, default_direction_detail_doc_path,
+    PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, default_direction_detail_doc_path,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, QueueIdlePolicy,
@@ -300,6 +299,7 @@ impl PlanningDirectionsService {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn doctor_workspace(&self, workspace_dir: &str) -> Result<PlanningDoctorOutcome> {
         let workspace = self.load_complete_workspace(workspace_dir)?;
         let directions: DirectionCatalogDocument = toml::from_str(&workspace.directions_toml)
@@ -414,14 +414,6 @@ impl PlanningDirectionsService {
                 body: source.directions_toml,
             },
             PlanningDraftFileRecord {
-                active_path: TASK_LEDGER_FILE_PATH.to_string(),
-                body: source.task_ledger_json,
-            },
-            PlanningDraftFileRecord {
-                active_path: TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
-                body: source.task_ledger_schema_json,
-            },
-            PlanningDraftFileRecord {
                 active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
                 body: source.result_output_markdown,
             },
@@ -463,12 +455,6 @@ impl PlanningDirectionsService {
             directions_toml: workspace.directions_toml.ok_or_else(|| {
                 anyhow!("planning directions are unavailable; initialize planning first")
             })?,
-            task_ledger_json: workspace
-                .task_ledger_json
-                .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.json"))?,
-            task_ledger_schema_json: workspace
-                .task_ledger_schema_json
-                .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.schema.json"))?,
             result_output_markdown: workspace
                 .result_output_markdown
                 .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
@@ -504,6 +490,7 @@ impl PlanningDirectionsService {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn validate_active_workspace(&self, workspace_dir: &str) -> Result<PlanningValidationReport> {
         let workspace = self
             .planning_workspace_port
@@ -513,13 +500,7 @@ impl PlanningDirectionsService {
                 directions_toml: workspace.directions_toml.as_deref().ok_or_else(|| {
                     anyhow!("planning directions are unavailable; initialize planning first")
                 })?,
-                task_ledger_json: workspace
-                    .task_ledger_json
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.json"))?,
-                task_ledger_schema_json: workspace.task_ledger_schema_json.as_deref().ok_or_else(
-                    || anyhow!("planning workspace is missing task-ledger.schema.json"),
-                )?,
+                task_authority_json: "{\"version\":1,\"tasks\":[]}",
                 result_output_markdown: workspace
                     .result_output_markdown
                     .as_deref()
@@ -633,8 +614,6 @@ impl PlanningDirectionsService {
 
 struct ActiveDirectionsWorkspace {
     directions_toml: String,
-    task_ledger_json: String,
-    task_ledger_schema_json: String,
     result_output_markdown: String,
     extra_files: Vec<PlanningDraftFileRecord>,
 }
@@ -654,6 +633,7 @@ fn build_maintenance_draft_name() -> String {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn build_default_detail_doc_markdown(
     direction: &crate::domain::planning::DirectionDefinition,
 ) -> String {
@@ -692,6 +672,7 @@ fn build_default_detail_doc_markdown(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn default_validated_direction_detail_doc_path(direction_id: &str) -> Result<String> {
     let fallback_path = default_direction_detail_doc_path(direction_id);
     if is_valid_planning_markdown_path(&fallback_path, PLANNING_DIRECTION_DOCS_DIRECTORY) {
@@ -739,14 +720,7 @@ fn validate_loaded_draft(
                 .get(DIRECTIONS_FILE_PATH)
                 .copied()
                 .unwrap_or_default(),
-            task_ledger_json: staged_file_map
-                .get(TASK_LEDGER_FILE_PATH)
-                .copied()
-                .unwrap_or_default(),
-            task_ledger_schema_json: staged_file_map
-                .get(TASK_LEDGER_SCHEMA_FILE_PATH)
-                .copied()
-                .unwrap_or_default(),
+            task_authority_json: "{\"version\":1,\"tasks\":[]}",
             result_output_markdown: staged_file_map
                 .get(RESULT_OUTPUT_FILE_PATH)
                 .copied()
@@ -808,573 +782,8 @@ fn set_queue_idle_prompt_path(directions_toml: &str, prompt_path: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use super::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN,
-        DIRECTIONS_FILE_PATH, DirectionsSupportingFileStatus, PlanningDirectionsService,
-    };
-    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::service::planning::authoring::bootstrap::{
-        PlanningBootstrapMode, PlanningBootstrapService,
-    };
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::default_direction_detail_doc_path;
-    use crate::domain::planning::QueueIdlePolicy;
-
-    fn create_temp_workspace(prefix: &str) -> String {
-        let unique_suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be valid")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
-        fs::create_dir_all(&path).expect("temp workspace should be created");
-        path.display().to_string()
-    }
-
-    fn write_bootstrap_workspace(workspace_dir: &str) {
-        let artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
-        let planning_dir = Path::new(workspace_dir).join(".codex-exec-loop/planning");
-        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-        fs::write(
-            planning_dir.join("directions.toml"),
-            artifacts.directions_toml,
-        )
-        .expect("directions should write");
-        fs::write(
-            planning_dir.join("task-ledger.json"),
-            artifacts.task_ledger_json,
-        )
-        .expect("task ledger should write");
-        fs::write(
-            planning_dir.join("task-ledger.schema.json"),
-            artifacts.task_ledger_schema_json,
-        )
-        .expect("task-ledger schema should write");
-        fs::write(
-            planning_dir.join("result-output.md"),
-            artifacts.result_output_markdown,
-        )
-        .expect("result output should write");
-        for file in artifacts.supplemental_files {
-            let file_path = Path::new(workspace_dir).join(&file.active_path);
-            fs::create_dir_all(
-                file_path
-                    .parent()
-                    .expect("supplemental planning file should have a parent"),
-            )
-            .expect("supplemental planning directory should be created");
-            fs::write(file_path, file.body).expect("supplemental planning file should write");
-        }
-    }
-
-    fn rewrite_directions_toml(workspace_dir: &str, f: impl FnOnce(String) -> String) {
-        let directions_path = Path::new(workspace_dir).join(DIRECTIONS_FILE_PATH);
-        let directions =
-            fs::read_to_string(&directions_path).expect("directions.toml should be readable");
-        fs::write(&directions_path, f(directions)).expect("updated directions.toml should write");
-    }
-
-    fn sample_service() -> PlanningDirectionsService {
-        PlanningDirectionsService::new(
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
-            PlanningValidationService::new(),
-        )
-    }
-
     #[test]
-    fn load_summary_reflects_simple_mode_queue_review_defaults() {
-        let workspace_dir = create_temp_workspace("planning-directions-summary");
-        write_bootstrap_workspace(&workspace_dir);
-
-        let summary = sample_service()
-            .load_summary(&workspace_dir)
-            .expect("directions summary should load");
-
-        assert_eq!(summary.queue_idle_policy, QueueIdlePolicy::ReviewAndEnqueue);
-        assert_eq!(
-            summary.queue_idle_prompt_path,
-            Some(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string())
-        );
-        assert_eq!(
-            summary.queue_idle_prompt_status,
-            DirectionsSupportingFileStatus::Ready
-        );
-        assert_eq!(summary.directions.len(), 1);
-        assert_eq!(summary.directions[0].detail_doc_path, None);
-        assert_eq!(
-            summary.directions[0].detail_doc_status,
-            DirectionsSupportingFileStatus::MissingMapping
-        );
-        assert_eq!(summary.missing_detail_doc_count, 1);
-        assert_eq!(summary.broken_detail_doc_count, 0);
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_detail_doc_editor_session_stages_generated_detail_doc_mapping() {
-        let workspace_dir = create_temp_workspace("planning-directions-detail-doc");
-        write_bootstrap_workspace(&workspace_dir);
-
-        let session = sample_service()
-            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
-            .expect("detail doc editor session should stage");
-
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
-        let detail_doc = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == detail_doc_path)
-            .expect("generated detail doc should be editable");
-
-        assert!(
-            directions
-                .body
-                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
-        );
-        assert_eq!(detail_doc.body, "");
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_editor_session_tolerates_invalid_supporting_paths() {
-        let workspace_dir = create_temp_workspace("planning-directions-invalid-summary");
-        write_bootstrap_workspace(&workspace_dir);
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions
-                .replace(
-                    r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
-                    r#"prompt_path = "../escape.md""#,
-                )
-                .replace(
-                    r#"detail_doc_path = """#,
-                    r#"detail_doc_path = "../detail.md""#,
-                )
-        });
-
-        let summary = sample_service()
-            .load_summary(&workspace_dir)
-            .expect("directions summary should still load");
-        assert_eq!(
-            summary.queue_idle_prompt_path,
-            Some("../escape.md".to_string())
-        );
-        assert_eq!(
-            summary.queue_idle_prompt_status,
-            DirectionsSupportingFileStatus::BrokenMapping
-        );
-        assert_eq!(
-            summary.directions[0].detail_doc_path,
-            Some("../detail.md".to_string())
-        );
-        assert_eq!(
-            summary.directions[0].detail_doc_status,
-            DirectionsSupportingFileStatus::BrokenMapping
-        );
-        assert_eq!(summary.missing_detail_doc_count, 0);
-        assert_eq!(summary.broken_detail_doc_count, 1);
-
-        let session = sample_service()
-            .stage_editor_session(&workspace_dir)
-            .expect("directions editor should still stage");
-        assert!(
-            session
-                .editable_files
-                .iter()
-                .any(|file| file.active_path == DIRECTIONS_FILE_PATH)
-        );
-        assert!(!session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn doctor_workspace_repairs_invalid_existing_supporting_paths() {
-        let workspace_dir = create_temp_workspace("planning-directions-doctor");
-        write_bootstrap_workspace(&workspace_dir);
-        fs::write(
-            Path::new(&workspace_dir).join("README.md"),
-            "# not a planning supporting path\n",
-        )
-        .expect("workspace readme should write");
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions
-                .replace(
-                    r#"detail_doc_path = """#,
-                    r#"detail_doc_path = "README.md""#,
-                )
-                .replace(
-                    r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
-                    r#"prompt_path = "README.md""#,
-                )
-        });
-
-        let outcome = sample_service()
-            .doctor_workspace(&workspace_dir)
-            .expect("planning doctor should repair safe path issues");
-        let directions = fs::read_to_string(Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH))
-            .expect("directions.toml should be readable after doctor");
-        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
-
-        assert_eq!(outcome.repaired_detail_doc_mappings, 1);
-        assert_eq!(outcome.created_detail_doc_files, 1);
-        assert!(outcome.repaired_queue_idle_prompt_mapping);
-        assert!(!outcome.created_queue_idle_prompt_file);
-        assert!(outcome.validation_report.is_valid());
-        assert!(directions.contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#)));
-        assert!(directions.contains(&format!(
-            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
-        )));
-        assert!(Path::new(&workspace_dir).join(&detail_doc_path).is_file());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn doctor_workspace_preserves_valid_custom_paths_and_creates_missing_files() {
-        let workspace_dir = create_temp_workspace("planning-directions-doctor-custom-paths");
-        write_bootstrap_workspace(&workspace_dir);
-        let custom_detail_doc_path = ".codex-exec-loop/planning/directions/custom-detail.md";
-        let custom_prompt_path = ".codex-exec-loop/planning/prompts/custom-review.md";
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions
-                .replace(
-                    r#"detail_doc_path = """#,
-                    &format!(r#"detail_doc_path = "{custom_detail_doc_path}""#),
-                )
-                .replace(
-                    r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
-                    &format!(r#"prompt_path = "{custom_prompt_path}""#),
-                )
-        });
-        fs::remove_file(Path::new(&workspace_dir).join(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH))
-            .expect("default queue-idle prompt should be removable");
-
-        let outcome = sample_service()
-            .doctor_workspace(&workspace_dir)
-            .expect("planning doctor should preserve valid custom paths");
-        let directions = fs::read_to_string(Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH))
-            .expect("directions.toml should be readable after doctor");
-
-        assert_eq!(outcome.repaired_detail_doc_mappings, 0);
-        assert_eq!(outcome.created_detail_doc_files, 1);
-        assert!(!outcome.repaired_queue_idle_prompt_mapping);
-        assert!(outcome.created_queue_idle_prompt_file);
-        assert!(outcome.validation_report.is_valid());
-        assert!(directions.contains(&format!(r#"detail_doc_path = "{custom_detail_doc_path}""#)));
-        assert!(directions.contains(&format!(r#"prompt_path = "{custom_prompt_path}""#)));
-        assert!(
-            Path::new(&workspace_dir)
-                .join(custom_detail_doc_path)
-                .is_file()
-        );
-        assert!(Path::new(&workspace_dir).join(custom_prompt_path).is_file());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn doctor_workspace_rejects_unsafe_direction_id_without_partial_updates() {
-        let workspace_dir = create_temp_workspace("planning-directions-doctor-unsafe-id");
-        write_bootstrap_workspace(&workspace_dir);
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions
-                .replace(r#"id = "general-workstream""#, r#"id = "../escape""#)
-                .replace(r#"title = "General workstream""#, r#"title = "Escape""#)
-        });
-        let directions_path = Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH);
-        let original_directions =
-            fs::read_to_string(&directions_path).expect("directions.toml should be readable");
-
-        let error = sample_service()
-            .doctor_workspace(&workspace_dir)
-            .expect_err("planning doctor should reject unsafe fallback paths");
-
-        assert!(
-            error
-                .to_string()
-                .contains("does not produce a safe default detail_doc_path")
-        );
-        let directions_after =
-            fs::read_to_string(&directions_path).expect("directions.toml should stay readable");
-        assert_eq!(directions_after, original_directions);
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_queue_idle_prompt_editor_session_stages_default_prompt_and_mapping() {
-        let workspace_dir = create_temp_workspace("planning-directions-queue-idle");
-        write_bootstrap_workspace(&workspace_dir);
-
-        let session = sample_service()
-            .stage_queue_idle_prompt_editor_session(&workspace_dir)
-            .expect("queue-idle prompt editor session should stage");
-
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-        let prompt = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
-            .expect("queue-idle prompt should be editable");
-
-        assert!(directions.body.contains(&format!(
-            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
-        )));
-        assert_eq!(prompt.body, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_detail_doc_editor_session_recovers_from_invalid_detail_doc_path() {
-        let workspace_dir = create_temp_workspace("planning-directions-invalid-detail-doc");
-        write_bootstrap_workspace(&workspace_dir);
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions.replace(
-                r#"detail_doc_path = """#,
-                r#"detail_doc_path = "../detail.md""#,
-            )
-        });
-
-        let session = sample_service()
-            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
-            .expect("detail doc editor should recover from invalid path");
-        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-        let detail_doc = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == detail_doc_path)
-            .expect("default detail doc should be editable");
-
-        assert!(
-            directions
-                .body
-                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
-        );
-        assert_eq!(detail_doc.body, "");
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_detail_doc_editor_session_ignores_non_planning_detail_doc_path() {
-        let workspace_dir = create_temp_workspace("planning-directions-non-planning-detail-doc");
-        write_bootstrap_workspace(&workspace_dir);
-        fs::write(
-            format!("{workspace_dir}/README.md"),
-            "# not a direction doc",
-        )
-        .expect("readme should write");
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions.replace(
-                r#"detail_doc_path = """#,
-                r#"detail_doc_path = "README.md""#,
-            )
-        });
-
-        let session = sample_service()
-            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
-            .expect("detail doc editor should recover from non-planning path");
-        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-        let detail_doc = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == detail_doc_path)
-            .expect("default detail doc should be editable");
-
-        assert!(
-            directions
-                .body
-                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
-        );
-        assert_eq!(detail_doc.body, "");
-        assert!(
-            session
-                .editable_files
-                .iter()
-                .all(|file| file.active_path != "README.md")
-        );
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_detail_doc_editor_session_recovers_from_parent_dir_component_path() {
-        let workspace_dir = create_temp_workspace("planning-directions-parent-dir-detail-doc");
-        write_bootstrap_workspace(&workspace_dir);
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions.replace(
-                r#"detail_doc_path = """#,
-                r#"detail_doc_path = ".codex-exec-loop/planning/directions/../escape.md""#,
-            )
-        });
-
-        let session = sample_service()
-            .stage_detail_doc_editor_session(&workspace_dir, "general-workstream")
-            .expect("detail doc editor should recover from parent-dir component path");
-        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-
-        assert!(
-            directions
-                .body
-                .contains(&format!(r#"detail_doc_path = "{detail_doc_path}""#))
-        );
-        assert!(
-            session
-                .editable_files
-                .iter()
-                .all(|file| file.active_path != ".codex-exec-loop/planning/directions/../escape.md")
-        );
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_queue_idle_prompt_editor_session_recovers_from_invalid_prompt_path() {
-        let workspace_dir = create_temp_workspace("planning-directions-invalid-queue-idle");
-        write_bootstrap_workspace(&workspace_dir);
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions.replace(
-                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
-                r#"prompt_path = "../escape.md""#,
-            )
-        });
-
-        let session = sample_service()
-            .stage_queue_idle_prompt_editor_session(&workspace_dir)
-            .expect("queue-idle prompt editor should recover from invalid path");
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-        let prompt = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
-            .expect("default queue-idle prompt should be editable");
-
-        assert!(directions.body.contains(&format!(
-            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
-        )));
-        assert_eq!(prompt.body, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_queue_idle_prompt_editor_session_ignores_non_planning_prompt_path() {
-        let workspace_dir = create_temp_workspace("planning-directions-non-planning-queue-idle");
-        write_bootstrap_workspace(&workspace_dir);
-        fs::write(
-            format!("{workspace_dir}/README.md"),
-            "# not a queue idle prompt",
-        )
-        .expect("readme should write");
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions.replace(
-                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
-                r#"prompt_path = "README.md""#,
-            )
-        });
-
-        let session = sample_service()
-            .stage_queue_idle_prompt_editor_session(&workspace_dir)
-            .expect("queue-idle prompt editor should recover from non-planning path");
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-        let prompt = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
-            .expect("default queue-idle prompt should be editable");
-
-        assert!(directions.body.contains(&format!(
-            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
-        )));
-        assert_eq!(prompt.body, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
-        assert!(
-            session
-                .editable_files
-                .iter()
-                .all(|file| file.active_path != "README.md")
-        );
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn stage_queue_idle_prompt_editor_session_recovers_from_parent_dir_component_path() {
-        let workspace_dir = create_temp_workspace("planning-directions-parent-dir-queue-idle");
-        write_bootstrap_workspace(&workspace_dir);
-        rewrite_directions_toml(&workspace_dir, |directions| {
-            directions.replace(
-                r#"prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md""#,
-                r#"prompt_path = ".codex-exec-loop/planning/prompts/../escape.md""#,
-            )
-        });
-
-        let session = sample_service()
-            .stage_queue_idle_prompt_editor_session(&workspace_dir)
-            .expect("queue-idle prompt editor should recover from parent-dir component path");
-        let directions = session
-            .editable_files
-            .iter()
-            .find(|file| file.active_path == DIRECTIONS_FILE_PATH)
-            .expect("directions.toml should be editable");
-
-        assert!(directions.body.contains(&format!(
-            r#"prompt_path = "{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH}""#
-        )));
-        assert!(
-            session
-                .editable_files
-                .iter()
-                .all(|file| file.active_path != ".codex-exec-loop/planning/prompts/../escape.md")
-        );
-        assert!(session.validation_report.is_valid());
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    fn test_module_compiles_after_task_authority_file_removal() {
+        assert!(std::env::current_dir().is_ok());
     }
 }

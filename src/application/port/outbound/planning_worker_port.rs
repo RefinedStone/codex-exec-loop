@@ -3,7 +3,7 @@ use anyhow::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningWorkerOperation {
     RefreshQueue,
-    RepairTaskLedger,
+    RepairTaskAuthority,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

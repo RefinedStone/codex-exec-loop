@@ -6,19 +6,16 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthoritySnapshot;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-use crate::application::service::planning::{
-    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
-};
+use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
-    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskLedgerDocument,
+    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskAuthorityDocument,
 };
 
 use super::{
     AUTHORITY_STORE_MODE, AUTHORITY_STORE_SCHEMA_VERSION, TASK_LEDGER_VERSION_METADATA_KEY,
-    read_metadata_i64_connection, read_metadata_string_connection, remove_active_documents,
-    replace_task_authority_tables, table_exists,
+    read_metadata_i64_connection, read_metadata_string_connection, replace_task_authority_tables,
+    table_exists,
 };
 
 pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
@@ -254,14 +251,7 @@ pub(super) fn load_active_documents(connection: &Connection) -> Result<BTreeMap<
 pub(super) fn load_active_authority_documents(
     connection: &Connection,
 ) -> Result<BTreeMap<String, String>> {
-    let mut documents = load_active_documents(connection)?;
-    if let Some(task_ledger_json) = load_task_ledger_json_from_connection(connection)? {
-        documents.insert(TASK_LEDGER_FILE_PATH.to_string(), task_ledger_json);
-    }
-    if let Some(queue_snapshot_json) = load_queue_snapshot_json_from_connection(connection)? {
-        documents.insert(QUEUE_SNAPSHOT_FILE_PATH.to_string(), queue_snapshot_json);
-    }
-    Ok(documents)
+    load_active_documents(connection)
 }
 
 pub(super) fn load_active_workspace_record(
@@ -270,35 +260,11 @@ pub(super) fn load_active_workspace_record(
     let documents = load_active_documents(connection)?;
     Ok(PlanningWorkspaceLoadRecord {
         directions_toml: documents.get(DIRECTIONS_FILE_PATH).cloned(),
-        task_ledger_json: load_task_ledger_json_from_connection(connection)?,
-        task_ledger_schema_json: documents.get(TASK_LEDGER_SCHEMA_FILE_PATH).cloned(),
-        queue_snapshot_json: load_queue_snapshot_json_from_connection(connection)?,
         result_output_markdown: documents.get(RESULT_OUTPUT_FILE_PATH).cloned(),
     })
 }
 
 pub(super) fn load_active_document(
-    connection: &Connection,
-    relative_path: &str,
-) -> Result<Option<String>> {
-    if relative_path == TASK_LEDGER_FILE_PATH {
-        return load_task_ledger_json_from_connection(connection);
-    }
-    if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
-        return load_queue_snapshot_json_from_connection(connection);
-    }
-
-    connection
-        .query_row(
-            "SELECT content FROM active_documents WHERE relative_path = ?1",
-            params![relative_path],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .with_context(|| format!("failed to read active authority document `{relative_path}`"))
-}
-
-pub(super) fn raw_active_document(
     connection: &Connection,
     relative_path: &str,
 ) -> Result<Option<String>> {
@@ -315,7 +281,7 @@ pub(super) fn raw_active_document(
 pub(super) fn load_task_authority_snapshot_from_connection(
     connection: &Connection,
 ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-    let Some(task_ledger) = load_task_ledger_from_connection(connection)? else {
+    let Some(task_authority) = load_task_authority_from_connection(connection)? else {
         return Ok(None);
     };
     let queue_projection =
@@ -324,30 +290,14 @@ pub(super) fn load_task_authority_snapshot_from_connection(
         read_metadata_i64_connection(connection, "planning_revision")?.unwrap_or(0);
     Ok(Some(PlanningTaskAuthoritySnapshot {
         planning_revision,
-        task_ledger,
+        task_authority,
         queue_projection,
     }))
 }
 
-pub(super) fn load_task_ledger_json_from_connection(
+pub(super) fn load_task_authority_from_connection(
     connection: &Connection,
-) -> Result<Option<String>> {
-    load_task_ledger_from_connection(connection)?
-        .map(|task_ledger| serialize_pretty_json(&task_ledger))
-        .transpose()
-}
-
-pub(super) fn load_queue_snapshot_json_from_connection(
-    connection: &Connection,
-) -> Result<Option<String>> {
-    load_queue_projection_from_connection(connection)?
-        .map(|queue_projection| serialize_pretty_json(&queue_projection))
-        .transpose()
-}
-
-pub(super) fn load_task_ledger_from_connection(
-    connection: &Connection,
-) -> Result<Option<TaskLedgerDocument>> {
+) -> Result<Option<TaskAuthorityDocument>> {
     if !task_authority_exists(connection)? {
         return Ok(None);
     }
@@ -375,7 +325,7 @@ pub(super) fn load_task_ledger_from_connection(
         );
     }
 
-    Ok(Some(TaskLedgerDocument { version, tasks }))
+    Ok(Some(TaskAuthorityDocument { version, tasks }))
 }
 
 pub(super) fn load_queue_projection_from_connection(
@@ -452,10 +402,6 @@ pub(super) fn task_authority_exists(connection: &Connection) -> Result<bool> {
         .map(|value| value.is_some())
 }
 
-pub(super) fn serialize_pretty_json<T: serde::Serialize>(value: &T) -> Result<String> {
-    serde_json::to_string_pretty(value).context("failed to serialize planning authority json")
-}
-
 pub(super) fn empty_queue_projection() -> PriorityQueueProjection {
     PriorityQueueProjection {
         next_task: None,
@@ -465,16 +411,11 @@ pub(super) fn empty_queue_projection() -> PriorityQueueProjection {
     }
 }
 
-pub(super) fn parse_queue_projection_export(body: &str) -> PriorityQueueProjection {
-    serde_json::from_str::<PriorityQueueProjection>(body)
-        .unwrap_or_else(|_| empty_queue_projection())
-}
-
 pub(super) fn reconcile_task_authority_with_directions(
     transaction: &rusqlite::Transaction<'_>,
     directions_toml: Option<&str>,
 ) -> Result<()> {
-    let Some(mut task_ledger) = load_task_ledger_from_connection(transaction)? else {
+    let Some(mut task_authority) = load_task_authority_from_connection(transaction)? else {
         return Ok(());
     };
     let direction_ids = match directions_toml {
@@ -482,12 +423,10 @@ pub(super) fn reconcile_task_authority_with_directions(
             .with_context(|| format!("failed to parse `{DIRECTIONS_FILE_PATH}`"))?,
         None => BTreeSet::new(),
     };
-    if !prune_task_ledger_to_direction_ids(&mut task_ledger, &direction_ids) {
+    if !prune_task_authority_to_direction_ids(&mut task_authority, &direction_ids) {
         return Ok(());
     }
-    replace_task_authority_tables(transaction, &task_ledger, &empty_queue_projection())?;
-    remove_active_documents(transaction, TASK_LEDGER_FILE_PATH)?;
-    remove_active_documents(transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
+    replace_task_authority_tables(transaction, &task_authority, &empty_queue_projection())?;
     Ok(())
 }
 
@@ -499,12 +438,12 @@ pub(super) fn parse_direction_ids(directions_toml: &str) -> Result<BTreeSet<Stri
         .collect())
 }
 
-pub(super) fn prune_task_ledger_to_direction_ids(
-    task_ledger: &mut TaskLedgerDocument,
+pub(super) fn prune_task_authority_to_direction_ids(
+    task_authority: &mut TaskAuthorityDocument,
     direction_ids: &BTreeSet<String>,
 ) -> bool {
     let mut removed_task_ids = BTreeSet::new();
-    task_ledger.tasks.retain(|task| {
+    task_authority.tasks.retain(|task| {
         let keep = direction_ids.contains(task.direction_id.trim());
         if !keep {
             removed_task_ids.insert(task.id.trim().to_string());
@@ -514,7 +453,7 @@ pub(super) fn prune_task_ledger_to_direction_ids(
     if removed_task_ids.is_empty() {
         return false;
     }
-    for task in &mut task_ledger.tasks {
+    for task in &mut task_authority.tasks {
         task.depends_on
             .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
         task.blocked_by

@@ -56,8 +56,7 @@ pub struct PlanningAuthorityShadowStoreInspection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningFileKind {
     Directions,
-    TaskLedger,
-    TaskLedgerSchema,
+    TaskAuthority,
     ResultOutput,
 }
 
@@ -190,7 +189,7 @@ pub enum DirectionState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TaskLedgerDocument {
+pub struct TaskAuthorityDocument {
     pub version: u32,
     #[serde(default)]
     pub tasks: Vec<TaskDefinition>,
@@ -471,15 +470,14 @@ impl TaskDefinition {
 #[derive(Debug, Clone)]
 pub struct PlanningWorkspaceFiles<'a> {
     pub directions_toml: &'a str,
-    pub task_ledger_json: &'a str,
-    pub task_ledger_schema_json: &'a str,
+    pub task_authority_json: &'a str,
     pub result_output_markdown: &'a str,
 }
 
 #[derive(Debug, Clone)]
 pub struct PlanningValidationResult {
     pub directions: Option<DirectionCatalogDocument>,
-    pub task_ledger: Option<TaskLedgerDocument>,
+    pub task_authority: Option<TaskAuthorityDocument>,
     pub report: PlanningValidationReport,
 }
 

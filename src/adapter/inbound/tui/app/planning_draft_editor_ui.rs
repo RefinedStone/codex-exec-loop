@@ -60,11 +60,6 @@ impl PlanningDraftEditorUiState {
         self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
     }
 
-    #[cfg(test)]
-    pub fn is_open(&self) -> bool {
-        self.session.is_some()
-    }
-
     pub fn draft_name(&self) -> Option<&str> {
         self.session
             .as_ref()
@@ -525,8 +520,9 @@ mod tests {
                     body: "version = 1".to_string(),
                 },
                 PlanningDraftEditorFile {
-                    active_path: ".codex-exec-loop/planning/task-ledger.json".to_string(),
-                    staged_path: "/tmp/bootstrap-test/task-ledger.json".to_string(),
+                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    staged_path: "/tmp/bootstrap-test/.codex-exec-loop/planning/result-output.md"
+                        .to_string(),
                     body: "{\n  \"version\": 1,\n  \"tasks\": []\n}".to_string(),
                 },
             ],
@@ -562,7 +558,7 @@ mod tests {
         state.move_file_selection(1);
         assert_eq!(
             state.selected_buffer().expect("buffer").active_path(),
-            ".codex-exec-loop/planning/task-ledger.json"
+            ".codex-exec-loop/planning/result-output.md"
         );
         assert!(!state.selected_buffer().expect("buffer").is_dirty());
 
@@ -632,9 +628,9 @@ mod tests {
 
         let mut invalid_report = PlanningValidationReport::default();
         invalid_report.push_error(
-            PlanningFileKind::TaskLedger,
+            PlanningFileKind::TaskAuthority,
             "invalid-json",
-            "task-ledger.json must parse as valid json",
+            "result-output.md must parse as valid markdown",
         );
         state.apply_save_result(invalid_report);
 

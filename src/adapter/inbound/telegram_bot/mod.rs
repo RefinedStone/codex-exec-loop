@@ -663,7 +663,7 @@ mod tests {
         ) -> Result<PlanningControlResetOutcome> {
             Ok(PlanningControlResetOutcome {
                 target: target.label().to_string(),
-                rewritten_paths: vec![".codex-exec-loop/planning/task-ledger.json".to_string()],
+                rewritten_paths: vec!["DB task authority".to_string()],
                 removed_paths: Vec::new(),
                 planning_state: "ready".to_string(),
                 health: Some("queue reset complete".to_string()),

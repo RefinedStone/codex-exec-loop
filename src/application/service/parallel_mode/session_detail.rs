@@ -15,7 +15,7 @@ pub(super) fn default_validation_summary() -> &'static str {
     "validation summary is not recorded in runtime yet"
 }
 
-pub(super) fn default_ledger_refresh_outcome() -> &'static str {
+pub(super) fn default_authority_refresh_outcome() -> &'static str {
     "no official completion has been reported yet"
 }
 
@@ -40,7 +40,7 @@ pub(super) fn build_assigned_session_detail(
         "in_progress",
         "slot lease acquired and branch reserved for launch",
         default_validation_summary(),
-        default_ledger_refresh_outcome(),
+        default_authority_refresh_outcome(),
         None,
         vec![ParallelModeAgentSessionHistoryEntry::new(
             "assigned",
@@ -146,7 +146,7 @@ pub(super) fn record_reported_complete_session_detail(
             detail.completion_state_label = "reported_complete".to_string();
             detail.latest_summary = update.final_response_summary.to_string();
             detail.validation_summary = update.validation_summary.to_string();
-            detail.ledger_refresh_outcome =
+            detail.authority_refresh_outcome =
                 "completion reported; official ledger refresh is pending".to_string();
             detail.distributor_outcome = None;
             detail.updated_at = update.completed_at.to_string();
@@ -185,7 +185,7 @@ pub(super) fn record_ledger_refreshing_session_detail(
             detail.latest_summary =
                 "completion reported and hidden planning worker is refreshing the ledger"
                     .to_string();
-            detail.ledger_refresh_outcome =
+            detail.authority_refresh_outcome =
                 "hidden planning worker is refreshing the official task ledger".to_string();
             detail.updated_at = timestamp.clone();
             push_session_history(
@@ -204,7 +204,7 @@ pub(super) fn record_commit_ready_session_detail(
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
-    ledger_refresh_outcome: &str,
+    authority_refresh_outcome: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
@@ -218,7 +218,7 @@ pub(super) fn record_commit_ready_session_detail(
             detail.completion_state_label = "commit_ready".to_string();
             detail.latest_summary =
                 "official ledger refresh accepted the completion report".to_string();
-            detail.ledger_refresh_outcome = ledger_refresh_outcome.trim().to_string();
+            detail.authority_refresh_outcome = authority_refresh_outcome.trim().to_string();
             detail.distributor_outcome =
                 Some("commit-ready result is waiting for distributor integration".to_string());
             detail.updated_at = timestamp.clone();
@@ -446,7 +446,7 @@ pub(super) fn record_official_completion_failed_session_detail(
             detail.state_label = "failed".to_string();
             detail.completion_state_label = "failed".to_string();
             detail.latest_summary = "official completion refresh failed".to_string();
-            detail.ledger_refresh_outcome = failure_detail.trim().to_string();
+            detail.authority_refresh_outcome = failure_detail.trim().to_string();
             detail.distributor_outcome = Some(
                 "not queued for distributor integration because official refresh failed"
                     .to_string(),

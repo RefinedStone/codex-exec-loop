@@ -914,9 +914,9 @@ pub(super) fn sample_planning_editor_session() -> PlanningDraftEditorSession {
                 body: "version = 1\n".to_string(),
             },
             PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/task-ledger.json".to_string(),
+                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
                 staged_path:
-                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/task-ledger.json"
+                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/.codex-exec-loop/planning/result-output.md"
                         .to_string(),
                 body: "{\n  \"version\": 1,\n  \"tasks\": []\n}".to_string(),
             },

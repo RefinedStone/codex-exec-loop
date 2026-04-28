@@ -42,7 +42,7 @@ Key artifacts:
 | --- | --- |
 | `.codex-exec-loop/planning/directions.toml` | directions, detail-doc mapping, and queue-idle policy |
 | `.codex-exec-loop/planning/directions/<direction-id>.md` | long-form direction detail |
-| `.codex-exec-loop/planning/task-ledger.json` | task ledger import/review artifact; relational store is authority in git-backed workspaces |
+| `.codex-exec-loop/planning/task-authority.json` | task ledger import/review artifact; relational store is authority in git-backed workspaces |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | queue-idle supporting prompt |
 | `.codex-exec-loop/planning/drafts/<draft>/...` | staged inactive edits awaiting promote |
 | `.codex-exec-loop/planning/rejected/<turn>/...` | archived invalid planning writes |

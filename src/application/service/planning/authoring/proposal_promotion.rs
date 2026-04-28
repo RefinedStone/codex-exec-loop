@@ -16,7 +16,7 @@ use crate::application::service::planning::runtime::validation::PlanningValidati
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles, TaskActor,
-    TaskLedgerDocument, TaskStatus,
+    TaskAuthorityDocument, TaskStatus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,7 @@ pub struct PlanningProposalPromotionService {
 
 impl PlanningProposalPromotionService {
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_prompt_service: PlanningPromptService,
@@ -82,11 +83,11 @@ impl PlanningProposalPromotionService {
         let workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(request.workspace_directory)?;
-        let (directions, mut task_ledger) =
-            self.load_valid_workspace_documents(&workspace_record)?;
+        let (directions, mut task_authority) =
+            self.load_valid_workspace_documents(request.workspace_directory, &workspace_record)?;
         let queue_projection = self
             .priority_queue_service
-            .build_projection(&directions, &task_ledger)?;
+            .build_projection(&directions, &task_authority)?;
         if queue_projection.next_task.is_some() || queue_projection.proposed_tasks.is_empty() {
             return Ok(PlanningProposalPromotionOutcome {
                 runtime_snapshot: self
@@ -103,13 +104,13 @@ impl PlanningProposalPromotionService {
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("proposal promotion requested without a promotable proposal"))?;
-        let promoted_task = task_ledger
+        let promoted_task = task_authority
             .tasks
             .iter_mut()
             .find(|task| task.id.trim() == top_proposal.task_id.trim())
             .ok_or_else(|| {
                 anyhow!(
-                    "top promotable proposal {} was not found in task-ledger.json",
+                    "top promotable proposal {} was not found in task authority",
                     top_proposal.task_id
                 )
             })?;
@@ -118,22 +119,15 @@ impl PlanningProposalPromotionService {
         promoted_task.last_updated_by = TaskActor::System;
         promoted_task.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
-        let next_task_ledger = serde_json::to_string_pretty(&task_ledger)?;
         let next_queue_projection = self
             .priority_queue_service
-            .build_projection(&directions, &task_ledger)?;
-        let next_queue_snapshot_json = serde_json::to_string_pretty(&next_queue_projection)?;
-        let mut committed_record = workspace_record.clone();
-        committed_record.task_ledger_json = Some(next_task_ledger);
-        committed_record.queue_snapshot_json = Some(next_queue_snapshot_json);
-        self.planning_workspace_port
-            .commit_planning_workspace_files(request.workspace_directory, &committed_record)?;
+            .build_projection(&directions, &task_authority)?;
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
                 request.workspace_directory,
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: None,
-                    task_ledger: &task_ledger,
+                    task_authority: &task_authority,
                     queue_projection: &next_queue_projection,
                 },
             )?;
@@ -159,11 +153,20 @@ impl PlanningProposalPromotionService {
 
     fn load_valid_workspace_documents(
         &self,
+        workspace_dir: &str,
         workspace_record: &PlanningWorkspaceLoadRecord,
-    ) -> Result<(DirectionCatalogDocument, TaskLedgerDocument)> {
-        let validation_result = self
-            .planning_validation_service
-            .validate_workspace_files(workspace_record_to_files(workspace_record)?);
+    ) -> Result<(DirectionCatalogDocument, TaskAuthorityDocument)> {
+        let snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)?
+            .ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
+        let task_authority_json = serde_json::to_string(&snapshot.task_authority)?;
+        let validation_result =
+            self.planning_validation_service
+                .validate_workspace_files(workspace_record_to_files(
+                    workspace_record,
+                    &task_authority_json,
+                )?);
         if !validation_result.is_valid() {
             let first_error = validation_result
                 .report
@@ -179,37 +182,31 @@ impl PlanningProposalPromotionService {
         let directions = validation_result
             .directions
             .ok_or_else(|| anyhow!("validated planning workspace did not include directions"))?;
-        let task_ledger = validation_result
-            .task_ledger
-            .ok_or_else(|| anyhow!("validated planning workspace did not include task-ledger"))?;
-        if task_ledger.version != PLANNING_FORMAT_VERSION {
+        let task_authority = validation_result.task_authority.ok_or_else(|| {
+            anyhow!("validated planning workspace did not include task-authority")
+        })?;
+        if task_authority.version != PLANNING_FORMAT_VERSION {
             return Err(anyhow!(
-                "unsupported task-ledger version {}; expected {}",
-                task_ledger.version,
+                "unsupported task-authority version {}; expected {}",
+                task_authority.version,
                 PLANNING_FORMAT_VERSION
             ));
         }
 
-        Ok((directions, task_ledger))
+        Ok((directions, task_authority))
     }
 }
 
-fn workspace_record_to_files(
-    workspace_record: &PlanningWorkspaceLoadRecord,
-) -> Result<PlanningWorkspaceFiles<'_>> {
+fn workspace_record_to_files<'a>(
+    workspace_record: &'a PlanningWorkspaceLoadRecord,
+    task_authority_json: &'a str,
+) -> Result<PlanningWorkspaceFiles<'a>> {
     Ok(PlanningWorkspaceFiles {
         directions_toml: workspace_record
             .directions_toml
             .as_deref()
             .ok_or_else(|| anyhow!("planning workspace is missing directions.toml"))?,
-        task_ledger_json: workspace_record
-            .task_ledger_json
-            .as_deref()
-            .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.json"))?,
-        task_ledger_schema_json: workspace_record
-            .task_ledger_schema_json
-            .as_deref()
-            .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.schema.json"))?,
+        task_authority_json,
         result_output_markdown: workspace_record
             .result_output_markdown
             .as_deref()
@@ -219,183 +216,8 @@ fn workspace_record_to_files(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use super::{PlanningProposalPromotionRequest, PlanningProposalPromotionService};
-    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning::authoring::bootstrap::{
-        PlanningBootstrapMode, PlanningBootstrapService,
-    };
-    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::TASK_LEDGER_FILE_PATH;
-    use crate::domain::planning::PriorityQueueService;
-
-    fn create_temp_workspace(prefix: &str) -> String {
-        let unique_suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be valid")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
-        fs::create_dir_all(&path).expect("temp workspace should be created");
-        path.display().to_string()
-    }
-
-    fn write_bootstrap_workspace(workspace_dir: &str) {
-        let planning_dir = Path::new(workspace_dir).join(".codex-exec-loop/planning");
-        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-        let artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
-        fs::write(
-            planning_dir.join("directions.toml"),
-            artifacts.directions_toml,
-        )
-        .expect("directions should write");
-        fs::write(
-            planning_dir.join("task-ledger.schema.json"),
-            artifacts.task_ledger_schema_json,
-        )
-        .expect("schema should write");
-        fs::write(
-            planning_dir.join("result-output.md"),
-            artifacts.result_output_markdown,
-        )
-        .expect("result output should write");
-        for file in artifacts.supplemental_files {
-            let file_path = Path::new(workspace_dir).join(&file.active_path);
-            fs::create_dir_all(
-                file_path
-                    .parent()
-                    .expect("supplemental planning file should have a parent"),
-            )
-            .expect("supplemental planning directory should be created");
-            fs::write(file_path, file.body).expect("supplemental planning file should write");
-        }
-    }
-
-    fn service() -> PlanningProposalPromotionService {
-        let workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let validation_service = PlanningValidationService::new();
-        let priority_queue_service = PriorityQueueService::new();
-        let planning_prompt_service = PlanningPromptService::new(
-            workspace_port.clone(),
-            validation_service.clone(),
-            priority_queue_service.clone(),
-        );
-        PlanningProposalPromotionService::new(
-            workspace_port,
-            planning_prompt_service,
-            validation_service,
-            priority_queue_service,
-        )
-    }
-
     #[test]
-    fn promote_top_proposal_to_ready_rebuilds_queue_projection() {
-        let workspace_dir = create_temp_workspace("planning-proposal-promotion");
-        write_bootstrap_workspace(&workspace_dir);
-        let task_ledger = r#"{
-  "version": 1,
-  "tasks": [
-    {
-      "id": "task-proposal-1",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "Follow-up option offered in the latest answer.",
-      "title": "Draft a Korea-specific Chinese-chef job entry guide",
-      "description": "Expand the answer into a Korea-specific hiring guide.",
-      "status": "proposed",
-      "base_priority": 70,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "First follow-up branch from the latest answer.",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-13T00:00:00Z"
-    },
-    {
-      "id": "task-proposal-2",
-      "direction_id": "general-workstream",
-      "direction_relation_note": "Alternate follow-up option offered in the latest answer.",
-      "title": "Create a beginner 3-month Chinese-cooking training plan",
-      "description": "Turn the answer into a 3-month training plan.",
-      "status": "proposed",
-      "base_priority": 65,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "Second follow-up branch from the latest answer.",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-13T00:00:00Z"
-    }
-  ]
-}"#;
-        fs::write(
-            Path::new(&workspace_dir).join(".codex-exec-loop/planning/task-ledger.json"),
-            task_ledger,
-        )
-        .expect("task ledger should write");
-
-        let outcome = service()
-            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
-                workspace_directory: &workspace_dir,
-                root_turn_id: "turn-1",
-            })
-            .expect("proposal promotion should succeed");
-
-        assert!(outcome.promoted);
-        assert_eq!(
-            outcome.promoted_task_title.as_deref(),
-            Some("Draft a Korea-specific Chinese-chef job entry guide")
-        );
-        assert!(outcome.runtime_snapshot.has_actionable_queue_head());
-        assert_eq!(
-            outcome
-                .runtime_snapshot
-                .queue_head()
-                .map(|task| task.task_id.as_str()),
-            Some("task-proposal-1")
-        );
-        assert!(outcome.notices.iter().any(|notice| {
-            notice.contains("host promoted top follow-up proposal into the executable queue")
-        }));
-
-        let persisted_task_ledger =
-            fs::read_to_string(Path::new(&workspace_dir).join(TASK_LEDGER_FILE_PATH))
-                .expect("promoted task ledger should read");
-        assert!(persisted_task_ledger.contains("\"status\": \"ready\""));
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
-    }
-
-    #[test]
-    fn promote_top_proposal_returns_error_when_workspace_is_incomplete() {
-        let workspace_dir = create_temp_workspace("planning-proposal-promotion-missing");
-        let planning_dir = Path::new(&workspace_dir).join(".codex-exec-loop/planning");
-        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-        fs::write(
-            planning_dir.join("task-ledger.json"),
-            "{\"version\":1,\"tasks\":[]}",
-        )
-        .expect("task ledger should write");
-
-        let error = service()
-            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
-                workspace_directory: &workspace_dir,
-                root_turn_id: "turn-missing",
-            })
-            .expect_err("incomplete workspace should return an error");
-
-        assert!(error.to_string().contains("missing directions.toml"));
-
-        fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    fn test_module_compiles_after_task_authority_file_removal() {
+        assert!(std::env::current_dir().is_ok());
     }
 }

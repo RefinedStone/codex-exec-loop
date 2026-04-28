@@ -9,7 +9,7 @@ use crate::domain::parallel_mode::{
 use super::distributor::{ParallelModeDistributorQueueRecord, ParallelModeDistributorService};
 use super::{
     PoolBoardWithContextResult, PoolRuntimeContext, build_assigned_session_detail,
-    build_pool_board, default_ledger_refresh_outcome, default_supervisor_notice,
+    build_pool_board, default_authority_refresh_outcome, default_supervisor_notice,
     default_validation_summary, derive_supervisor_state, format_elapsed_label_from_timestamp,
     inspect_pool_board_and_context, lease_session_key, pool_operator_recovery_notice,
     reconcile_pool_board_and_context,
@@ -334,8 +334,8 @@ fn build_live_session_detail(
     if detail.validation_summary.trim().is_empty() {
         detail.validation_summary = default_validation_summary().to_string();
     }
-    if detail.ledger_refresh_outcome.trim().is_empty() {
-        detail.ledger_refresh_outcome = default_ledger_refresh_outcome().to_string();
+    if detail.authority_refresh_outcome.trim().is_empty() {
+        detail.authority_refresh_outcome = default_authority_refresh_outcome().to_string();
     }
     if detail.distributor_outcome.is_none() {
         detail.distributor_outcome = live_distributor_outcome(lease);

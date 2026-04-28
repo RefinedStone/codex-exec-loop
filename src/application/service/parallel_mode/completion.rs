@@ -119,7 +119,7 @@ impl ParallelModeService {
     pub fn mark_workspace_commit_ready(
         &self,
         workspace_dir: &str,
-        ledger_refresh_outcome: &str,
+        authority_refresh_outcome: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
@@ -135,7 +135,7 @@ impl ParallelModeService {
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
-            ledger_refresh_outcome,
+            authority_refresh_outcome,
         )
         .map(Some)
     }

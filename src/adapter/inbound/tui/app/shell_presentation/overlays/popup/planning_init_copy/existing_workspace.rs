@@ -21,7 +21,7 @@ pub(super) fn build_existing_workspace_overlay_view(
             ),
         ],
         summary_lines: vec![Line::from(
-            "Hidden planner sessions update task-ledger.json through the active planning workspace.",
+            "Hidden planner sessions update DB task authority through structured payloads.",
         )],
         option_lines: vec![
             Line::from(format!("workspace: {}", copy.workspace_directory)),

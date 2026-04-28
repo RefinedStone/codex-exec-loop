@@ -1,6 +1,5 @@
 use std::path::{Component, Path};
 
-use jsonschema::Validator;
 use serde_json::Value;
 
 use crate::application::service::planning::shared::contract::{
@@ -10,7 +9,7 @@ use crate::application::service::planning::shared::contract::{
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningFileKind, PlanningSemanticValidationService,
     PlanningValidationReport, PlanningValidationResult, PlanningWorkspaceFiles, QueueIdlePolicy,
-    TaskLedgerDocument,
+    TaskAuthorityDocument,
 };
 
 #[derive(Default, Clone)]
@@ -31,30 +30,21 @@ impl PlanningValidationService {
     ) -> PlanningValidationResult {
         let mut report = PlanningValidationReport::new();
         let directions = self.parse_direction_catalog(files.directions_toml, &mut report);
-        let task_ledger_value = self.parse_task_ledger_value(files.task_ledger_json, &mut report);
-        let task_ledger_schema =
-            self.validate_task_ledger_schema(files.task_ledger_schema_json, &mut report);
-        if let (Some(task_ledger_value), Some(task_ledger_schema)) =
-            (task_ledger_value.as_ref(), task_ledger_schema.as_ref())
-        {
-            self.validate_task_ledger_against_schema(
-                task_ledger_value,
-                task_ledger_schema,
-                &mut report,
-            );
-        }
-        let task_ledger = task_ledger_value
-            .and_then(|task_ledger_value| self.parse_task_ledger(task_ledger_value, &mut report));
+        let task_authority_value =
+            self.parse_task_authority_value(files.task_authority_json, &mut report);
+        let task_authority = task_authority_value.and_then(|task_authority_value| {
+            self.parse_task_authority(task_authority_value, &mut report)
+        });
         self.validate_result_output_markdown(files.result_output_markdown, &mut report);
         PlanningSemanticValidationService::new().validate(
             directions.as_ref(),
-            task_ledger.as_ref(),
+            task_authority.as_ref(),
             &mut report,
         );
 
         PlanningValidationResult {
             directions,
-            task_ledger,
+            task_authority,
             report,
         }
     }
@@ -77,36 +67,36 @@ impl PlanningValidationService {
         }
     }
 
-    fn parse_task_ledger_value(
+    fn parse_task_authority_value(
         &self,
-        task_ledger_json: &str,
+        task_authority_json: &str,
         report: &mut PlanningValidationReport,
     ) -> Option<Value> {
-        match serde_json::from_str(task_ledger_json) {
+        match serde_json::from_str(task_authority_json) {
             Ok(document) => Some(document),
             Err(error) => {
                 report.push_error(
-                    PlanningFileKind::TaskLedger,
-                    "task_ledger_parse_failed",
-                    format!("failed to parse task-ledger.json: {error}"),
+                    PlanningFileKind::TaskAuthority,
+                    "task_authority_parse_failed",
+                    format!("failed to parse task authority: {error}"),
                 );
                 None
             }
         }
     }
 
-    fn parse_task_ledger(
+    fn parse_task_authority(
         &self,
-        task_ledger_value: Value,
+        task_authority_value: Value,
         report: &mut PlanningValidationReport,
-    ) -> Option<TaskLedgerDocument> {
-        match serde_json::from_value(task_ledger_value) {
+    ) -> Option<TaskAuthorityDocument> {
+        match serde_json::from_value(task_authority_value) {
             Ok(document) => Some(document),
             Err(error) => {
                 report.push_error(
-                    PlanningFileKind::TaskLedger,
-                    "task_ledger_parse_failed",
-                    format!("failed to parse task-ledger.json: {error}"),
+                    PlanningFileKind::TaskAuthority,
+                    "task_authority_parse_failed",
+                    format!("failed to parse task authority: {error}"),
                 );
                 None
             }
@@ -185,98 +175,6 @@ impl PlanningValidationService {
                 PlanningFileKind::Directions,
                 "missing_queue_idle_prompt_file",
                 format!("queue_idle.prompt_path does not exist: {prompt_path}"),
-            );
-        }
-    }
-
-    fn validate_task_ledger_schema(
-        &self,
-        task_ledger_schema_json: &str,
-        report: &mut PlanningValidationReport,
-    ) -> Option<Validator> {
-        if task_ledger_schema_json.trim().is_empty() {
-            report.push_error(
-                PlanningFileKind::TaskLedgerSchema,
-                "blank_task_ledger_schema",
-                "task-ledger.schema.json must not be blank",
-            );
-            return None;
-        }
-
-        let parsed_schema = match serde_json::from_str::<Value>(task_ledger_schema_json) {
-            Ok(value) => value,
-            Err(error) => {
-                report.push_error(
-                    PlanningFileKind::TaskLedgerSchema,
-                    "task_ledger_schema_parse_failed",
-                    format!("failed to parse task-ledger.schema.json: {error}"),
-                );
-                return None;
-            }
-        };
-
-        let mut schema_is_usable = true;
-        if !parsed_schema.is_object() {
-            report.push_error(
-                PlanningFileKind::TaskLedgerSchema,
-                "task_ledger_schema_not_object",
-                "task-ledger.schema.json must be a JSON object",
-            );
-            schema_is_usable = false;
-        }
-        if parsed_schema
-            .get("$schema")
-            .and_then(Value::as_str)
-            .is_none()
-        {
-            report.push_warning(
-                PlanningFileKind::TaskLedgerSchema,
-                "missing_schema_declaration",
-                "task-ledger.schema.json should declare a $schema URI",
-            );
-        }
-        if parsed_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .is_none()
-        {
-            report.push_error(
-                PlanningFileKind::TaskLedgerSchema,
-                "missing_schema_properties",
-                "task-ledger.schema.json must define top-level properties",
-            );
-            schema_is_usable = false;
-        }
-
-        if !schema_is_usable {
-            return None;
-        }
-
-        match jsonschema::validator_for(&parsed_schema) {
-            Ok(validator) => Some(validator),
-            Err(error) => {
-                report.push_error(
-                    PlanningFileKind::TaskLedgerSchema,
-                    "invalid_task_ledger_schema",
-                    format!("task-ledger.schema.json is not a valid JSON schema: {error}"),
-                );
-                None
-            }
-        }
-    }
-
-    fn validate_task_ledger_against_schema(
-        &self,
-        task_ledger_value: &Value,
-        validator: &Validator,
-        report: &mut PlanningValidationReport,
-    ) {
-        for error in validator.iter_errors(task_ledger_value) {
-            let instance_path = display_json_location(error.instance_path().to_string());
-            report.push_error(
-                PlanningFileKind::TaskLedger,
-                "task_ledger_schema_violation",
-                format!("task-ledger.json failed schema validation at {instance_path}: {error}"),
             );
         }
     }
@@ -365,14 +263,6 @@ fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
     suffix.starts_with('/') && suffix.len() > 1 && normalized.ends_with(".md")
 }
 
-fn display_json_location(path: String) -> String {
-    if path.is_empty() || path == "." {
-        "root".to_string()
-    } else {
-        path
-    }
-}
-
 fn placeholder_marker(line: &str) -> Option<&'static str> {
     let normalized = line.to_ascii_lowercase();
     PLACEHOLDER_MARKERS
@@ -393,19 +283,8 @@ mod tests {
         r#"# Result Output Prompt
 
 - Summarize the work you actually completed in this turn.
-- Mention task-ledger updates when they changed.
+- Mention task-authority updates when they changed.
 "#
-    }
-
-    fn bootstrap_files<'a>(
-        artifacts: &'a crate::application::service::planning::authoring::bootstrap::PlanningBootstrapArtifacts,
-    ) -> PlanningWorkspaceFiles<'a> {
-        PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
-            task_ledger_json: &artifacts.task_ledger_json,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
-            result_output_markdown: &artifacts.result_output_markdown,
-        }
     }
 
     #[test]
@@ -414,11 +293,17 @@ mod tests {
         let validation_service = PlanningValidationService::new();
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
-        let result = validation_service.validate_workspace_files(bootstrap_files(&artifacts));
+        let task_authority_json = serde_json::to_string(&artifacts.task_authority)
+            .expect("bootstrap task authority should serialize");
+        let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
+            directions_toml: &artifacts.directions_toml,
+            task_authority_json: &task_authority_json,
+            result_output_markdown: &artifacts.result_output_markdown,
+        });
 
         assert!(result.is_valid(), "{:?}", result.report.issues);
         assert!(result.directions.is_some());
-        assert!(result.task_ledger.is_some());
+        assert!(result.task_authority.is_some());
     }
 
     #[test]
@@ -434,7 +319,7 @@ summary = "Ship planning support."
 success_criteria = ["Complete the planning slice."]
 state = "active"
 "#,
-            task_ledger_json: r#"{
+            task_authority_json: r#"{
   "version": 1,
   "tasks": [
     {
@@ -456,13 +341,12 @@ state = "active"
     }
   ]
 }"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "missing_direction_reference"
         }));
     }
@@ -480,7 +364,7 @@ summary = "Keep task updates aligned."
 success_criteria = ["Only aligned tasks enter the ledger."]
 state = "active"
 "#,
-            task_ledger_json: r#"{
+            task_authority_json: r#"{
   "version": 1,
   "tasks": [
     {
@@ -502,13 +386,12 @@ state = "active"
     }
   ]
 }"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "missing_direction_relation_note"
         }));
     }
@@ -526,7 +409,7 @@ summary = "Keep task updates aligned."
 success_criteria = ["Only aligned tasks enter the ledger."]
 state = "active"
 "#,
-            task_ledger_json: r#"{
+            task_authority_json: r#"{
   "version": 1,
   "tasks": [
     {
@@ -565,48 +448,46 @@ state = "active"
     }
   ]
 }"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "dependency_cycle_detected"
         }));
     }
 
     #[test]
-    fn rejects_task_ledgers_that_fail_json_schema() {
+    fn rejects_unsupported_task_authority_version_without_schema_validation() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
-            task_ledger_json: r#"{
-  "version": 1
+            task_authority_json: r#"{
+  "version": 2
 }"#,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
             result_output_markdown: valid_result_output_markdown(),
         });
 
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
-                && issue.code == "task_ledger_schema_violation"
+            issue.file_kind == PlanningFileKind::TaskAuthority
+                && issue.code == "unsupported_task_authority_version"
         }));
     }
 
     #[test]
-    fn rejects_unknown_task_ledger_fields() {
+    fn rejects_unknown_task_authority_fields() {
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
-            task_ledger_json: r#"{
+            task_authority_json: r#"{
   "version": 1,
   "tasks": [
     {
@@ -629,14 +510,13 @@ state = "active"
     }
   ]
 }"#,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
             result_output_markdown: valid_result_output_markdown(),
         });
 
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
-                && issue.code == "task_ledger_parse_failed"
+            issue.file_kind == PlanningFileKind::TaskAuthority
+                && issue.code == "task_authority_parse_failed"
         }));
     }
 
@@ -648,7 +528,7 @@ state = "active"
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
-            task_ledger_json: r#"{
+            task_authority_json: r#"{
   "version": 1,
   "tasks": [
     {
@@ -704,25 +584,24 @@ state = "active"
     }
   ]
 }"#,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
             result_output_markdown: valid_result_output_markdown(),
         });
 
         assert!(!result.is_valid());
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "dependency_blocker_conflict"
         }));
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "done_task_unresolved_dependency"
         }));
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "done_task_unresolved_blocker"
         }));
         assert!(result.report.errors().iter().any(|issue| {
-            issue.file_kind == PlanningFileKind::TaskLedger
+            issue.file_kind == PlanningFileKind::TaskAuthority
                 && issue.code == "multiple_in_progress_tasks"
         }));
     }
@@ -732,10 +611,11 @@ state = "active"
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+        let task_authority_json = serde_json::to_string(&artifacts.task_authority)
+            .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
-            task_ledger_json: &artifacts.task_ledger_json,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
+            task_authority_json: &task_authority_json,
             result_output_markdown: "Summarize the completed work.",
         });
 
@@ -751,10 +631,11 @@ state = "active"
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+        let task_authority_json = serde_json::to_string(&artifacts.task_authority)
+            .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
-            task_ledger_json: &artifacts.task_ledger_json,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
+            task_authority_json: &task_authority_json,
             result_output_markdown: r#"# Result Output Prompt
 
 - TODO: replace this guidance before relying on it.
@@ -773,10 +654,11 @@ state = "active"
         let bootstrap_service = PlanningBootstrapService::new();
         let validation_service = PlanningValidationService::new();
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
+        let task_authority_json = serde_json::to_string(&artifacts.task_authority)
+            .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
             directions_toml: &artifacts.directions_toml,
-            task_ledger_json: &artifacts.task_ledger_json,
-            task_ledger_schema_json: &artifacts.task_ledger_schema_json,
+            task_authority_json: &task_authority_json,
             result_output_markdown: "   ",
         });
 
@@ -800,8 +682,7 @@ success_criteria = ["Use a detail doc path inside the directions directory."]
 detail_doc_path = ".codex-exec-loop/planning/directions_backup/direction-a.md"
 state = "active"
 "#,
-            task_ledger_json: r#"{"version":1,"tasks":[]}"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
+            task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 
@@ -831,8 +712,7 @@ success_criteria = ["Use a detail doc path inside the directions directory."]
 detail_doc_path = ".codex-exec-loop/planning/directions/../direction-a.md"
 state = "active"
 "#,
-            task_ledger_json: r#"{"version":1,"tasks":[]}"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
+            task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 
@@ -865,8 +745,7 @@ summary = "Keep details in a scoped markdown file."
 success_criteria = ["Use a queue-idle prompt inside the prompts directory."]
 state = "active"
 "#,
-            task_ledger_json: r#"{"version":1,"tasks":[]}"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
+            task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 
@@ -899,8 +778,7 @@ summary = "Keep details in a scoped markdown file."
 success_criteria = ["Use a queue-idle prompt inside the prompts directory."]
 state = "active"
 "#,
-            task_ledger_json: r#"{"version":1,"tasks":[]}"#,
-            task_ledger_schema_json: r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"version":{"type":"integer"},"tasks":{"type":"array"}}}"#,
+            task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
 

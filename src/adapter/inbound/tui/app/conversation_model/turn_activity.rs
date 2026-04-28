@@ -57,11 +57,6 @@ impl TurnActivityState {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn last_completed_changed_planning_file_paths(&self) -> &[String] {
-        &self.last_completed_turn_changed_planning_file_paths
-    }
-
     pub(crate) fn last_completed_file_change_count(&self) -> usize {
         self.last_completed_turn_file_change_count
     }

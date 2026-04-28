@@ -16,7 +16,6 @@ use self::worker_dependencies::PlanningWorkerUseCaseDependencies;
 use self::workspace_dependencies::PlanningWorkspaceUseCaseDependencies;
 use super::authoring::directions_apply::PlanningDirectionsApplyService;
 use super::authoring::init::PlanningInitService;
-use super::authoring::task_ledger_apply::PlanningTaskLedgerApplyService;
 use super::feature::PlanningFeature;
 use super::repair::doctor::PlanningDoctorService;
 use super::repair::reset::PlanningResetService;
@@ -103,12 +102,6 @@ impl PlanningWorkspaceUseCaseBuilder {
                 self.dependencies.validation.clone(),
                 self.dependencies.priority_queue.clone(),
                 self.dependencies.task_repository.clone(),
-            ),
-            PlanningTaskLedgerApplyService::with_task_repository(
-                self.dependencies.workspace,
-                self.dependencies.validation,
-                self.dependencies.priority_queue,
-                self.dependencies.task_repository,
             ),
         )
     }

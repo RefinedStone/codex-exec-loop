@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow};
@@ -10,8 +9,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::application::service::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, PlanningDraftEditorFile, PlanningDraftPromoteResult,
-    PlanningDraftSaveResult, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
+    PlanningDraftSaveResult, RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::planning::{DirectionCatalogDocument, PlanningFileKind, PlanningWorkspaceFiles};
 
@@ -29,9 +27,7 @@ impl PlanningAdminFacadeService {
         direction_id: Option<&str>,
     ) -> Result<PlanningAdminSessionView> {
         let draft_name = match kind {
-            PlanningAdminDraftKind::FullPlanning | PlanningAdminDraftKind::TaskLedger => {
-                self.stage_active_manual_editor_draft()?
-            }
+            PlanningAdminDraftKind::FullPlanning => self.stage_active_manual_editor_draft()?,
             PlanningAdminDraftKind::Directions => {
                 self.planning
                     .workspace
@@ -184,16 +180,12 @@ impl PlanningAdminFacadeService {
             DIRECTIONS_FILE_PATH,
             PlanningFileKind::Directions,
         )?;
-        let task_ledger_json = self.load_effective_draft_body(
-            &staged_files,
-            TASK_LEDGER_FILE_PATH,
-            PlanningFileKind::TaskLedger,
-        )?;
-        let task_ledger_schema_json = self.load_effective_draft_body(
-            &staged_files,
-            TASK_LEDGER_SCHEMA_FILE_PATH,
-            PlanningFileKind::TaskLedgerSchema,
-        )?;
+        let task_authority_json = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(self.workspace_dir.as_str())?
+            .map(|snapshot| serde_json::to_string(&snapshot.task_authority))
+            .transpose()?
+            .unwrap_or_else(|| "{\"version\":1,\"tasks\":[]}".to_string());
         let result_output_markdown = self.load_effective_draft_body(
             &staged_files,
             RESULT_OUTPUT_FILE_PATH,
@@ -204,8 +196,7 @@ impl PlanningAdminFacadeService {
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
                     directions_toml: &directions_toml,
-                    task_ledger_json: &task_ledger_json,
-                    task_ledger_schema_json: &task_ledger_schema_json,
+                    task_authority_json: &task_authority_json,
                     result_output_markdown: &result_output_markdown,
                 });
 
@@ -227,10 +218,10 @@ impl PlanningAdminFacadeService {
         }
 
         let queue_preview = if result.report.is_valid() {
-            match (result.directions.as_ref(), result.task_ledger.as_ref()) {
-                (Some(directions), Some(task_ledger)) => self
+            match (result.directions.as_ref(), result.task_authority.as_ref()) {
+                (Some(directions), Some(task_authority)) => self
                     .priority_queue_service
-                    .build_projection(directions, task_ledger)
+                    .build_projection(directions, task_authority)
                     .ok()
                     .map(|projection| map_queue_preview(&projection)),
                 _ => None,
@@ -250,13 +241,12 @@ impl PlanningAdminFacadeService {
         staged_files: &BTreeMap<&'a str, &'a str>,
         path: &'static str,
         file_kind: PlanningFileKind,
-    ) -> Result<Cow<'a, str>> {
+    ) -> Result<String> {
         if let Some(body) = staged_files.get(path) {
-            return Ok(Cow::Borrowed(*body));
+            return Ok((*body).to_string());
         }
         self.planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), path)?
-            .map(Cow::Owned)
             .ok_or_else(|| missing_core_draft_file_error(path, file_kind))
     }
 
@@ -267,36 +257,18 @@ impl PlanningAdminFacadeService {
             .ok_or_else(|| {
                 anyhow!("planning directions are unavailable; initialize planning first")
             })?;
-        let task_ledger_json = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), TASK_LEDGER_FILE_PATH)?
-            .ok_or_else(|| anyhow!("task-ledger.json is unavailable; initialize planning first"))?;
         let result_output_markdown = self
             .planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
             .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
-        let task_ledger_schema_json = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), TASK_LEDGER_SCHEMA_FILE_PATH)?
-            .ok_or_else(|| {
-                anyhow!("task-ledger.schema.json is unavailable; initialize planning first")
-            })?;
         let mut files = vec![
             PlanningDraftFileRecord {
                 active_path: DIRECTIONS_FILE_PATH.to_string(),
                 body: directions_toml.clone(),
             },
             PlanningDraftFileRecord {
-                active_path: TASK_LEDGER_FILE_PATH.to_string(),
-                body: task_ledger_json,
-            },
-            PlanningDraftFileRecord {
                 active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
                 body: result_output_markdown,
-            },
-            PlanningDraftFileRecord {
-                active_path: TASK_LEDGER_SCHEMA_FILE_PATH.to_string(),
-                body: task_ledger_schema_json,
             },
         ];
 
@@ -360,8 +332,7 @@ fn missing_core_draft_file_error(path: &'static str, file_kind: PlanningFileKind
         "draft is missing required {} content at {}",
         match file_kind {
             PlanningFileKind::Directions => "directions",
-            PlanningFileKind::TaskLedger => "task catalog compatibility file",
-            PlanningFileKind::TaskLedgerSchema => "task catalog compatibility schema",
+            PlanningFileKind::TaskAuthority => "task authority",
             PlanningFileKind::ResultOutput => "result output",
         },
         path
@@ -374,8 +345,6 @@ fn file_key_for_kind(
 ) -> Option<PlanningAdminFileKey> {
     let key = if active_path == DIRECTIONS_FILE_PATH {
         PlanningAdminFileKey::Directions
-    } else if active_path == TASK_LEDGER_FILE_PATH {
-        PlanningAdminFileKey::TaskLedger
     } else if active_path == RESULT_OUTPUT_FILE_PATH {
         PlanningAdminFileKey::ResultOutput
     } else if active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
@@ -391,19 +360,12 @@ fn file_key_for_kind(
     match kind {
         PlanningAdminDraftKind::FullPlanning => matches!(
             key,
-            PlanningAdminFileKey::Directions
-                | PlanningAdminFileKey::TaskLedger
-                | PlanningAdminFileKey::ResultOutput
+            PlanningAdminFileKey::Directions | PlanningAdminFileKey::ResultOutput
         )
         .then_some(key),
         PlanningAdminDraftKind::Directions => matches!(
             key,
             PlanningAdminFileKey::Directions | PlanningAdminFileKey::QueueIdlePrompt
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::TaskLedger => matches!(
-            key,
-            PlanningAdminFileKey::TaskLedger | PlanningAdminFileKey::ResultOutput
         )
         .then_some(key),
         PlanningAdminDraftKind::QueueIdlePrompt => matches!(

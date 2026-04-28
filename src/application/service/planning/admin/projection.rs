@@ -5,7 +5,7 @@ use crate::application::service::planning::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningFileKind, PlanningValidationReport,
-    PlanningValidationSeverity, PriorityQueueProjection, TaskLedgerDocument,
+    PlanningValidationSeverity, PriorityQueueProjection, TaskAuthorityDocument,
 };
 
 use super::{
@@ -18,11 +18,11 @@ use super::{
 
 pub(super) fn map_management_view(
     directions: &DirectionCatalogDocument,
-    task_ledger: &TaskLedgerDocument,
+    task_authority: &TaskAuthorityDocument,
     default_direction_id: &str,
 ) -> PlanningAdminManagementView {
     let mut task_counts = BTreeMap::<&str, usize>::new();
-    for task in &task_ledger.tasks {
+    for task in &task_authority.tasks {
         *task_counts.entry(task.direction_id.trim()).or_default() += 1;
     }
 
@@ -45,7 +45,7 @@ pub(super) fn map_management_view(
                     .unwrap_or_default(),
             })
             .collect(),
-        tasks: task_ledger
+        tasks: task_authority
             .tasks
             .iter()
             .map(|task| PlanningAdminTaskManagementView {
@@ -150,8 +150,7 @@ pub(super) fn map_validation_report(
                 },
                 file_kind: match issue.file_kind {
                     PlanningFileKind::Directions => "directions".to_string(),
-                    PlanningFileKind::TaskLedger => "task_ledger".to_string(),
-                    PlanningFileKind::TaskLedgerSchema => "task_ledger_schema".to_string(),
+                    PlanningFileKind::TaskAuthority => "task_authority".to_string(),
                     PlanningFileKind::ResultOutput => "result_output".to_string(),
                 },
                 code: issue.code.clone(),

@@ -21,39 +21,30 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
 };
-use crate::application::service::planning::{
-    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
-};
+use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
 };
-mod exports;
 mod store;
 
-use self::exports::*;
 use self::store::*;
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
     PlanningAuthorityShadowStoreSyncState, PriorityQueueProjection, PriorityQueueSkippedTask,
-    PriorityQueueTask, TaskLedgerDocument,
+    PriorityQueueTask, TaskAuthorityDocument,
 };
 
 const AKRA_HOME_ENV: &str = "AKRA_HOME";
 const AKRA_HOME_DIRECTORY: &str = ".akra";
 const AKRA_PROJECTS_DIRECTORY: &str = "projects";
 const RUNTIME_DIRECTORY: &str = "runtime";
-const RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
 const AUTHORITY_STORE_FILE_NAME: &str = "planning-authority.db";
-const PLANNING_SNAPSHOT_EXPORT_FILE_NAME: &str = "planning-snapshot.json";
-const TASK_LEDGER_EXPORT_FILE_NAME: &str = "task-ledger.json";
-const QUEUE_SNAPSHOT_EXPORT_FILE_NAME: &str = "queue.snapshot.json";
 const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 5;
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
 const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
 const CLAIM_STALE_AFTER_SECS: i64 = 300;
-const TASK_LEDGER_VERSION_METADATA_KEY: &str = "task_ledger_version";
+const TASK_LEDGER_VERSION_METADATA_KEY: &str = "task_authority_version";
 
 #[derive(Default)]
 pub struct SqlitePlanningAuthorityAdapter;
@@ -222,7 +213,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store active commit transaction")?;
 
-        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -270,14 +260,9 @@ impl SqlitePlanningAuthorityAdapter {
                 current_planning_revision: current_revision,
             });
         }
-        let existing_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
-        let has_stale_task_documents = raw_active_document(&transaction, TASK_LEDGER_FILE_PATH)?
-            .is_some()
-            || raw_active_document(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?.is_some();
-        if let Some(existing_snapshot) = existing_snapshot
-            && existing_snapshot.task_ledger == *commit.task_ledger
+        if let Some(existing_snapshot) = load_task_authority_snapshot_from_connection(&transaction)?
+            && existing_snapshot.task_authority == *commit.task_authority
             && existing_snapshot.queue_projection == *commit.queue_projection
-            && !has_stale_task_documents
         {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: current_revision,
@@ -285,15 +270,16 @@ impl SqlitePlanningAuthorityAdapter {
         }
 
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
-        replace_task_authority_tables(&transaction, commit.task_ledger, commit.queue_projection)?;
-        remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
-        remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
+        replace_task_authority_tables(
+            &transaction,
+            commit.task_authority,
+            commit.queue_projection,
+        )?;
         let planning_revision = bump_planning_revision(&transaction)?;
         transaction
             .commit()
             .context("failed to commit task authority transaction")?;
 
-        refresh_runtime_exports(&location)?;
         Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
     }
 
@@ -306,14 +292,11 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to open task authority clear transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
         clear_task_authority_tables(&transaction)?;
-        remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
-        remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
         bump_planning_revision(&transaction)?;
         transaction
             .commit()
             .context("failed to clear task authority transaction")?;
 
-        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -324,72 +307,15 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        let existing_task_ledger = if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
-            load_task_ledger_from_connection(&connection)?
-        } else {
-            None
-        };
-        let existing_queue_projection = if relative_path == TASK_LEDGER_FILE_PATH {
-            load_queue_projection_from_connection(&connection)?
-        } else {
-            None
-        };
 
         let transaction = connection
             .transaction()
             .context("failed to open authority-store active file transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
-        let changed = if relative_path == TASK_LEDGER_FILE_PATH {
-            match body {
-                Some(body) => {
-                    let mut task_ledger = serde_json::from_str::<TaskLedgerDocument>(body)
-                        .with_context(|| format!("failed to parse `{TASK_LEDGER_FILE_PATH}`"))?;
-                    if let Some(directions_toml) =
-                        load_active_document(&transaction, DIRECTIONS_FILE_PATH)?
-                        && let Ok(direction_ids) = parse_direction_ids(&directions_toml)
-                    {
-                        prune_task_ledger_to_direction_ids(&mut task_ledger, &direction_ids);
-                    }
-                    let queue_projection =
-                        existing_queue_projection.unwrap_or_else(empty_queue_projection);
-                    replace_task_authority_tables(&transaction, &task_ledger, &queue_projection)?;
-                    remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
-                    remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-                }
-                None => {
-                    clear_task_authority_tables(&transaction)?;
-                    remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
-                    remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-                }
-            }
-            true
-        } else if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
-            match (existing_task_ledger, body) {
-                (Some(task_ledger), Some(body)) => {
-                    let queue_projection = parse_queue_projection_export(body);
-                    replace_task_authority_tables(&transaction, &task_ledger, &queue_projection)?;
-                    remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-                }
-                (Some(task_ledger), None) => {
-                    replace_task_authority_tables(
-                        &transaction,
-                        &task_ledger,
-                        &empty_queue_projection(),
-                    )?;
-                    remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-                }
-                (None, _) => {
-                    set_active_document(&transaction, relative_path, body)?;
-                }
-            }
-            true
-        } else {
-            let changed = set_active_document(&transaction, relative_path, body)?;
-            if changed && relative_path == DIRECTIONS_FILE_PATH {
-                reconcile_task_authority_with_directions(&transaction, body)?;
-            }
-            changed
-        };
+        let changed = set_active_document(&transaction, relative_path, body)?;
+        if changed && relative_path == DIRECTIONS_FILE_PATH {
+            reconcile_task_authority_with_directions(&transaction, body)?;
+        }
         if changed {
             bump_planning_revision(&transaction)?;
         }
@@ -397,7 +323,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store active file transaction")?;
 
-        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -412,26 +337,7 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction()
             .context("failed to open authority-store active removal transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
-        let changed = if relative_path == TASK_LEDGER_FILE_PATH {
-            clear_task_authority_tables(&transaction)?;
-            remove_active_documents(&transaction, TASK_LEDGER_FILE_PATH)?;
-            remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-            true
-        } else if relative_path == QUEUE_SNAPSHOT_FILE_PATH {
-            if let Some(task_ledger) = load_task_ledger_from_connection(&transaction)? {
-                replace_task_authority_tables(
-                    &transaction,
-                    &task_ledger,
-                    &empty_queue_projection(),
-                )?;
-                remove_active_documents(&transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
-                true
-            } else {
-                remove_active_documents(&transaction, relative_path)?
-            }
-        } else {
-            remove_active_documents(&transaction, relative_path)?
-        };
+        let changed = remove_active_documents(&transaction, relative_path)?;
         if changed {
             bump_planning_revision(&transaction)?;
         }
@@ -439,7 +345,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store active removal transaction")?;
 
-        refresh_runtime_exports(&location)?;
         Ok(())
     }
 
@@ -852,18 +757,6 @@ impl SqlitePlanningAuthorityAdapter {
         })
     }
 
-    fn collect_runtime_export_view(
-        location: &PlanningAuthorityLocation,
-    ) -> Result<PlanningAuthorityExportView> {
-        Ok(PlanningAuthorityExportView {
-            snapshot_documents: load_planning_snapshot_export(location)?,
-            task_ledger_view: read_optional_export_file(&task_ledger_export_path(location))?,
-            queue_projection_view: read_optional_export_file(&queue_projection_export_path(
-                location,
-            ))?,
-        })
-    }
-
     fn inspect_shadow_store_impl(
         &self,
         workspace_dir: &str,
@@ -875,16 +768,6 @@ impl SqlitePlanningAuthorityAdapter {
         let previous_documents = load_shadow_documents(&connection)?;
         let source_documents = load_active_authority_documents(&connection)?;
         let shadow_parity_issues = compare_shadow_documents(&source_documents, &previous_documents);
-        let exported_view = Self::collect_runtime_export_view(&location)?;
-        if source_documents.is_empty() && exported_view.has_any_content() {
-            return Err(anyhow!(
-                "authority store is empty while runtime exports still exist"
-            ));
-        }
-        let export_parity_issues = compare_exported_documents(&source_documents, &exported_view);
-        if !export_parity_issues.is_empty() {
-            sync_exported_authority_documents(&location, &source_documents)?;
-        }
         store_shadow_documents(&mut connection, &location, &source_documents)?;
 
         let mirrored_documents = load_shadow_documents(&connection)?;
@@ -898,14 +781,13 @@ impl SqlitePlanningAuthorityAdapter {
 
         let sync_state = if !had_store || previous_documents.is_empty() {
             PlanningAuthorityShadowStoreSyncState::Bootstrapped
-        } else if shadow_parity_issues.is_empty() && export_parity_issues.is_empty() {
+        } else if shadow_parity_issues.is_empty() {
             PlanningAuthorityShadowStoreSyncState::InSync
         } else {
             PlanningAuthorityShadowStoreSyncState::Resynced
         };
         let parity_issue_examples = shadow_parity_issues
             .iter()
-            .chain(export_parity_issues.iter())
             .take(3)
             .cloned()
             .collect::<Vec<_>>();
@@ -914,10 +796,40 @@ impl SqlitePlanningAuthorityAdapter {
             location,
             sync_state,
             mirrored_document_count: source_documents.len(),
-            parity_issue_count: shadow_parity_issues.len() + export_parity_issues.len(),
+            parity_issue_count: shadow_parity_issues.len(),
             parity_issue_examples,
         })
     }
+}
+
+fn compare_shadow_documents(
+    source_documents: &BTreeMap<String, String>,
+    mirrored_documents: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let document_paths = source_documents
+        .keys()
+        .chain(mirrored_documents.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let mut issues = Vec::new();
+    for relative_path in document_paths {
+        match (
+            source_documents.get(&relative_path),
+            mirrored_documents.get(&relative_path),
+        ) {
+            (Some(_), None) => issues.push(format!("{relative_path}: missing from shadow store")),
+            (None, Some(_)) => issues.push(format!(
+                "{relative_path}: shadow store contains stale content"
+            )),
+            (Some(source), Some(mirrored)) if source != mirrored => {
+                issues.push(format!("{relative_path}: content mismatch"));
+            }
+            _ => {}
+        }
+    }
+
+    issues
 }
 
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
@@ -1500,28 +1412,6 @@ fn apply_active_workspace_record(
         DIRECTIONS_FILE_PATH,
         record.directions_toml.as_deref(),
     )?;
-    if let Some(task_ledger_json) = record.task_ledger_json.as_deref() {
-        let task_ledger = serde_json::from_str::<TaskLedgerDocument>(task_ledger_json)
-            .with_context(|| {
-                format!("failed to parse active authority document `{TASK_LEDGER_FILE_PATH}`")
-            })?;
-        let queue_projection = match record.queue_snapshot_json.as_deref() {
-            Some(queue_snapshot_json) => parse_queue_projection_export(queue_snapshot_json),
-            None => empty_queue_projection(),
-        };
-        replace_task_authority_tables(transaction, &task_ledger, &queue_projection)?;
-        changed |= true;
-    } else {
-        clear_task_authority_tables(transaction)?;
-        changed |= true;
-    }
-    changed |= remove_active_documents(transaction, TASK_LEDGER_FILE_PATH)?;
-    changed |= set_active_document(
-        transaction,
-        TASK_LEDGER_SCHEMA_FILE_PATH,
-        record.task_ledger_schema_json.as_deref(),
-    )?;
-    changed |= remove_active_documents(transaction, QUEUE_SNAPSHOT_FILE_PATH)?;
     changed |= set_active_document(
         transaction,
         RESULT_OUTPUT_FILE_PATH,
@@ -1532,11 +1422,11 @@ fn apply_active_workspace_record(
 
 fn replace_task_authority_tables(
     transaction: &rusqlite::Transaction<'_>,
-    task_ledger: &TaskLedgerDocument,
+    task_authority: &TaskAuthorityDocument,
     queue_projection: &PriorityQueueProjection,
 ) -> Result<()> {
     clear_task_authority_rows(transaction)?;
-    for (index, task) in task_ledger.tasks.iter().enumerate() {
+    for (index, task) in task_authority.tasks.iter().enumerate() {
         let task_id = task.id.trim();
         transaction
             .execute(
@@ -1569,7 +1459,7 @@ fn replace_task_authority_tables(
     upsert_metadata(
         transaction,
         TASK_LEDGER_VERSION_METADATA_KEY,
-        &task_ledger.version.to_string(),
+        &task_authority.version.to_string(),
     )?;
     Ok(())
 }

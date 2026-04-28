@@ -99,7 +99,7 @@ operator prompt in readable form. The task id is
 retry.
 
 LLM output, hidden-session output, and future planner adapters may only return this structured draft.
-They must not write SQL, mutate `task-ledger.json`, update queue projection exports, or generate
+They must not write SQL, mutate `DB task authority`, update queue projection exports, or generate
 runtime exports directly.
 
 ## Validation Layer
@@ -136,7 +136,7 @@ In git-backed workspaces, SQLite remains canonical:
 6. commit ledger, queue projection, and planning revision in one store transaction
 7. write runtime exports from the committed store state
 
-Tracked task-ledger artifacts and the legacy-named queue projection artifact stay import and review
+Tracked task-authority artifacts and the legacy-named queue projection artifact stay import and review
 surfaces. Runtime intake does not make them authoritative and does not accept out-of-band edits
 without the existing explicit apply flow.
 

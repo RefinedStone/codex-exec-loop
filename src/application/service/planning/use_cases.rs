@@ -12,9 +12,6 @@ use super::authoring::proposal_promotion::{
     PlanningProposalPromotionOutcome, PlanningProposalPromotionRequest,
     PlanningProposalPromotionService,
 };
-use super::authoring::task_ledger_apply::{
-    PlanningTaskLedgerApplyService, PlanningTrackedTaskLedgerApplyResult,
-};
 use super::repair::doctor::{PlanningDoctorReport, PlanningDoctorService};
 use super::repair::reconciliation::{PlanningExecutionSnapshot, PlanningReconciliationResult};
 use super::repair::reset::{
@@ -43,7 +40,6 @@ pub struct PlanningWorkspaceUseCases {
     doctor_service: PlanningDoctorService,
     directions_service: PlanningDirectionsService,
     directions_apply_service: PlanningDirectionsApplyService,
-    task_ledger_apply_service: PlanningTaskLedgerApplyService,
 }
 
 impl PlanningWorkspaceUseCases {
@@ -53,7 +49,6 @@ impl PlanningWorkspaceUseCases {
         doctor_service: PlanningDoctorService,
         directions_service: PlanningDirectionsService,
         directions_apply_service: PlanningDirectionsApplyService,
-        task_ledger_apply_service: PlanningTaskLedgerApplyService,
     ) -> Self {
         Self {
             init_service,
@@ -61,7 +56,6 @@ impl PlanningWorkspaceUseCases {
             doctor_service,
             directions_service,
             directions_apply_service,
-            task_ledger_apply_service,
         }
     }
 
@@ -99,14 +93,6 @@ impl PlanningWorkspaceUseCases {
     ) -> anyhow::Result<PlanningTrackedDirectionsApplyResult> {
         self.directions_apply_service
             .apply_tracked_directions(workspace_dir)
-    }
-
-    pub fn apply_tracked_task_ledger(
-        &self,
-        workspace_dir: &str,
-    ) -> anyhow::Result<PlanningTrackedTaskLedgerApplyResult> {
-        self.task_ledger_apply_service
-            .apply_tracked_task_ledger(workspace_dir)
     }
 
     pub fn stage_simple_mode_draft(
@@ -362,19 +348,19 @@ impl PlanningWorkerUseCases {
             .refresh_queue_from_official_completion(request)
     }
 
-    pub fn render_repair_task_ledger_prompt(
+    pub fn render_repair_task_authority_prompt(
         &self,
         request: &PlanningLedgerRepairRequest<'_>,
     ) -> String {
         self.worker_orchestration
-            .render_repair_task_ledger_prompt(request)
+            .render_repair_task_authority_prompt(request)
     }
 
-    pub fn repair_task_ledger(
+    pub fn repair_task_authority(
         &self,
         request: PlanningLedgerRepairRequest<'_>,
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
-        self.worker_orchestration.repair_task_ledger(request)
+        self.worker_orchestration.repair_task_authority(request)
     }
 
     pub fn promote_top_proposal_to_ready_if_needed(

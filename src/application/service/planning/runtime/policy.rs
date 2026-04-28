@@ -653,21 +653,21 @@ mod tests {
     fn summary_view_prefers_repair_failure_when_present() {
         let service = PlanningRuntimePolicyService::new();
         let snapshot = PlanningRuntimeSnapshot::invalid(
-            "planning validation failed: task-ledger.json".to_string(),
+            "planning validation failed: task authority".to_string(),
         );
 
         let summary = service.build_summary_view(PlanningRuntimeSummaryRequest {
             snapshot: &snapshot,
             has_running_turn: false,
             is_repairing: true,
-            repair_failure_summary: Some("task-ledger.json is missing direction_id"),
+            repair_failure_summary: Some("task authority is missing direction_id"),
         });
 
         assert_eq!(summary.workspace_state, PlanningWorkspaceState::Repairing);
         assert_eq!(summary.status_label, "repairing");
         assert_eq!(
             summary.failure_summary.as_deref(),
-            Some("task-ledger.json is missing direction_id")
+            Some("task authority is missing direction_id")
         );
     }
 
@@ -689,7 +689,7 @@ mod tests {
             has_running_turn: false,
             is_repairing: true,
             repair_failure_summary: Some(
-                "task-ledger.json is missing direction_id and contains extra trailing data",
+                "task authority is missing direction_id and contains extra trailing data",
             ),
             repair_attempt: Some(PlanningRuntimeRepairAttempt {
                 attempts_used: 1,
@@ -703,7 +703,7 @@ mod tests {
         let summary_line = summary_line.expect("summary line should be projected");
         assert!(summary_line.contains("planning: repairing"));
         assert!(summary_line.contains("repair: 1/2"));
-        assert!(summary_line.contains("failure: task-ledger.json is m..."));
+        assert!(summary_line.contains("failure: task authority"));
         assert!(summary_line.contains("queue: queue idle:"));
         assert!(summary_line.contains("proposals: 2 promotable"));
     }

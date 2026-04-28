@@ -68,8 +68,8 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
             draft_name: draft_name.to_string(),
             draft_directory: "/tmp/drafts".to_string(),
             staged_files: vec![PlanningStagedFileRecord {
-                active_path: "task-ledger.json".to_string(),
-                staged_path: ".codex-exec-loop/planning/drafts/task-ledger.json".to_string(),
+                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                staged_path: ".codex-exec-loop/planning/drafts/result-output.md".to_string(),
             }],
         })
     }
@@ -431,7 +431,7 @@ fn auto_followup_refresh_prompt_appends_planning_fragment_when_queue_is_idle() {
 fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::invalid(
-        "planning validation failed: task-ledger.json is invalid",
+        "planning validation failed: task authority is invalid",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -452,14 +452,13 @@ fn planning_notice_summary_filters_non_planning_runtime_notices() {
     conversation.runtime_notices = vec![
         "shared runtime reconnected after app-server exit".to_string(),
         "planning reconciliation restored protected directions.toml".to_string(),
-        "planning repair queued retry 1/2 for task-ledger.json".to_string(),
+        "planning repair queued retry 1/2 for task authority".to_string(),
     ];
 
     assert_eq!(
         conversation.planning_notice_summary(64),
         Some(
-            "planning notices (2): planning repair queued retry 1/2 for task-ledger.json"
-                .to_string()
+            "planning notices (2): planning repair queued retry 1/2 for task authority".to_string()
         )
     );
 }

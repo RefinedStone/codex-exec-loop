@@ -17,7 +17,7 @@ Queue가 비었을 때만 이 prompt를 사용합니다.
 - 더 이어갈 작업이 정말 없다면 queue를 비운 채 유지하고, 그 판단을 짧게 요약하세요.
 "#;
 pub const PLANNING_AUTO_FOLLOW_REFRESH_QUEUE_BODY: &str = r#"직전 답변을 실행 관점에서 정리해 planning priority queue를 갱신하세요.
-- 직전 답변에서 실행 가능한 보완, 수정, 후속 제안 사항을 작업 목록으로 정리하고 DB task authority에 반영하세요. `task-ledger.json`은 read-only export이므로 직접 수정하지 마세요.
+- 직전 답변에서 실행 가능한 보완, 수정, 후속 제안 사항을 작업 목록으로 정리하고 DB task authority에 반영하세요. tracked task authority 파일을 직접 수정하지 마세요.
 - 기존 proposal 또는 task와 의미가 겹치면 중복 생성 대신 기존 항목을 갱신하세요.
 - 실행 가능한 작업 목록은 priority가 보이도록 normal queue task로 반영하고, `proposed`는 아직 일반 queue에 올리면 안 되는 후보만 남기세요.
 - 실행 가능한 queue head가 없다면, 작업 목록 전체를 queue에 반영하되 이번 턴에서는 가장 높은 우선순위의 executable task 1개만 수행하세요.

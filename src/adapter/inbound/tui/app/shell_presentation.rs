@@ -73,7 +73,7 @@ pub(super) use overlays::{
     build_startup_overlay_view, build_supersession_overlay_view, build_task_intake_overlay_view,
 };
 #[cfg(test)]
-pub(super) use prompt_composer::{build_input_prompt_cursor_offset, build_ready_input_lines};
+pub(super) use prompt_composer::build_input_prompt_cursor_offset;
 #[cfg(test)]
 pub(super) use shell_core::{
     ConversationShellFrameView, ConversationShellView, TranscriptPanelView,

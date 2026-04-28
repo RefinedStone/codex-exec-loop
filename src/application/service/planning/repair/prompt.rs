@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 
-use crate::domain::planning::{TaskDefinition, TaskLedgerDocument};
+use crate::domain::planning::{TaskAuthorityDocument, TaskDefinition};
 
 use super::reconciliation::PlanningRepairRequest;
 
@@ -14,8 +14,8 @@ pub struct PlanningRepairPromptHandoff<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningRepairRetryReason {
-    TaskLedgerUnchanged,
-    TaskLedgerStillInvalid,
+    TaskAuthorityUnchanged,
+    TaskAuthorityStillInvalid,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -37,11 +37,11 @@ pub fn build_planning_repair_prompt(
         "대리인입니다.".to_string(),
         format!("planning repair {attempt_number}/{max_attempts} 입니다."),
         "이전 턴에서 DB task authority 후보가 validation을 통과하지 못했습니다.".to_string(),
-        "이번 턴에서는 `.codex-exec-loop/planning/task-ledger.json`을 수정하지 말고, 마지막 답변에 fenced JSON 하나를 포함하세요: `{\"task_ledger\": {...}}`.".to_string(),
-        "- `directions.toml`, `task-ledger.schema.json`, `result-output.md`, `queue.snapshot.json` 은 수정하지 마세요.".to_string(),
+        "이번 턴에서는 planning 파일을 수정하지 말고, 마지막 답변에 fenced JSON 하나를 포함하세요: `{\"task_authority\": {...}}`.".to_string(),
+        "- `directions.toml`, `result-output.md` 은 수정하지 마세요.".to_string(),
         "- 현재 task authority는 마지막 accepted DB snapshot 기준입니다."
             .to_string(),
-        "- 아래 validation 오류를 모두 해결하는 전체 task ledger JSON을 `task_ledger` 값으로 반환하세요.".to_string(),
+        "- 아래 validation 오류를 모두 해결하는 전체 task authority JSON을 `task_authority` 값으로 반환하세요.".to_string(),
         "- 기존 direction frame 밖의 관련 없는 새 작업은 추가하지 마세요.".to_string(),
     ];
 
@@ -80,18 +80,11 @@ pub fn build_planning_repair_prompt(
         truncate_prompt_section(&request.directions_toml, 4_000).as_str(),
     ));
 
-    lines.push(String::new());
-    lines.push("Allowed schema (`task-ledger.schema.json`):".to_string());
-    lines.push(prompt_code_block(
-        "json",
-        truncate_prompt_section(&request.task_ledger_schema_json, 4_000).as_str(),
-    ));
-
     let prompt_context = build_planning_repair_prompt_context(request, previous_handoff);
     let accepted_excerpt = prompt_context
         .accepted_excerpt
         .clone()
-        .unwrap_or_else(|| truncate_prompt_section(&request.accepted_task_ledger_json, 4_000));
+        .unwrap_or_else(|| truncate_prompt_section(&request.accepted_task_authority_json, 4_000));
 
     lines.push(String::new());
     lines.push(
@@ -101,15 +94,15 @@ pub fn build_planning_repair_prompt(
     );
     lines.push(prompt_code_block("json", &accepted_excerpt));
 
-    if let Some(rejected_task_ledger_json) = request
-        .rejected_task_ledger_json
+    if let Some(rejected_task_authority_json) = request
+        .rejected_task_authority_json
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
         let rejected_excerpt = prompt_context
             .rejected_excerpt
             .clone()
-            .unwrap_or_else(|| truncate_prompt_section(rejected_task_ledger_json, 4_000));
+            .unwrap_or_else(|| truncate_prompt_section(rejected_task_authority_json, 4_000));
         lines.push(String::new());
         lines.push(
             prompt_context
@@ -121,7 +114,7 @@ pub fn build_planning_repair_prompt(
 
     lines.push(String::new());
     lines.push(
-        "수정이 끝나면 무엇을 고쳤는지 짧게 요약하고, 반드시 갱신된 전체 task ledger를 fenced JSON으로 함께 반환하세요. 더 이상 고칠 것이 없어도 `DONE` 만 단독으로 출력하지 말고 이유를 설명하세요."
+        "수정이 끝나면 무엇을 고쳤는지 짧게 요약하고, 반드시 갱신된 전체 task authority를 fenced JSON으로 함께 반환하세요. 더 이상 고칠 것이 없어도 `DONE` 만 단독으로 출력하지 말고 이유를 설명하세요."
             .to_string(),
     );
 
@@ -132,18 +125,19 @@ fn build_planning_repair_prompt_context(
     request: &PlanningRepairRequest,
     previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
 ) -> PlanningRepairPromptContext {
-    let accepted_task_ledger = parse_task_ledger_document(&request.accepted_task_ledger_json);
-    let rejected_task_ledger = request
-        .rejected_task_ledger_json
+    let accepted_task_authority =
+        parse_task_authority_document(&request.accepted_task_authority_json);
+    let rejected_task_authority = request
+        .rejected_task_authority_json
         .as_deref()
-        .and_then(parse_task_ledger_document);
-    let Some(accepted_task_ledger) = accepted_task_ledger.as_ref() else {
+        .and_then(parse_task_authority_document);
+    let Some(accepted_task_authority) = accepted_task_authority.as_ref() else {
         return PlanningRepairPromptContext::default();
     };
 
     let focus_ids = collect_focus_task_ids(
-        accepted_task_ledger,
-        rejected_task_ledger.as_ref(),
+        accepted_task_authority,
+        rejected_task_authority.as_ref(),
         &request.validation_errors,
         previous_handoff,
     );
@@ -153,26 +147,29 @@ fn build_planning_repair_prompt_context(
 
     PlanningRepairPromptContext {
         accepted_heading: Some(
-            "Current accepted `task-ledger.json` focus (current handoff + validation context):"
+            "Current accepted task authority focus (current handoff + validation context):"
                 .to_string(),
         ),
-        accepted_excerpt: serialize_focused_task_ledger_excerpt(accepted_task_ledger, &focus_ids),
-        rejected_heading: rejected_task_ledger
+        accepted_excerpt: serialize_focused_task_authority_excerpt(
+            accepted_task_authority,
+            &focus_ids,
+        ),
+        rejected_heading: rejected_task_authority
             .as_ref()
             .map(|_| "Rejected candidate focus (changed tasks + validation context):".to_string()),
-        rejected_excerpt: rejected_task_ledger
-            .as_ref()
-            .and_then(|task_ledger| serialize_focused_task_ledger_excerpt(task_ledger, &focus_ids)),
+        rejected_excerpt: rejected_task_authority.as_ref().and_then(|task_authority| {
+            serialize_focused_task_authority_excerpt(task_authority, &focus_ids)
+        }),
     }
 }
 
-fn parse_task_ledger_document(body: &str) -> Option<TaskLedgerDocument> {
+fn parse_task_authority_document(body: &str) -> Option<TaskAuthorityDocument> {
     serde_json::from_str(body).ok()
 }
 
 fn collect_focus_task_ids(
-    accepted_task_ledger: &TaskLedgerDocument,
-    rejected_task_ledger: Option<&TaskLedgerDocument>,
+    accepted_task_authority: &TaskAuthorityDocument,
+    rejected_task_authority: Option<&TaskAuthorityDocument>,
     validation_errors: &[String],
     previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
 ) -> BTreeSet<String> {
@@ -184,19 +181,22 @@ fn collect_focus_task_ids(
         }
     }
 
-    let mut known_task_ids = accepted_task_ledger
+    let mut known_task_ids = accepted_task_authority
         .tasks
         .iter()
         .map(|task| task.id.trim().to_string())
         .collect::<BTreeSet<_>>();
-    if let Some(rejected_task_ledger) = rejected_task_ledger {
+    if let Some(rejected_task_authority) = rejected_task_authority {
         known_task_ids.extend(
-            rejected_task_ledger
+            rejected_task_authority
                 .tasks
                 .iter()
                 .map(|task| task.id.trim().to_string()),
         );
-        focus_ids.extend(changed_task_ids(accepted_task_ledger, rejected_task_ledger));
+        focus_ids.extend(changed_task_ids(
+            accepted_task_authority,
+            rejected_task_authority,
+        ));
     }
 
     for validation_error in validation_errors {
@@ -207,24 +207,24 @@ fn collect_focus_task_ids(
         }
     }
 
-    expand_related_task_ids(&mut focus_ids, accepted_task_ledger);
-    if let Some(rejected_task_ledger) = rejected_task_ledger {
-        expand_related_task_ids(&mut focus_ids, rejected_task_ledger);
+    expand_related_task_ids(&mut focus_ids, accepted_task_authority);
+    if let Some(rejected_task_authority) = rejected_task_authority {
+        expand_related_task_ids(&mut focus_ids, rejected_task_authority);
     }
 
     focus_ids
 }
 
 fn changed_task_ids(
-    accepted_task_ledger: &TaskLedgerDocument,
-    rejected_task_ledger: &TaskLedgerDocument,
+    accepted_task_authority: &TaskAuthorityDocument,
+    rejected_task_authority: &TaskAuthorityDocument,
 ) -> BTreeSet<String> {
-    let accepted_task_map = accepted_task_ledger
+    let accepted_task_map = accepted_task_authority
         .tasks
         .iter()
         .map(|task| (task.id.trim(), task))
         .collect::<HashMap<_, _>>();
-    let rejected_task_map = rejected_task_ledger
+    let rejected_task_map = rejected_task_authority
         .tasks
         .iter()
         .map(|task| (task.id.trim(), task))
@@ -269,12 +269,15 @@ fn validation_error_mentions_task_id(validation_error: &str, task_id: &str) -> b
         .any(|token| token == task_id)
 }
 
-fn expand_related_task_ids(focus_ids: &mut BTreeSet<String>, task_ledger: &TaskLedgerDocument) {
+fn expand_related_task_ids(
+    focus_ids: &mut BTreeSet<String>,
+    task_authority: &TaskAuthorityDocument,
+) {
     let mut expanded = true;
     while expanded {
         expanded = false;
         let seed_ids = focus_ids.clone();
-        for task in &task_ledger.tasks {
+        for task in &task_authority.tasks {
             let task_id = task.id.trim();
             let directly_related = seed_ids.contains(task_id)
                 || task
@@ -306,11 +309,11 @@ fn expand_related_task_ids(focus_ids: &mut BTreeSet<String>, task_ledger: &TaskL
     }
 }
 
-fn serialize_focused_task_ledger_excerpt(
-    task_ledger: &TaskLedgerDocument,
+fn serialize_focused_task_authority_excerpt(
+    task_authority: &TaskAuthorityDocument,
     focus_ids: &BTreeSet<String>,
 ) -> Option<String> {
-    let focused_tasks = task_ledger
+    let focused_tasks = task_authority
         .tasks
         .iter()
         .filter(|task| focus_ids.contains(task.id.trim()))
@@ -320,8 +323,8 @@ fn serialize_focused_task_ledger_excerpt(
         return None;
     }
 
-    serde_json::to_string_pretty(&TaskLedgerDocument {
-        version: task_ledger.version,
+    serde_json::to_string_pretty(&TaskAuthorityDocument {
+        version: task_authority.version,
         tasks: focused_tasks,
     })
     .ok()
@@ -344,11 +347,11 @@ fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
 impl PlanningRepairRetryReason {
     fn instruction(self) -> &'static str {
         match self {
-            Self::TaskLedgerUnchanged => {
-                "직전 repair 시도에서 task authority payload가 바뀌지 않았습니다. 이번 턴에서는 갱신된 `task_ledger` JSON payload를 반드시 다시 반환하세요."
+            Self::TaskAuthorityUnchanged => {
+                "직전 repair 시도에서 task authority payload가 바뀌지 않았습니다. 이번 턴에서는 갱신된 `task_authority` JSON payload를 반드시 다시 반환하세요."
             }
-            Self::TaskLedgerStillInvalid => {
-                "직전 repair 시도에서 task authority payload를 수정했지만 여전히 유효하지 않습니다. 이번 턴에서는 validation 오류를 모두 해결한 `task_ledger` JSON payload를 다시 반환하세요."
+            Self::TaskAuthorityStillInvalid => {
+                "직전 repair 시도에서 task authority payload를 수정했지만 여전히 유효하지 않습니다. 이번 턴에서는 validation 오류를 모두 해결한 `task_authority` JSON payload를 다시 반환하세요."
             }
         }
     }

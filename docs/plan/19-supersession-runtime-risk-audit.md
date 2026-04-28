@@ -30,7 +30,7 @@ state is already repo-shared.
 | ID | Area | Failure mode | Severity | Current guardrail | Remaining gap | Target response |
 | --- | --- | --- | --- | --- | --- | --- |
 | R1 | planning authority | root checkout and leased worktree can observe or mutate different planning state | critical | repo-scoped refresh ordering key inside one process | planning files still resolve from active workspace path | one repo-scoped authority domain with store-backed drafts |
-| R2 | planning transactionality | `task-ledger` and queue projection can diverge on disk | critical | runtime rebuilds queue in memory from accepted ledger | on-disk views still update through separate file writes | transactional promote and active-commit model |
+| R2 | planning transactionality | `task-authority` and queue projection can diverge on disk | critical | runtime rebuilds queue in memory from accepted ledger | on-disk views still update through separate file writes | transactional promote and active-commit model |
 | R3 | official completion ordering | two app processes can refresh the same repo scope independently | high | in-memory mutex and condvar gate | no cross-process coordination | claim semantics inside the same authority domain as planning revision |
 | R4 | distributor serialization | duplicate queue enqueue or queue-head processing across processes | high | single-process happy-path flow | no queue-head claim or CAS | queue claims inside the same authority domain as runtime projections |
 | R5 | slot and session runtime state | file-backed lease and session detail can lose concurrent updates | high | temp-write plus rename avoids partial files | lost-update race still exists | versioned runtime projections inside the authority store |
@@ -99,7 +99,7 @@ operations.
 
 **Failure scenario**
 
-- hidden planner refresh updates `task-ledger.json`
+- hidden planner refresh updates `DB task authority`
 - process crashes before the queue projection export is rebuilt
 - runtime can recompute in memory later, but exported queue files and human inspection are stale
 

@@ -34,7 +34,7 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     #[serde(default)]
     pub original_commit_sha: Option<String>,
     pub validation_summary: String,
-    pub ledger_refresh_outcome: String,
+    pub authority_refresh_outcome: String,
     #[serde(default)]
     pub github_capabilities: Option<GithubAutomationCapabilities>,
     #[serde(default)]

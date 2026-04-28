@@ -18,7 +18,7 @@ impl PlanningAdminFacadeService {
         let documents = self.load_admin_documents()?;
         Ok(map_management_view(
             &documents.directions,
-            &documents.task_ledger,
+            &documents.task_authority,
             default_direction_id(&documents.directions)?,
         ))
     }
@@ -79,17 +79,17 @@ impl PlanningAdminFacadeService {
         }
 
         let removed_task_ids = documents
-            .task_ledger
+            .task_authority
             .tasks
             .iter()
             .filter(|task| task.direction_id.trim() == direction_id)
             .map(|task| task.id.trim().to_string())
             .collect::<BTreeSet<_>>();
         documents
-            .task_ledger
+            .task_authority
             .tasks
             .retain(|task| task.direction_id.trim() != direction_id);
-        remove_task_references(&mut documents.task_ledger, &removed_task_ids);
+        remove_task_references(&mut documents.task_authority, &removed_task_ids);
 
         let removed_task_count = removed_task_ids.len();
         ensure_default_direction(&mut documents.directions)?;
@@ -110,11 +110,11 @@ impl PlanningAdminFacadeService {
         let mut documents = self.load_admin_documents()?;
         ensure_default_direction(&mut documents.directions)?;
         let default_direction_id = default_direction_id(&documents.directions)?;
-        let task = task_from_request(request, &documents.task_ledger, default_direction_id)?;
+        let task = task_from_request(request, &documents.task_authority, default_direction_id)?;
         ensure_direction_exists(&documents.directions, &task.direction_id)?;
         let task_id = task.id.trim().to_string();
         let updated = if let Some(existing) = documents
-            .task_ledger
+            .task_authority
             .tasks
             .iter_mut()
             .find(|existing| existing.id.trim() == task_id)
@@ -122,7 +122,7 @@ impl PlanningAdminFacadeService {
             *existing = task;
             true
         } else {
-            documents.task_ledger.tasks.push(task);
+            documents.task_authority.tasks.push(task);
             false
         };
         self.commit_admin_documents(documents)?;
@@ -143,16 +143,16 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         let task_id = normalized_required_id(&request.id, "task id")?;
         let mut documents = self.load_admin_documents()?;
-        let original_count = documents.task_ledger.tasks.len();
+        let original_count = documents.task_authority.tasks.len();
         documents
-            .task_ledger
+            .task_authority
             .tasks
             .retain(|task| task.id.trim() != task_id);
-        if documents.task_ledger.tasks.len() == original_count {
+        if documents.task_authority.tasks.len() == original_count {
             bail!("task `{task_id}` was not found");
         }
         remove_task_references(
-            &mut documents.task_ledger,
+            &mut documents.task_authority,
             &BTreeSet::from([task_id.to_string()]),
         );
         self.commit_admin_documents(documents)?;

@@ -4,7 +4,7 @@ use chrono::DateTime;
 
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, PriorityQueueProjection,
-    PriorityQueueSkippedTask, PriorityQueueTask, TaskDefinition, TaskLedgerDocument,
+    PriorityQueueSkippedTask, PriorityQueueTask, TaskAuthorityDocument, TaskDefinition,
 };
 
 #[derive(Default, Clone)]
@@ -38,7 +38,7 @@ impl fmt::Display for PriorityQueueBuildError {
         match self {
             Self::MultipleInProgressTasks { task_ids } => write!(
                 formatter,
-                "task-ledger.json may contain at most one in_progress task; found {}: {}",
+                "task authority may contain at most one in_progress task; found {}: {}",
                 task_ids.len(),
                 task_ids.join(", ")
             ),
@@ -96,26 +96,26 @@ impl PriorityQueueService {
     pub fn build_projection(
         &self,
         directions: &DirectionCatalogDocument,
-        task_ledger: &TaskLedgerDocument,
+        task_authority: &TaskAuthorityDocument,
     ) -> Result<PriorityQueueProjection, PriorityQueueBuildError> {
         let direction_map = directions
             .directions
             .iter()
             .map(|direction| (direction.id.trim(), direction))
             .collect::<HashMap<_, _>>();
-        let task_map = task_ledger
+        let task_map = task_authority
             .tasks
             .iter()
             .map(|task| (task.id.trim(), task))
             .collect::<HashMap<_, _>>();
         let updated_at_epoch_millis_by_task_id =
-            self.validate_queue_inputs(task_ledger, &direction_map, &task_map)?;
+            self.validate_queue_inputs(task_authority, &direction_map, &task_map)?;
 
         let mut candidates = Vec::new();
         let mut proposed_candidates = Vec::new();
         let mut skipped_tasks = Vec::new();
 
-        for task in &task_ledger.tasks {
+        for task in &task_authority.tasks {
             let normalized_direction_id = task.direction_id.trim();
             let direction = direction_map
                 .get(normalized_direction_id)
@@ -250,11 +250,11 @@ impl PriorityQueueService {
 
     fn validate_queue_inputs<'a>(
         &self,
-        task_ledger: &'a TaskLedgerDocument,
+        task_authority: &'a TaskAuthorityDocument,
         direction_map: &HashMap<&'a str, &'a DirectionDefinition>,
         task_map: &HashMap<&'a str, &'a TaskDefinition>,
     ) -> Result<HashMap<&'a str, i64>, PriorityQueueBuildError> {
-        let in_progress_tasks = task_ledger
+        let in_progress_tasks = task_authority
             .tasks
             .iter()
             .filter(|task| task.status == crate::domain::planning::TaskStatus::InProgress)
@@ -269,7 +269,7 @@ impl PriorityQueueService {
         }
 
         let mut updated_at_epoch_millis_by_task_id = HashMap::new();
-        for task in &task_ledger.tasks {
+        for task in &task_authority.tasks {
             let task_id = task.id.trim();
             if !direction_map.contains_key(task.direction_id.trim()) {
                 return Err(PriorityQueueBuildError::UnknownDirection {
@@ -440,7 +440,7 @@ mod tests {
     use super::{PriorityQueueBuildError, PriorityQueueService};
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig, TaskActor,
-        TaskDefinition, TaskLedgerDocument, TaskStatus,
+        TaskAuthorityDocument, TaskDefinition, TaskStatus,
     };
 
     fn directions(states: &[(&str, DirectionState)]) -> DirectionCatalogDocument {
@@ -497,7 +497,7 @@ mod tests {
     fn prefers_in_progress_tasks_before_ready_tasks() {
         let queue_service = PriorityQueueService::new();
         let directions = directions(&[("direction-a", DirectionState::Active)]);
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -528,7 +528,7 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect("queue projection should build");
 
         assert_eq!(
@@ -580,7 +580,7 @@ mod tests {
         );
         blocked_by_review.blocked_by = vec!["review-open".to_string()];
 
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -621,7 +621,7 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect("queue projection should build");
 
         assert_eq!(
@@ -669,7 +669,7 @@ mod tests {
         );
         blocked_proposal.depends_on = vec!["blocking-ready".to_string()];
 
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -701,7 +701,7 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect("queue projection should build");
 
         assert_eq!(
@@ -736,7 +736,7 @@ mod tests {
         runnable_task.depends_on = vec!["dependency-task".to_string()];
         runnable_task.blocked_by = vec![" blocker-task ".to_string()];
 
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -760,7 +760,7 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect("queue projection should build");
 
         assert_eq!(
@@ -788,7 +788,7 @@ mod tests {
     fn breaks_priority_ties_with_oldest_update_time() {
         let queue_service = PriorityQueueService::new();
         let directions = directions(&[("direction-a", DirectionState::Active)]);
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -811,7 +811,7 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect("queue projection should build");
 
         assert_eq!(
@@ -845,7 +845,7 @@ mod tests {
         );
         blocked_task.blocked_by = vec!["user-input".to_string()];
 
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -861,7 +861,7 @@ mod tests {
         };
 
         let snapshot = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect("queue projection should build");
 
         assert_eq!(
@@ -884,7 +884,7 @@ mod tests {
     fn rejects_unknown_direction_references_instead_of_skipping_them() {
         let queue_service = PriorityQueueService::new();
         let directions = directions(&[("direction-a", DirectionState::Active)]);
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![task(
                 "task-1",
@@ -897,7 +897,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect_err("queue build should reject unknown directions");
 
         assert_eq!(
@@ -922,13 +922,13 @@ mod tests {
             "2026-04-09T09:00:00Z",
         );
         blocked_task.depends_on = vec!["missing-task".to_string()];
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![blocked_task],
         };
 
         let error = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect_err("queue build should reject missing dependency references");
 
         assert_eq!(
@@ -944,7 +944,7 @@ mod tests {
     fn rejects_invalid_updated_at_instead_of_silently_reordering() {
         let queue_service = PriorityQueueService::new();
         let directions = directions(&[("direction-a", DirectionState::Active)]);
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![task(
                 "task-1",
@@ -957,7 +957,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect_err("queue build should reject invalid updated_at values");
 
         assert_eq!(
@@ -973,7 +973,7 @@ mod tests {
     fn rejects_multiple_in_progress_tasks_during_queue_build() {
         let queue_service = PriorityQueueService::new();
         let directions = directions(&[("direction-a", DirectionState::Active)]);
-        let task_ledger = TaskLedgerDocument {
+        let task_authority = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 task(
@@ -996,7 +996,7 @@ mod tests {
         };
 
         let error = queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
             .expect_err("queue build should reject multiple in_progress tasks");
 
         assert_eq!(

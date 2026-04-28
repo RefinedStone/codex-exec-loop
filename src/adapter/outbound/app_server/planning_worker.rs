@@ -147,9 +147,7 @@ mod tests {
                 },
                 ConversationStreamEvent::TurnCompleted {
                     turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: vec![
-                        ".codex-exec-loop/planning/task-ledger.json".to_string(),
-                    ],
+                    changed_planning_file_paths: vec!["DB task authority".to_string()],
                 },
             ],
             calls: Mutex::new(Vec::new()),
@@ -170,7 +168,7 @@ mod tests {
         );
         assert_eq!(
             result.changed_planning_file_paths,
-            vec![".codex-exec-loop/planning/task-ledger.json".to_string()]
+            vec!["DB task authority".to_string()]
         );
         assert_eq!(
             fake_launcher
@@ -196,7 +194,7 @@ mod tests {
 
         let error = adapter
             .run_planning_session(PlanningWorkerRequest {
-                operation: PlanningWorkerOperation::RepairTaskLedger,
+                operation: PlanningWorkerOperation::RepairTaskAuthority,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "repair".to_string(),
             })

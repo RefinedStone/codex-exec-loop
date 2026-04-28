@@ -3,19 +3,19 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
 
-use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
+use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskAuthoritySnapshot {
     pub planning_revision: i64,
-    pub task_ledger: TaskLedgerDocument,
+    pub task_authority: TaskAuthorityDocument,
     pub queue_projection: PriorityQueueProjection,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningTaskAuthorityCommit<'a> {
     pub observed_planning_revision: Option<i64>,
-    pub task_ledger: &'a TaskLedgerDocument,
+    pub task_authority: &'a TaskAuthorityDocument,
     pub queue_projection: &'a PriorityQueueProjection,
 }
 
@@ -85,7 +85,7 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
             workspace_dir.to_string(),
             PlanningTaskAuthoritySnapshot {
                 planning_revision,
-                task_ledger: commit.task_ledger.clone(),
+                task_authority: commit.task_authority.clone(),
                 queue_projection: commit.queue_projection.clone(),
             },
         );

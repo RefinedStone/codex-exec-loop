@@ -88,7 +88,7 @@ The terminal-agent research set in `docs/plan/21-*`, `docs/plan/22-*`, `docs/pla
 
 `directions.toml` should carry only live strategy.
 Completed directions should leave the active map.
-Future cycle details should sit in supporting docs and task-ledger items, not in a pile of done
+Future cycle details should sit in supporting docs and task-authority items, not in a pile of done
 directions.
 
 ## Mid-Term Implementation Track

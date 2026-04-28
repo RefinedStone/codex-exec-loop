@@ -343,7 +343,7 @@ mod tests {
             },
             reset_outcome: PlanningControlResetOutcome {
                 target: "queue".to_string(),
-                rewritten_paths: vec![".codex-exec-loop/planning/task-ledger.json".to_string()],
+                rewritten_paths: vec!["DB task authority".to_string()],
                 removed_paths: Vec::new(),
                 planning_state: "ready".to_string(),
                 health: Some("queue reset complete".to_string()),
@@ -386,6 +386,6 @@ mod tests {
             .expect("reset should execute");
 
         assert!(reply.text.contains("reset queue 완료"));
-        assert!(reply.text.contains("task-ledger.json"));
+        assert!(reply.text.contains("DB task authority"));
     }
 }

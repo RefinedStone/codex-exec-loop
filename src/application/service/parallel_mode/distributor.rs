@@ -150,7 +150,7 @@ impl ParallelModeDistributorService {
             original_commit_sha: Some(commit_sha.clone()),
             commit_sha,
             validation_summary: detail.validation_summary.clone(),
-            ledger_refresh_outcome: detail.ledger_refresh_outcome.clone(),
+            authority_refresh_outcome: detail.authority_refresh_outcome.clone(),
             github_capabilities: Some(github_capabilities),
             pull_request_number: None,
             pull_request_url: None,
@@ -456,7 +456,7 @@ fn build_distributor_snapshot_from_context(
         "reported_complete" => ("reported".to_string(), detail.latest_summary.clone()),
         "ledger_refreshing" => (
             "ledger refreshing".to_string(),
-            detail.ledger_refresh_outcome.clone(),
+            detail.authority_refresh_outcome.clone(),
         ),
         "commit_ready" => (
             "official".to_string(),
@@ -464,9 +464,10 @@ fn build_distributor_snapshot_from_context(
                 "commit-ready result is waiting for distributor enqueue".to_string()
             }),
         ),
-        "failed" if detail_has_history_state(&detail, "reported_complete") => {
-            ("blocked".to_string(), detail.ledger_refresh_outcome.clone())
-        }
+        "failed" if detail_has_history_state(&detail, "reported_complete") => (
+            "blocked".to_string(),
+            detail.authority_refresh_outcome.clone(),
+        ),
         _ => (
             ParallelModeQueueItemState::Idle.label().to_string(),
             "no distributor queue items are waiting".to_string(),
@@ -1459,6 +1460,6 @@ fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueReco
         record.branch_name,
         record.commit_sha,
         record.validation_summary.trim(),
-        record.ledger_refresh_outcome.trim()
+        record.authority_refresh_outcome.trim()
     )
 }

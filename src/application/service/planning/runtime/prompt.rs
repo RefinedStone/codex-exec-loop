@@ -9,13 +9,12 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    TASK_LEDGER_SCHEMA_FILE_PATH,
+    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueProjection,
-    PriorityQueueTask, QueueIdlePolicy, TaskDefinition, TaskLedgerDocument,
+    PriorityQueueTask, QueueIdlePolicy, TaskAuthorityDocument, TaskDefinition,
 };
 
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
@@ -52,7 +51,7 @@ pub struct PlanningRuntimeSnapshot {
     queue_idle_prompt_path: Option<String>,
     queue_head: Option<PriorityQueueTask>,
     queue_projection: Option<PriorityQueueProjection>,
-    task_ledger_signature: Option<u64>,
+    task_authority_signature: Option<u64>,
     queue_head_task_signature: Option<u64>,
     failure_reason: Option<String>,
     auto_followup_pause_reason: Option<String>,
@@ -70,7 +69,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head: None,
             queue_projection: None,
-            task_ledger_signature: None,
+            task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
@@ -88,7 +87,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head: None,
             queue_projection: None,
-            task_ledger_signature: None,
+            task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: Some(reason.into()),
             auto_followup_pause_reason: None,
@@ -123,7 +122,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head,
             queue_projection: None,
-            task_ledger_signature: None,
+            task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
@@ -151,7 +150,7 @@ impl PlanningRuntimeSnapshot {
             queue_idle_prompt_path: None,
             queue_head,
             queue_projection: Some(queue_projection),
-            task_ledger_signature: None,
+            task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
             auto_followup_pause_reason: None,
@@ -209,8 +208,8 @@ impl PlanningRuntimeSnapshot {
         self.queue_projection.as_ref()
     }
 
-    pub fn task_ledger_signature(&self) -> Option<u64> {
-        self.task_ledger_signature
+    pub fn task_authority_signature(&self) -> Option<u64> {
+        self.task_authority_signature
     }
 
     pub fn queue_head_task_signature(&self) -> Option<u64> {
@@ -234,11 +233,11 @@ impl PlanningRuntimeSnapshot {
     #[cfg(test)]
     pub(crate) fn with_test_signatures(
         &self,
-        task_ledger_signature: Option<u64>,
+        task_authority_signature: Option<u64>,
         queue_head_task_signature: Option<u64>,
     ) -> Self {
         let mut snapshot = self.clone();
-        snapshot.task_ledger_signature = task_ledger_signature;
+        snapshot.task_authority_signature = task_authority_signature;
         snapshot.queue_head_task_signature = queue_head_task_signature;
         snapshot
     }
@@ -329,11 +328,11 @@ impl PlanningPromptService {
                     "planning task authority is unavailable; initialize or repair the planning database"
                 )
             })?;
-        let authority_task_ledger_json =
-            serde_json::to_string(&task_authority_snapshot.task_ledger)
+        let authority_task_authority_json =
+            serde_json::to_string(&task_authority_snapshot.task_authority)
                 .context("failed to serialize task authority ledger")?;
         let workspace_files =
-            workspace_record_to_files(&workspace_record, &authority_task_ledger_json);
+            workspace_record_to_files(&workspace_record, &authority_task_authority_json);
         let mut validation_result = self
             .planning_validation_service
             .validate_workspace_files(workspace_files);
@@ -367,13 +366,13 @@ impl PlanningPromptService {
         let directions = validation_result
             .directions
             .expect("valid planning directions should be available");
-        let task_ledger = validation_result
-            .task_ledger
+        let task_authority = validation_result
+            .task_authority
             .expect("valid planning task ledger should be available");
         let stored_queue_projection = Some(task_authority_snapshot.queue_projection);
         let current_queue_projection = match self
             .priority_queue_service
-            .build_projection(&directions, &task_ledger)
+            .build_projection(&directions, &task_authority)
         {
             Ok(queue_projection) => queue_projection,
             Err(error) => {
@@ -401,12 +400,12 @@ impl PlanningPromptService {
             build_prompt_fragment(&directions, &queue_projection, result_output_markdown);
         let queue_idle_prompt_path =
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
-        let task_ledger_signature = normalized_task_ledger_signature(&task_ledger);
+        let task_authority_signature = normalized_task_authority_signature(&task_authority);
         let queue_head_task_signature = queue_projection
             .next_task
             .as_ref()
             .and_then(|queue_head| {
-                task_ledger
+                task_authority
                     .tasks
                     .iter()
                     .find(|task| task.id.trim() == queue_head.task_id.trim())
@@ -427,7 +426,7 @@ impl PlanningPromptService {
             queue_idle_prompt_path,
             queue_head: queue_projection.next_task.clone(),
             queue_projection: Some(queue_projection),
-            task_ledger_signature: Some(task_ledger_signature),
+            task_authority_signature: Some(task_authority_signature),
             queue_head_task_signature,
             failure_reason: None,
             auto_followup_pause_reason: None,
@@ -435,8 +434,8 @@ impl PlanningPromptService {
     }
 }
 
-fn normalized_task_ledger_signature(task_ledger: &TaskLedgerDocument) -> u64 {
-    let mut normalized_ledger = task_ledger.clone();
+fn normalized_task_authority_signature(task_authority: &TaskAuthorityDocument) -> u64 {
+    let mut normalized_ledger = task_authority.clone();
     normalized_ledger
         .tasks
         .sort_by(|left, right| left.id.cmp(&right.id));
@@ -465,18 +464,14 @@ where
 
 fn workspace_record_to_files<'a>(
     workspace_record: &'a PlanningWorkspaceLoadRecord,
-    task_ledger_json: &'a str,
+    task_authority_json: &'a str,
 ) -> PlanningWorkspaceFiles<'a> {
     PlanningWorkspaceFiles {
         directions_toml: workspace_record
             .directions_toml
             .as_deref()
             .expect("complete planning workspace should include directions"),
-        task_ledger_json,
-        task_ledger_schema_json: workspace_record
-            .task_ledger_schema_json
-            .as_deref()
-            .expect("complete planning workspace should include task-ledger schema"),
+        task_authority_json,
         result_output_markdown: workspace_record
             .result_output_markdown
             .as_deref()
@@ -488,9 +483,6 @@ fn missing_workspace_paths(workspace_record: &PlanningWorkspaceLoadRecord) -> Ve
     let mut missing_paths = Vec::new();
     if workspace_record.directions_toml.is_none() {
         missing_paths.push(DIRECTIONS_FILE_PATH);
-    }
-    if workspace_record.task_ledger_schema_json.is_none() {
-        missing_paths.push(TASK_LEDGER_SCHEMA_FILE_PATH);
     }
     if workspace_record.result_output_markdown.is_none() {
         missing_paths.push(RESULT_OUTPUT_FILE_PATH);
@@ -634,17 +626,10 @@ fn build_prompt_fragment(
     }
 
     lines.push(String::new());
-    lines.push("Task Catalog Mutation Contract".to_string());
-    lines.push(
-        "- Do not edit the checked-in `task-ledger.json`; it is a read-only export of DB task authority."
-            .to_string(),
-    );
+    lines.push("Task Authority Mutation Contract".to_string());
     lines.push(format!(
-        "- Do not edit `{}`, `{}`, `{}`, or `{}`.",
-        DIRECTIONS_FILE_PATH,
-        TASK_LEDGER_SCHEMA_FILE_PATH,
-        QUEUE_SNAPSHOT_FILE_PATH,
-        RESULT_OUTPUT_FILE_PATH,
+        "- Do not edit `{}` or `{}`.",
+        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     ));
     lines.push(
         "- New tasks must attach to an existing `direction_id` and include `direction_relation_note`."
@@ -752,575 +737,34 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use anyhow::Result;
-
-    use super::{PlanningPromptService, PlanningRuntimeWorkspaceStatus};
-    use crate::application::port::outbound::planning_task_repository_port::{
-        PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
-        PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
-    };
-    use crate::application::port::outbound::planning_workspace_port::{
-        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
-    };
-    use crate::application::service::planning::authoring::bootstrap::{
-        PlanningBootstrapMode, PlanningBootstrapService,
-    };
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::{
-        DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-        TASK_LEDGER_FILE_PATH, TASK_LEDGER_SCHEMA_FILE_PATH,
-    };
-    use crate::domain::planning::PriorityQueueService;
-    use crate::domain::planning::{
-        PriorityQueueProjection, PriorityQueueTask, TaskLedgerDocument, TaskStatus,
-    };
-
-    #[derive(Default)]
-    struct FakePlanningWorkspacePort {
-        load_record: PlanningWorkspaceLoadRecord,
-    }
-
-    #[derive(Default)]
-    struct FakePlanningTaskRepositoryPort {
-        snapshot: Option<PlanningTaskAuthoritySnapshot>,
-    }
-
-    impl PlanningTaskRepositoryPort for FakePlanningTaskRepositoryPort {
-        fn load_task_authority_snapshot(
-            &self,
-            _workspace_dir: &str,
-        ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-            Ok(self.snapshot.clone())
-        }
-
-        fn commit_task_authority_snapshot(
-            &self,
-            _workspace_dir: &str,
-            _commit: PlanningTaskAuthorityCommit<'_>,
-        ) -> Result<PlanningTaskAuthorityCommitResult> {
-            unreachable!("task authority commits are not used in planning prompt service tests")
-        }
-
-        fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
-            unreachable!("task authority clears are not used in planning prompt service tests")
-        }
-    }
-
-    impl PlanningWorkspacePort for FakePlanningWorkspacePort {
-        fn stage_planning_draft_files(
-            &self,
-            _workspace_dir: &str,
-            _draft_name: &str,
-            _files: &[crate::application::port::outbound::planning_workspace_port::PlanningDraftFileRecord],
-        ) -> Result<
-            crate::application::port::outbound::planning_workspace_port::PlanningDraftStageRecord,
-        > {
-            unreachable!("staging is not used in planning prompt service tests")
-        }
-
-        fn load_planning_workspace_files(
-            &self,
-            _workspace_dir: &str,
-        ) -> Result<PlanningWorkspaceLoadRecord> {
-            Ok(self.load_record.clone())
-        }
-
-        fn load_planning_workspace_candidate_files(
-            &self,
-            workspace_dir: &str,
-        ) -> Result<PlanningWorkspaceLoadRecord> {
-            self.load_planning_workspace_files(workspace_dir)
-        }
-
-        fn commit_planning_workspace_files(
-            &self,
-            _workspace_dir: &str,
-            _record: &PlanningWorkspaceLoadRecord,
-        ) -> Result<()> {
-            unreachable!("workspace commits are not used in planning prompt service tests")
-        }
-
-        fn load_optional_planning_file(
-            &self,
-            _workspace_dir: &str,
-            relative_path: &str,
-        ) -> Result<Option<String>> {
-            let body = match relative_path {
-                DIRECTIONS_FILE_PATH => self.load_record.directions_toml.clone(),
-                TASK_LEDGER_FILE_PATH => self.load_record.task_ledger_json.clone(),
-                TASK_LEDGER_SCHEMA_FILE_PATH => self.load_record.task_ledger_schema_json.clone(),
-                QUEUE_SNAPSHOT_FILE_PATH => self.load_record.queue_snapshot_json.clone(),
-                RESULT_OUTPUT_FILE_PATH => self.load_record.result_output_markdown.clone(),
-                _ => None,
-            };
-            Ok(body)
-        }
-
-        fn load_optional_planning_candidate_file(
-            &self,
-            workspace_dir: &str,
-            relative_path: &str,
-        ) -> Result<Option<String>> {
-            self.load_optional_planning_file(workspace_dir, relative_path)
-        }
-
-        fn load_planning_draft_files(
-            &self,
-            _workspace_dir: &str,
-            _draft_name: &str,
-        ) -> Result<
-            crate::application::port::outbound::planning_workspace_port::PlanningDraftLoadRecord,
-        > {
-            unreachable!("draft loads are not used in planning prompt service tests")
-        }
-
-        fn replace_planning_draft_file(
-            &self,
-            _workspace_dir: &str,
-            _draft_name: &str,
-            _active_path: &str,
-            _body: &str,
-        ) -> Result<String> {
-            unreachable!("draft replacement is not used in planning prompt service tests")
-        }
-
-        fn replace_planning_workspace_file(
-            &self,
-            _workspace_dir: &str,
-            _relative_path: &str,
-            _body: Option<&str>,
-        ) -> Result<()> {
-            unreachable!("file replacement is not used in planning prompt service tests")
-        }
-
-        fn remove_planning_workspace_entry(
-            &self,
-            _workspace_dir: &str,
-            _relative_path: &str,
-        ) -> Result<()> {
-            unreachable!("entry removal is not used in planning prompt service tests")
-        }
-
-        fn archive_rejected_planning_file(
-            &self,
-            _workspace_dir: &str,
-            _archive_name: &str,
-            _active_path: &str,
-            _body: &str,
-        ) -> Result<String> {
-            unreachable!("archive writes are not used in planning prompt service tests")
-        }
-    }
-
-    fn sample_service(load_record: PlanningWorkspaceLoadRecord) -> PlanningPromptService {
-        let snapshot = load_record
-            .task_ledger_json
-            .as_deref()
-            .and_then(|task_ledger_json| serde_json::from_str(task_ledger_json).ok())
-            .map(|task_ledger| PlanningTaskAuthoritySnapshot {
-                planning_revision: 1,
-                task_ledger,
-                queue_projection: PriorityQueueProjection {
-                    next_task: None,
-                    active_tasks: Vec::new(),
-                    proposed_tasks: Vec::new(),
-                    skipped_tasks: Vec::new(),
-                },
-            });
-        PlanningPromptService::with_task_repository(
-            Arc::new(FakePlanningWorkspacePort { load_record }),
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
-            Arc::new(FakePlanningTaskRepositoryPort { snapshot }),
-        )
-    }
-
-    fn sample_service_with_task_repository(
-        load_record: PlanningWorkspaceLoadRecord,
-        snapshot: PlanningTaskAuthoritySnapshot,
-    ) -> PlanningPromptService {
-        PlanningPromptService::with_task_repository(
-            Arc::new(FakePlanningWorkspacePort { load_record }),
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
-            Arc::new(FakePlanningTaskRepositoryPort {
-                snapshot: Some(snapshot),
-            }),
-        )
-    }
+    use super::{missing_workspace_paths, workspace_record_to_files};
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
+    use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 
     #[test]
-    fn missing_all_planning_files_keeps_runtime_snapshot_uninitialized() {
-        let result = sample_service(PlanningWorkspaceLoadRecord::default())
-            .load_runtime_snapshot("/tmp/workspace")
-            .expect("planning runtime snapshot should load");
-
-        assert_eq!(
-            result.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::Uninitialized
-        );
-        assert!(!result.blocks_auto_followup());
-        assert!(!result.has_actionable_queue_head());
-    }
-
-    #[test]
-    fn partial_planning_workspace_blocks_auto_followup() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let result = sample_service(PlanningWorkspaceLoadRecord {
-            directions_toml: Some(bootstrap_artifacts.directions_toml),
-            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
-            task_ledger_schema_json: None,
-            queue_snapshot_json: None,
-            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-        })
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
-
-        assert_eq!(
-            result.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::Invalid
-        );
-        let reason = result
-            .failure_reason()
-            .expect("partial workspace should capture a failure reason");
-        assert!(reason.contains("task-ledger.schema.json"));
-        assert!(result.blocks_auto_followup());
-    }
-
-    #[test]
-    fn valid_planning_workspace_without_queue_head_is_ready_no_task() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let result = sample_service(PlanningWorkspaceLoadRecord {
-            directions_toml: Some(bootstrap_artifacts.directions_toml),
-            task_ledger_json: Some(bootstrap_artifacts.task_ledger_json),
-            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
-            queue_snapshot_json: None,
-            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-        })
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
-
-        assert_eq!(
-            result.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        );
-        assert_eq!(result.queue_head(), None);
-        assert_eq!(
-            result.queue_summary(),
-            Some("queue idle: no executable planning task")
-        );
-        assert_eq!(result.proposal_summary(), None);
-        assert!(!result.has_actionable_queue_head());
-        assert!(!result.blocks_auto_followup());
-    }
-
-    #[test]
-    fn proposed_followups_are_surfaceable_when_no_executable_queue_head_exists() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let result = sample_service(PlanningWorkspaceLoadRecord {
-            directions_toml: Some(bootstrap_artifacts.directions_toml),
-            task_ledger_json: Some(
-                r#"{
-  "version": 1,
-  "tasks": [
-    {
-      "id": "task-followup-1",
-      "direction_id": "example-direction",
-      "direction_relation_note": "The answer offered a concrete next-step variant under the current direction.",
-      "title": "Draft a sushi-chef roadmap",
-      "description": "Persist the offered roadmap option as a follow-up candidate.",
-      "status": "proposed",
-      "base_priority": 30,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "Suggested follow-up option from the latest answer.",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-09T09:00:00Z"
-    }
-  ]
-}"#
-                .to_string(),
-            ),
-            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
-            queue_snapshot_json: None,
-            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-        })
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
-
-        assert_eq!(
-            result.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        );
-        assert_eq!(
-            result.proposal_summary(),
-            Some("1 promotable follow-up proposal available: Draft a sushi-chef roadmap")
-        );
-        let prompt_fragment = result
-            .prompt_fragment()
-            .expect("valid workspace should expose a prompt fragment");
-        assert!(prompt_fragment.contains("proposed_tasks: top 1 of 1 promotable proposals"));
-        assert!(
-            prompt_fragment
-                .contains("proposal rank 1 | task-followup-1 | Draft a sushi-chef roadmap")
-        );
-        assert!(prompt_fragment.contains("combined_priority=30"));
-        assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
-        assert!(
-            prompt_fragment
-                .contains("move the actionable worklist into normal queue tasks with priorities")
-        );
-        assert!(result.has_proposal_candidates());
-    }
-
-    #[test]
-    fn non_promotable_proposals_do_not_surface_as_proposal_candidates() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let result = sample_service(PlanningWorkspaceLoadRecord {
-            directions_toml: Some(
-                r#"
-version = 1
-
-[[directions]]
-id = "example-direction"
-title = "Example direction"
-summary = "Keep the product moving"
-success_criteria = ["done"]
-scope_hints = ["stay focused"]
-state = "paused"
-"#
-                .to_string(),
-            ),
-            task_ledger_json: Some(
-                r#"{
-  "version": 1,
-  "tasks": [
-    {
-      "id": "task-followup-1",
-      "direction_id": "example-direction",
-      "direction_relation_note": "The answer offered a concrete next-step variant under the current direction.",
-      "title": "Draft a sushi-chef roadmap",
-      "description": "Persist the offered roadmap option as a follow-up candidate.",
-      "status": "proposed",
-      "base_priority": 30,
-      "dynamic_priority_delta": 4,
-      "priority_reason": "Suggested follow-up option from the latest answer.",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
-      "source_turn_id": null,
-      "updated_at": "2026-04-09T09:00:00Z"
-    }
-  ]
-}"#
-                .to_string(),
-            ),
-            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
-            queue_snapshot_json: None,
-            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-        })
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
-
-        assert_eq!(result.proposal_summary(), None);
-        assert!(!result.has_proposal_candidates());
-        let prompt_fragment = result
-            .prompt_fragment()
-            .expect("valid workspace should expose a prompt fragment");
-        assert!(prompt_fragment.contains("skipped_tasks: showing 1 of 1"));
-        assert!(prompt_fragment.contains("direction example-direction is paused"));
-    }
-
-    #[test]
-    fn valid_planning_workspace_builds_prompt_fragment_with_queue_context() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let result = sample_service(PlanningWorkspaceLoadRecord {
-            directions_toml: Some(bootstrap_artifacts.directions_toml),
-            task_ledger_json: Some(
-                r#"{
-  "version": 1,
-  "tasks": [
-    {
-      "id": "task-1",
-      "direction_id": "example-direction",
-      "title": "Implement the next slice",
-      "description": "Move the planning work forward.",
-      "status": "ready",
-      "base_priority": 8,
-      "dynamic_priority_delta": 2,
-      "priority_reason": "user requested this next",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "user",
-      "last_updated_by": "user",
-      "source_turn_id": null,
-      "updated_at": "2026-04-09T09:00:00Z"
-    }
-  ]
-}"#
-                .to_string(),
-            ),
-            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
-            queue_snapshot_json: None,
-            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-        })
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
-
-        assert_eq!(
-            result.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyWithTask
-        );
-        let prompt_fragment = result
-            .prompt_fragment()
-            .expect("valid workspace should expose a prompt fragment");
-        assert!(prompt_fragment.contains("Planning Context"));
-        assert!(prompt_fragment.contains("Direction Summary"));
-        assert!(prompt_fragment.contains("Queue Summary"));
-        assert!(prompt_fragment.contains("task-1"));
-        assert!(prompt_fragment.contains("Result Output Prompt"));
-        assert!(prompt_fragment.contains("Runtime Follow-up Proposal Rules"));
-        assert!(
-            result
-                .queue_summary()
-                .expect("valid workspace should expose a queue summary")
-                .contains("task-1")
-        );
-        assert_eq!(
-            result
-                .queue_head()
-                .expect("valid workspace should expose the queue head")
-                .task_id,
-            "task-1"
-        );
-        assert!(result.has_actionable_queue_head());
-    }
-
-    #[test]
-    fn stored_queue_projection_is_rebuilt_when_current_directions_change() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let task_ledger_json = r#"{
-  "version": 1,
-  "tasks": [
-    {
-      "id": "task-1",
-      "direction_id": "example-direction",
-      "title": "Implement the next slice",
-      "description": "Move the planning work forward.",
-      "status": "ready",
-      "base_priority": 8,
-      "dynamic_priority_delta": 2,
-      "priority_reason": "user requested this next",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "user",
-      "last_updated_by": "user",
-      "source_turn_id": null,
-      "updated_at": "2026-04-09T09:00:00Z"
-    }
-  ]
-}"#;
-        let task_ledger =
-            serde_json::from_str::<TaskLedgerDocument>(task_ledger_json).expect("ledger parses");
-        let stored_queue_task = PriorityQueueTask {
-            rank: 1,
-            task_id: "task-1".to_string(),
-            direction_id: "example-direction".to_string(),
-            direction_title: "Old direction title".to_string(),
-            task_title: "Implement the next slice".to_string(),
-            status: TaskStatus::Ready,
-            combined_priority: 10,
-            updated_at: "2026-04-09T09:00:00Z".to_string(),
-            rank_reasons: vec!["stale".to_string()],
+    fn missing_workspace_paths_only_reports_operator_files() {
+        let record = PlanningWorkspaceLoadRecord {
+            directions_toml: None,
+            result_output_markdown: None,
         };
 
-        let result = sample_service_with_task_repository(
-            PlanningWorkspaceLoadRecord {
-                directions_toml: Some(bootstrap_artifacts.directions_toml),
-                task_ledger_json: Some(task_ledger_json.to_string()),
-                task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
-                queue_snapshot_json: None,
-                result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-            },
-            PlanningTaskAuthoritySnapshot {
-                planning_revision: 1,
-                task_ledger,
-                queue_projection: PriorityQueueProjection {
-                    next_task: Some(stored_queue_task.clone()),
-                    active_tasks: vec![stored_queue_task],
-                    proposed_tasks: Vec::new(),
-                    skipped_tasks: Vec::new(),
-                },
-            },
-        )
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
-
         assert_eq!(
-            result
-                .queue_head()
-                .expect("queue head should be rebuilt")
-                .direction_title,
-            "Example direction"
+            missing_workspace_paths(&record),
+            vec![DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH]
         );
     }
 
     #[test]
-    fn invalid_planning_workspace_blocks_auto_followup_with_validation_reason() {
-        let bootstrap_artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        let result = sample_service(PlanningWorkspaceLoadRecord {
-            directions_toml: Some(bootstrap_artifacts.directions_toml),
-            task_ledger_json: Some(
-                r#"{
-  "version": 1,
-  "tasks": [
-    {
-      "id": "task-1",
-      "direction_id": "missing-direction",
-      "title": "Invalid task",
-      "description": "References a missing direction.",
-      "status": "ready",
-      "base_priority": 10,
-      "dynamic_priority_delta": 0,
-      "priority_reason": "test",
-      "depends_on": [],
-      "blocked_by": [],
-      "created_by": "user",
-      "last_updated_by": "user",
-      "source_turn_id": null,
-      "updated_at": "2026-04-09T09:00:00Z"
-    }
-  ]
-}"#
-                .to_string(),
-            ),
-            task_ledger_schema_json: Some(bootstrap_artifacts.task_ledger_schema_json),
-            queue_snapshot_json: None,
-            result_output_markdown: Some(bootstrap_artifacts.result_output_markdown),
-        })
-        .load_runtime_snapshot("/tmp/workspace")
-        .expect("planning runtime snapshot should load");
+    fn workspace_record_combines_db_task_authority_with_operator_files() {
+        let record = PlanningWorkspaceLoadRecord {
+            directions_toml: Some("version = 1".to_string()),
+            result_output_markdown: Some("# Result Output Prompt".to_string()),
+        };
 
-        assert_eq!(
-            result.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::Invalid
-        );
-        let reason = result
-            .failure_reason()
-            .expect("invalid planning workspace should expose a failure reason");
-        assert!(reason.contains("planning validation failed"));
+        let files = workspace_record_to_files(&record, "{\"version\":1,\"tasks\":[]}");
+
+        assert_eq!(files.directions_toml, "version = 1");
+        assert_eq!(files.task_authority_json, "{\"version\":1,\"tasks\":[]}");
+        assert_eq!(files.result_output_markdown, "# Result Output Prompt");
     }
 }

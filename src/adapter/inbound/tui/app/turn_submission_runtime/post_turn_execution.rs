@@ -416,7 +416,7 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        let ledger_refresh_outcome = outcome
+        let authority_refresh_outcome = outcome
             .worker_summary
             .as_deref()
             .map(|summary| format!("official ledger refresh succeeded: {summary}"))
@@ -425,7 +425,7 @@ impl PostTurnEvaluationExecutor {
             self.parallel_mode_turn_service
                 .finalize_official_completion_success(
                     &request.workspace_directory,
-                    &ledger_refresh_outcome,
+                    &authority_refresh_outcome,
                 ),
         );
 
@@ -462,13 +462,13 @@ impl PostTurnEvaluationExecutor {
             let worker_prompt = self
                 .planning
                 .worker
-                .render_repair_task_ledger_prompt(&worker_request);
+                .render_repair_task_authority_prompt(&worker_request);
             self.record_planner_worker_running(
                 PlannerWorkerStatus::RepairRunning,
                 "repair",
                 worker_prompt,
             );
-            let worker_outcome = self.planning.worker.repair_task_ledger(worker_request);
+            let worker_outcome = self.planning.worker.repair_task_authority(worker_request);
 
             let outcome = match worker_outcome {
                 Ok(outcome) => outcome,
@@ -515,10 +515,10 @@ impl PostTurnEvaluationExecutor {
                 };
             }
 
-            next_retry_reason = Some(if outcome.task_ledger_changed {
-                PlanningRepairRetryReason::TaskLedgerStillInvalid
+            next_retry_reason = Some(if outcome.task_authority_changed {
+                PlanningRepairRetryReason::TaskAuthorityStillInvalid
             } else {
-                PlanningRepairRetryReason::TaskLedgerUnchanged
+                PlanningRepairRetryReason::TaskAuthorityUnchanged
             });
             next_request = repair_request;
         }

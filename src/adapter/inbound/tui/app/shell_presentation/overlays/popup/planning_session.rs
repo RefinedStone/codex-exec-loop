@@ -87,8 +87,8 @@ mod tests {
                     body: "title = \"Directions\"\n".to_string(),
                 },
                 PlanningDraftEditorFile {
-                    active_path: "planning/task-ledger.json".to_string(),
-                    staged_path: ".draft/planning/task-ledger.json".to_string(),
+                    active_path: "planning/result-output.md".to_string(),
+                    staged_path: ".draft/planning/result-output.md".to_string(),
                     body: "{}\n".to_string(),
                 },
             ],

@@ -13,7 +13,7 @@ use crate::application::service::planning::authoring::bootstrap::{
 use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningWorkspaceFiles,
-    TaskActor, TaskDefinition, TaskLedgerDocument, TaskStatus,
+    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
 };
 
 use super::{
@@ -35,9 +35,6 @@ impl PlanningAdminFacadeService {
         let directions_toml = workspace.directions_toml.ok_or_else(|| {
             anyhow!("planning directions are unavailable; initialize planning first")
         })?;
-        let task_ledger_schema_json = workspace.task_ledger_schema_json.ok_or_else(|| {
-            anyhow!("task-ledger.schema.json is unavailable; initialize planning first")
-        })?;
         let result_output_markdown = workspace
             .result_output_markdown
             .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
@@ -53,8 +50,7 @@ impl PlanningAdminFacadeService {
             .context("failed to parse active directions.toml")?;
         Ok(PlanningAdminDocuments {
             directions,
-            task_ledger: task_authority_snapshot.task_ledger,
-            task_ledger_schema_json,
+            task_authority: task_authority_snapshot.task_authority,
             result_output_markdown,
             observed_planning_revision: Some(task_authority_snapshot.planning_revision),
         })
@@ -68,13 +64,12 @@ impl PlanningAdminFacadeService {
         remove_tasks_with_unresolved_directions(&mut documents);
 
         let directions_toml = toml::to_string_pretty(&documents.directions)?;
-        let task_ledger_json = serde_json::to_string_pretty(&documents.task_ledger)?;
+        let task_authority_json = serde_json::to_string_pretty(&documents.task_authority)?;
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
                     directions_toml: &directions_toml,
-                    task_ledger_json: &task_ledger_json,
-                    task_ledger_schema_json: &documents.task_ledger_schema_json,
+                    task_authority_json: &task_authority_json,
                     result_output_markdown: &documents.result_output_markdown,
                 });
         if !validation_result.report.is_valid() {
@@ -91,7 +86,7 @@ impl PlanningAdminFacadeService {
         }
         let queue_projection = self
             .priority_queue_service
-            .build_projection(&documents.directions, &documents.task_ledger)
+            .build_projection(&documents.directions, &documents.task_authority)
             .context("failed to rebuild planning queue")?;
 
         match self
@@ -100,7 +95,7 @@ impl PlanningAdminFacadeService {
                 self.workspace_dir.as_str(),
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: documents.observed_planning_revision,
-                    task_ledger: &documents.task_ledger,
+                    task_authority: &documents.task_authority,
                     queue_projection: &queue_projection,
                 },
             )? {
@@ -133,8 +128,7 @@ impl PlanningAdminFacadeService {
 #[derive(Debug, Clone)]
 pub(super) struct PlanningAdminDocuments {
     pub(super) directions: DirectionCatalogDocument,
-    pub(super) task_ledger: TaskLedgerDocument,
-    pub(super) task_ledger_schema_json: String,
+    pub(super) task_authority: TaskAuthorityDocument,
     pub(super) result_output_markdown: String,
     observed_planning_revision: Option<i64>,
 }
@@ -173,7 +167,7 @@ pub(super) fn direction_from_request(
 
 pub(super) fn task_from_request(
     request: PlanningAdminTaskMutationRequest,
-    task_ledger: &TaskLedgerDocument,
+    task_authority: &TaskAuthorityDocument,
     default_direction_id: &str,
 ) -> Result<TaskDefinition> {
     let title = normalized_required_text(&request.title, "task title")?;
@@ -181,13 +175,13 @@ pub(super) fn task_from_request(
         generated_unique_id(
             GENERATED_TASK_ID_PREFIX,
             title,
-            task_ledger.tasks.iter().map(|task| task.id.trim()),
+            task_authority.tasks.iter().map(|task| task.id.trim()),
         )
     } else {
         normalized_required_id(&request.id, "task id")?.to_string()
     };
     let now = Utc::now().to_rfc3339();
-    let existing = task_ledger
+    let existing = task_authority
         .tasks
         .iter()
         .find(|task| task.id.trim() == id.as_str())
@@ -264,7 +258,7 @@ fn remove_tasks_with_unresolved_directions(documents: &mut PlanningAdminDocument
         .map(|direction| direction.id.trim())
         .collect::<BTreeSet<_>>();
     let mut removed_task_ids = BTreeSet::new();
-    documents.task_ledger.tasks.retain(|task| {
+    documents.task_authority.tasks.retain(|task| {
         let should_keep = direction_ids.contains(task.direction_id.trim());
         if !should_keep {
             removed_task_ids.insert(task.id.trim().to_string());
@@ -274,7 +268,7 @@ fn remove_tasks_with_unresolved_directions(documents: &mut PlanningAdminDocument
     if removed_task_ids.is_empty() {
         return;
     }
-    remove_task_references(&mut documents.task_ledger, &removed_task_ids);
+    remove_task_references(&mut documents.task_authority, &removed_task_ids);
 }
 
 fn parse_direction_state(raw: &str) -> Result<DirectionState> {
@@ -428,10 +422,10 @@ fn split_references(raw: &str) -> Vec<String> {
 }
 
 pub(super) fn remove_task_references(
-    task_ledger: &mut TaskLedgerDocument,
+    task_authority: &mut TaskAuthorityDocument,
     removed_task_ids: &BTreeSet<String>,
 ) {
-    for task in &mut task_ledger.tasks {
+    for task in &mut task_authority.tasks {
         task.depends_on
             .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
         task.blocked_by

@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 pub enum PlanningAdminDraftKind {
     FullPlanning,
     Directions,
-    TaskLedger,
     QueueIdlePrompt,
     DirectionDetail,
 }
@@ -17,7 +16,6 @@ impl PlanningAdminDraftKind {
         match self {
             Self::FullPlanning => "full planning",
             Self::Directions => "directions",
-            Self::TaskLedger => "task catalog",
             Self::QueueIdlePrompt => "queue-idle prompt",
             Self::DirectionDetail => "direction detail",
         }
@@ -27,7 +25,6 @@ impl PlanningAdminDraftKind {
         match self {
             Self::FullPlanning => "Full Planning Draft",
             Self::Directions => "Directions Draft",
-            Self::TaskLedger => "Task Catalog Draft",
             Self::QueueIdlePrompt => "Queue-Idle Prompt Draft",
             Self::DirectionDetail => "Direction Detail Draft",
         }
@@ -37,7 +34,6 @@ impl PlanningAdminDraftKind {
         match self {
             Self::FullPlanning => "/admin",
             Self::Directions | Self::QueueIdlePrompt | Self::DirectionDetail => "/admin/directions",
-            Self::TaskLedger => "/admin/tasks",
         }
     }
 
@@ -45,7 +41,6 @@ impl PlanningAdminDraftKind {
         match self {
             Self::FullPlanning => "full_planning",
             Self::Directions => "directions",
-            Self::TaskLedger => "task_ledger",
             Self::QueueIdlePrompt => "queue_idle_prompt",
             Self::DirectionDetail => "direction_detail",
         }
@@ -62,7 +57,6 @@ impl fmt::Display for PlanningAdminDraftKind {
 #[serde(rename_all = "snake_case")]
 pub enum PlanningAdminFileKey {
     Directions,
-    TaskLedger,
     ResultOutput,
     QueueIdlePrompt,
     DirectionDetail,
@@ -72,7 +66,6 @@ impl PlanningAdminFileKey {
     pub fn label(self) -> &'static str {
         match self {
             Self::Directions => "Directions",
-            Self::TaskLedger => "Task Catalog",
             Self::ResultOutput => "Result Output",
             Self::QueueIdlePrompt => "Queue-Idle Prompt",
             Self::DirectionDetail => "Direction Detail",
@@ -82,7 +75,6 @@ impl PlanningAdminFileKey {
     pub fn editor_language(self) -> &'static str {
         match self {
             Self::Directions => "toml",
-            Self::TaskLedger => "json",
             Self::ResultOutput | Self::QueueIdlePrompt | Self::DirectionDetail => "markdown",
         }
     }
@@ -90,7 +82,6 @@ impl PlanningAdminFileKey {
     pub fn slug(self) -> &'static str {
         match self {
             Self::Directions => "directions",
-            Self::TaskLedger => "task_ledger",
             Self::ResultOutput => "result_output",
             Self::QueueIdlePrompt => "queue_idle_prompt",
             Self::DirectionDetail => "direction_detail",

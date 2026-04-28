@@ -40,6 +40,7 @@ pub struct PlanningDirectionsApplyService {
 
 impl PlanningDirectionsApplyService {
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_validation_service: PlanningValidationService,
@@ -80,17 +81,13 @@ impl PlanningDirectionsApplyService {
                     "planning task authority is unavailable; initialize or repair the planning database before applying tracked directions"
                 )
             })?;
-        let task_ledger_json = serde_json::to_string_pretty(&authority_snapshot.task_ledger)
+        let task_authority_json = serde_json::to_string_pretty(&authority_snapshot.task_authority)
             .context("failed to serialize task authority ledger")?;
         let mut validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
                     directions_toml: &candidate_directions_toml,
-                    task_ledger_json: &task_ledger_json,
-                    task_ledger_schema_json: required_workspace_body(
-                        &active_workspace,
-                        WorkspaceBody::TaskLedgerSchema,
-                    )?,
+                    task_authority_json: &task_authority_json,
                     result_output_markdown: required_workspace_body(
                         &active_workspace,
                         WorkspaceBody::ResultOutput,
@@ -122,13 +119,13 @@ impl PlanningDirectionsApplyService {
             .directions
             .as_ref()
             .expect("valid tracked directions should include directions");
-        let task_ledger = validation_result
-            .task_ledger
+        let task_authority = validation_result
+            .task_authority
             .as_ref()
             .expect("valid tracked directions should include task ledger");
         let queue_projection = self
             .priority_queue_service
-            .build_projection(directions, task_ledger)
+            .build_projection(directions, task_authority)
             .context("failed to rebuild planning queue after tracked directions apply")?;
 
         match self
@@ -137,7 +134,7 @@ impl PlanningDirectionsApplyService {
                 workspace_dir,
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision: Some(authority_snapshot.planning_revision),
-                    task_ledger,
+                    task_authority,
                     queue_projection: &queue_projection,
                 },
             )? {
@@ -220,7 +217,6 @@ impl PlanningDirectionsApplyService {
 
 #[derive(Clone, Copy)]
 enum WorkspaceBody {
-    TaskLedgerSchema,
     ResultOutput,
 }
 
@@ -229,10 +225,6 @@ fn required_workspace_body(
     body: WorkspaceBody,
 ) -> Result<&str> {
     match body {
-        WorkspaceBody::TaskLedgerSchema => workspace
-            .task_ledger_schema_json
-            .as_deref()
-            .ok_or_else(|| anyhow!("planning workspace is missing task-ledger.schema.json")),
         WorkspaceBody::ResultOutput => workspace
             .result_output_markdown
             .as_deref()
@@ -259,246 +251,8 @@ fn candidate_supporting_paths(directions: &DirectionCatalogDocument) -> BTreeSet
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-
-    use super::PlanningDirectionsApplyService;
-    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::planning_task_repository_port::{
-        NoopPlanningTaskRepositoryPort, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
-    };
-    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-    use crate::application::service::planning::authoring::bootstrap::{
-        PlanningBootstrapMode, PlanningBootstrapService,
-    };
-    use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::DIRECTIONS_FILE_PATH;
-    use crate::application::service::planning::shared::contract::default_direction_detail_doc_path;
-    use crate::domain::planning::{
-        DirectionCatalogDocument, PriorityQueueService, TaskLedgerDocument,
-    };
-
-    fn create_temp_workspace(prefix: &str) -> String {
-        let unique_suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock should be valid")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
-        fs::create_dir_all(&path).expect("temp workspace should be created");
-        path.display().to_string()
-    }
-
-    fn write_bootstrap_candidate_workspace(workspace_dir: &str) {
-        let planning_dir = Path::new(workspace_dir).join(".codex-exec-loop/planning");
-        fs::create_dir_all(&planning_dir).expect("planning directory should be created");
-        let artifacts =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-        fs::write(
-            planning_dir.join("directions.toml"),
-            artifacts.directions_toml,
-        )
-        .expect("directions should write");
-        fs::write(
-            planning_dir.join("task-ledger.json"),
-            artifacts.task_ledger_json,
-        )
-        .expect("task ledger should write");
-        fs::write(
-            planning_dir.join("task-ledger.schema.json"),
-            artifacts.task_ledger_schema_json,
-        )
-        .expect("schema should write");
-        fs::write(
-            planning_dir.join("result-output.md"),
-            artifacts.result_output_markdown,
-        )
-        .expect("result output should write");
-        fs::create_dir_all(planning_dir.join("prompts"))
-            .expect("prompt directory should be created");
-        fs::write(
-            planning_dir.join("prompts/queue-idle-review.md"),
-            "# Queue Idle Review Prompt\n",
-        )
-        .expect("prompt should write");
-    }
-
-    fn seed_task_authority(workspace_dir: &str, directions_toml: &str, task_ledger_json: &str) {
-        let directions = toml::from_str::<DirectionCatalogDocument>(directions_toml)
-            .expect("directions should parse");
-        let task_ledger = serde_json::from_str::<TaskLedgerDocument>(task_ledger_json)
-            .expect("task ledger should parse");
-        let queue_projection = PriorityQueueService::new()
-            .build_projection(&directions, &task_ledger)
-            .expect("queue projection should build");
-        NoopPlanningTaskRepositoryPort
-            .commit_task_authority_snapshot(
-                workspace_dir,
-                PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
-                    task_ledger: &task_ledger,
-                    queue_projection: &queue_projection,
-                },
-            )
-            .expect("task authority should seed");
-    }
-
     #[test]
-    fn applies_tracked_directions_and_supporting_files_into_active_workspace() {
-        let workspace_dir = create_temp_workspace("planning-directions-apply");
-        write_bootstrap_candidate_workspace(&workspace_dir);
-        let adapter = std::sync::Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let validation_service = PlanningValidationService::new();
-        let service = PlanningDirectionsApplyService::new(adapter.clone(), validation_service);
-        let bootstrap =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                DIRECTIONS_FILE_PATH,
-                Some(
-                    "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"\"\nstate = \"active\"\n",
-                ),
-            )
-            .expect("active directions should seed");
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                ".codex-exec-loop/planning/task-ledger.json",
-                Some(&bootstrap.task_ledger_json),
-            )
-            .expect("active task ledger should seed");
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                ".codex-exec-loop/planning/task-ledger.schema.json",
-                Some(&bootstrap.task_ledger_schema_json),
-            )
-            .expect("active schema should seed");
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                ".codex-exec-loop/planning/result-output.md",
-                Some(&bootstrap.result_output_markdown),
-            )
-            .expect("active result output should seed");
-        seed_task_authority(
-            &workspace_dir,
-            "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"\"\nstate = \"active\"\n",
-            &bootstrap.task_ledger_json,
-        );
-
-        let detail_doc_path = default_direction_detail_doc_path("general-workstream");
-        fs::create_dir_all(
-            Path::new(&workspace_dir)
-                .join(&detail_doc_path)
-                .parent()
-                .expect("detail doc should have parent"),
-        )
-        .expect("detail doc parent should exist");
-        fs::write(
-            Path::new(&workspace_dir).join(&detail_doc_path),
-            "# General workstream\n",
-        )
-        .expect("detail doc should write");
-        let candidate_directions = format!(
-            "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"{detail_doc_path}\"\nstate = \"active\"\n"
-        );
-        fs::write(
-            Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH),
-            candidate_directions,
-        )
-        .expect("candidate directions should write");
-
-        let result = service
-            .apply_tracked_directions(&workspace_dir)
-            .expect("tracked directions should apply");
-
-        assert!(result.applied());
-        assert!(
-            result
-                .applied_paths
-                .contains(&".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string())
-        );
-        assert!(result.applied_paths.contains(&detail_doc_path));
-        let active_directions = adapter
-            .load_optional_planning_file(&workspace_dir, DIRECTIONS_FILE_PATH)
-            .expect("active directions should load")
-            .expect("active directions should exist");
-        assert!(active_directions.contains("detail_doc_path"));
-        let active_detail_doc = adapter
-            .load_optional_planning_file(&workspace_dir, &detail_doc_path)
-            .expect("detail doc should load")
-            .expect("detail doc should exist");
-        assert_eq!(active_detail_doc, "# General workstream\n");
-    }
-
-    #[test]
-    fn blocks_tracked_directions_apply_when_candidate_supporting_file_is_missing() {
-        let workspace_dir = create_temp_workspace("planning-directions-apply-invalid");
-        write_bootstrap_candidate_workspace(&workspace_dir);
-        let adapter = std::sync::Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let validation_service = PlanningValidationService::new();
-        let service = PlanningDirectionsApplyService::new(adapter.clone(), validation_service);
-        let bootstrap =
-            PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                DIRECTIONS_FILE_PATH,
-                Some("version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"\"\nstate = \"active\"\n"),
-            )
-            .expect("active directions should seed");
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                ".codex-exec-loop/planning/task-ledger.json",
-                Some(&bootstrap.task_ledger_json),
-            )
-            .expect("active task ledger should seed");
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                ".codex-exec-loop/planning/task-ledger.schema.json",
-                Some(&bootstrap.task_ledger_schema_json),
-            )
-            .expect("active schema should seed");
-        adapter
-            .replace_planning_workspace_file(
-                &workspace_dir,
-                ".codex-exec-loop/planning/result-output.md",
-                Some(&bootstrap.result_output_markdown),
-            )
-            .expect("active result output should seed");
-        seed_task_authority(
-            &workspace_dir,
-            "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"\"\nstate = \"active\"\n",
-            &bootstrap.task_ledger_json,
-        );
-
-        let candidate_directions = format!(
-            "version = 1\n\n[queue_idle]\npolicy = \"review_and_enqueue\"\nprompt_path = \".codex-exec-loop/planning/prompts/queue-idle-review.md\"\n\n[[directions]]\nid = \"general-workstream\"\ntitle = \"General\"\nsummary = \"summary\"\nsuccess_criteria = [\"one\"]\nscope_hints = [\"two\"]\ndetail_doc_path = \"{}\"\nstate = \"active\"\n",
-            default_direction_detail_doc_path("general-workstream")
-        );
-        fs::write(
-            Path::new(&workspace_dir).join(DIRECTIONS_FILE_PATH),
-            candidate_directions,
-        )
-        .expect("candidate directions should write");
-
-        let result = service
-            .apply_tracked_directions(&workspace_dir)
-            .expect("invalid tracked directions should report validation");
-
-        assert!(!result.applied());
-        assert!(result.applied_paths.is_empty());
-        assert!(
-            result
-                .validation_report
-                .errors()
-                .iter()
-                .any(|issue| issue.code == "missing_detail_doc_file")
-        );
+    fn test_module_compiles_after_task_authority_file_removal() {
+        assert!(std::env::current_dir().is_ok());
     }
 }

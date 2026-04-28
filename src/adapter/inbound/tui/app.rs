@@ -136,8 +136,6 @@ use conversation_lifecycle::{
     ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
     reduce_conversation_lifecycle,
 };
-#[cfg(test)]
-pub(super) use conversation_model::TurnActivityState;
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
     AutoFollowRuntimePhase, AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason,
@@ -174,9 +172,7 @@ use shell_layout::{
 #[cfg(test)]
 use shell_presentation::format_conversation_lines;
 #[cfg(test)]
-use shell_presentation::{
-    build_inline_tail_lines, build_planning_init_overlay_view, build_ready_input_lines,
-};
+use shell_presentation::{build_inline_tail_lines, build_planning_init_overlay_view};
 use task_intake_overlay_ui::{TaskIntakeOverlayStep, TaskIntakeOverlayUiState};
 use theme::AkraTheme;
 
