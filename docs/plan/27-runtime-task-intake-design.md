@@ -136,12 +136,11 @@ In git-backed workspaces, SQLite remains canonical:
 6. commit ledger, queue projection, and planning revision in one store transaction
 7. write runtime exports from the committed store state
 
-Tracked task-authority artifacts and the legacy-named queue projection artifact stay import and review
-surfaces. Runtime intake does not make them authoritative and does not accept out-of-band edits
-without the existing explicit apply flow.
+Task-authority exports and the legacy-named queue projection artifact remain review surfaces only.
+Runtime intake does not make exported files authoritative and does not accept out-of-band edits.
 
-Non-git workspaces may keep their current direct-file authority path, but the service contract should
-still treat ledger plus queue projection as one accepted mutation.
+The service contract treats the accepted task ledger and queue projection as one store-backed
+mutation, regardless of workspace type.
 
 ## Revision-Safe Commit
 

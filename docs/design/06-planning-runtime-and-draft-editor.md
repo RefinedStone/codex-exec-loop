@@ -93,8 +93,8 @@ snapshot, regenerates any colliding id suffix, revalidates, and retries within a
 
 ## Current Limits
 
-- Non-git workspaces still fall back to direct local planning files instead of the repo-scoped authority store.
-- Tracked planning files require explicit draft promotion if the operator wants them accepted.
+- Non-git workspaces still use workspace-local authority storage instead of a shared repo-scoped store.
+- Operator-edited planning support files require explicit draft promotion or admin apply before they are accepted.
 - Real-terminal validation is still required for restart recovery, distributor delivery, and multi-worktree operator flow.
 - The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
 
