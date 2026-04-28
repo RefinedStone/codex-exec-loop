@@ -26,16 +26,13 @@ impl PlanningAdminFacadeService {
 
     pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
         self.ensure_no_parallel_working("apply exported planning files")?;
-        let directions_result = self
-            .planning
-            .workspace
-            .apply_tracked_directions(self.workspace_dir.as_str())?;
-        if !directions_result.validation_report.is_valid() {
-            bail!("tracked directions apply failed validation");
-        }
-        let mut paths = directions_result.applied_paths;
-        paths.sort();
-        paths.dedup();
+        let mut documents = self.load_admin_documents()?;
+        documents.result_output_markdown = self
+            .planning_workspace_port
+            .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
+            .ok_or_else(|| anyhow::anyhow!("missing exported file: {RESULT_OUTPUT_FILE_PATH}"))?;
+        self.commit_admin_documents(documents)?;
+        let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
         Ok(PlanningAdminFileSyncOutcome {
             notice: format!("applied {} exported planning paths", paths.len()),
             paths,

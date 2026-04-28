@@ -14,7 +14,6 @@ use self::runtime_dependencies::PlanningRuntimeUseCaseDependencies;
 use self::shared_services::PlanningSharedServices;
 use self::worker_dependencies::PlanningWorkerUseCaseDependencies;
 use self::workspace_dependencies::PlanningWorkspaceUseCaseDependencies;
-use super::authoring::directions_apply::PlanningDirectionsApplyService;
 use super::authoring::init::PlanningInitService;
 use super::feature::PlanningFeature;
 use super::repair::doctor::PlanningDoctorService;
@@ -97,12 +96,6 @@ impl PlanningWorkspaceUseCaseBuilder {
             ),
             PlanningDoctorService::new(self.dependencies.prompt),
             self.dependencies.directions,
-            PlanningDirectionsApplyService::with_task_repository(
-                self.dependencies.workspace.clone(),
-                self.dependencies.validation.clone(),
-                self.dependencies.priority_queue.clone(),
-                self.dependencies.task_repository.clone(),
-            ),
         )
     }
 }

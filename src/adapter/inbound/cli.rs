@@ -10,15 +10,13 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
-    PlanningTrackedDirectionsApplyResult, PlanningWorkspaceInitResult,
-    PlanningWorkspaceResetResult,
+    PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
 };
 
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
 const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const QUEUE_USAGE: &str = "Usage: akra queue apply [workspace_dir]";
-const DIRECTIONS_USAGE: &str = "Usage: akra directions apply [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
 const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
@@ -66,15 +64,6 @@ struct ResetReport {
     target: Option<&'static str>,
     rewritten_paths: Vec<String>,
     removed_paths: Vec<String>,
-    status: Option<String>,
-    issue: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DirectionsApplyReport {
-    workspace_path: String,
-    applied_paths: Vec<String>,
-    validation_report: Option<crate::domain::planning::PlanningValidationReport>,
     status: Option<String>,
     issue: Option<String>,
 }
@@ -170,63 +159,6 @@ impl ResetReport {
     }
 }
 
-impl DirectionsApplyReport {
-    fn path_issue(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            applied_paths: Vec::new(),
-            validation_report: None,
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    fn success(workspace_path: String, result: PlanningTrackedDirectionsApplyResult) -> Self {
-        let status = if result.applied() {
-            Some(format!(
-                "tracked directions applied to active planning ({} files)",
-                result.applied_paths.len()
-            ))
-        } else {
-            Some("tracked directions apply blocked by validation".to_string())
-        };
-        let issue = if result.validation_report.is_valid() {
-            None
-        } else {
-            Some(first_validation_issue_message(&result.validation_report))
-        };
-        Self {
-            workspace_path,
-            applied_paths: result.applied_paths,
-            validation_report: Some(result.validation_report),
-            status,
-            issue,
-        }
-    }
-
-    fn failure(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            applied_paths: Vec::new(),
-            validation_report: None,
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    fn exit_code(&self) -> i32 {
-        let blocked_by_validation = self
-            .validation_report
-            .as_ref()
-            .is_some_and(|report| !report.is_valid());
-        if self.issue.is_some() || blocked_by_validation {
-            1
-        } else {
-            0
-        }
-    }
-}
-
 impl QueueApplyReport {
     fn path_issue(workspace_path: String, issue: String) -> Self {
         Self {
@@ -280,7 +212,6 @@ where
             writeln!(stdout, "{TELEGRAM_BOT_ALIAS_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
             writeln!(stdout, "{QUEUE_USAGE}")?;
-            writeln!(stdout, "{DIRECTIONS_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
             Ok(Some(0))
@@ -304,15 +235,6 @@ where
             Some(workspace.as_os_str()),
             stdout,
         )?)),
-        [command] if command == OsStr::new("directions") => {
-            bail!("{DIRECTIONS_USAGE}");
-        }
-        [command, action] if command == OsStr::new("directions") => {
-            Ok(Some(run_directions(action.as_os_str(), None, stdout)?))
-        }
-        [command, action, workspace] if command == OsStr::new("directions") => Ok(Some(
-            run_directions(action.as_os_str(), Some(workspace.as_os_str()), stdout)?,
-        )),
         [command] if command == OsStr::new("init") => Ok(Some(run_init(None, stdout)?)),
         [command, workspace] if command == OsStr::new("init") => {
             Ok(Some(run_init(Some(workspace.as_os_str()), stdout)?))
@@ -327,9 +249,6 @@ where
         )?)),
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
-        }
-        [command, _, _, ..] if command == OsStr::new("directions") => {
-            bail!("{DIRECTIONS_USAGE}");
         }
         [command, _, ..] if command == OsStr::new("init") => {
             bail!("{INIT_USAGE}");
@@ -378,27 +297,6 @@ fn run_doctor(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<
     let report = inspect_workspace(&workspace_path);
     render_doctor_report(stdout, &report)?;
     Ok(report.exit_code())
-}
-
-fn run_directions(
-    action_arg: &OsStr,
-    workspace_arg: Option<&OsStr>,
-    stdout: &mut impl Write,
-) -> Result<i32> {
-    match action_arg
-        .to_string_lossy()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "apply" => {
-            let workspace_path = resolve_workspace_path(workspace_arg)?;
-            let report = apply_tracked_directions(&workspace_path);
-            render_directions_apply_report(stdout, &report)?;
-            Ok(report.exit_code())
-        }
-        _ => bail!("{DIRECTIONS_USAGE}"),
-    }
 }
 
 fn run_queue(
@@ -542,22 +440,6 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
     }
 }
 
-fn apply_tracked_directions(workspace_path: &Path) -> DirectionsApplyReport {
-    let workspace_label = workspace_path.display().to_string();
-    if let Err(issue) = validate_workspace_path(workspace_path) {
-        return DirectionsApplyReport::path_issue(workspace_label, issue);
-    }
-
-    let planning = build_production_planning_services();
-    match planning
-        .workspace
-        .apply_tracked_directions(workspace_path.to_string_lossy().as_ref())
-    {
-        Ok(result) => DirectionsApplyReport::success(workspace_label, result),
-        Err(error) => DirectionsApplyReport::failure(workspace_label, error.to_string()),
-    }
-}
-
 fn apply_tracked_task_authority(workspace_path: &Path) -> QueueApplyReport {
     let workspace_label = workspace_path.display().to_string();
     if let Err(issue) = validate_workspace_path(workspace_path) {
@@ -595,37 +477,6 @@ fn render_doctor_report(stdout: &mut impl Write, report: &DoctorReport) -> Resul
     }
     if let Some(note) = report.report.note() {
         writeln!(stdout, "note: {note}")?;
-    }
-
-    Ok(())
-}
-
-fn render_directions_apply_report(
-    stdout: &mut impl Write,
-    report: &DirectionsApplyReport,
-) -> Result<()> {
-    writeln!(stdout, "workspace: {}", report.workspace_path)?;
-    writeln!(stdout, "command: directions apply")?;
-    writeln!(stdout, "source: DB direction authority")?;
-
-    for applied_path in &report.applied_paths {
-        writeln!(stdout, "applied: {applied_path}")?;
-    }
-    if let Some(validation_report) = &report.validation_report {
-        writeln!(
-            stdout,
-            "validation: {}",
-            validation_label(validation_report)
-        )?;
-        for issue in validation_report.errors() {
-            writeln!(stdout, "validation issue: {}", issue.message)?;
-        }
-    }
-    if let Some(status) = &report.status {
-        writeln!(stdout, "status: {status}")?;
-    }
-    if let Some(issue) = &report.issue {
-        writeln!(stdout, "issue: {issue}")?;
     }
 
     Ok(())
@@ -731,16 +582,6 @@ fn validation_label(report: &crate::domain::planning::PlanningValidationReport) 
     } else {
         "invalid"
     }
-}
-
-fn first_validation_issue_message(
-    report: &crate::domain::planning::PlanningValidationReport,
-) -> String {
-    report
-        .errors()
-        .first()
-        .map(|issue| issue.message.clone())
-        .unwrap_or_else(|| "planning validation failed".to_string())
 }
 
 #[cfg(test)]
