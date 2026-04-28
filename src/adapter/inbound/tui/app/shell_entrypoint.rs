@@ -7,6 +7,7 @@ use crate::adapter::outbound::app_server::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::app_server::CodexAppServerAdapter;
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -49,7 +50,11 @@ fn build_default_app() -> NativeTuiApp {
         sqlite_planning_authority,
         planning_worker_port,
     );
-    let parallel_mode_service = ParallelModeService::new(planning_authority, github_automation);
+    let parallel_mode_service = ParallelModeService::new(
+        planning_authority,
+        github_automation,
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
     let mut app = NativeTuiApp::new(
         startup_service,
         session_service,
