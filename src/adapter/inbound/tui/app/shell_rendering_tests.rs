@@ -52,7 +52,7 @@ fn planning_manual_editor_matches_snapshot() {
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
     assert!(rendered.contains("Planning Draft"));
-    assert!(rendered.contains("directions.toml"));
+    assert!(rendered.contains("result-output.md"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("planning_manual_editor", rendered);
 }

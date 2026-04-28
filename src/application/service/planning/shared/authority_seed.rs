@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
+    PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -19,6 +20,7 @@ use crate::domain::planning::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct PlanningAuthoritySeedOutcome {
     pub(crate) workspace_files_seeded: bool,
+    pub(crate) direction_authority_seeded: bool,
     pub(crate) task_authority_seeded: bool,
 }
 
@@ -58,11 +60,18 @@ impl PlanningAuthoritySeedService {
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
         let workspace_files_seeded = self.ensure_workspace_files(workspace_dir, &mut workspace)?;
-        let task_authority_seeded =
-            self.ensure_task_authority(workspace_dir, &workspace, &bootstrap.task_authority)?;
+        let direction_authority_seeded =
+            self.ensure_direction_authority(workspace_dir, &bootstrap.directions)?;
+        let task_authority_seeded = self.ensure_task_authority(
+            workspace_dir,
+            &workspace,
+            &bootstrap.directions,
+            &bootstrap.task_authority,
+        )?;
 
         Ok(PlanningAuthoritySeedOutcome {
             workspace_files_seeded,
+            direction_authority_seeded,
             task_authority_seeded,
         })
     }
@@ -76,10 +85,6 @@ impl PlanningAuthoritySeedService {
             .planning_bootstrap_service
             .build_artifacts_for_mode(PlanningBootstrapMode::Simple);
         let mut changed = false;
-        if workspace.directions_toml.is_none() {
-            workspace.directions_toml = Some(bootstrap.directions_toml);
-            changed = true;
-        }
         if workspace.result_output_markdown.is_none() {
             workspace.result_output_markdown = Some(bootstrap.result_output_markdown);
             changed = true;
@@ -106,10 +111,38 @@ impl PlanningAuthoritySeedService {
         Ok(changed)
     }
 
+    fn ensure_direction_authority(
+        &self,
+        workspace_dir: &str,
+        default_directions: &DirectionCatalogDocument,
+    ) -> Result<bool> {
+        if self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(workspace_dir)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+
+        match self
+            .planning_task_repository_port
+            .commit_direction_authority_snapshot(
+                workspace_dir,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: default_directions,
+                },
+            )? {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(true),
+            PlanningTaskAuthorityCommitResult::Conflict { .. } => Ok(false),
+        }
+    }
+
     fn ensure_task_authority(
         &self,
         workspace_dir: &str,
         workspace: &PlanningWorkspaceLoadRecord,
+        default_directions: &DirectionCatalogDocument,
         default_task_authority: &TaskAuthorityDocument,
     ) -> Result<bool> {
         if self
@@ -120,10 +153,6 @@ impl PlanningAuthoritySeedService {
             return Ok(false);
         }
 
-        let directions_toml = workspace
-            .directions_toml
-            .as_deref()
-            .context("default planning authority seed did not provide directions")?;
         let result_output_markdown = workspace
             .result_output_markdown
             .as_deref()
@@ -133,7 +162,7 @@ impl PlanningAuthoritySeedService {
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml,
+                    directions: default_directions,
                     task_authority_json: &task_authority_json,
                     result_output_markdown,
                 });
@@ -147,11 +176,9 @@ impl PlanningAuthoritySeedService {
             anyhow::bail!("default planning authority seed failed validation: {first_failure}");
         }
 
-        let directions = toml::from_str::<DirectionCatalogDocument>(directions_toml)
-            .context("failed to parse planning directions during default authority seed")?;
         let queue_projection = self
             .priority_queue_service
-            .build_projection(&directions, default_task_authority)
+            .build_projection(default_directions, default_task_authority)
             .context("failed to build default planning queue projection")?;
         match self
             .planning_task_repository_port
@@ -175,13 +202,15 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::adapter::outbound::filesystem::planning_workspace::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::PlanningValidationService;
     use crate::application::service::planning::shared::contract::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
     };
-    use crate::domain::planning::{DirectionCatalogDocument, PriorityQueueService};
+    use crate::domain::planning::PriorityQueueService;
 
     use super::PlanningAuthoritySeedService;
 
@@ -218,26 +247,22 @@ mod tests {
             .expect("default seed should succeed");
 
         assert!(outcome.workspace_files_seeded);
+        assert!(outcome.direction_authority_seeded);
         assert!(outcome.task_authority_seeded);
         let workspace = workspace_port
             .load_planning_workspace_files(&workspace_dir)
             .expect("seeded workspace should load");
-        assert!(workspace.directions_toml.is_some());
         assert!(workspace.result_output_markdown.is_some());
-        let directions: DirectionCatalogDocument =
-            toml::from_str(workspace.directions_toml.as_deref().unwrap())
-                .expect("seeded directions should parse");
+        let directions = NoopPlanningTaskRepositoryPort
+            .load_direction_authority_snapshot(&workspace_dir)
+            .expect("seeded directions should load")
+            .expect("seeded directions should exist")
+            .directions;
         assert_eq!(directions.directions[0].id, "general-workstream");
         assert!(
             workspace_port
                 .load_optional_planning_file(&workspace_dir, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
                 .expect("seeded prompt should load")
-                .is_some()
-        );
-        assert!(
-            workspace_port
-                .load_optional_planning_file(&workspace_dir, DIRECTIONS_FILE_PATH)
-                .expect("seeded directions should load")
                 .is_some()
         );
         assert!(
@@ -266,6 +291,7 @@ mod tests {
             .expect("default seed should succeed");
 
         assert!(outcome.workspace_files_seeded);
+        assert!(outcome.direction_authority_seeded);
         assert!(outcome.task_authority_seeded);
         let workspace = workspace_port
             .load_planning_workspace_files(&workspace_dir)
@@ -274,6 +300,11 @@ mod tests {
             workspace.result_output_markdown.as_deref(),
             Some("# Custom Result\n\n- Preserve this operator-authored instruction.")
         );
-        assert!(workspace.directions_toml.is_some());
+        let directions = NoopPlanningTaskRepositoryPort
+            .load_direction_authority_snapshot(&workspace_dir)
+            .expect("seeded directions should load")
+            .expect("seeded directions should exist")
+            .directions;
+        assert_eq!(directions.directions[0].id, "general-workstream");
     }
 }

@@ -4,9 +4,11 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthoritySnapshot;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningDirectionAuthoritySnapshot, PlanningTaskAuthoritySnapshot,
+};
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
+use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskAuthorityDocument,
@@ -50,6 +52,22 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 content TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS planning_direction_config (
+                config_key TEXT PRIMARY KEY,
+                version INTEGER NOT NULL,
+                queue_idle_policy TEXT NOT NULL,
+                queue_idle_prompt_path TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS planning_directions (
+                direction_id TEXT PRIMARY KEY,
+                direction_order INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                state TEXT NOT NULL,
+                detail_doc_path TEXT NOT NULL,
+                content_json TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS planning_tasks (
                 task_id TEXT PRIMARY KEY,
                 task_order INTEGER NOT NULL,
@@ -87,6 +105,8 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 ON planning_tasks(status, combined_priority, updated_at);
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_direction
                 ON planning_tasks(direction_id);
+            CREATE INDEX IF NOT EXISTS idx_planning_directions_order
+                ON planning_directions(direction_order, direction_id);
             CREATE INDEX IF NOT EXISTS idx_planning_task_edges_lookup
                 ON planning_task_edges(target_task_id, edge_kind);
             CREATE INDEX IF NOT EXISTS idx_planning_queue_projection_bucket_rank
@@ -259,9 +279,78 @@ pub(super) fn load_active_workspace_record(
 ) -> Result<PlanningWorkspaceLoadRecord> {
     let documents = load_active_documents(connection)?;
     Ok(PlanningWorkspaceLoadRecord {
-        directions_toml: documents.get(DIRECTIONS_FILE_PATH).cloned(),
         result_output_markdown: documents.get(RESULT_OUTPUT_FILE_PATH).cloned(),
     })
+}
+
+pub(super) fn load_direction_authority_snapshot_from_connection(
+    connection: &Connection,
+) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
+    let Some(directions) = load_direction_catalog_from_connection(connection)? else {
+        return Ok(None);
+    };
+    let planning_revision =
+        read_metadata_i64_connection(connection, "planning_revision")?.unwrap_or(0);
+    Ok(Some(PlanningDirectionAuthoritySnapshot {
+        planning_revision,
+        directions,
+    }))
+}
+
+pub(super) fn load_direction_catalog_from_connection(
+    connection: &Connection,
+) -> Result<Option<DirectionCatalogDocument>> {
+    if !direction_authority_exists(connection)? {
+        return Ok(None);
+    }
+    let (version, queue_idle_policy, queue_idle_prompt_path) = connection
+        .query_row(
+            "SELECT version, queue_idle_policy, queue_idle_prompt_path
+             FROM planning_direction_config
+             WHERE config_key = 'default'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u32,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .context("failed to read planning direction config")?
+        .unwrap_or((PLANNING_FORMAT_VERSION, "stop".to_string(), String::new()));
+    let mut statement = connection
+        .prepare(
+            "SELECT direction_id, content_json
+             FROM planning_directions
+             ORDER BY direction_order ASC, direction_id ASC",
+        )
+        .context("failed to read planning direction rows")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate planning direction rows")?;
+    let mut directions = Vec::new();
+    for row in rows {
+        let (direction_id, content_json) =
+            row.context("failed to decode planning direction row")?;
+        directions.push(serde_json::from_str(&content_json).with_context(|| {
+            format!("failed to deserialize planning direction row `{direction_id}`")
+        })?);
+    }
+    let queue_idle = serde_json::from_value(serde_json::json!({
+        "policy": queue_idle_policy,
+        "prompt_path": queue_idle_prompt_path,
+    }))
+    .context("failed to decode planning direction queue-idle config")?;
+
+    Ok(Some(DirectionCatalogDocument {
+        version,
+        queue_idle,
+        directions,
+    }))
 }
 
 pub(super) fn load_active_document(
@@ -413,14 +502,13 @@ pub(super) fn empty_queue_projection() -> PriorityQueueProjection {
 
 pub(super) fn reconcile_task_authority_with_directions(
     transaction: &rusqlite::Transaction<'_>,
-    directions_toml: Option<&str>,
+    directions: Option<&DirectionCatalogDocument>,
 ) -> Result<()> {
     let Some(mut task_authority) = load_task_authority_from_connection(transaction)? else {
         return Ok(());
     };
-    let direction_ids = match directions_toml {
-        Some(directions_toml) => parse_direction_ids(directions_toml)
-            .with_context(|| format!("failed to parse `{DIRECTIONS_FILE_PATH}`"))?,
+    let direction_ids = match directions {
+        Some(directions) => direction_ids(directions),
         None => BTreeSet::new(),
     };
     if !prune_task_authority_to_direction_ids(&mut task_authority, &direction_ids) {
@@ -430,12 +518,85 @@ pub(super) fn reconcile_task_authority_with_directions(
     Ok(())
 }
 
-pub(super) fn parse_direction_ids(directions_toml: &str) -> Result<BTreeSet<String>> {
-    Ok(toml::from_str::<DirectionCatalogDocument>(directions_toml)?
+pub(super) fn direction_ids(directions: &DirectionCatalogDocument) -> BTreeSet<String> {
+    directions
         .directions
-        .into_iter()
+        .iter()
         .map(|direction| direction.id.trim().to_string())
-        .collect())
+        .collect()
+}
+
+pub(super) fn replace_direction_authority_tables(
+    transaction: &rusqlite::Transaction<'_>,
+    directions: &DirectionCatalogDocument,
+) -> Result<()> {
+    clear_direction_authority_rows(transaction)?;
+    transaction
+        .execute(
+            "INSERT INTO planning_direction_config
+             (config_key, version, queue_idle_policy, queue_idle_prompt_path)
+             VALUES ('default', ?1, ?2, ?3)",
+            params![
+                directions.version,
+                directions.queue_idle.policy.label(),
+                directions.queue_idle.prompt_path.trim(),
+            ],
+        )
+        .context("failed to persist planning direction config")?;
+    for (index, direction) in directions.directions.iter().enumerate() {
+        let direction_id = direction.id.trim();
+        transaction
+            .execute(
+                "INSERT INTO planning_directions
+                 (direction_id, direction_order, title, state, detail_doc_path, content_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    direction_id,
+                    index as i64,
+                    direction.title.trim(),
+                    direction.state.label(),
+                    direction.detail_doc_path.trim(),
+                    serde_json::to_string(direction)
+                        .context("failed to serialize planning direction row")?,
+                ],
+            )
+            .with_context(|| format!("failed to persist planning direction `{direction_id}`"))?;
+    }
+    upsert_metadata(
+        transaction,
+        "direction_authority_version",
+        &directions.version.to_string(),
+    )?;
+    Ok(())
+}
+
+pub(super) fn clear_direction_authority_tables(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<()> {
+    clear_direction_authority_rows(transaction)?;
+    upsert_metadata(transaction, "direction_authority_version", "0")?;
+    Ok(())
+}
+
+fn clear_direction_authority_rows(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    transaction
+        .execute("DELETE FROM planning_directions", [])
+        .context("failed to clear planning direction rows")?;
+    transaction
+        .execute("DELETE FROM planning_direction_config", [])
+        .context("failed to clear planning direction config")?;
+    Ok(())
+}
+
+fn direction_authority_exists(connection: &Connection) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM planning_directions LIMIT 1)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .context("failed to inspect planning direction rows")
 }
 
 pub(super) fn prune_task_authority_to_direction_ids(

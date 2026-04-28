@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn next_action_prefers_save_guidance_when_dirty_files_exist() {
         let report = PlanningValidationReport::default();
-        let dirty_labels = vec!["directions.toml".to_string()];
+        let dirty_labels = vec!["result-output.md".to_string()];
 
         let action = planning_draft_editor_next_action(&dirty_labels, &report);
 

@@ -29,7 +29,7 @@ impl PlanningValidationService {
         files: PlanningWorkspaceFiles<'_>,
     ) -> PlanningValidationResult {
         let mut report = PlanningValidationReport::new();
-        let directions = self.parse_direction_catalog(files.directions_toml, &mut report);
+        let directions = Some(files.directions.clone());
         let task_authority_value =
             self.parse_task_authority_value(files.task_authority_json, &mut report);
         let task_authority = task_authority_value.and_then(|task_authority_value| {
@@ -46,24 +46,6 @@ impl PlanningValidationService {
             directions,
             task_authority,
             report,
-        }
-    }
-
-    fn parse_direction_catalog(
-        &self,
-        directions_toml: &str,
-        report: &mut PlanningValidationReport,
-    ) -> Option<DirectionCatalogDocument> {
-        match toml::from_str(directions_toml) {
-            Ok(document) => Some(document),
-            Err(error) => {
-                report.push_error(
-                    PlanningFileKind::Directions,
-                    "directions_parse_failed",
-                    format!("failed to parse directions.toml: {error}"),
-                );
-                None
-            }
         }
     }
 
@@ -277,7 +259,10 @@ mod tests {
     use crate::application::service::planning::authoring::bootstrap::{
         PlanningBootstrapMode, PlanningBootstrapService,
     };
-    use crate::domain::planning::{PlanningFileKind, PlanningWorkspaceFiles};
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
+        PlanningFileKind, PlanningWorkspaceFiles, QueueIdleConfig, QueueIdlePolicy,
+    };
 
     fn valid_result_output_markdown() -> &'static str {
         r#"# Result Output Prompt
@@ -285,6 +270,22 @@ mod tests {
 - Summarize the work you actually completed in this turn.
 - Mention task-authority updates when they changed.
 "#
+    }
+
+    fn test_directions(direction_id: &str) -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: direction_id.to_string(),
+                title: "Direction A".to_string(),
+                summary: "Keep task updates aligned.".to_string(),
+                success_criteria: vec!["Only aligned tasks enter the authority.".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        }
     }
 
     #[test]
@@ -296,7 +297,7 @@ mod tests {
         let task_authority_json = serde_json::to_string(&artifacts.task_authority)
             .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: &task_authority_json,
             result_output_markdown: &artifacts.result_output_markdown,
         });
@@ -309,16 +310,9 @@ mod tests {
     #[test]
     fn rejects_unknown_direction_references() {
         let validation_service = PlanningValidationService::new();
+        let directions = test_directions("product-direction");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[[directions]]
-id = "product-direction"
-title = "Product direction"
-summary = "Ship planning support."
-success_criteria = ["Complete the planning slice."]
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -354,16 +348,9 @@ state = "active"
     #[test]
     fn rejects_llm_tasks_without_relation_notes() {
         let validation_service = PlanningValidationService::new();
+        let directions = test_directions("direction-a");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[[directions]]
-id = "direction-a"
-title = "Direction A"
-summary = "Keep task updates aligned."
-success_criteria = ["Only aligned tasks enter the ledger."]
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -399,16 +386,9 @@ state = "active"
     #[test]
     fn rejects_dependency_cycles() {
         let validation_service = PlanningValidationService::new();
+        let directions = test_directions("direction-a");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[[directions]]
-id = "direction-a"
-title = "Direction A"
-summary = "Keep task updates aligned."
-success_criteria = ["Only aligned tasks enter the ledger."]
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -465,7 +445,7 @@ state = "active"
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: r#"{
   "version": 2
 }"#,
@@ -486,7 +466,7 @@ state = "active"
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -527,7 +507,7 @@ state = "active"
         let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
 
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -614,7 +594,7 @@ state = "active"
         let task_authority_json = serde_json::to_string(&artifacts.task_authority)
             .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: &task_authority_json,
             result_output_markdown: "Summarize the completed work.",
         });
@@ -634,7 +614,7 @@ state = "active"
         let task_authority_json = serde_json::to_string(&artifacts.task_authority)
             .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: &task_authority_json,
             result_output_markdown: r#"# Result Output Prompt
 
@@ -657,7 +637,7 @@ state = "active"
         let task_authority_json = serde_json::to_string(&artifacts.task_authority)
             .expect("bootstrap task authority should serialize");
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: &artifacts.directions_toml,
+            directions: &artifacts.directions,
             task_authority_json: &task_authority_json,
             result_output_markdown: "   ",
         });
@@ -671,17 +651,11 @@ state = "active"
     #[test]
     fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
         let validation_service = PlanningValidationService::new();
+        let mut directions = test_directions("direction-a");
+        directions.directions[0].detail_doc_path =
+            ".codex-exec-loop/planning/directions_backup/direction-a.md".to_string();
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[[directions]]
-id = "direction-a"
-title = "Direction A"
-summary = "Keep details in a scoped markdown file."
-success_criteria = ["Use a detail doc path inside the directions directory."]
-detail_doc_path = ".codex-exec-loop/planning/directions_backup/direction-a.md"
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
@@ -701,17 +675,11 @@ state = "active"
     #[test]
     fn rejects_detail_doc_paths_with_parent_dir_components() {
         let validation_service = PlanningValidationService::new();
+        let mut directions = test_directions("direction-a");
+        directions.directions[0].detail_doc_path =
+            ".codex-exec-loop/planning/directions/../direction-a.md".to_string();
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[[directions]]
-id = "direction-a"
-title = "Direction A"
-summary = "Keep details in a scoped markdown file."
-success_criteria = ["Use a detail doc path inside the directions directory."]
-detail_doc_path = ".codex-exec-loop/planning/directions/../direction-a.md"
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
@@ -731,20 +699,14 @@ state = "active"
     #[test]
     fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
         let validation_service = PlanningValidationService::new();
+        let mut directions = test_directions("direction-a");
+        directions.queue_idle = QueueIdleConfig {
+            policy: QueueIdlePolicy::ReviewAndEnqueue,
+            prompt_path: ".codex-exec-loop/planning/prompts_backup/queue-idle-review.md"
+                .to_string(),
+        };
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[queue_idle]
-policy = "review_and_enqueue"
-prompt_path = ".codex-exec-loop/planning/prompts_backup/queue-idle-review.md"
-
-[[directions]]
-id = "direction-a"
-title = "Direction A"
-summary = "Keep details in a scoped markdown file."
-success_criteria = ["Use a queue-idle prompt inside the prompts directory."]
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });
@@ -764,20 +726,13 @@ state = "active"
     #[test]
     fn rejects_queue_idle_prompt_paths_with_parent_dir_components() {
         let validation_service = PlanningValidationService::new();
+        let mut directions = test_directions("direction-a");
+        directions.queue_idle = QueueIdleConfig {
+            policy: QueueIdlePolicy::ReviewAndEnqueue,
+            prompt_path: ".codex-exec-loop/planning/prompts/../queue-idle-review.md".to_string(),
+        };
         let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-            directions_toml: r#"version = 1
-
-[queue_idle]
-policy = "review_and_enqueue"
-prompt_path = ".codex-exec-loop/planning/prompts/../queue-idle-review.md"
-
-[[directions]]
-id = "direction-a"
-title = "Direction A"
-summary = "Keep details in a scoped markdown file."
-success_criteria = ["Use a queue-idle prompt inside the prompts directory."]
-state = "active"
-"#,
+            directions: &directions,
             task_authority_json: r#"{"version":1,"tasks":[]}"#,
             result_output_markdown: valid_result_output_markdown(),
         });

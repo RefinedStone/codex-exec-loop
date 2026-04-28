@@ -335,7 +335,7 @@ fn build_planning_queue_refresh_prompt(
         r#"planning worker refresh 입니다.
 
 이번 세션은 planning 전용입니다. DB task authority를 기준으로 queue를 갱신하세요.
-- `directions.toml`과 `result-output.md`는 수정하지 마세요.
+- `result-output.md`는 수정하지 마세요.
 - 현재 planning context와 아래 최신 사용자 요청, main session의 최신 답변을 함께 보고 실행 가능한 후속 작업을 task authority에 반영하세요.
 - 마지막 답변에는 fenced JSON 하나를 포함하세요: `{{"task_authority": {{...}}}}`. `task_authority` 값은 갱신된 전체 task ledger 문서입니다.
 - 최신 답변이 다음 순서, 이어서 할 일, 보완 항목, numbered checklist를 직접 제시하면 그것을 우선적인 후속 작업 근거로 사용하세요.
@@ -368,7 +368,7 @@ fn build_planning_queue_idle_derive_prompt(
         r#"planning worker queue-idle active-derivation review 입니다.
 
 이번 세션은 planning 전용입니다. DB task authority를 기준으로 queue를 재평가하고, 필요하면 다음 작업을 적극적으로 도출하세요.
-- `directions.toml`, direction detail docs, queue-idle review prompt, `result-output.md` 는 수정하지 마세요.
+- direction detail docs, queue-idle review prompt, `result-output.md` 는 수정하지 마세요.
 - 현재 queue는 비어 있습니다. direction 목표와 success criteria, detail doc, 최신 사용자 요청, 최신 답변, 지금까지의 work list를 다시 비추어보고 다음 실행 가능한 작업이 실제로 남아 있는지 판단하세요.
 - 마지막 답변에는 fenced JSON 하나를 포함하세요: `{{"task_authority": {{...}}}}`. `task_authority` 값은 갱신된 전체 task ledger 문서입니다.
 - 최신 답변에 다음 순서, 이어서 만들 항목, 보완해야 할 목차, numbered checklist가 보이면 그것을 근거로 새 follow-up task를 만들어야 합니다.
@@ -403,7 +403,7 @@ fn build_planning_official_completion_prompt(
         r#"planning worker official completion refresh 입니다.
 
 이번 세션은 planning 전용입니다. DB task authority 기준으로 agent completion을 공식 상태로 반영하세요.
-- `directions.toml`과 `result-output.md`는 수정하지 마세요.
+- `result-output.md`는 수정하지 마세요.
 - 아래 completion payload는 비공식 agent report입니다. ledger refresh가 성공하기 전까지 이 결과를 공식 완료로 간주하지 마세요.
 - payload의 `task_id`와 `task_title`을 기준으로 기존 ledger task를 찾아 `done`, `blocked`, updated active task 중 무엇이 맞는지 판단하세요.
 - 마지막 답변에는 fenced JSON 하나를 포함하세요: `{{"task_authority": {{...}}}}`. `task_authority` 값은 갱신된 전체 task ledger 문서입니다.

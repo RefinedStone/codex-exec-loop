@@ -86,7 +86,7 @@ The terminal-agent research set in `docs/plan/21-*`, `docs/plan/22-*`, `docs/pla
 
 ### 4. Keep Planning Artifacts Clean
 
-`directions.toml` should carry only live strategy.
+DB direction authority should carry only live strategy.
 Completed directions should leave the active map.
 Future cycle details should sit in supporting docs and task-authority items, not in a pile of done
 directions.

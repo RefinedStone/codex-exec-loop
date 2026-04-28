@@ -43,7 +43,7 @@ impl PlanningSemanticValidationService {
                 PlanningFileKind::Directions,
                 "unsupported_directions_version",
                 format!(
-                    "directions.toml version {} does not match supported version {}",
+                    "direction authority version {} does not match supported version {}",
                     direction_catalog.version, PLANNING_FORMAT_VERSION
                 ),
             );
@@ -53,7 +53,7 @@ impl PlanningSemanticValidationService {
             report.push_error(
                 PlanningFileKind::Directions,
                 "missing_directions",
-                "directions.toml must contain at least one direction",
+                "direction authority must contain at least one direction",
             );
             return;
         }

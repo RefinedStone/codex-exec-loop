@@ -59,7 +59,7 @@ pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspac
 pub use self::runtime::validation::PlanningValidationService;
 pub use self::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 pub use self::shared::contract::{
-    ACTIVE_PLANNING_FILE_PATHS, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH,
+    ACTIVE_PLANNING_FILE_PATHS, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
     PLANNING_REJECTED_DIRECTORY, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
     default_direction_detail_doc_path,

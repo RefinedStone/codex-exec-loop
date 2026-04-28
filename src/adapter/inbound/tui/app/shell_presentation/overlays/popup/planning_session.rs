@@ -58,7 +58,7 @@ mod tests {
         assert_eq!(session.selected_index, 0);
         assert_eq!(
             session.selected_buffer.active_path(),
-            "planning/directions.toml"
+            "planning/result-output.md"
         );
         assert!(session.validation_report.is_valid());
         assert!(session.dirty_labels.is_empty());
@@ -73,7 +73,7 @@ mod tests {
         let session = collect_planning_draft_editor_session_view(&ui_state)
             .expect("session view should exist");
 
-        assert_eq!(session.dirty_labels, vec!["directions.toml".to_string()]);
+        assert_eq!(session.dirty_labels, vec!["result-output.md".to_string()]);
     }
 
     fn sample_session() -> PlanningDraftEditorSession {
@@ -82,8 +82,8 @@ mod tests {
             draft_directory: "/tmp/planning-draft".to_string(),
             editable_files: vec![
                 PlanningDraftEditorFile {
-                    active_path: "planning/directions.toml".to_string(),
-                    staged_path: ".draft/planning/directions.toml".to_string(),
+                    active_path: "planning/result-output.md".to_string(),
+                    staged_path: ".draft/planning/result-output.md".to_string(),
                     body: "title = \"Directions\"\n".to_string(),
                 },
                 PlanningDraftEditorFile {

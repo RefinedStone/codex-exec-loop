@@ -35,13 +35,12 @@ pub struct PlanningDraftLoadRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlanningWorkspaceLoadRecord {
-    pub directions_toml: Option<String>,
     pub result_output_markdown: Option<String>,
 }
 
 impl PlanningWorkspaceLoadRecord {
     pub fn has_any_files(&self) -> bool {
-        self.directions_toml.is_some() || self.result_output_markdown.is_some()
+        self.result_output_markdown.is_some()
     }
 }
 

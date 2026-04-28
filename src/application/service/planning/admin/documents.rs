@@ -5,13 +5,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
+    PlanningTaskAuthorityCommitResult,
 };
+use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
-use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningWorkspaceFiles,
     TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
@@ -45,22 +46,23 @@ impl PlanningAdminFacadeService {
         let workspace = self
             .planning_workspace_port
             .load_planning_workspace_files(self.workspace_dir.as_str())?;
-        let directions_toml = workspace
-            .directions_toml
-            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?;
         let result_output_markdown = workspace.result_output_markdown.ok_or_else(|| {
             anyhow!("default planning authority seed did not provide result output")
         })?;
+        let direction_authority_snapshot = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(self.workspace_dir.as_str())?
+            .ok_or_else(|| {
+                anyhow!("default planning authority seed did not provide direction authority")
+            })?;
         let task_authority_snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(self.workspace_dir.as_str())?
             .ok_or_else(|| {
                 anyhow!("default planning authority seed did not provide task authority")
             })?;
-        let directions = toml::from_str::<DirectionCatalogDocument>(&directions_toml)
-            .context("failed to parse active directions.toml")?;
         Ok(PlanningAdminDocuments {
-            directions,
+            directions: direction_authority_snapshot.directions,
             task_authority: task_authority_snapshot.task_authority,
             result_output_markdown,
             observed_planning_revision: Some(task_authority_snapshot.planning_revision),
@@ -74,12 +76,11 @@ impl PlanningAdminFacadeService {
         ensure_default_direction(&mut documents.directions)?;
         remove_tasks_with_unresolved_directions(&mut documents);
 
-        let directions_toml = toml::to_string_pretty(&documents.directions)?;
         let task_authority_json = serde_json::to_string_pretty(&documents.task_authority)?;
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml: &directions_toml,
+                    directions: &documents.directions,
                     task_authority_json: &task_authority_json,
                     result_output_markdown: &documents.result_output_markdown,
                 });
@@ -102,10 +103,29 @@ impl PlanningAdminFacadeService {
 
         match self
             .planning_task_repository_port
+            .commit_direction_authority_snapshot(
+                self.workspace_dir.as_str(),
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: documents.observed_planning_revision,
+                    directions: &documents.directions,
+                },
+            )? {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => {
+                bail!(
+                    "planning db changed while editing directions (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                );
+            }
+        }
+        match self
+            .planning_task_repository_port
             .commit_task_authority_snapshot(
                 self.workspace_dir.as_str(),
                 PlanningTaskAuthorityCommit {
-                    observed_planning_revision: documents.observed_planning_revision,
+                    observed_planning_revision: None,
                     task_authority: &documents.task_authority,
                     queue_projection: &queue_projection,
                 },
@@ -120,12 +140,6 @@ impl PlanningAdminFacadeService {
                 );
             }
         }
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                self.workspace_dir.as_str(),
-                DIRECTIONS_FILE_PATH,
-                Some(&directions_toml),
-            )?;
         self.planning_workspace_port
             .replace_planning_workspace_file(
                 self.workspace_dir.as_str(),
@@ -252,9 +266,8 @@ fn default_direction_definition() -> Result<DirectionDefinition> {
 fn build_default_direction_definition() -> Result<DirectionDefinition, String> {
     let artifacts =
         PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
-    let directions = toml::from_str::<DirectionCatalogDocument>(&artifacts.directions_toml)
-        .map_err(|error| format!("failed to parse bootstrap default directions: {error}"))?;
-    directions
+    artifacts
+        .directions
         .directions
         .into_iter()
         .find(|direction| direction.id.trim() == DEFAULT_DIRECTION_ID)

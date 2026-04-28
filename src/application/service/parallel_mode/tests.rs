@@ -15,7 +15,7 @@ use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
 use crate::application::service::planning::PlanningRuntimeSnapshot;
-use crate::application::service::planning::shared::contract::DIRECTIONS_FILE_PATH;
+use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,

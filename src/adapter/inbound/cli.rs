@@ -606,7 +606,7 @@ fn render_directions_apply_report(
 ) -> Result<()> {
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
     writeln!(stdout, "command: directions apply")?;
-    writeln!(stdout, "source: .codex-exec-loop/planning/directions.toml")?;
+    writeln!(stdout, "source: DB direction authority")?;
 
     for applied_path in &report.applied_paths {
         writeln!(stdout, "applied: {applied_path}")?;

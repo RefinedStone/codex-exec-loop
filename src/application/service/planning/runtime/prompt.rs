@@ -9,9 +9,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
-use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-};
+use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueProjection,
@@ -338,11 +336,22 @@ impl PlanningPromptService {
                     "planning task authority is unavailable; initialize or repair the planning database"
                 )
             })?;
+        let direction_authority_snapshot = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(workspace_dir)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "planning direction authority is unavailable; initialize or repair the planning database"
+                )
+            })?;
         let authority_task_authority_json =
             serde_json::to_string(&task_authority_snapshot.task_authority)
                 .context("failed to serialize task authority ledger")?;
-        let workspace_files =
-            workspace_record_to_files(&workspace_record, &authority_task_authority_json);
+        let workspace_files = workspace_record_to_files(
+            &workspace_record,
+            &direction_authority_snapshot.directions,
+            &authority_task_authority_json,
+        );
         let mut validation_result = self
             .planning_validation_service
             .validate_workspace_files(workspace_files);
@@ -474,13 +483,11 @@ where
 
 fn workspace_record_to_files<'a>(
     workspace_record: &'a PlanningWorkspaceLoadRecord,
+    directions: &'a DirectionCatalogDocument,
     task_authority_json: &'a str,
 ) -> PlanningWorkspaceFiles<'a> {
     PlanningWorkspaceFiles {
-        directions_toml: workspace_record
-            .directions_toml
-            .as_deref()
-            .expect("complete planning workspace should include directions"),
+        directions,
         task_authority_json,
         result_output_markdown: workspace_record
             .result_output_markdown
@@ -491,9 +498,6 @@ fn workspace_record_to_files<'a>(
 
 fn missing_workspace_paths(workspace_record: &PlanningWorkspaceLoadRecord) -> Vec<&'static str> {
     let mut missing_paths = Vec::new();
-    if workspace_record.directions_toml.is_none() {
-        missing_paths.push(DIRECTIONS_FILE_PATH);
-    }
     if workspace_record.result_output_markdown.is_none() {
         missing_paths.push(RESULT_OUTPUT_FILE_PATH);
     }
@@ -637,10 +641,7 @@ fn build_prompt_fragment(
 
     lines.push(String::new());
     lines.push("Task Authority Mutation Contract".to_string());
-    lines.push(format!(
-        "- Do not edit `{}` or `{}`.",
-        DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    ));
+    lines.push(format!("- Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH));
     lines.push(
         "- New tasks must attach to an existing `direction_id` and include `direction_relation_note`."
             .to_string(),
@@ -749,31 +750,45 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 mod tests {
     use super::{missing_workspace_paths, workspace_record_to_files};
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-    use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
+    use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig,
+    };
 
     #[test]
     fn missing_workspace_paths_only_reports_operator_files() {
         let record = PlanningWorkspaceLoadRecord {
-            directions_toml: None,
             result_output_markdown: None,
         };
 
         assert_eq!(
             missing_workspace_paths(&record),
-            vec![DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH]
+            vec![RESULT_OUTPUT_FILE_PATH]
         );
     }
 
     #[test]
     fn workspace_record_combines_db_task_authority_with_operator_files() {
         let record = PlanningWorkspaceLoadRecord {
-            directions_toml: Some("version = 1".to_string()),
             result_output_markdown: Some("# Result Output Prompt".to_string()),
         };
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: "general-workstream".to_string(),
+                title: "General workstream".to_string(),
+                summary: "default".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        };
 
-        let files = workspace_record_to_files(&record, "{\"version\":1,\"tasks\":[]}");
+        let files = workspace_record_to_files(&record, &directions, "{\"version\":1,\"tasks\":[]}");
 
-        assert_eq!(files.directions_toml, "version = 1");
+        assert_eq!(files.directions, &directions);
         assert_eq!(files.task_authority_json, "{\"version\":1,\"tasks\":[]}");
         assert_eq!(files.result_output_markdown, "# Result Output Prompt");
     }

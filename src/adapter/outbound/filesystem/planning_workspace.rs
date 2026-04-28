@@ -10,8 +10,8 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspacePort,
 };
 use crate::application::service::planning::{
-    ACTIVE_PLANNING_FILE_PATHS, DIRECTIONS_FILE_PATH, PLANNING_DRAFTS_DIRECTORY,
-    PLANNING_REJECTED_DIRECTORY, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+    ACTIVE_PLANNING_FILE_PATHS, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
+    RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
 };
 
 #[derive(Default)]
@@ -79,7 +79,6 @@ impl FilesystemPlanningWorkspaceAdapter {
         file_loader: impl Fn(&str, &str) -> Result<Option<String>>,
     ) -> Result<PlanningWorkspaceLoadRecord> {
         Ok(PlanningWorkspaceLoadRecord {
-            directions_toml: file_loader(workspace_dir, DIRECTIONS_FILE_PATH)?,
             result_output_markdown: file_loader(workspace_dir, RESULT_OUTPUT_FILE_PATH)?,
         })
     }
@@ -88,11 +87,6 @@ impl FilesystemPlanningWorkspaceAdapter {
         workspace_root: &Path,
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()> {
-        write_optional_workspace_file(
-            workspace_root,
-            DIRECTIONS_FILE_PATH,
-            record.directions_toml.as_deref(),
-        )?;
         write_optional_workspace_file(
             workspace_root,
             RESULT_OUTPUT_FILE_PATH,
@@ -524,7 +518,6 @@ mod tests {
             .commit_planning_workspace_files(
                 workspace.to_str().expect("workspace path should be utf8"),
                 &PlanningWorkspaceLoadRecord {
-                    directions_toml: Some("version = 1".to_string()),
                     result_output_markdown: Some("# Result Output Prompt".to_string()),
                 },
             )
@@ -536,7 +529,6 @@ mod tests {
             )
             .expect("workspace files should load");
 
-        assert_eq!(loaded.directions_toml.as_deref(), Some("version = 1"));
         assert_eq!(
             loaded.result_output_markdown.as_deref(),
             Some("# Result Output Prompt")

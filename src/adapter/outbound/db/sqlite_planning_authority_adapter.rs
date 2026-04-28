@@ -14,6 +14,7 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningDirectionAuthorityCommit, PlanningDirectionAuthoritySnapshot,
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot,
     PlanningTaskRepositoryPort,
 };
@@ -21,7 +22,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
 };
-use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
+use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
 };
@@ -241,6 +242,79 @@ impl SqlitePlanningAuthorityAdapter {
         load_task_authority_snapshot_from_connection(&connection)
     }
 
+    pub(crate) fn load_direction_authority_snapshot(
+        workspace_dir: &str,
+    ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        load_direction_authority_snapshot_from_connection(&connection)
+    }
+
+    pub(crate) fn commit_direction_authority_snapshot(
+        workspace_dir: &str,
+        commit: PlanningDirectionAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open direction authority commit transaction")?;
+        let current_revision = read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0);
+        if let Some(observed_revision) = commit.observed_planning_revision
+            && observed_revision != current_revision
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: observed_revision,
+                current_planning_revision: current_revision,
+            });
+        }
+        if let Some(existing_snapshot) =
+            load_direction_authority_snapshot_from_connection(&transaction)?
+            && existing_snapshot.directions == *commit.directions
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: current_revision,
+            });
+        }
+
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_direction_authority_commit_at",
+        )?;
+        replace_direction_authority_tables(&transaction, commit.directions)?;
+        reconcile_task_authority_with_directions(&transaction, Some(commit.directions))?;
+        let planning_revision = bump_planning_revision(&transaction)?;
+        transaction
+            .commit()
+            .context("failed to commit direction authority transaction")?;
+
+        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
+    }
+
+    pub(crate) fn clear_direction_authority_snapshot(workspace_dir: &str) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open direction authority clear transaction")?;
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_direction_authority_commit_at",
+        )?;
+        clear_direction_authority_tables(&transaction)?;
+        reconcile_task_authority_with_directions(&transaction, None)?;
+        bump_planning_revision(&transaction)?;
+        transaction
+            .commit()
+            .context("failed to clear direction authority transaction")?;
+
+        Ok(())
+    }
+
     pub(crate) fn commit_task_authority_snapshot(
         workspace_dir: &str,
         commit: PlanningTaskAuthorityCommit<'_>,
@@ -313,9 +387,6 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to open authority-store active file transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
         let changed = set_active_document(&transaction, relative_path, body)?;
-        if changed && relative_path == DIRECTIONS_FILE_PATH {
-            reconcile_task_authority_with_directions(&transaction, body)?;
-        }
         if changed {
             bump_planning_revision(&transaction)?;
         }
@@ -921,6 +992,25 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
 }
 
 impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
+    fn load_direction_authority_snapshot(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
+        Self::load_direction_authority_snapshot(workspace_dir)
+    }
+
+    fn commit_direction_authority_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningDirectionAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Self::commit_direction_authority_snapshot(workspace_dir, commit)
+    }
+
+    fn clear_direction_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
+        Self::clear_direction_authority_snapshot(workspace_dir)
+    }
+
     fn load_task_authority_snapshot(
         &self,
         workspace_dir: &str,
@@ -1407,11 +1497,6 @@ fn apply_active_workspace_record(
     record: &PlanningWorkspaceLoadRecord,
 ) -> Result<bool> {
     let mut changed = false;
-    changed |= set_active_document(
-        transaction,
-        DIRECTIONS_FILE_PATH,
-        record.directions_toml.as_deref(),
-    )?;
     changed |= set_active_document(
         transaction,
         RESULT_OUTPUT_FILE_PATH,

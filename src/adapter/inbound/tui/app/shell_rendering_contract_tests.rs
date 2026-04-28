@@ -534,7 +534,7 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
 
     assert!(rendered.contains("Planning Draft"));
     assert!(rendered.contains("Files"));
-    assert!(rendered.contains("directions.toml"));
+    assert!(rendered.contains("result-output.md"));
     assert!(rendered.contains("controls: Ctrl+S saves and validates"));
     assert!(rendered.contains("Ctrl+P saves and promotes active planning"));
     assert!(!rendered.contains("Transcript /"));
@@ -907,9 +907,9 @@ pub(super) fn sample_planning_editor_session() -> PlanningDraftEditorSession {
         draft_directory: "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test".to_string(),
         editable_files: vec![
             PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
+                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
                 staged_path:
-                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/directions.toml"
+                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/result-output.md"
                         .to_string(),
                 body: "version = 1\n".to_string(),
             },
@@ -937,9 +937,9 @@ fn sample_long_planning_editor_session() -> PlanningDraftEditorSession {
         draft_name: "bootstrap-test".to_string(),
         draft_directory: "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test".to_string(),
         editable_files: vec![PlanningDraftEditorFile {
-            active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
+            active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
             staged_path:
-                "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/directions.toml"
+                "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/result-output.md"
                     .to_string(),
             body: (1..=12)
                 .map(|index| format!("line {index}"))

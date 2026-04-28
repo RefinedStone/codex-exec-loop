@@ -8,7 +8,7 @@ pub const DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN: &str = r#"# Queue Idle Revi
 
 Queue가 비었을 때만 이 prompt를 사용합니다.
 
-- `directions.toml`의 direction 목표, success criteria, detail doc를 기준으로 현재 DB task authority work list를 다시 점검하세요.
+- DB direction authority의 direction 목표, success criteria, detail doc를 기준으로 현재 DB task authority work list를 다시 점검하세요.
 - 최신 사용자 요청과 최신 답변이 다음 작업을 암시하면, 그 내용을 근거로 새 follow-up task를 적극적으로 도출하세요.
 - 최신 답변에 다음 순서, 이어서 할 일, 보완 항목, numbered checklist가 보이면 가장 확실한 다음 작업은 `ready` 또는 `in_progress`로 두고 나머지는 `proposed`로 정리하세요.
 - 이미 done / in_progress / blocked 로 관리 중인 항목과 의미가 겹치면 새 task를 만들지 말고 기존 task를 갱신하세요.
