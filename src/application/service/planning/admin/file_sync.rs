@@ -9,7 +9,7 @@ use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 
 impl PlanningAdminFacadeService {
     pub fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
-        self.ensure_no_parallel_working("export planning files")?;
+        self.ensure_no_parallel_working("export planning support files")?;
         let documents = self.load_admin_documents()?;
         let mut paths = Vec::new();
         write_candidate_file(
@@ -19,13 +19,16 @@ impl PlanningAdminFacadeService {
             &mut paths,
         )?;
         Ok(PlanningAdminFileSyncOutcome {
-            notice: format!("exported {} planning files for editing", paths.len()),
+            notice: format!(
+                "exported {} planning support files for editing",
+                paths.len()
+            ),
             paths,
         })
     }
 
     pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
-        self.ensure_no_parallel_working("apply exported planning files")?;
+        self.ensure_no_parallel_working("apply exported planning support files")?;
         let mut documents = self.load_admin_documents()?;
         documents.result_output_markdown = self
             .planning_workspace_port

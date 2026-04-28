@@ -44,11 +44,6 @@
   <div class="actions">
     <form method="post" action="/admin/drafts">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="kind" value="directions">
-      <button type="submit" class="secondary">Raw catalog</button>
-    </form>
-    <form method="post" action="/admin/drafts">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="kind" value="queue_idle_prompt">
       <button type="submit" class="secondary">Queue prompt</button>
     </form>

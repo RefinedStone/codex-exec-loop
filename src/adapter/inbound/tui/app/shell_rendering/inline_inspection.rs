@@ -503,7 +503,7 @@ fn draw_inline_directions_draft_editor_inspection(
     area: Rect,
     app: &NativeTuiApp,
 ) {
-    draw_inline_draft_editor_inspection(frame, area, app, "Directions Draft");
+    draw_inline_draft_editor_inspection(frame, area, app, "Directions Support Draft");
 }
 
 fn draw_inline_session_list_panel(

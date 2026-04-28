@@ -8,7 +8,7 @@ use super::QueueOverlayView;
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     let header_lines = vec![
         AkraTheme::title_line("Planning Queue", " / shell inspection"),
-        Line::from("Review the next actionable work without opening raw planning files."),
+        Line::from("Review the next actionable work without opening raw planning artifacts."),
     ];
 
     match &app.conversation_state {

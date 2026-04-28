@@ -41,7 +41,7 @@ fn planning_draft_editor_next_action(
     if !dirty_labels.is_empty() {
         "next action: Ctrl+S re-runs validation, or Ctrl+P saves current edits and promotes if valid"
     } else if validation_report.is_valid() {
-        "next action: Ctrl+P promotes this draft into active planning files"
+        "next action: Ctrl+P promotes this draft into accepted planning state"
     } else {
         "next action: fix validation errors before promoting this draft"
     }
@@ -73,7 +73,7 @@ mod tests {
 
         assert_eq!(
             action,
-            "next action: Ctrl+P promotes this draft into active planning files"
+            "next action: Ctrl+P promotes this draft into accepted planning state"
         );
     }
 

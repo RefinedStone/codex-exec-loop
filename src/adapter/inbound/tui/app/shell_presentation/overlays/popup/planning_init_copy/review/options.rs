@@ -7,7 +7,7 @@ pub(super) fn build_simple_review_option_lines(
     vec![
         Line::from(format!("staged draft: {}", copy.draft_name)),
         Line::from(format!(
-            "reviewed artifacts: {} staged planning files",
+            "reviewed artifacts: {} staged planning support files",
             copy.staged_file_count
         )),
         Line::from(
