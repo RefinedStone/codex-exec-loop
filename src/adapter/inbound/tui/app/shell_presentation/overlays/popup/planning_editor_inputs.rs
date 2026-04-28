@@ -81,11 +81,11 @@ mod tests {
 
         let status_copy = build_planning_draft_editor_status_copy(
             "draft-1",
-            "planning/directions.toml",
+            "planning/result-output.md",
             1,
             1,
             &validation_report,
-            ".draft/planning/directions.toml",
+            ".draft/planning/result-output.md",
             &[],
             "next action: inspect",
             None,

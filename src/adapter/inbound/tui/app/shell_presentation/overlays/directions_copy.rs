@@ -34,7 +34,7 @@ pub(super) fn build_overview_overlay_view(
             overlay_option_line(
                 "Enter",
                 "edit directions",
-                "open directions.toml and any existing queue-idle prompt in the staged editor",
+                "open the DB-backed direction maintenance view and any existing queue-idle prompt",
                 false,
                 false,
             ),
@@ -127,7 +127,7 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
             overlay_option_line(
                 "1",
                 "yes",
-                "stage a markdown file and open it with directions.toml for creation or repair",
+                "stage a markdown detail doc for creation or repair",
                 selected_choice == DetailDocConfirmChoice::Yes,
                 false,
             ),

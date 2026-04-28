@@ -515,8 +515,8 @@ mod tests {
             draft_directory: "/tmp/bootstrap-test".to_string(),
             editable_files: vec![
                 PlanningDraftEditorFile {
-                    active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
-                    staged_path: "/tmp/bootstrap-test/directions.toml".to_string(),
+                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
                     body: "version = 1".to_string(),
                 },
                 PlanningDraftEditorFile {
@@ -535,8 +535,8 @@ mod tests {
             draft_name: "bootstrap-test".to_string(),
             draft_directory: "/tmp/bootstrap-test".to_string(),
             editable_files: vec![PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/directions.toml".to_string(),
-                staged_path: "/tmp/bootstrap-test/directions.toml".to_string(),
+                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
                 body: body.to_string(),
             }],
             validation_report: PlanningValidationReport::default(),

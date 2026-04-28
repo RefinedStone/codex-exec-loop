@@ -40,13 +40,11 @@ Key artifacts:
 
 | Path | Meaning |
 | --- | --- |
-| `.codex-exec-loop/planning/directions.toml` | directions, detail-doc mapping, and queue-idle policy |
+| SQLite direction authority | directions, detail-doc mapping, and queue-idle policy |
 | `.codex-exec-loop/planning/directions/<direction-id>.md` | long-form direction detail |
-| `.codex-exec-loop/planning/task-authority.json` | task ledger import/review artifact; relational store is authority in git-backed workspaces |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | queue-idle supporting prompt |
 | `.codex-exec-loop/planning/drafts/<draft>/...` | staged inactive edits awaiting promote |
 | `.codex-exec-loop/planning/rejected/<turn>/...` | archived invalid planning writes |
-| `.codex-exec-loop/runtime/exports/*` | store-backed review exports |
 
 Queue behavior:
 
@@ -55,7 +53,7 @@ Queue behavior:
 - Runtime task intake creates accepted `ready` tasks through a structured draft, validation, and
   revision-safe commit path; LLM output may only produce `TaskDraft` data and must not write SQL or
   JSON authority surfaces directly.
-- When the queue is valid but idle, behavior follows `[queue_idle]` in `directions.toml`.
+- When the queue is valid but idle, behavior follows DB direction authority queue-idle policy.
 - `:directions` keeps direction detail docs and queue-idle prompt editing subordinate to the same
   staged-draft authoring model.
 

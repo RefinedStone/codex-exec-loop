@@ -7,7 +7,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord,
 };
 use crate::application::service::planning::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, PlanningDraftEditorFile, PlanningDraftPromoteResult,
     PlanningDraftSaveResult, RESULT_OUTPUT_FILE_PATH,
 };
@@ -176,11 +176,11 @@ impl PlanningAdminFacadeService {
             .iter()
             .map(|file| (file.active_path.as_str(), file.body.as_str()))
             .collect::<BTreeMap<_, _>>();
-        let directions_toml = self.load_effective_draft_body(
-            &staged_files,
-            DIRECTIONS_FILE_PATH,
-            PlanningFileKind::Directions,
-        )?;
+        let directions = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(self.workspace_dir.as_str())?
+            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?
+            .directions;
         let task_authority_json = self
             .planning_task_repository_port
             .load_task_authority_snapshot(self.workspace_dir.as_str())?
@@ -196,7 +196,7 @@ impl PlanningAdminFacadeService {
         let mut result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml: &directions_toml,
+                    directions: &directions,
                     task_authority_json: &task_authority_json,
                     result_output_markdown: &result_output_markdown,
                 });
@@ -253,28 +253,23 @@ impl PlanningAdminFacadeService {
 
     pub(super) fn stage_active_manual_editor_draft(&self) -> Result<String> {
         self.ensure_default_authority()?;
-        let directions_toml = self
-            .planning_workspace_port
-            .load_optional_planning_file(self.workspace_dir.as_str(), DIRECTIONS_FILE_PATH)?
-            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?;
+        let directions = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(self.workspace_dir.as_str())?
+            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?
+            .directions;
         let result_output_markdown = self
             .planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
             .ok_or_else(|| {
                 anyhow!("default planning authority seed did not provide result output")
             })?;
-        let mut files = vec![
-            PlanningDraftFileRecord {
-                active_path: DIRECTIONS_FILE_PATH.to_string(),
-                body: directions_toml.clone(),
-            },
-            PlanningDraftFileRecord {
-                active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
-                body: result_output_markdown,
-            },
-        ];
+        let mut files = vec![PlanningDraftFileRecord {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            body: result_output_markdown,
+        }];
 
-        let supporting_paths = collect_direction_supporting_paths(&directions_toml);
+        let supporting_paths = collect_direction_supporting_paths(&directions);
         for path in supporting_paths {
             if let Some(body) = self
                 .planning_workspace_port
@@ -308,18 +303,14 @@ pub(super) struct PlanningAdminDraftValidationSnapshot {
     queue_preview: Option<PlanningAdminQueuePreview>,
 }
 
-fn collect_direction_supporting_paths(directions_toml: &str) -> Vec<String> {
-    let Ok(directions) = toml::from_str::<DirectionCatalogDocument>(directions_toml) else {
-        return Vec::new();
-    };
-
+fn collect_direction_supporting_paths(directions: &DirectionCatalogDocument) -> Vec<String> {
     let mut paths = BTreeSet::new();
     let prompt_path = directions.queue_idle.prompt_path.trim();
     if !prompt_path.is_empty() {
         paths.insert(prompt_path.to_string());
     }
 
-    for direction in directions.directions {
+    for direction in &directions.directions {
         let detail_doc_path = direction.detail_doc_path.trim();
         if !detail_doc_path.is_empty() {
             paths.insert(detail_doc_path.to_string());
@@ -345,9 +336,7 @@ fn file_key_for_kind(
     kind: PlanningAdminDraftKind,
     active_path: &str,
 ) -> Option<PlanningAdminFileKey> {
-    let key = if active_path == DIRECTIONS_FILE_PATH {
-        PlanningAdminFileKey::Directions
-    } else if active_path == RESULT_OUTPUT_FILE_PATH {
+    let key = if active_path == RESULT_OUTPUT_FILE_PATH {
         PlanningAdminFileKey::ResultOutput
     } else if active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
         || active_path.starts_with(&format!("{PLANNING_PROMPTS_DIRECTORY}/"))
@@ -360,25 +349,17 @@ fn file_key_for_kind(
     };
 
     match kind {
-        PlanningAdminDraftKind::FullPlanning => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::ResultOutput
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::Directions => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::QueueIdlePrompt
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::QueueIdlePrompt => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::QueueIdlePrompt
-        )
-        .then_some(key),
-        PlanningAdminDraftKind::DirectionDetail => matches!(
-            key,
-            PlanningAdminFileKey::Directions | PlanningAdminFileKey::DirectionDetail
-        )
-        .then_some(key),
+        PlanningAdminDraftKind::FullPlanning => {
+            matches!(key, PlanningAdminFileKey::ResultOutput).then_some(key)
+        }
+        PlanningAdminDraftKind::Directions => {
+            matches!(key, PlanningAdminFileKey::QueueIdlePrompt).then_some(key)
+        }
+        PlanningAdminDraftKind::QueueIdlePrompt => {
+            matches!(key, PlanningAdminFileKey::QueueIdlePrompt).then_some(key)
+        }
+        PlanningAdminDraftKind::DirectionDetail => {
+            matches!(key, PlanningAdminFileKey::DirectionDetail).then_some(key)
+        }
     }
 }

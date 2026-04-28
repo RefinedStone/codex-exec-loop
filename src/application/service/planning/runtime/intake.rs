@@ -12,9 +12,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
-use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-};
+use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
@@ -196,7 +194,7 @@ impl PlanningTaskIntakeValidationService {
                 PlanningTaskIntakeValidationError::new(
                     "unknown_direction",
                     format!(
-                        "Task direction `{}` is not in directions.toml.",
+                        "Task direction `{}` is not in direction authority.",
                         draft.task.direction_id.trim()
                     ),
                 )
@@ -381,16 +379,19 @@ impl PlanningTaskIntakeService {
             ));
         }
 
-        let directions_toml = required_workspace_body(
-            &workspace_record,
-            DIRECTIONS_FILE_PATH,
-            workspace_record.directions_toml.as_deref(),
-        )?;
         let result_output_markdown = required_workspace_body(
             &workspace_record,
             RESULT_OUTPUT_FILE_PATH,
             workspace_record.result_output_markdown.as_deref(),
         )?;
+        let direction_snapshot = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(&request.workspace_directory)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Planning direction authority is unavailable; initialize or repair the planning database before using :task."
+                )
+            })?;
         let repository_snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(&request.workspace_directory)?
@@ -405,7 +406,7 @@ impl PlanningTaskIntakeService {
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml,
+                    directions: &direction_snapshot.directions,
                     task_authority_json: &task_authority_json,
                     result_output_markdown,
                 });
@@ -498,11 +499,7 @@ impl PlanningTaskIntakeService {
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml: required_workspace_body(
-                        &context.workspace_record,
-                        DIRECTIONS_FILE_PATH,
-                        context.workspace_record.directions_toml.as_deref(),
-                    )?,
+                    directions: &context.directions,
                     task_authority_json: &next_task_authority_json,
                     result_output_markdown: required_workspace_body(
                         &context.workspace_record,
@@ -552,7 +549,7 @@ fn required_workspace_body<'a>(
 
 fn task_intake_repair_guidance(first_failure: &str) -> &'static str {
     if first_failure.contains("references unknown direction_id") {
-        return "Next action: run :directions apply if tracked directions.toml contains the missing direction; otherwise run :doctor.";
+        return "Next action: run :doctor to inspect direction authority.";
     }
     if first_failure.contains("DB task authority")
         || first_failure.contains("task ")
@@ -560,13 +557,10 @@ fn task_intake_repair_guidance(first_failure: &str) -> &'static str {
     {
         return "Next action: run :doctor to inspect task authority.";
     }
-    if first_failure.contains("directions.toml")
-        || first_failure.contains("direction ")
-        || first_failure.contains("queue_idle")
-    {
-        return "Next action: run :directions apply if tracked directions.toml is newer; otherwise run :doctor.";
+    if first_failure.contains("direction ") || first_failure.contains("queue_idle") {
+        return "Next action: run :doctor to inspect direction authority.";
     }
-    "Next action: run :doctor to inspect the workspace, then use :directions apply for tracked direction drift."
+    "Next action: run :doctor to inspect the workspace."
 }
 
 fn validate_task_link(

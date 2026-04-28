@@ -38,7 +38,7 @@ pub fn build_planning_repair_prompt(
         format!("planning repair {attempt_number}/{max_attempts} 입니다."),
         "이전 턴에서 DB task authority 후보가 validation을 통과하지 못했습니다.".to_string(),
         "이번 턴에서는 planning 파일을 수정하지 말고, 마지막 답변에 fenced JSON 하나를 포함하세요: `{\"task_authority\": {...}}`.".to_string(),
-        "- `directions.toml`, `result-output.md` 은 수정하지 마세요.".to_string(),
+        "- `result-output.md` 은 수정하지 마세요.".to_string(),
         "- 현재 task authority는 마지막 accepted DB snapshot 기준입니다."
             .to_string(),
         "- 아래 validation 오류를 모두 해결하는 전체 task authority JSON을 `task_authority` 값으로 반환하세요.".to_string(),
@@ -74,10 +74,10 @@ pub fn build_planning_repair_prompt(
     }
 
     lines.push(String::new());
-    lines.push("Accepted directions (`directions.toml`):".to_string());
+    lines.push("Accepted direction authority:".to_string());
     lines.push(prompt_code_block(
-        "toml",
-        truncate_prompt_section(&request.directions_toml, 4_000).as_str(),
+        "json",
+        truncate_prompt_section(&request.direction_authority_json, 4_000).as_str(),
     ));
 
     let prompt_context = build_planning_repair_prompt_context(request, previous_handoff);

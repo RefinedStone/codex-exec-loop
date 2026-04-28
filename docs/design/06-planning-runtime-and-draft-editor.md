@@ -10,14 +10,14 @@ The operator-facing current contract lives in
 - Git-backed workspaces resolve one canonical repo authority root and persist planning authority under `.codex-exec-loop/runtime/planning-authority.db`.
 - Active planning, staged drafts, official refresh claims, distributor queue claims, and runtime slot, session, and distributor projections are repo-scoped authority-store data.
 - Git-backed runtime no longer writes task authority or queue projection JSON files during normal authority updates.
-- Tracked planning files under `.codex-exec-loop/planning/` remain operator-authored directions, prompts, and result-output guidance only.
+- Tracked planning files under `.codex-exec-loop/planning/` remain operator-authored prompts, direction detail docs, and result-output guidance only.
 - Authority inspection reports store health directly from SQLite state.
 
 ## Planning Artifacts
 
 | Path | Ownership | Role |
 | --- | --- | --- |
-| `.codex-exec-loop/planning/directions.toml` | operator-owned through staged drafts | defines directions, detail-doc mapping, and queue-idle policy |
+| SQLite direction authority | DB-backed planning authority | defines directions, detail-doc mapping, and queue-idle policy |
 | `.codex-exec-loop/planning/directions/<direction-id>.md` | operator-owned through staged drafts | long-form direction detail |
 | `.codex-exec-loop/planning/result-output.md` | protected planning contract | result-output guidance fragment |
 | `.codex-exec-loop/planning/prompts/queue-idle-review.md` | operator-owned through staged drafts | prompt used when queue-idle review is enabled |
@@ -34,7 +34,7 @@ The operator-facing current contract lives in
 - Proposed tasks do not enter the executable queue until they are promoted or otherwise moved into
   normal queue state.
 - Builtin `next-task` uses the accepted queue head only.
-- Queue-idle behavior is driven by `[queue_idle]` in `directions.toml`.
+- Queue-idle behavior is driven by DB direction authority.
 
 ## Runtime Task Intake
 
@@ -85,7 +85,7 @@ snapshot, regenerates any colliding id suffix, revalidates, and retries within a
 
 ## Protection And Recovery Rules
 
-- `directions.toml` and `result-output.md` are protected during automated execution.
+- DB direction authority and `result-output.md` are protected during automated execution.
 - Invalid hidden-session task authority payloads are rejected and may trigger a bounded repair retry.
 - Queue refresh and repair work run through the planning worker boundary.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.

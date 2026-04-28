@@ -5,15 +5,13 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningStagedFileRecord,
     PlanningWorkspacePort,
 };
-use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-};
+use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningValidationReport,
     TaskAuthorityDocument,
@@ -154,7 +152,7 @@ impl PlanningInitService {
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(workspace_dir, draft_name)?;
-        let validation_report = self.validate_loaded_draft(&loaded);
+        let validation_report = self.validate_loaded_draft(workspace_dir, &loaded)?;
 
         Ok(PlanningDraftEditorSession {
             draft_name: loaded.draft_name,
@@ -203,7 +201,7 @@ impl PlanningInitService {
         let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
         Ok(PlanningDraftSaveResult {
             draft_name: draft_name.to_string(),
-            validation_report: self.validate_loaded_draft(&loaded),
+            validation_report: self.validate_loaded_draft(workspace_dir, &loaded)?,
         })
     }
 
@@ -253,7 +251,7 @@ impl PlanningInitService {
         draft_name: &str,
         loaded: PlanningDraftLoadRecord,
     ) -> Result<PlanningDraftPromoteResult> {
-        let validation_result = self.validate_loaded_draft_result(&loaded);
+        let validation_result = self.validate_loaded_draft_result(workspace_dir, &loaded)?;
         let validation_report = validation_result.report.clone();
         if !validation_report.is_valid() {
             return Ok(PlanningDraftPromoteResult {
@@ -293,6 +291,7 @@ impl PlanningInitService {
                     )?;
                 applied_paths.push(file.active_path.clone());
             }
+            self.commit_direction_authority_from_bootstrap(workspace_dir, directions)?;
             self.planning_task_repository_port
                 .commit_task_authority_snapshot(
                     workspace_dir,
@@ -379,14 +378,30 @@ impl PlanningInitService {
         self.load_manual_editor_session(workspace_dir, &staged.draft_name)
     }
 
-    fn validate_loaded_draft(&self, loaded: &PlanningDraftLoadRecord) -> PlanningValidationReport {
-        self.validate_loaded_draft_result(loaded).report
+    fn validate_loaded_draft(
+        &self,
+        workspace_dir: &str,
+        loaded: &PlanningDraftLoadRecord,
+    ) -> Result<PlanningValidationReport> {
+        Ok(self
+            .validate_loaded_draft_result(workspace_dir, loaded)?
+            .report)
     }
 
     fn validate_loaded_draft_result(
         &self,
+        workspace_dir: &str,
         loaded: &PlanningDraftLoadRecord,
-    ) -> crate::domain::planning::PlanningValidationResult {
+    ) -> Result<crate::domain::planning::PlanningValidationResult> {
+        let directions = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(workspace_dir)?
+            .map(|snapshot| snapshot.directions)
+            .unwrap_or_else(|| {
+                self.planning_bootstrap_service
+                    .build_artifacts_for_mode(PlanningBootstrapMode::Detail)
+                    .directions
+            });
         let staged_file_map = loaded
             .staged_files
             .iter()
@@ -395,10 +410,7 @@ impl PlanningInitService {
         let task_authority_json = default_empty_task_authority_json();
         let mut result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
-                directions_toml: staged_file_map
-                    .get(DIRECTIONS_FILE_PATH)
-                    .copied()
-                    .unwrap_or_default(),
+                directions: &directions,
                 task_authority_json: &task_authority_json,
                 result_output_markdown: staged_file_map
                     .get(RESULT_OUTPUT_FILE_PATH)
@@ -415,7 +427,7 @@ impl PlanningInitService {
                 );
         }
 
-        result
+        Ok(result)
     }
 
     fn initialize_workspace(
@@ -448,7 +460,12 @@ impl PlanningInitService {
                     Some(&file.body),
                 )?;
         }
-        self.commit_task_authority_from_bootstrap(workspace_dir, &bootstrap.task_authority)?;
+        self.commit_direction_authority_from_bootstrap(workspace_dir, &bootstrap.directions)?;
+        self.commit_task_authority_from_bootstrap(
+            workspace_dir,
+            &bootstrap.directions,
+            &bootstrap.task_authority,
+        )?;
 
         Ok(PlanningWorkspaceInitResult {
             mode,
@@ -469,7 +486,7 @@ impl PlanningInitService {
             .expect("bootstrap task authority should serialize");
         let mut validation_result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
-                directions_toml: &artifacts.directions_toml,
+                directions: &artifacts.directions,
                 task_authority_json: &task_authority_json,
                 result_output_markdown: &artifacts.result_output_markdown,
             },
@@ -488,38 +505,45 @@ impl PlanningInitService {
                 );
         }
 
-        let mut files = vec![
-            PlanningDraftFileRecord {
-                active_path: artifacts.directions_path,
-                body: artifacts.directions_toml,
-            },
-            PlanningDraftFileRecord {
-                active_path: artifacts.result_output_path,
-                body: artifacts.result_output_markdown,
-            },
-        ];
+        let mut files = vec![PlanningDraftFileRecord {
+            active_path: artifacts.result_output_path,
+            body: artifacts.result_output_markdown,
+        }];
         files.extend(artifacts.supplemental_files.into_iter().map(Into::into));
 
         BootstrapWorkspacePlan {
             files,
+            directions: artifacts.directions,
             task_authority: artifacts.task_authority,
             validation_report: validation_result.report,
         }
     }
 
+    fn commit_direction_authority_from_bootstrap(
+        &self,
+        workspace_dir: &str,
+        directions: &DirectionCatalogDocument,
+    ) -> Result<()> {
+        self.planning_task_repository_port
+            .commit_direction_authority_snapshot(
+                workspace_dir,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions,
+                },
+            )
+            .map(|_| ())
+    }
+
     fn commit_task_authority_from_bootstrap(
         &self,
         workspace_dir: &str,
+        directions: &DirectionCatalogDocument,
         task_authority: &TaskAuthorityDocument,
     ) -> Result<()> {
-        let directions_toml = self
-            .planning_workspace_port
-            .load_optional_planning_file(workspace_dir, DIRECTIONS_FILE_PATH)?
-            .ok_or_else(|| anyhow!("valid bootstrap did not include directions"))?;
-        let directions = toml::from_str::<DirectionCatalogDocument>(&directions_toml)?;
         let queue_projection = self
             .priority_queue_service
-            .build_projection(&directions, task_authority)
+            .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
@@ -536,12 +560,13 @@ impl PlanningInitService {
 
 struct BootstrapWorkspacePlan {
     files: Vec<PlanningDraftFileRecord>,
+    directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
     validation_report: PlanningValidationReport,
 }
 
 fn is_operator_editable_draft_path(active_path: &str) -> bool {
-    matches!(active_path, DIRECTIONS_FILE_PATH | RESULT_OUTPUT_FILE_PATH)
+    matches!(active_path, RESULT_OUTPUT_FILE_PATH)
 }
 
 fn default_empty_task_authority_json() -> String {
@@ -563,12 +588,14 @@ fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::is_operator_editable_draft_path;
-    use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
+    use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 
     #[test]
     fn operator_editable_draft_paths_exclude_task_authority_artifacts() {
-        assert!(is_operator_editable_draft_path(DIRECTIONS_FILE_PATH));
         assert!(is_operator_editable_draft_path(RESULT_OUTPUT_FILE_PATH));
+        assert!(!is_operator_editable_draft_path(
+            ".codex-exec-loop/planning/direction-authority"
+        ));
         assert!(!is_operator_editable_draft_path("DB task authority"));
         assert!(!is_operator_editable_draft_path(
             ".codex-exec-loop/planning/legacy-queue-snapshot.json"

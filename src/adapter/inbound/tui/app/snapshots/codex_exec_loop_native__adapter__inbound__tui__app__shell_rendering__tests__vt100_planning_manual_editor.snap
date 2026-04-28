@@ -5,8 +5,8 @@ expression: rendered
 Akra / Planning Draft / inline inspection
 draft dir: /tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test
 Files
-> directions.toml
-directions.toml
+> result-output.md
+result-output.md
 version = 1
 
 
@@ -19,7 +19,7 @@ version = 1
 
 Status
 staged draft: bootstrap-test
-current file: .codex-exec-loop/planning/directions.toml (1/3)
+current file: .codex-exec-loop/planning/result-output.md (1/3)
 validation state: ok
 staged path: /tmp/root/.codex-exec-loop/planning/drafts/bootstrap-...
 Keys

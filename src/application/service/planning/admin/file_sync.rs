@@ -5,19 +5,13 @@ use anyhow::{Context, Result, bail};
 
 use super::{PlanningAdminFacadeService, PlanningAdminFileSyncOutcome};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
-use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
+use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 
 impl PlanningAdminFacadeService {
     pub fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
         self.ensure_no_parallel_working("export planning files")?;
         let documents = self.load_admin_documents()?;
         let mut paths = Vec::new();
-        write_candidate_file(
-            &self.workspace_dir,
-            DIRECTIONS_FILE_PATH,
-            &toml::to_string_pretty(&documents.directions)?,
-            &mut paths,
-        )?;
         write_candidate_file(
             &self.workspace_dir,
             RESULT_OUTPUT_FILE_PATH,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -13,11 +13,11 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::planning::PriorityQueueService;
-use crate::domain::planning::{TaskAuthorityDocument, TaskStatus};
+use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, TaskStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningResetTarget {
@@ -125,7 +125,7 @@ impl PlanningResetService {
     ) -> Result<PlanningWorkspaceResetResult> {
         self.commit_task_authority_from_document(
             workspace_dir,
-            workspace.directions_toml.as_deref(),
+            None,
             &bootstrap.task_authority,
             workspace.result_output_markdown.as_deref(),
         )?;
@@ -187,17 +187,14 @@ impl PlanningResetService {
             .unwrap_or_else(|| bootstrap.task_authority.clone());
         self.commit_task_authority_from_document(
             workspace_dir,
-            Some(&bootstrap.directions_toml),
+            Some(&bootstrap.directions),
             &task_authority,
             workspace.result_output_markdown.as_deref(),
         )?;
 
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::Directions,
-            rewritten_paths: vec![
-                DIRECTIONS_FILE_PATH.to_string(),
-                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
-            ],
+            rewritten_paths: vec![DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()],
             removed_paths: vec![
                 PLANNING_DIRECTION_DOCS_DIRECTORY.to_string(),
                 PLANNING_PROMPTS_DIRECTORY.to_string(),
@@ -219,7 +216,7 @@ impl PlanningResetService {
             )?;
         self.commit_task_authority_from_document(
             workspace_dir,
-            Some(&bootstrap.directions_toml),
+            Some(&bootstrap.directions),
             &bootstrap.task_authority,
             Some(&bootstrap.result_output_markdown),
         )?;
@@ -227,7 +224,6 @@ impl PlanningResetService {
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::All,
             rewritten_paths: vec![
-                DIRECTIONS_FILE_PATH.to_string(),
                 RESULT_OUTPUT_FILE_PATH.to_string(),
                 DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
             ],
@@ -247,12 +243,7 @@ impl PlanningResetService {
             .remove_planning_workspace_entry(workspace_dir, PLANNING_DIRECTION_DOCS_DIRECTORY)?;
         self.planning_workspace_port
             .remove_planning_workspace_entry(workspace_dir, PLANNING_PROMPTS_DIRECTORY)?;
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                workspace_dir,
-                DIRECTIONS_FILE_PATH,
-                Some(&bootstrap.directions_toml),
-            )?;
+        self.commit_direction_authority_from_bootstrap(workspace_dir, &bootstrap.directions)?;
         for supplemental_file in &bootstrap.supplemental_files {
             self.planning_workspace_port
                 .replace_planning_workspace_file(
@@ -267,12 +258,22 @@ impl PlanningResetService {
     fn commit_task_authority_from_document(
         &self,
         workspace_dir: &str,
-        directions_toml: Option<&str>,
+        directions: Option<&DirectionCatalogDocument>,
         task_authority: &TaskAuthorityDocument,
         result_output_markdown: Option<&str>,
     ) -> Result<()> {
-        let (Some(directions_toml), Some(result_output_markdown)) =
-            (directions_toml, result_output_markdown)
+        let loaded_directions;
+        let directions = match directions {
+            Some(directions) => Some(directions),
+            None => {
+                loaded_directions = self
+                    .planning_task_repository_port
+                    .load_direction_authority_snapshot(workspace_dir)?
+                    .map(|snapshot| snapshot.directions);
+                loaded_directions.as_ref()
+            }
+        };
+        let (Some(directions), Some(result_output_markdown)) = (directions, result_output_markdown)
         else {
             return self
                 .planning_task_repository_port
@@ -281,7 +282,7 @@ impl PlanningResetService {
         let task_authority_json = serde_json::to_string(task_authority)?;
         let validation_result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
-                directions_toml,
+                directions,
                 task_authority_json: &task_authority_json,
                 result_output_markdown,
             },
@@ -308,6 +309,22 @@ impl PlanningResetService {
                     observed_planning_revision: None,
                     task_authority,
                     queue_projection: &queue_projection,
+                },
+            )
+            .map(|_| ())
+    }
+
+    fn commit_direction_authority_from_bootstrap(
+        &self,
+        workspace_dir: &str,
+        directions: &DirectionCatalogDocument,
+    ) -> Result<()> {
+        self.planning_task_repository_port
+            .commit_direction_authority_snapshot(
+                workspace_dir,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions,
                 },
             )
             .map(|_| ())

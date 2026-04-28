@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::shared::contract::{
-    DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+    RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
 };
 use crate::domain::planning::PlanningWorkspaceFiles;
 use crate::domain::planning::PriorityQueueService;
@@ -30,7 +30,6 @@ pub struct PlanningReconciliationService {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanningExecutionSnapshot {
-    pub directions_toml: Option<String>,
     pub result_output_markdown: Option<String>,
 }
 
@@ -55,7 +54,7 @@ pub struct PlanningReconciliationResult {
 pub struct PlanningRepairRequest {
     pub failure_summary: String,
     pub validation_errors: Vec<String>,
-    pub directions_toml: String,
+    pub direction_authority_json: String,
     pub accepted_task_authority_json: String,
     pub rejected_task_authority_json: Option<String>,
     pub rejected_archive_path: Option<String>,
@@ -63,7 +62,6 @@ pub struct PlanningRepairRequest {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct PlanningChangeSet {
-    pub(super) directions_changed: bool,
     pub(super) result_output_changed: bool,
 }
 
@@ -71,17 +69,15 @@ impl PlanningChangeSet {
     fn from_paths(paths: &[String]) -> Self {
         let mut change_set = Self::default();
         for path in paths {
-            match canonical_active_planning_file_path(path) {
-                Some(DIRECTIONS_FILE_PATH) => change_set.directions_changed = true,
-                Some(RESULT_OUTPUT_FILE_PATH) => change_set.result_output_changed = true,
-                _ => {}
+            if let Some(RESULT_OUTPUT_FILE_PATH) = canonical_active_planning_file_path(path) {
+                change_set.result_output_changed = true;
             }
         }
         change_set
     }
 
     fn has_relevant_changes(self) -> bool {
-        self.directions_changed || self.result_output_changed
+        self.result_output_changed
     }
 }
 
@@ -124,7 +120,6 @@ impl PlanningReconciliationService {
             .load_planning_workspace_files(workspace_dir)?;
 
         Ok(PlanningExecutionSnapshot {
-            directions_toml: workspace_record.directions_toml,
             result_output_markdown: workspace_record.result_output_markdown,
         })
     }
@@ -161,10 +156,12 @@ impl PlanningReconciliationService {
         execution_snapshot: &PlanningExecutionSnapshot,
     ) -> Result<PlanningReconciliationResult> {
         let mut result = PlanningReconciliationResult::default();
-        let directions_toml = execution_snapshot
-            .directions_toml
-            .as_deref()
-            .unwrap_or_default();
+        let direction_snapshot = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(workspace_dir)?
+            .ok_or_else(|| anyhow::anyhow!("planning direction authority is unavailable"))?;
+        let direction_authority_json =
+            serde_json::to_string_pretty(&direction_snapshot.directions)?;
         let result_output_markdown = execution_snapshot
             .result_output_markdown
             .as_deref()
@@ -172,7 +169,7 @@ impl PlanningReconciliationService {
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions_toml,
+                    directions: &direction_snapshot.directions,
                     task_authority_json: candidate_task_authority_json,
                     result_output_markdown,
                 });
@@ -192,7 +189,7 @@ impl PlanningReconciliationService {
             result.repair_request = Some(PlanningRepairRequest {
                 failure_summary: failure_summary.clone(),
                 validation_errors,
-                directions_toml: directions_toml.to_string(),
+                direction_authority_json,
                 accepted_task_authority_json,
                 rejected_task_authority_json: Some(candidate_task_authority_json.to_string()),
                 rejected_archive_path: None,
@@ -205,7 +202,7 @@ impl PlanningReconciliationService {
         }
 
         let directions = validation_result.directions.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("planning validation reported success without parsed directions.toml")
+            anyhow::anyhow!("planning validation reported success without direction authority")
         })?;
         let task_authority = validation_result.task_authority.as_ref().ok_or_else(|| {
             anyhow::anyhow!("planning validation reported success without parsed task authority")
@@ -255,7 +252,6 @@ pub(super) fn execution_snapshot_to_workspace_record(
     execution_snapshot: &PlanningExecutionSnapshot,
 ) -> PlanningWorkspaceLoadRecord {
     PlanningWorkspaceLoadRecord {
-        directions_toml: execution_snapshot.directions_toml.clone(),
         result_output_markdown: execution_snapshot.result_output_markdown.clone(),
     }
 }
@@ -296,7 +292,7 @@ mod tests {
             &PlanningRepairRequest {
                 failure_summary: "invalid task".to_string(),
                 validation_errors: vec!["task has unknown direction".to_string()],
-                directions_toml: "version = 1".to_string(),
+                direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
                 accepted_task_authority_json: "{\"version\":1,\"tasks\":[]}".to_string(),
                 rejected_task_authority_json: Some("{ invalid json".to_string()),
                 rejected_archive_path: None,

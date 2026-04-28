@@ -451,7 +451,7 @@ fn planning_notice_summary_filters_non_planning_runtime_notices() {
     let mut conversation = ready_conversation();
     conversation.runtime_notices = vec![
         "shared runtime reconnected after app-server exit".to_string(),
-        "planning reconciliation restored protected directions.toml".to_string(),
+        "planning reconciliation restored protected DB direction authority".to_string(),
         "planning repair queued retry 1/2 for task authority".to_string(),
     ];
 

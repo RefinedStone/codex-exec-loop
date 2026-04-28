@@ -160,11 +160,16 @@ impl PlanningProposalPromotionService {
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_dir)?
             .ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
+        let directions_snapshot = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(workspace_dir)?
+            .ok_or_else(|| anyhow!("planning direction authority is unavailable"))?;
         let task_authority_json = serde_json::to_string(&snapshot.task_authority)?;
         let validation_result =
             self.planning_validation_service
                 .validate_workspace_files(workspace_record_to_files(
                     workspace_record,
+                    &directions_snapshot.directions,
                     &task_authority_json,
                 )?);
         if !validation_result.is_valid() {
@@ -199,13 +204,11 @@ impl PlanningProposalPromotionService {
 
 fn workspace_record_to_files<'a>(
     workspace_record: &'a PlanningWorkspaceLoadRecord,
+    directions: &'a DirectionCatalogDocument,
     task_authority_json: &'a str,
 ) -> Result<PlanningWorkspaceFiles<'a>> {
     Ok(PlanningWorkspaceFiles {
-        directions_toml: workspace_record
-            .directions_toml
-            .as_deref()
-            .ok_or_else(|| anyhow!("planning workspace is missing directions.toml"))?,
+        directions,
         task_authority_json,
         result_output_markdown: workspace_record
             .result_output_markdown

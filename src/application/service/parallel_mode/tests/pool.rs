@@ -301,19 +301,19 @@ fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
         linked_worktree
             .to_str()
             .expect("valid linked worktree path"),
-        DIRECTIONS_FILE_PATH,
-        Some("version = 1\n"),
+        RESULT_OUTPUT_FILE_PATH,
+        Some("# Result Output Prompt\n"),
     )
-    .expect("authority store should seed active directions");
-    let worktree_directions_path = linked_worktree.join(DIRECTIONS_FILE_PATH);
+    .expect("authority store should seed active result output");
+    let worktree_directions_path = linked_worktree.join(RESULT_OUTPUT_FILE_PATH);
     fs::create_dir_all(
         worktree_directions_path
             .parent()
-            .expect("worktree directions path should have a parent directory"),
+            .expect("worktree result output path should have a parent directory"),
     )
     .expect("worktree planning directory should exist");
-    fs::write(&worktree_directions_path, "version = 0\n")
-        .expect("linked-worktree directions should diverge");
+    fs::write(&worktree_directions_path, "# divergent result\n")
+        .expect("linked-worktree result output should diverge");
     let service = test_parallel_mode_service();
 
     let snapshot = service.inspect_readiness(

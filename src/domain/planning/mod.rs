@@ -356,6 +356,14 @@ impl DirectionState {
     pub fn allows_queue_execution(self) -> bool {
         self == Self::Active
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Done => "done",
+        }
+    }
 }
 
 impl QueueIdlePolicy {
@@ -469,7 +477,7 @@ impl TaskDefinition {
 
 #[derive(Debug, Clone)]
 pub struct PlanningWorkspaceFiles<'a> {
-    pub directions_toml: &'a str,
+    pub directions: &'a DirectionCatalogDocument,
     pub task_authority_json: &'a str,
     pub result_output_markdown: &'a str,
 }

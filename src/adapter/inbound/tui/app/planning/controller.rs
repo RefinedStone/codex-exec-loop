@@ -30,7 +30,7 @@ impl NativeTuiApp {
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
                                 status_text:
-                                    "fix directions.toml parse errors before generating detail docs"
+                                    "fix DB direction authority errors before generating detail docs"
                                         .to_string(),
                             },
                         );
@@ -61,7 +61,7 @@ impl NativeTuiApp {
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
                                 status_text:
-                                    "fix directions.toml parse errors before editing queue-idle prompt"
+                                    "fix DB direction authority errors before editing queue-idle prompt"
                                         .to_string(),
                             },
                         );
@@ -1328,7 +1328,7 @@ fn planning_reset_preview_text(target: PlanningResetTarget) -> String {
             "reset queue preview: rewrites the task catalog compatibility file and clears derived queue state"
                 .to_string()
         }
-        PlanningResetTarget::Directions => "reset directions preview: rewrites directions.toml, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue".to_string(),
+        PlanningResetTarget::Directions => "reset directions preview: rewrites DB direction authority, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue".to_string(),
         PlanningResetTarget::All => "reset all preview: replaces the full active planning scaffold, clears derived queue state, and refreshes the planning authority / rerun `:reset all confirm` to continue".to_string(),
     }
 }
