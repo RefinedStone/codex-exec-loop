@@ -9,8 +9,8 @@ use crate::application::service::planning::shared::contract::{
     DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, RESULT_OUTPUT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     TASK_LEDGER_SCHEMA_FILE_PATH, canonical_active_planning_file_path,
 };
-use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::PlanningWorkspaceFiles;
+use crate::domain::planning::PriorityQueueService;
 
 use super::accepted_ledger::{PlanningAcceptedLedgerCommitRequest, commit_accepted_task_ledger};
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
@@ -311,7 +311,7 @@ mod tests {
         DIRECTIONS_FILE_PATH, QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
         TASK_LEDGER_SCHEMA_FILE_PATH,
     };
-    use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::PriorityQueueService;
 
     fn create_temp_workspace(prefix: &str) -> String {
         let unique_suffix = SystemTime::now()

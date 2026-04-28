@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
-use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::planning::PriorityQueueService;
 
 use super::super::authoring::bootstrap::PlanningBootstrapService;
 use super::super::authoring::directions::PlanningDirectionsService;

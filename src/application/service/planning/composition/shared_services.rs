@@ -1,5 +1,5 @@
-use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
+use crate::domain::planning::PriorityQueueService;
 
 use super::super::authoring::directions::PlanningDirectionsService;
 use super::super::repair::reconciliation::PlanningReconciliationService;

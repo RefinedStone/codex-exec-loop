@@ -6,8 +6,8 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::domain::planning::PlanningValidationResult;
+use crate::domain::planning::PriorityQueueService;
 
 use super::ledger_recovery::PlanningQueueProjectionAction;
 use super::reconciliation::{PlanningExecutionSnapshot, execution_snapshot_to_workspace_record};

@@ -12,7 +12,7 @@ use crate::application::service::planning::runtime::validation::PlanningValidati
 use crate::application::service::planning::shared::contract::{
     QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
 };
-use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{PlanningValidationReport, PlanningWorkspaceFiles};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,7 +245,7 @@ mod tests {
     use crate::application::service::planning::shared::contract::{
         QUEUE_SNAPSHOT_FILE_PATH, TASK_LEDGER_FILE_PATH,
     };
-    use crate::application::service::priority_queue_service::PriorityQueueService;
+    use crate::domain::planning::PriorityQueueService;
     use crate::domain::planning::{PriorityQueueProjection, TaskLedgerDocument};
 
     fn create_temp_workspace(prefix: &str) -> String {

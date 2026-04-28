@@ -21,7 +21,7 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
-use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::planning::PriorityQueueService;
 
 #[derive(Clone)]
 pub struct PlanningInitService {

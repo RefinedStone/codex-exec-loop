@@ -42,7 +42,6 @@ use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningServices, PlanningTaskHandoff, PlanningValidationService,
     TASK_LEDGER_FILE_PATH,
 };
-use crate::application::service::priority_queue_service::PriorityQueueService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
@@ -50,6 +49,7 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
 use crate::domain::planning::PlanningWorkspaceFiles;
+use crate::domain::planning::PriorityQueueService;
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;

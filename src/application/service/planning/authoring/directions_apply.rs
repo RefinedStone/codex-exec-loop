@@ -13,7 +13,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::DIRECTIONS_FILE_PATH;
-use crate::application::service::priority_queue_service::PriorityQueueService;
+use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, PlanningWorkspaceFiles,
 };
