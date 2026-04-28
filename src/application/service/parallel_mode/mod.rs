@@ -214,7 +214,7 @@ impl ParallelModeService {
         };
 
         let git_worktree = match &repo_root {
-            Some(repo_root) => inspect_git_worktree(repo_root),
+            Some(repo_root) => inspect_git_worktree(self.parallel_runtime.as_ref(), repo_root),
             None => blocked_prerequisite_capability(
                 ParallelModeCapabilityKey::GitWorktree,
                 "waiting for git repository detection",
@@ -222,7 +222,7 @@ impl ParallelModeService {
             ),
         };
         let akra_branch = match &repo_root {
-            Some(repo_root) => inspect_akra_branch(repo_root),
+            Some(repo_root) => inspect_akra_branch(self.parallel_runtime.as_ref(), repo_root),
             None => blocked_prerequisite_capability(
                 ParallelModeCapabilityKey::AkraBranch,
                 "waiting for git repository detection",
@@ -230,15 +230,19 @@ impl ParallelModeService {
             ),
         };
         let push_remote = match &repo_root {
-            Some(repo_root) => inspect_push_remote(repo_root),
+            Some(repo_root) => inspect_push_remote(self.parallel_runtime.as_ref(), repo_root),
             None => blocked_prerequisite_capability(
                 ParallelModeCapabilityKey::PushRemote,
                 "waiting for git repository detection",
                 "enter a git repository first",
             ),
         };
-        let gh_binary = inspect_gh_binary();
-        let gh_auth = inspect_gh_auth(&gh_binary, repo_root.as_deref());
+        let gh_binary = inspect_gh_binary(self.parallel_runtime.as_ref());
+        let gh_auth = inspect_gh_auth(
+            self.parallel_runtime.as_ref(),
+            &gh_binary,
+            repo_root.as_deref(),
+        );
         let planning = inspect_planning(planning_snapshot);
         let authority_store = inspect_authority_store(
             self.planning_authority.as_ref(),

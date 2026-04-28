@@ -1,6 +1,6 @@
-use std::io::Write;
 use std::process::{Command, Stdio};
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
@@ -21,10 +21,13 @@ pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
     .filter(|value| !value.is_empty())
 }
 
-pub(super) fn inspect_git_worktree(repo_root: &str) -> ParallelModeCapabilitySnapshot {
-    match run_command(
+pub(super) fn inspect_git_worktree(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> ParallelModeCapabilitySnapshot {
+    match runtime.run_command(
         "git",
-        ["-C", repo_root, "worktree", "list", "--porcelain"],
+        &["-C", repo_root, "worktree", "list", "--porcelain"],
         None,
     ) {
         Some(_) => ParallelModeCapabilitySnapshot::new(
@@ -42,10 +45,13 @@ pub(super) fn inspect_git_worktree(repo_root: &str) -> ParallelModeCapabilitySna
     }
 }
 
-pub(super) fn inspect_akra_branch(repo_root: &str) -> ParallelModeCapabilitySnapshot {
-    if command_succeeds(
+pub(super) fn inspect_akra_branch(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> ParallelModeCapabilitySnapshot {
+    if runtime.command_succeeds(
         "git",
-        [
+        &[
             "-C",
             repo_root,
             "show-ref",
@@ -53,9 +59,9 @@ pub(super) fn inspect_akra_branch(repo_root: &str) -> ParallelModeCapabilitySnap
             "--quiet",
             "refs/heads/akra",
         ],
-    ) || command_succeeds(
+    ) || runtime.command_succeeds(
         "git",
-        [
+        &[
             "-C",
             repo_root,
             "show-ref",
@@ -72,7 +78,7 @@ pub(super) fn inspect_akra_branch(repo_root: &str) -> ParallelModeCapabilitySnap
         );
     }
 
-    if command_succeeds("git", ["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
+    if runtime.command_succeeds("git", &["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::AkraBranch,
             ParallelModeCapabilityState::Ready,
@@ -89,10 +95,13 @@ pub(super) fn inspect_akra_branch(repo_root: &str) -> ParallelModeCapabilitySnap
     )
 }
 
-pub(super) fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnapshot {
-    let Some(push_url) = run_command(
+pub(super) fn inspect_push_remote(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> ParallelModeCapabilitySnapshot {
+    let Some(push_url) = runtime.run_command(
         "git",
-        [
+        &[
             "-C",
             repo_root,
             "remote",
@@ -121,10 +130,10 @@ pub(super) fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnap
         );
     };
 
-    let Some(credentials) = run_command_with_stdin(
+    let Some(credentials) = runtime.run_command_with_stdin(
         "git",
-        ["credential", "fill"],
-        format!("protocol=https\nhost={host}\npath={path}\n\n"),
+        &["credential", "fill"],
+        &format!("protocol=https\nhost={host}\npath={path}\n\n"),
     ) else {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
@@ -160,15 +169,17 @@ pub(super) fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnap
     }
 }
 
-pub(super) fn inspect_gh_binary() -> ParallelModeCapabilitySnapshot {
-    match which::which("gh") {
-        Ok(path) => ParallelModeCapabilitySnapshot::new(
+pub(super) fn inspect_gh_binary(
+    runtime: &dyn ParallelModeRuntimePort,
+) -> ParallelModeCapabilitySnapshot {
+    match runtime.find_executable("gh") {
+        Some(path) => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
             ParallelModeCapabilityState::Ready,
             format!("gh found at {}", path.display()),
             None,
         ),
-        Err(_) => ParallelModeCapabilitySnapshot::new(
+        None => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
             ParallelModeCapabilityState::Degraded,
             "gh is not installed on PATH",
@@ -178,6 +189,7 @@ pub(super) fn inspect_gh_binary() -> ParallelModeCapabilitySnapshot {
 }
 
 pub(super) fn inspect_gh_auth(
+    runtime: &dyn ParallelModeRuntimePort,
     gh_binary: &ParallelModeCapabilitySnapshot,
     repo_root: Option<&str>,
 ) -> ParallelModeCapabilitySnapshot {
@@ -190,23 +202,14 @@ pub(super) fn inspect_gh_auth(
         );
     }
 
-    let mut command = Command::new("gh");
-    command.args(["auth", "status"]);
-    if let Some(repo_root) = repo_root {
-        command.current_dir(repo_root);
-    }
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::null());
-    command.env("GIT_TERMINAL_PROMPT", "0");
-
-    match command.status() {
-        Ok(status) if status.success() => ParallelModeCapabilitySnapshot::new(
+    match runtime.gh_auth_status(repo_root) {
+        true => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Ready,
             "gh auth status succeeded",
             None,
         ),
-        _ => ParallelModeCapabilitySnapshot::new(
+        false => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
             "gh is installed but not authenticated for this workspace",
@@ -399,34 +402,6 @@ pub(super) fn run_command<const N: usize>(
     command.env("GIT_TERMINAL_PROMPT", "0");
 
     let output = command.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let trimmed = stdout.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
-fn run_command_with_stdin<const N: usize>(
-    program: &str,
-    args: [&str; N],
-    stdin_body: String,
-) -> Option<String> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .spawn()
-        .ok()?;
-
-    let mut stdin = child.stdin.take()?;
-    stdin.write_all(stdin_body.as_bytes()).ok()?;
-    drop(stdin);
-
-    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }
