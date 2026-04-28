@@ -34,7 +34,7 @@ state is already repo-shared.
 | R3 | official completion ordering | two app processes can refresh the same repo scope independently | high | in-memory mutex and condvar gate | no cross-process coordination | claim semantics inside the same authority domain as planning revision |
 | R4 | distributor serialization | duplicate queue enqueue or queue-head processing across processes | high | single-process happy-path flow | no queue-head claim or CAS | queue claims inside the same authority domain as runtime projections |
 | R5 | slot and session runtime state | file-backed lease and session detail can lose concurrent updates | high | temp-write plus rename avoids partial files | lost-update race still exists | versioned runtime projections inside the authority store |
-| R6 | git tracking | planning files can leak into agent branches when mutated from leased worktrees | high | protected-file restore after automated turns | authority still begins from tracked files | tracked files become export and explicit import artifacts only |
+| R6 | git tracking | planning files can leak into agent branches when mutated from leased worktrees | high | protected-file restore after automated turns | authority still begins from tracked files | tracked files become export and supported staged-edit artifacts only |
 | R7 | restart recovery | in-flight refresh or delivery state can be forgotten on restart | medium | some durable pool files and session detail | ordering and claims are not restart-safe | recovery sweep plus external truth reconciliation |
 | R8 | queue view drift | the legacy queue projection export can lag or disagree with runtime-derived queue | medium | runtime recalculates queue from ledger | humans and tools can still read stale exported files | revision-stamped exports generated from committed store state |
 
@@ -345,7 +345,7 @@ The current file-backed model should be replaced by a repo-shared planning autho
 - store-backed `draft -> validate -> promote` instead of direct active-state mutation
 - transactional active commits for ledger and queue projection
 - separate planning revision and runtime event sequencing
-- tracked planning files reduced to export and explicit import artifacts
+- tracked planning files reduced to export and supported staged-edit artifacts
 - recovery that rechecks Git and GitHub truth instead of replay-only recovery
 
 See [18-repo-shared-planning-authority-store.md](18-repo-shared-planning-authority-store.md) for

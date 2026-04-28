@@ -69,14 +69,13 @@ Queue behavior:
 For git-backed workspaces:
 
 - repo-scoped planning authority lives under `.codex-exec-loop/runtime/planning-authority.db`
-- tracked files under `.codex-exec-loop/planning/` are review, portability, export, and explicit
-  import artifacts rather than runtime authority
+- tracked files under `.codex-exec-loop/planning/` are review, portability, export, and supported
+  staged-edit artifacts rather than runtime authority
 - authority inspection can repair exported review files from store truth when they drift
 
 ## Current Limits
 
-- Non-git workspaces still fall back to direct local planning files instead of the repo-scoped
-  authority store.
+- Non-git workspaces still use workspace-local authority storage instead of the repo-scoped store.
 - Real-terminal validation is still required for restart recovery, distributor delivery, and
   multi-worktree operator flow.
 - Planning detail mode remains manual authoring only; the `llm-assisted` path is still disabled.

@@ -83,7 +83,7 @@ The authority store lives under the canonical repo root:
 Tracked planning files under `.codex-exec-loop/planning/` remain valuable, but only as:
 
 - exported review artifacts
-- explicit import sources
+- supported staged-edit sources
 - branch-visible diffs when the operator chooses to mirror authority outward
 
 They are not runtime authority anymore.
@@ -91,7 +91,7 @@ They are not runtime authority anymore.
 This intentionally changes the continuity rule:
 
 - Git is no longer the primary carrier of authoritative planning state
-- Git remains a review and portability surface through explicit export or import
+- Git remains a review and portability surface through explicit export and supported staged edits
 
 ### 4. Rollout Uses One-Way Mirror Stages Only
 
@@ -101,7 +101,7 @@ The compatibility path is:
 | --- | --- |
 | `legacy-file` | tracked files remain authority; the store is not runtime authority |
 | `shadow-store` | tracked files remain authority; the store mirrors and validates parity only |
-| `store-primary` | the store is authority; tracked files are export and explicit import artifacts only |
+| `store-primary` | the store is authority; tracked files are export and supported staged-edit artifacts only |
 
 `hybrid-read` is intentionally dropped because it reads like two-way sync.
 
@@ -178,7 +178,7 @@ It owns:
 - appending runtime-domain events
 - reading and updating runtime projections
 - exporting tracked planning artifacts
-- importing tracked planning artifacts under explicit policy
+- accepting supported operator edits through staged promotion or admin apply
 - running recovery reconciliation
 
 This port owns repo-scoped consistency, not raw file I/O.
@@ -211,10 +211,9 @@ Compatibility logic remains an adapter concern.
 
 It owns:
 
-- one-time import from tracked planning files
 - revision-stamped export views
 - parity diagnostics in `shadow-store`
-- explicit import validation in `store-primary`
+- explicit validation before supported operator edits become active in `store-primary`
 
 ## Authority Data Model
 
@@ -307,7 +306,7 @@ Examples that must be single-transaction:
 
 - make store-backed active planning the default runtime authority
 - keep tracked planning files as revision-stamped exports
-- allow explicit import only under controlled operator flow
+- accept supported operator edits only under controlled promotion/apply flow
 
 ## Acceptance Criteria
 
