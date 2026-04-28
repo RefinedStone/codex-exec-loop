@@ -76,10 +76,16 @@ fn build_planning_admin_facade(workspace_dir: String) -> PlanningAdminFacadeServ
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
         planning_authority.clone(),
-        planning_authority,
+        planning_authority.clone(),
         Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
     );
-    PlanningAdminFacadeService::from_planning(workspace_dir, planning, planning_workspace_port)
+    PlanningAdminFacadeService::from_planning_with_authority(
+        workspace_dir,
+        planning,
+        planning_workspace_port,
+        planning_authority.clone(),
+        planning_authority,
+    )
 }
 
 fn parse_args<I>(args: I) -> Result<TelegramBotArgs>

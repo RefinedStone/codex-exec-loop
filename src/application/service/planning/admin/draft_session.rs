@@ -63,6 +63,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftLoadRequest,
     ) -> Result<PlanningAdminSessionView> {
+        self.ensure_default_authority()?;
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(self.workspace_dir.as_str(), &request.draft_name)?;
@@ -251,16 +252,17 @@ impl PlanningAdminFacadeService {
     }
 
     pub(super) fn stage_active_manual_editor_draft(&self) -> Result<String> {
+        self.ensure_default_authority()?;
         let directions_toml = self
             .planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), DIRECTIONS_FILE_PATH)?
-            .ok_or_else(|| {
-                anyhow!("planning directions are unavailable; initialize planning first")
-            })?;
+            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?;
         let result_output_markdown = self
             .planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
-            .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
+            .ok_or_else(|| {
+                anyhow!("default planning authority seed did not provide result output")
+            })?;
         let mut files = vec![
             PlanningDraftFileRecord {
                 active_path: DIRECTIONS_FILE_PATH.to_string(),

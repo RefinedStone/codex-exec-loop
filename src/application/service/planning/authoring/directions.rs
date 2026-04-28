@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use toml_edit::{DocumentMut, Item, value};
 
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
 };
@@ -13,11 +14,13 @@ use crate::application::service::planning::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, DIRECTIONS_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, default_direction_detail_doc_path,
 };
+use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, QueueIdlePolicy,
 };
@@ -91,26 +94,35 @@ impl PlanningDoctorOutcome {
 pub struct PlanningDirectionsService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
+    authority_seed_service: PlanningAuthoritySeedService,
 }
 
 impl PlanningDirectionsService {
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         planning_validation_service: PlanningValidationService,
+        priority_queue_service: PriorityQueueService,
     ) -> Self {
         Self {
+            authority_seed_service: PlanningAuthoritySeedService::new(
+                planning_workspace_port.clone(),
+                planning_task_repository_port,
+                planning_validation_service.clone(),
+                priority_queue_service,
+            ),
             planning_workspace_port,
             planning_validation_service,
         }
     }
 
     pub fn load_summary(&self, workspace_dir: &str) -> Result<DirectionsMaintenanceSummary> {
+        self.authority_seed_service
+            .ensure_default_authority(workspace_dir)?;
         let directions_toml = self
             .planning_workspace_port
             .load_optional_planning_file(workspace_dir, DIRECTIONS_FILE_PATH)?
-            .ok_or_else(|| {
-                anyhow!("planning directions are unavailable; initialize planning first")
-            })?;
+            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?;
         let parsed = match toml::from_str::<DirectionCatalogDocument>(&directions_toml) {
             Ok(document) => Some(document),
             Err(error) => {
@@ -182,12 +194,12 @@ impl PlanningDirectionsService {
         &self,
         workspace_dir: &str,
     ) -> Result<QueueIdleReviewContext> {
+        self.authority_seed_service
+            .ensure_default_authority(workspace_dir)?;
         let directions_toml = self
             .planning_workspace_port
             .load_optional_planning_file(workspace_dir, DIRECTIONS_FILE_PATH)?
-            .ok_or_else(|| {
-                anyhow!("planning directions are unavailable; initialize planning first")
-            })?;
+            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?;
         let directions: DirectionCatalogDocument = toml::from_str(&directions_toml)
             .map_err(|error| anyhow!("failed to parse directions.toml: {error}"))?;
         let prompt_path =
@@ -448,16 +460,18 @@ impl PlanningDirectionsService {
     }
 
     fn load_complete_workspace(&self, workspace_dir: &str) -> Result<ActiveDirectionsWorkspace> {
+        self.authority_seed_service
+            .ensure_default_authority(workspace_dir)?;
         let workspace = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
         let mut active_workspace = ActiveDirectionsWorkspace {
             directions_toml: workspace.directions_toml.ok_or_else(|| {
-                anyhow!("planning directions are unavailable; initialize planning first")
+                anyhow!("default planning authority seed did not provide directions")
             })?,
-            result_output_markdown: workspace
-                .result_output_markdown
-                .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
+            result_output_markdown: workspace.result_output_markdown.ok_or_else(|| {
+                anyhow!("default planning authority seed did not provide result output")
+            })?,
             extra_files: Vec::new(),
         };
         if let Ok(directions) =
@@ -492,19 +506,20 @@ impl PlanningDirectionsService {
     #[cfg(test)]
     #[allow(dead_code)]
     fn validate_active_workspace(&self, workspace_dir: &str) -> Result<PlanningValidationReport> {
+        self.authority_seed_service
+            .ensure_default_authority(workspace_dir)?;
         let workspace = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
         let mut result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions_toml: workspace.directions_toml.as_deref().ok_or_else(|| {
-                    anyhow!("planning directions are unavailable; initialize planning first")
+                    anyhow!("default planning authority seed did not provide directions")
                 })?,
                 task_authority_json: "{\"version\":1,\"tasks\":[]}",
-                result_output_markdown: workspace
-                    .result_output_markdown
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
+                result_output_markdown: workspace.result_output_markdown.as_deref().ok_or_else(
+                    || anyhow!("default planning authority seed did not provide result output"),
+                )?,
             },
         );
         if let Some(directions) = result.directions.as_ref() {

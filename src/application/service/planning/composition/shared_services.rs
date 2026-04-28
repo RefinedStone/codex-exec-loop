@@ -21,8 +21,12 @@ impl PlanningSharedServices {
     pub(super) fn new(ports: &PlanningFeaturePorts) -> Self {
         let validation = PlanningValidationService::new();
         let priority_queue = PriorityQueueService::new();
-        let directions =
-            PlanningDirectionsService::new(ports.workspace.clone(), validation.clone());
+        let directions = PlanningDirectionsService::new(
+            ports.workspace.clone(),
+            ports.task_repository.clone(),
+            validation.clone(),
+            priority_queue.clone(),
+        );
         let prompt = PlanningPromptService::with_task_repository(
             ports.workspace.clone(),
             validation.clone(),

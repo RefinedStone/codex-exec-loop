@@ -11,6 +11,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::contract::{
     DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
 };
@@ -251,6 +252,7 @@ pub struct PlanningTaskIntakeService {
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
+    authority_seed_service: PlanningAuthoritySeedService,
     intake_validation_service: PlanningTaskIntakeValidationService,
     draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
 }
@@ -279,6 +281,12 @@ impl PlanningTaskIntakeService {
         draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
     ) -> Self {
         Self {
+            authority_seed_service: PlanningAuthoritySeedService::new(
+                planning_workspace_port.clone(),
+                planning_task_repository_port.clone(),
+                planning_validation_service.clone(),
+                priority_queue_service.clone(),
+            ),
             planning_workspace_port,
             planning_task_repository_port,
             planning_validation_service,
@@ -362,6 +370,8 @@ impl PlanningTaskIntakeService {
         &self,
         request: &PlanningTaskIntakeRequest,
     ) -> Result<PlanningTaskIntakeContext> {
+        self.authority_seed_service
+            .ensure_default_authority(&request.workspace_directory)?;
         let workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(&request.workspace_directory)?;

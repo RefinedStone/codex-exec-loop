@@ -472,7 +472,7 @@ fn inline_tail_reports_partial_handle_based_session_catalog_status() {
 }
 
 #[test]
-fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
+fn inline_planning_init_inspection_renders_existing_auto_seeded_workspace_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     let workspace_dir = std::env::temp_dir().join(format!(
@@ -509,8 +509,8 @@ fn inline_planning_init_inspection_renders_selector_inside_shell_frame() {
     let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Planning / inline inspection"));
-    assert!(rendered.contains("simple mode"));
-    assert!(rendered.contains("detail mode"));
+    assert!(rendered.contains("planning state:"));
+    assert!(rendered.contains("queue idle policy:"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 

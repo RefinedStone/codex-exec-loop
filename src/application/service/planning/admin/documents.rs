@@ -10,6 +10,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
+use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::{DIRECTIONS_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningWorkspaceFiles,
@@ -28,23 +29,33 @@ static DEFAULT_DIRECTION_DEFINITION: OnceLock<Result<DirectionDefinition, String
     OnceLock::new();
 
 impl PlanningAdminFacadeService {
+    pub(super) fn ensure_default_authority(&self) -> Result<()> {
+        PlanningAuthoritySeedService::new(
+            self.planning_workspace_port.clone(),
+            self.planning_task_repository_port.clone(),
+            self.planning_validation_service.clone(),
+            self.priority_queue_service.clone(),
+        )
+        .ensure_default_authority(self.workspace_dir.as_str())
+        .map(|_| ())
+    }
+
     pub(super) fn load_admin_documents(&self) -> Result<PlanningAdminDocuments> {
+        self.ensure_default_authority()?;
         let workspace = self
             .planning_workspace_port
             .load_planning_workspace_files(self.workspace_dir.as_str())?;
-        let directions_toml = workspace.directions_toml.ok_or_else(|| {
-            anyhow!("planning directions are unavailable; initialize planning first")
+        let directions_toml = workspace
+            .directions_toml
+            .ok_or_else(|| anyhow!("default planning authority seed did not provide directions"))?;
+        let result_output_markdown = workspace.result_output_markdown.ok_or_else(|| {
+            anyhow!("default planning authority seed did not provide result output")
         })?;
-        let result_output_markdown = workspace
-            .result_output_markdown
-            .ok_or_else(|| anyhow!("result-output.md is unavailable; initialize planning first"))?;
         let task_authority_snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(self.workspace_dir.as_str())?
             .ok_or_else(|| {
-                anyhow!(
-                    "planning task authority is unavailable; initialize or repair planning first"
-                )
+                anyhow!("default planning authority seed did not provide task authority")
             })?;
         let directions = toml::from_str::<DirectionCatalogDocument>(&directions_toml)
             .context("failed to parse active directions.toml")?;

@@ -226,16 +226,16 @@ mod tests {
     }
 
     #[test]
-    fn inspect_workspace_reports_absent_state_for_uninitialized_workspace() {
+    fn inspect_workspace_seeds_default_authority_for_uninitialized_workspace() {
         let workspace_dir = create_temp_workspace("planning-doctor-absent");
 
         let report = doctor_service().inspect_workspace(&workspace_dir);
 
-        assert_eq!(report.planning_state(), PlanningDoctorState::Absent);
         assert_eq!(
-            report.health(),
-            Some("planning workspace is not initialized")
+            report.planning_state(),
+            PlanningDoctorState::ReadyWithoutTask
         );
+        assert_eq!(report.health(), Some("planning workspace is healthy"));
         assert_eq!(report.exit_code(), 0);
 
         std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
