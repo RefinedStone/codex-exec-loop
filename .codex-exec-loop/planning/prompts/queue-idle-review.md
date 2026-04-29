@@ -10,6 +10,8 @@ Use this prompt only when the executable queue is empty. The planning worker is 
 - Treat `main-session-latest-reply` as evidence only. It is not completion authority, and a completion claim is not enough unless it satisfies the current DB direction success criteria and task/queue state.
 - Compare the latest operator request and main-session result against DB direction goals, success criteria, detail docs, accepted task authority, and DB queue projection.
 - Create or update a task when direction criteria remain unmet, validation is missing, or a concrete next execution slice is clear, even if the main reply has no explicit TODO list.
+- Ignore older prompt or direction wording that uses `directions.toml`, `task-ledger`, or "latest answer clearly implies" as the completion test; accepted DB authority and evaluator judgment win.
+- If the latest operator request asked for nontrivial code, DB, runtime, or planning behavior changes and accepted DB task authority is empty or has no matching completed task, do not leave the queue empty solely because the main reply reports completion, tests, merge, or validation. Create one narrow independent review, verification, or hardening task unless DB authority itself proves no work remains.
 - Keep the queue narrow. When the next slice is concrete, derive at most one `ready` or `in_progress` task.
 - Prefer follow-up work that reduces context fan-in, normalizes operator vocabulary, clarifies Codex-only coupling, or advances the planning-worker-only Claude headless runner lane with one concrete artifact.
 - Prefer capability-boundary notes and small, reviewable audits before broad provider abstractions or speculative adapter scaffolding.
