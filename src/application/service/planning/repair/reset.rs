@@ -14,10 +14,13 @@ use crate::application::service::planning::authoring::bootstrap::{
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
-    PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH,
+    PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
+    RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, TaskStatus};
+
+const LEGACY_RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningResetTarget {
@@ -207,6 +210,7 @@ impl PlanningResetService {
         workspace_dir: &str,
         bootstrap: &PlanningBootstrapArtifacts,
     ) -> Result<PlanningWorkspaceResetResult> {
+        self.reset_all_generated_artifacts(workspace_dir)?;
         self.reset_directions_side_artifacts(workspace_dir, bootstrap)?;
         self.planning_workspace_port
             .replace_planning_workspace_file(
@@ -230,8 +234,23 @@ impl PlanningResetService {
             removed_paths: vec![
                 PLANNING_DIRECTION_DOCS_DIRECTORY.to_string(),
                 PLANNING_PROMPTS_DIRECTORY.to_string(),
+                PLANNING_DRAFTS_DIRECTORY.to_string(),
+                PLANNING_REJECTED_DIRECTORY.to_string(),
+                LEGACY_RUNTIME_EXPORTS_DIRECTORY.to_string(),
             ],
         })
+    }
+
+    fn reset_all_generated_artifacts(&self, workspace_dir: &str) -> Result<()> {
+        for path in [
+            PLANNING_DRAFTS_DIRECTORY,
+            PLANNING_REJECTED_DIRECTORY,
+            LEGACY_RUNTIME_EXPORTS_DIRECTORY,
+        ] {
+            self.planning_workspace_port
+                .remove_planning_workspace_entry(workspace_dir, path)?;
+        }
+        Ok(())
     }
 
     fn reset_directions_side_artifacts(

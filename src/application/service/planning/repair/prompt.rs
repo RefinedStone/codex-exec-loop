@@ -62,6 +62,11 @@ pub fn build_planning_repair_prompt(
             "json",
             &truncate_prompt_section(&request.direction_authority_json, 4_000),
         )
+        .code_block(
+            "accepted-db-queue-projection",
+            "json",
+            &truncate_prompt_section(&request.accepted_queue_projection_json, 2_000),
+        )
         .code_block(&accepted_heading, "json", &accepted_excerpt)
         .optional_code_block(&rejected_heading, "json", rejected_excerpt.as_deref())
         .bullets("final-response", final_response_rules())
@@ -92,6 +97,8 @@ fn repair_constraints() -> Vec<String> {
             .to_string(),
         format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
         "Use the last accepted DB snapshot as the current task authority baseline.".to_string(),
+        "Ignore stale legacy/export artifacts such as `task-ledger.json`, `directions.toml`, `queue.snapshot.json`, `planning-snapshot.json`, and `.codex-exec-loop/runtime/exports/*`."
+            .to_string(),
         "Do not add unrelated work outside the existing direction frame.".to_string(),
     ]
 }

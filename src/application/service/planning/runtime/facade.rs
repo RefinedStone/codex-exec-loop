@@ -1,5 +1,6 @@
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
+    PlanningRepairPromptHandoff,
 };
 use crate::application::service::planning::runtime::policy::{
     PlanningAutoFollowBlockReason, PlanningAutoFollowPolicyDecision, PlanningAutoFollowPromptMode,
@@ -247,12 +248,14 @@ impl PlanningRuntimeFacadeService {
         workspace_directory: &str,
         candidate_task_authority_json: &str,
         execution_snapshot: &PlanningExecutionSnapshot,
+        previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
     ) -> Result<PlanningReconciliationResult> {
         self.planning_reconciliation_service
             .commit_task_authority_candidate(
                 workspace_directory,
                 candidate_task_authority_json,
                 execution_snapshot,
+                previous_handoff,
             )
     }
 }

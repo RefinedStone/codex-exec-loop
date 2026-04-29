@@ -18,6 +18,7 @@ impl PlanningWorkerUseCaseDependencies {
                 ports.worker,
                 services.runtime_facade,
                 ports.authority,
+                ports.task_repository.clone(),
             ),
             proposal_promotion: PlanningProposalPromotionService::with_task_repository(
                 ports.workspace,

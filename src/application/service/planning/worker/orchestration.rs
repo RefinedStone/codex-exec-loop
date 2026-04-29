@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
 };
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use anyhow::Result;
 
@@ -72,6 +73,15 @@ pub struct PlanningWorkerOrchestrationService {
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     runtime_facade: PlanningRuntimeFacadeService,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanningWorkerAuthorityContext {
+    status_lines: Vec<String>,
+    direction_authority_json: Option<String>,
+    task_authority_json: Option<String>,
+    queue_projection_json: Option<String>,
 }
 
 #[derive(Clone)]
@@ -113,11 +123,13 @@ impl PlanningWorkerOrchestrationService {
         planning_worker_port: Arc<dyn PlanningWorkerPort>,
         runtime_facade: PlanningRuntimeFacadeService,
         planning_authority: Arc<dyn PlanningAuthorityPort>,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     ) -> Self {
         Self {
             planning_worker_port,
             runtime_facade,
             planning_authority,
+            planning_task_repository_port,
         }
     }
 
@@ -126,11 +138,13 @@ impl PlanningWorkerOrchestrationService {
         request: PlanningQueueRefreshRequest<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
         let prompt = self.render_refresh_queue_prompt(&request);
+        let previous_handoff = request.previous_handoff_task.cloned();
         self.run_worker_and_reconcile(
             request.workspace_directory,
             &format!("planner-refresh-{}", request.root_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
+            previous_handoff.as_ref(),
         )
     }
 
@@ -148,6 +162,7 @@ impl PlanningWorkerOrchestrationService {
             &format!("planner-refresh-{}", request.contract.root_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
+            request.previous_handoff_task,
         )
     }
 
@@ -164,15 +179,18 @@ impl PlanningWorkerOrchestrationService {
             ),
             PlanningWorkerOperation::RepairTaskAuthority,
             prompt,
+            request.previous_handoff_task,
         )
     }
 
     pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
+        let authority_context = self.load_worker_authority_context(request.workspace_directory);
         match &request.mode {
             PlanningQueueRefreshMode::FromLatestReply => build_planning_queue_refresh_prompt(
                 request.latest_user_message,
                 request.latest_main_reply,
                 request.previous_handoff_task,
+                &authority_context,
             ),
             PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle {
                 queue_idle_prompt_markdown,
@@ -181,6 +199,7 @@ impl PlanningWorkerOrchestrationService {
                 request.latest_main_reply,
                 request.previous_handoff_task,
                 queue_idle_prompt_markdown,
+                &authority_context,
             ),
         }
     }
@@ -189,11 +208,13 @@ impl PlanningWorkerOrchestrationService {
         &self,
         request: &PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> String {
+        let authority_context = self.load_worker_authority_context(request.workspace_directory);
         build_planning_official_completion_prompt(
             request.latest_user_message,
             request.latest_main_reply,
             request.previous_handoff_task,
             request.contract,
+            &authority_context,
         )
     }
 
@@ -255,6 +276,7 @@ impl PlanningWorkerOrchestrationService {
         synthetic_turn_id: &str,
         operation: PlanningWorkerOperation,
         prompt: String,
+        previous_handoff: Option<&PlanningTaskHandoff>,
     ) -> Result<PlanningWorkerRunOutcome> {
         let execution_snapshot = self
             .runtime_facade
@@ -276,6 +298,12 @@ impl PlanningWorkerOrchestrationService {
                 workspace_directory,
                 candidate_task_authority,
                 &execution_snapshot,
+                previous_handoff.map(|task| PlanningRepairPromptHandoff {
+                    task_id: task.task_id.as_str(),
+                    task_title: task.task_title.as_str(),
+                    updated_at: task.updated_at.as_str(),
+                    status_label: task.status_label.as_str(),
+                }),
             )?;
         }
         let reconciliation_result = self.runtime_facade.reconcile_after_turn(
@@ -322,15 +350,78 @@ impl PlanningWorkerOrchestrationService {
             task_authority_changed,
         })
     }
+
+    fn load_worker_authority_context(
+        &self,
+        workspace_directory: &str,
+    ) -> PlanningWorkerAuthorityContext {
+        match (
+            self.planning_task_repository_port
+                .load_direction_authority_snapshot(workspace_directory),
+            self.planning_task_repository_port
+                .load_task_authority_snapshot(workspace_directory),
+        ) {
+            (Ok(Some(direction_snapshot)), Ok(Some(task_snapshot))) => {
+                PlanningWorkerAuthorityContext {
+                    status_lines: vec![
+                        "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
+                        format!(
+                            "direction_revision={}",
+                            direction_snapshot.planning_revision
+                        ),
+                        format!("task_revision={}", task_snapshot.planning_revision),
+                        "ignore_legacy_files=task-ledger.json,directions.toml,queue.snapshot.json,planning-snapshot.json,.codex-exec-loop/runtime/exports/*".to_string(),
+                    ],
+                    direction_authority_json: serde_json::to_string(&direction_snapshot.directions)
+                        .ok(),
+                    task_authority_json: serde_json::to_string(&task_snapshot.task_authority).ok(),
+                    queue_projection_json: serde_json::to_string(&task_snapshot.queue_projection)
+                        .ok(),
+                }
+            }
+            (direction_result, task_result) => {
+                let direction_status = authority_load_status(direction_result);
+                let task_status = authority_load_status(task_result);
+                PlanningWorkerAuthorityContext {
+                    status_lines: vec![
+                        "source_of_truth=accepted DB authority only".to_string(),
+                        format!("direction_authority={direction_status}"),
+                        format!("task_authority={task_status}"),
+                        "ignore_legacy_files=task-ledger.json,directions.toml,queue.snapshot.json,planning-snapshot.json,.codex-exec-loop/runtime/exports/*".to_string(),
+                    ],
+                    direction_authority_json: None,
+                    task_authority_json: None,
+                    queue_projection_json: None,
+                }
+            }
+        }
+    }
 }
 
 fn build_planning_queue_refresh_prompt(
     latest_user_message: Option<&str>,
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
+    authority_context: &PlanningWorkerAuthorityContext,
 ) -> String {
     PromptDocument::builder("planning-worker-refresh")
         .lines("role", planning_worker_role_lines())
+        .lines("db-authority", authority_context.status_lines.clone())
+        .optional_code_block(
+            "accepted-db-direction-authority",
+            "json",
+            authority_context.direction_authority_json.as_deref(),
+        )
+        .optional_code_block(
+            "accepted-db-task-authority",
+            "json",
+            authority_context.task_authority_json.as_deref(),
+        )
+        .optional_code_block(
+            "db-queue-projection",
+            "json",
+            authority_context.queue_projection_json.as_deref(),
+        )
         .bullets("output-contract", task_authority_output_contract())
         .bullets("refresh-policy", queue_refresh_policy_rules())
         .bullets("queue-advancement", queue_advancement_rules())
@@ -349,9 +440,26 @@ fn build_planning_queue_idle_derive_prompt(
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
     queue_idle_prompt_markdown: &str,
+    authority_context: &PlanningWorkerAuthorityContext,
 ) -> String {
     PromptDocument::builder("planning-worker-queue-idle-review")
         .lines("role", planning_worker_role_lines())
+        .lines("db-authority", authority_context.status_lines.clone())
+        .optional_code_block(
+            "accepted-db-direction-authority",
+            "json",
+            authority_context.direction_authority_json.as_deref(),
+        )
+        .optional_code_block(
+            "accepted-db-task-authority",
+            "json",
+            authority_context.task_authority_json.as_deref(),
+        )
+        .optional_code_block(
+            "db-queue-projection",
+            "json",
+            authority_context.queue_projection_json.as_deref(),
+        )
         .bullets("output-contract", task_authority_output_contract())
         .bullets("idle-review-policy", queue_idle_review_policy_rules())
         .optional_text("latest-operator-request", latest_user_message)
@@ -370,12 +478,29 @@ fn build_planning_official_completion_prompt(
     latest_main_reply: &str,
     previous_handoff_task: Option<&PlanningTaskHandoff>,
     contract: &PlanningOfficialCompletionRefreshContract,
+    authority_context: &PlanningWorkerAuthorityContext,
 ) -> String {
     let serialized_contract = serialize_official_completion_refresh_contract(contract);
     let contract_block = format!("```json\n{serialized_contract}\n```");
 
     PromptDocument::builder("planning-worker-official-completion")
         .lines("role", planning_worker_role_lines())
+        .lines("db-authority", authority_context.status_lines.clone())
+        .optional_code_block(
+            "accepted-db-direction-authority",
+            "json",
+            authority_context.direction_authority_json.as_deref(),
+        )
+        .optional_code_block(
+            "accepted-db-task-authority",
+            "json",
+            authority_context.task_authority_json.as_deref(),
+        )
+        .optional_code_block(
+            "db-queue-projection",
+            "json",
+            authority_context.queue_projection_json.as_deref(),
+        )
         .bullets("output-contract", task_authority_output_contract())
         .bullets("completion-policy", official_completion_policy_rules())
         .bullets("queue-advancement", queue_advancement_rules())
@@ -400,9 +525,11 @@ fn serialize_official_completion_refresh_contract(
 fn planning_worker_role_lines() -> Vec<String> {
     vec![
         "session=planning-only".to_string(),
-        "source_of_truth=DB task authority".to_string(),
+        "source_of_truth=DB direction authority + DB task authority + DB queue projection"
+            .to_string(),
         "protected_files=`result-output.md`, direction detail docs, queue-idle review prompt"
             .to_string(),
+        "Do not read or infer planning authority from stale legacy/export artifacts.".to_string(),
     ]
 }
 
@@ -413,6 +540,14 @@ fn task_authority_output_contract() -> Vec<String> {
         "`task_authority` is the full updated task ledger document.".to_string(),
         "End with a short natural-language summary of the ledger changes.".to_string(),
     ]
+}
+
+fn authority_load_status<T>(result: Result<Option<T>>) -> String {
+    match result {
+        Ok(Some(_)) => "loaded".to_string(),
+        Ok(None) => "missing".to_string(),
+        Err(error) => format!("error: {error}"),
+    }
 }
 
 fn queue_refresh_policy_rules() -> Vec<String> {
@@ -562,8 +697,53 @@ fn merge_reconciliation_results(
 
 #[cfg(test)]
 mod tests {
+    use super::{PlanningWorkerAuthorityContext, build_planning_queue_refresh_prompt};
+    use crate::application::service::planning::runtime::facade::PlanningTaskHandoff;
+
     #[test]
     fn test_module_compiles_after_task_authority_file_removal() {
         assert!(std::env::current_dir().is_ok());
+    }
+
+    #[test]
+    fn refresh_prompt_embeds_db_authority_and_legacy_ignore_contract() {
+        let authority_context = PlanningWorkerAuthorityContext {
+            status_lines: vec![
+                "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
+                "direction_revision=7".to_string(),
+                "task_revision=8".to_string(),
+                "ignore_legacy_files=task-ledger.json,directions.toml,queue.snapshot.json,planning-snapshot.json,.codex-exec-loop/runtime/exports/*".to_string(),
+            ],
+            direction_authority_json: Some("{\"version\":1,\"directions\":[]}".to_string()),
+            task_authority_json: Some("{\"version\":1,\"tasks\":[]}".to_string()),
+            queue_projection_json: Some(
+                "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                    .to_string(),
+            ),
+        };
+
+        let prompt = build_planning_queue_refresh_prompt(
+            Some("latest user"),
+            "latest reply",
+            Some(&PlanningTaskHandoff {
+                task_id: "task-1".to_string(),
+                task_title: "Task 1".to_string(),
+                direction_id: "direction-a".to_string(),
+                combined_priority: 10,
+                updated_at: "2026-04-29T00:00:00Z".to_string(),
+                status_label: "ready".to_string(),
+            }),
+            &authority_context,
+        );
+
+        assert!(prompt.contains("[accepted-db-direction-authority]"));
+        assert!(prompt.contains("{\"version\":1,\"directions\":[]}"));
+        assert!(prompt.contains("[accepted-db-task-authority]"));
+        assert!(prompt.contains("{\"version\":1,\"tasks\":[]}"));
+        assert!(prompt.contains("[db-queue-projection]"));
+        assert!(prompt.contains("task-ledger.json,directions.toml,queue.snapshot.json"));
+        assert!(prompt.contains(
+            "Do not read or infer planning authority from stale legacy/export artifacts."
+        ));
     }
 }

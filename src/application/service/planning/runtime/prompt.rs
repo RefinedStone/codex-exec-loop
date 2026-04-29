@@ -665,6 +665,8 @@ fn task_authority_contract_rules() -> Vec<String> {
             .to_string(),
         "Task catalog mutations must go through the runtime task authority flow; queue validation refreshes prompt state."
             .to_string(),
+        "Ignore stale legacy/export artifacts (`task-ledger.json`, `directions.toml`, `queue.snapshot.json`, `planning-snapshot.json`, `.codex-exec-loop/runtime/exports/*`); DB authority is the only planning source of truth."
+            .to_string(),
     ]
 }
 
@@ -747,7 +749,9 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{missing_workspace_paths, workspace_record_to_files};
+    use super::{
+        missing_workspace_paths, task_authority_contract_rules, workspace_record_to_files,
+    };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
@@ -764,6 +768,16 @@ mod tests {
             missing_workspace_paths(&record),
             vec![RESULT_OUTPUT_FILE_PATH]
         );
+    }
+
+    #[test]
+    fn task_authority_contract_names_legacy_artifacts_as_ignored_inputs() {
+        let rules = task_authority_contract_rules().join("\n");
+
+        assert!(rules.contains("DB authority is the only planning source of truth"));
+        assert!(rules.contains("task-ledger.json"));
+        assert!(rules.contains("directions.toml"));
+        assert!(rules.contains(".codex-exec-loop/runtime/exports/*"));
     }
 
     #[test]

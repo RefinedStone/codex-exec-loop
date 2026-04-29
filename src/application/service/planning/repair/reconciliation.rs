@@ -12,6 +12,7 @@ use crate::application::service::planning::shared::contract::{
 };
 use crate::domain::planning::PlanningWorkspaceFiles;
 use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument, TaskDefinition};
 
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
 pub use super::prompt::{
@@ -56,6 +57,7 @@ pub struct PlanningRepairRequest {
     pub validation_errors: Vec<String>,
     pub direction_authority_json: String,
     pub accepted_task_authority_json: String,
+    pub accepted_queue_projection_json: String,
     pub rejected_task_authority_json: Option<String>,
     pub rejected_archive_path: Option<String>,
 }
@@ -154,6 +156,7 @@ impl PlanningReconciliationService {
         workspace_dir: &str,
         candidate_task_authority_json: &str,
         execution_snapshot: &PlanningExecutionSnapshot,
+        previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
     ) -> Result<PlanningReconciliationResult> {
         let mut result = PlanningReconciliationResult::default();
         let direction_snapshot = self
@@ -180,10 +183,17 @@ impl PlanningReconciliationService {
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "unknown validation failure".to_string());
-            let accepted_task_authority_json = self
+            let accepted_snapshot = self
                 .planning_task_repository_port
-                .load_task_authority_snapshot(workspace_dir)?
+                .load_task_authority_snapshot(workspace_dir)?;
+            let accepted_task_authority_json = accepted_snapshot
+                .as_ref()
                 .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_authority))
+                .transpose()?
+                .unwrap_or_default();
+            let accepted_queue_projection_json = accepted_snapshot
+                .as_ref()
+                .map(|snapshot| serde_json::to_string(&snapshot.queue_projection))
                 .transpose()?
                 .unwrap_or_default();
             result.repair_request = Some(PlanningRepairRequest {
@@ -191,6 +201,7 @@ impl PlanningReconciliationService {
                 validation_errors,
                 direction_authority_json,
                 accepted_task_authority_json,
+                accepted_queue_projection_json,
                 rejected_task_authority_json: Some(candidate_task_authority_json.to_string()),
                 rejected_archive_path: None,
             });
@@ -216,6 +227,39 @@ impl PlanningReconciliationService {
         let authority_snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_dir)?;
+        if let Some(failure_summary) = queue_advancement_guard_failure(
+            previous_handoff,
+            authority_snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.task_authority),
+            task_authority,
+            &queue_projection,
+        ) {
+            let accepted_task_authority_json = authority_snapshot
+                .as_ref()
+                .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_authority))
+                .transpose()?
+                .unwrap_or_default();
+            let accepted_queue_projection_json = authority_snapshot
+                .as_ref()
+                .map(|snapshot| serde_json::to_string(&snapshot.queue_projection))
+                .transpose()?
+                .unwrap_or_default();
+            result.repair_request = Some(PlanningRepairRequest {
+                failure_summary: failure_summary.clone(),
+                validation_errors: vec![failure_summary.clone()],
+                direction_authority_json,
+                accepted_task_authority_json,
+                accepted_queue_projection_json,
+                rejected_task_authority_json: Some(candidate_task_authority_json.to_string()),
+                rejected_archive_path: None,
+            });
+            result.rejected_task_authority = true;
+            result.notices.push(format!(
+                "planning worker produced a non-advancing task authority update ({failure_summary})"
+            ));
+            return Ok(result);
+        }
         match self
             .planning_task_repository_port
             .commit_task_authority_snapshot(
@@ -270,9 +314,63 @@ fn validation_error_summaries(
         .collect()
 }
 
+fn queue_advancement_guard_failure(
+    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
+    accepted_task_authority: Option<&TaskAuthorityDocument>,
+    candidate_task_authority: &TaskAuthorityDocument,
+    queue_projection: &PriorityQueueProjection,
+) -> Option<String> {
+    let previous_handoff = previous_handoff?;
+    let queue_head = queue_projection.next_task.as_ref()?;
+    if queue_head.task_id.trim() != previous_handoff.task_id.trim() {
+        return None;
+    }
+
+    let accepted_task = accepted_task_authority
+        .and_then(|task_authority| find_task(task_authority, previous_handoff.task_id));
+    let candidate_task = find_task(candidate_task_authority, previous_handoff.task_id)?;
+
+    match accepted_task {
+        Some(accepted_task)
+            if accepted_task.normalized() == candidate_task.normalized()
+                && queue_head.status.label() == previous_handoff.status_label.trim() =>
+        {
+            Some(format!(
+                "planner refresh kept previous handoff `{}` unchanged as the ready queue head",
+                previous_handoff.task_id.trim()
+            ))
+        }
+        None if candidate_task.updated_at.trim() == previous_handoff.updated_at.trim() => {
+            Some(format!(
+                "planner refresh returned previous handoff `{}` as the queue head without DB baseline evidence of a task update",
+                previous_handoff.task_id.trim()
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn find_task<'a>(
+    task_authority: &'a TaskAuthorityDocument,
+    task_id: &str,
+) -> Option<&'a TaskDefinition> {
+    let task_id = task_id.trim();
+    task_authority
+        .tasks
+        .iter()
+        .find(|task| task.id.trim() == task_id)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PlanningChangeSet, PlanningRepairRequest, build_planning_repair_prompt};
+    use super::{
+        PlanningChangeSet, PlanningRepairPromptHandoff, PlanningRepairRequest,
+        build_planning_repair_prompt, queue_advancement_guard_failure,
+    };
+    use crate::domain::planning::{
+        PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
+        TaskAuthorityDocument, TaskDefinition, TaskStatus,
+    };
 
     #[test]
     fn change_set_ignores_legacy_task_file_paths() {
@@ -294,6 +392,9 @@ mod tests {
                 validation_errors: vec!["task has unknown direction".to_string()],
                 direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
                 accepted_task_authority_json: "{\"version\":1,\"tasks\":[]}".to_string(),
+                accepted_queue_projection_json:
+                    "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                        .to_string(),
                 rejected_task_authority_json: Some("{ invalid json".to_string()),
                 rejected_archive_path: None,
             },
@@ -304,7 +405,112 @@ mod tests {
         );
 
         assert!(prompt.contains("\"task_authority\""));
+        assert!(prompt.contains("[accepted-db-queue-projection]"));
+        assert!(prompt.contains("task-ledger.json"));
         assert!(!prompt.contains("task authority schema file"));
         assert!(!prompt.contains("queue snapshot artifact"));
+    }
+
+    #[test]
+    fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
+        let accepted = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T00:00:00Z")],
+        };
+        let projection = PriorityQueueProjection {
+            next_task: Some(queue_task("task-1", TaskStatus::Ready)),
+            active_tasks: vec![queue_task("task-1", TaskStatus::Ready)],
+            proposed_tasks: Vec::new(),
+            skipped_tasks: Vec::new(),
+        };
+
+        let failure = queue_advancement_guard_failure(
+            Some(PlanningRepairPromptHandoff {
+                task_id: "task-1",
+                task_title: "Task 1",
+                updated_at: "2026-04-29T00:00:00Z",
+                status_label: "ready",
+            }),
+            Some(&accepted),
+            &accepted,
+            &projection,
+        );
+
+        assert_eq!(
+            failure.as_deref(),
+            Some(
+                "planner refresh kept previous handoff `task-1` unchanged as the ready queue head"
+            )
+        );
+    }
+
+    #[test]
+    fn queue_advancement_guard_allows_updated_same_head() {
+        let accepted = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T00:00:00Z")],
+        };
+        let candidate = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T00:01:00Z")],
+        };
+        let projection = PriorityQueueProjection {
+            next_task: Some(queue_task("task-1", TaskStatus::Ready)),
+            active_tasks: vec![queue_task("task-1", TaskStatus::Ready)],
+            proposed_tasks: Vec::new(),
+            skipped_tasks: Vec::new(),
+        };
+
+        let failure = queue_advancement_guard_failure(
+            Some(PlanningRepairPromptHandoff {
+                task_id: "task-1",
+                task_title: "Task 1",
+                updated_at: "2026-04-29T00:00:00Z",
+                status_label: "ready",
+            }),
+            Some(&accepted),
+            &candidate,
+            &projection,
+        );
+
+        assert_eq!(failure, None);
+    }
+
+    fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_relation_note: "supports direction".to_string(),
+            title: "Task 1".to_string(),
+            description: "Do task 1".to_string(),
+            status: match status {
+                "ready" => TaskStatus::Ready,
+                "done" => TaskStatus::Done,
+                _ => panic!("unexpected status"),
+            },
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::Llm,
+            last_updated_by: TaskActor::Llm,
+            source_turn_id: None,
+            updated_at: updated_at.to_string(),
+        }
+    }
+
+    fn queue_task(id: &str, status: TaskStatus) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank: 1,
+            task_id: id.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_title: "Direction A".to_string(),
+            task_title: "Task 1".to_string(),
+            status,
+            combined_priority: 10,
+            updated_at: "2026-04-29T00:00:00Z".to_string(),
+            rank_reasons: vec!["status=ready".to_string()],
+        }
     }
 }
