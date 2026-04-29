@@ -6,6 +6,7 @@ mod feature;
 pub(crate) mod repair;
 pub(crate) mod runtime;
 pub(crate) mod shared;
+pub(crate) mod task_mutation;
 mod use_cases;
 pub(crate) mod worker;
 
@@ -62,6 +63,12 @@ pub use self::shared::contract::{
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
     PLANNING_REJECTED_DIRECTORY, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
     default_direction_detail_doc_path,
+};
+pub use self::task_mutation::{
+    PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskCreatePreview,
+    PlanningTaskCreatePreviewRequest, PlanningTaskMutationCommand,
+    PlanningTaskMutationCommitResult, PlanningTaskMutationRequest, PlanningTaskMutationService,
+    PlanningTaskMutationSource, PlanningTaskUpdateInput, extract_planning_task_commands,
 };
 pub use self::use_cases::{
     PlanningRuntimeUseCases, PlanningWorkerUseCases, PlanningWorkspaceUseCases,

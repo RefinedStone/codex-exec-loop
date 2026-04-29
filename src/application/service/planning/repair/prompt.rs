@@ -141,7 +141,8 @@ fn rejected_excerpt(
 fn final_response_rules() -> Vec<String> {
     vec![
         "Briefly summarize what was fixed.".to_string(),
-        "Return the updated full task authority in the required fenced JSON object.".to_string(),
+        "Return the corrected planning task command envelope in the required fenced JSON object."
+            .to_string(),
         "Do not answer with bare `DONE`; explain why if no ledger change is needed.".to_string(),
     ]
 }

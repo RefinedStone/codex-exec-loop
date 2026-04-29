@@ -2,8 +2,7 @@ use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_
 use crate::application::service::prompt_component::PromptDocumentBuilder;
 
 pub(crate) const LEGACY_AUTHORITY_ARTIFACTS: &str = "`task-ledger.json`, `directions.toml`, `queue.snapshot.json`, `planning-snapshot.json`, and `.codex-exec-loop/runtime/exports/*`";
-const TASK_AUTHORITY_JSON_OUTPUT_CONTRACT: &str =
-    "Final answer must include exactly one fenced JSON object: `{\"task_authority\": {...}}`.";
+const PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT: &str = "Final answer must include exactly one fenced JSON object: `{\"planning_task_commands\":{\"version\":1,\"commands\":[...]}}`.";
 const MAX_WORKER_DIRECTION_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_TASK_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_QUEUE_PROJECTION_CHARS: usize = 2_000;
@@ -70,16 +69,24 @@ pub(crate) fn add_worker_authority_context_sections(
 
 pub(crate) fn worker_task_authority_output_contract() -> Vec<String> {
     vec![
-        TASK_AUTHORITY_JSON_OUTPUT_CONTRACT.to_string(),
-        "`task_authority` is the full updated task ledger document.".to_string(),
-        "End with a short natural-language summary of the ledger changes.".to_string(),
+        PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT.to_string(),
+        "`commands` may contain only `create_task` or `update_task` operations.".to_string(),
+        "Do not return `task_authority` or a full task ledger document.".to_string(),
+        "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
+            .to_string(),
+        "Use `status=cancelled` to cancel work; do not emit delete operations.".to_string(),
+        "End with a short natural-language summary of the task command changes.".to_string(),
     ]
 }
 
 pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
     vec![
-        TASK_AUTHORITY_JSON_OUTPUT_CONTRACT.to_string(),
-        "`task_authority` must be the full updated task authority document.".to_string(),
+        PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT.to_string(),
+        "`commands` must be the smallest create/update set needed to resolve the validation errors."
+            .to_string(),
+        "Do not return `task_authority` or a full task ledger document.".to_string(),
+        "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
+            .to_string(),
         "Resolve every validation error listed below.".to_string(),
     ]
 }
@@ -91,7 +98,7 @@ pub(crate) fn runtime_task_authority_contract_rules() -> Vec<String> {
             .to_string(),
         "Do not write unrelated tasks that cannot be connected to existing directions."
             .to_string(),
-        "Task catalog mutations must go through the runtime task authority flow; queue validation refreshes prompt state."
+        "Task catalog mutations must go through `planning_task_commands`; queue validation refreshes prompt state."
             .to_string(),
         format!(
             "Ignore stale legacy/export artifacts ({LEGACY_AUTHORITY_ARTIFACTS}); DB authority is the only planning source of truth."
@@ -101,7 +108,7 @@ pub(crate) fn runtime_task_authority_contract_rules() -> Vec<String> {
 
 pub(crate) fn repair_constraints() -> Vec<String> {
     vec![
-        "Do not edit planning files in this turn; return the corrected ledger as JSON only."
+        "Do not edit planning files in this turn; return corrected planning task commands as JSON only."
             .to_string(),
         format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
         "Use the last accepted DB snapshot as the current task authority baseline.".to_string(),
@@ -181,11 +188,12 @@ mod tests {
     }
 
     #[test]
-    fn shared_output_contract_uses_required_task_authority_payload() {
+    fn shared_output_contract_uses_required_task_command_payload() {
         let contract = worker_task_authority_output_contract().join("\n");
 
-        assert!(contract.contains("\"task_authority\""));
-        assert!(contract.contains("full updated task ledger document"));
+        assert!(contract.contains("\"planning_task_commands\""));
+        assert!(contract.contains("create_task"));
+        assert!(contract.contains("Do not return `task_authority`"));
     }
 
     #[test]
