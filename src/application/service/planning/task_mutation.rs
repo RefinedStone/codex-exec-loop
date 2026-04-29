@@ -472,9 +472,9 @@ impl PlanningTaskMutationService {
             task.description = required_text(description, "task description")?.to_string();
         }
         if let Some(status) = input.status {
-            if terminal_status(task.status) && task.status != status && !terminal_status(status) {
+            if terminal_status(task.status) && task.status != status {
                 bail!(
-                    "task `{}` cannot regress from terminal status `{}` to `{}`",
+                    "task `{}` cannot change from terminal status `{}` to `{}`",
                     task.id.trim(),
                     task.status.label(),
                     status.label()
@@ -1190,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_status_regression_is_rejected() {
+    fn terminal_status_change_is_rejected() {
         let repo = repo();
         let workspace = workspace("terminal-regression");
         seed(
@@ -1218,7 +1218,7 @@ mod tests {
                         direction_relation_note: None,
                         title: None,
                         description: None,
-                        status: Some(TaskStatus::Ready),
+                        status: Some(TaskStatus::Cancelled),
                         base_priority: None,
                         dynamic_priority_delta: None,
                         priority_reason: None,
@@ -1229,6 +1229,10 @@ mod tests {
             })
             .unwrap_err();
 
-        assert!(error.to_string().contains("cannot regress"));
+        assert!(
+            error
+                .to_string()
+                .contains("cannot change from terminal status")
+        );
     }
 }

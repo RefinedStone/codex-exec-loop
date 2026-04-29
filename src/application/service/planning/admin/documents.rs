@@ -101,7 +101,7 @@ impl PlanningAdminFacadeService {
             .build_projection(&documents.directions, &documents.task_authority)
             .context("failed to rebuild planning queue")?;
 
-        match self
+        let task_observed_revision = match self
             .planning_task_repository_port
             .commit_direction_authority_snapshot(
                 self.workspace_dir.as_str(),
@@ -110,7 +110,7 @@ impl PlanningAdminFacadeService {
                     directions: &documents.directions,
                 },
             )? {
-            PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+            PlanningTaskAuthorityCommitResult::Committed { planning_revision } => planning_revision,
             PlanningTaskAuthorityCommitResult::Conflict {
                 observed_planning_revision,
                 current_planning_revision,
@@ -119,13 +119,13 @@ impl PlanningAdminFacadeService {
                     "planning db changed while editing directions (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
                 );
             }
-        }
+        };
         match self
             .planning_task_repository_port
             .commit_task_authority_snapshot(
                 self.workspace_dir.as_str(),
                 PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
+                    observed_planning_revision: Some(task_observed_revision),
                     task_authority: &documents.task_authority,
                     queue_projection: &queue_projection,
                 },
