@@ -13,7 +13,8 @@ use crate::application::port::outbound::planning_workspace_port::PlanningWorkspa
 
 use super::composition::{PlanningFeatureComposition, PlanningFeaturePorts};
 use super::use_cases::{
-    PlanningRuntimeUseCases, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningWorkerUseCases,
+    PlanningWorkspaceUseCases,
 };
 
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct PlanningFeature {
     pub workspace: PlanningWorkspaceUseCases,
     pub runtime: PlanningRuntimeUseCases,
     pub worker: PlanningWorkerUseCases,
+    pub task_tool: PlanningTaskToolUseCases,
 }
 
 impl PlanningFeature {

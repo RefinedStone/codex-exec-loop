@@ -18,8 +18,10 @@ use super::authoring::init::PlanningInitService;
 use super::feature::PlanningFeature;
 use super::repair::doctor::PlanningDoctorService;
 use super::repair::reset::PlanningResetService;
+use super::task_tool::PlanningTaskToolService;
 use super::use_cases::{
-    PlanningRuntimeUseCases, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningWorkerUseCases,
+    PlanningWorkspaceUseCases,
 };
 
 #[derive(Clone)]
@@ -60,10 +62,13 @@ impl PlanningFeatureComposition {
         let workspace_dependencies =
             PlanningWorkspaceUseCaseDependencies::new(&self.ports, &services);
         let runtime_dependencies = PlanningRuntimeUseCaseDependencies::new(&self.ports, &services);
+        let task_tool_use_cases =
+            PlanningTaskToolUseCaseBuilder::new(&self.ports, &services).build();
         let worker_dependencies = PlanningWorkerUseCaseDependencies::new(self.ports, services);
         PlanningFeature {
             workspace: PlanningWorkspaceUseCaseBuilder::new(workspace_dependencies).build(),
             runtime: PlanningRuntimeUseCaseBuilder::new(runtime_dependencies).build(),
+            task_tool: task_tool_use_cases,
             worker: PlanningWorkerUseCaseBuilder::new(worker_dependencies).build(),
         }
     }
@@ -132,5 +137,24 @@ impl PlanningWorkerUseCaseBuilder {
             self.dependencies.worker_orchestration,
             self.dependencies.proposal_promotion,
         )
+    }
+}
+
+struct PlanningTaskToolUseCaseBuilder {
+    task_tool: PlanningTaskToolService,
+}
+
+impl PlanningTaskToolUseCaseBuilder {
+    fn new(ports: &PlanningFeaturePorts, services: &PlanningSharedServices) -> Self {
+        Self {
+            task_tool: PlanningTaskToolService::new(
+                ports.task_repository.clone(),
+                services.priority_queue.clone(),
+            ),
+        }
+    }
+
+    fn build(self) -> PlanningTaskToolUseCases {
+        PlanningTaskToolUseCases::new(self.task_tool)
     }
 }
