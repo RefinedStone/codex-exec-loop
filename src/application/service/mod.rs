@@ -3,6 +3,7 @@ pub mod conversation_service;
 pub mod github_review_poller_service;
 pub mod parallel_mode;
 pub mod planning;
+pub(crate) mod prompt_component;
 pub mod session_service;
 pub mod startup_service;
 pub mod turn_prompt_assembly_service;

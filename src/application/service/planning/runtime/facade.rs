@@ -9,6 +9,7 @@ use crate::application::service::planning::runtime::prompt::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
 use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+use crate::application::service::prompt_component::PromptDocument;
 use crate::application::service::turn_prompt_assembly_service::{
     ManualPromptAssemblyRequest, TurnPromptAssemblyService,
 };
@@ -263,14 +264,32 @@ fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> St
         .find(|reason| !reason.trim().is_empty())
         .map(String::as_str)
         .unwrap_or("this is the highest-priority actionable task");
-    format!(
-        "Continue the next highest-priority task.\n\nTask: {}\nDirection: {}\nPriority: rank {} / combined priority {}\nWhy now: {}\n\nWork from the current repository state and focus on this task only. Treat `.codex-exec-loop/planning` and other planning control files as internal runtime state. Do not inspect, mention, or update them unless the user explicitly asked for planning maintenance or this task strictly requires it. Do not describe planning queue refresh logic in commentary or in the final answer. When you finish, summarize what you completed and what remains.",
-        queue_head.task_title.trim(),
-        queue_head.direction_title.trim(),
-        queue_head.rank,
-        queue_head.combined_priority,
-        rank_reason.trim(),
-    )
+
+    PromptDocument::builder("queued-task-handoff")
+        .lines(
+            "task",
+            vec![
+                "intent=Continue the next highest-priority task.".to_string(),
+                format!("title={}", queue_head.task_title.trim()),
+                format!("direction={}", queue_head.direction_title.trim()),
+                format!("rank={}", queue_head.rank),
+                format!("combined_priority={}", queue_head.combined_priority),
+                format!("why_now={}", rank_reason.trim()),
+            ],
+        )
+        .bullets(
+            "rules",
+            vec![
+                "Work from the current repository state and focus only on this task.".to_string(),
+                "Treat `.codex-exec-loop/planning` and planning control files as internal runtime state unless the user explicitly requested planning maintenance or the task strictly requires it."
+                    .to_string(),
+                "Do not describe planning queue refresh logic in commentary or final answer."
+                    .to_string(),
+                "When finished, summarize what changed and what remains.".to_string(),
+            ],
+        )
+        .build()
+        .render()
 }
 
 #[cfg(test)]

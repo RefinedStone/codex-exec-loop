@@ -10,6 +10,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningWorkspaceFiles, PriorityQueueProjection,
@@ -509,177 +510,175 @@ fn build_prompt_fragment(
     queue_projection: &PriorityQueueProjection,
     result_output_markdown: &str,
 ) -> String {
-    let mut lines = vec![
-        "Planning Context".to_string(),
-        "".to_string(),
-        "Direction Summary".to_string(),
-    ];
+    PromptDocument::builder("planning-context")
+        .lines("directions", direction_context_lines(directions))
+        .lines("queue-idle", queue_idle_lines(directions))
+        .lines("queue", queue_context_lines(queue_projection))
+        .bullets("task-authority-contract", task_authority_contract_rules())
+        .optional_text("result-output-prompt", Some(result_output_markdown))
+        .bullets("follow-up-proposals", follow_up_proposal_rules())
+        .build()
+        .render()
+}
 
-    for direction in &directions.directions {
-        lines.push(format!(
-            "- {} | {} | state={}",
-            direction.id.trim(),
-            direction.title.trim(),
-            direction_state_label(direction.state),
-        ));
-        lines.push(format!("  summary: {}", direction.summary.trim()));
-        lines.push(format!(
-            "  success_criteria: {}",
-            direction.success_criteria.join(" | ")
-        ));
-        if !direction.scope_hints.is_empty() {
-            lines.push(format!(
-                "  scope_hints: {}",
-                direction.scope_hints.join(" | ")
-            ));
-        }
-        if let Some(detail_doc_path) = trimmed_non_empty(direction.detail_doc_path.as_str()) {
-            lines.push(format!("  detail_doc_path: {detail_doc_path}"));
-        }
-    }
+fn direction_context_lines(directions: &DirectionCatalogDocument) -> Vec<String> {
+    directions
+        .directions
+        .iter()
+        .flat_map(|direction| {
+            let mut lines = vec![
+                format!(
+                    "- id={}; title={}; state={}",
+                    direction.id.trim(),
+                    direction.title.trim(),
+                    direction_state_label(direction.state),
+                ),
+                format!("  summary={}", direction.summary.trim()),
+                format!(
+                    "  success_criteria={}",
+                    direction.success_criteria.join(" | ")
+                ),
+            ];
+            if !direction.scope_hints.is_empty() {
+                lines.push(format!(
+                    "  scope_hints={}",
+                    direction.scope_hints.join(" | ")
+                ));
+            }
+            if let Some(detail_doc_path) = trimmed_non_empty(direction.detail_doc_path.as_str()) {
+                lines.push(format!("  detail_doc_path={detail_doc_path}"));
+            }
+            lines
+        })
+        .collect()
+}
 
-    lines.push(String::new());
-    lines.push("Queue Idle Policy".to_string());
-    lines.push(format!(
-        "- policy: {}",
-        directions.queue_idle.policy.label()
-    ));
+fn queue_idle_lines(directions: &DirectionCatalogDocument) -> Vec<String> {
+    let mut lines = vec![format!("policy={}", directions.queue_idle.policy.label())];
     if let Some(prompt_path) = trimmed_non_empty(directions.queue_idle.prompt_path.as_str()) {
-        lines.push(format!("- prompt_path: {prompt_path}"));
+        lines.push(format!("prompt_path={prompt_path}"));
     }
+    lines
+}
 
-    lines.push(String::new());
-    lines.push("Queue Summary".to_string());
+fn queue_context_lines(queue_projection: &PriorityQueueProjection) -> Vec<String> {
+    let mut lines = Vec::new();
     match queue_projection.next_task.as_ref() {
         Some(task) => {
+            lines.push(format!("next_task={}", queue_task_line(task)));
             lines.push(format!(
-                "- next_task: rank {} | {} | {} | direction={} | status={} | combined_priority={}",
-                task.rank,
-                task.task_id.trim(),
-                task.task_title.trim(),
-                task.direction_id.trim(),
-                task.status.label(),
-                task.combined_priority,
-            ));
-            lines.push(format!("  rank_reasons: {}", task.rank_reasons.join(" | ")));
-        }
-        None => lines.push("- next_task: none".to_string()),
-    }
-
-    if queue_projection.active_tasks.is_empty() {
-        lines.push("- visible_tasks: none".to_string());
-    } else {
-        let visible_tasks = queue_projection.visible_tasks(MAX_VISIBLE_QUEUE_TASKS);
-        lines.push(format!(
-            "- visible_tasks: top {} of {}",
-            visible_tasks.len(),
-            queue_projection.active_tasks.len()
-        ));
-        for task in visible_tasks {
-            lines.push(format!(
-                "  - rank {} | {} | {} | direction={} | status={} | combined_priority={}",
-                task.rank,
-                task.task_id.trim(),
-                task.task_title.trim(),
-                task.direction_id.trim(),
-                task.status.label(),
-                task.combined_priority,
-            ));
-            lines.push(format!(
-                "    rank_reasons: {}",
+                "next_task_rank_reasons={}",
                 task.rank_reasons.join(" | ")
             ));
         }
+        None => lines.push("next_task=none".to_string()),
     }
 
-    if !queue_projection.proposed_tasks.is_empty() {
-        let proposed_tasks = queue_projection.visible_proposed_tasks(MAX_VISIBLE_PROPOSED_TASKS);
+    lines.extend(active_task_lines(queue_projection));
+    lines.extend(proposed_task_lines(queue_projection));
+    lines.extend(skipped_task_lines(queue_projection));
+    lines
+}
+
+fn active_task_lines(queue_projection: &PriorityQueueProjection) -> Vec<String> {
+    if queue_projection.active_tasks.is_empty() {
+        return vec!["visible_tasks=none".to_string()];
+    }
+
+    let visible_tasks = queue_projection.visible_tasks(MAX_VISIBLE_QUEUE_TASKS);
+    let mut lines = vec![format!(
+        "visible_tasks=top {} of {}",
+        visible_tasks.len(),
+        queue_projection.active_tasks.len()
+    )];
+    for task in visible_tasks {
+        lines.push(format!("- {}", queue_task_line(&task)));
+        lines.push(format!("  rank_reasons={}", task.rank_reasons.join(" | ")));
+    }
+    lines
+}
+
+fn proposed_task_lines(queue_projection: &PriorityQueueProjection) -> Vec<String> {
+    if queue_projection.proposed_tasks.is_empty() {
+        return Vec::new();
+    }
+
+    let proposed_tasks = queue_projection.visible_proposed_tasks(MAX_VISIBLE_PROPOSED_TASKS);
+    let mut lines = vec![format!(
+        "proposed_tasks=top {} of {} promotable",
+        proposed_tasks.len(),
+        queue_projection.proposed_tasks.len()
+    )];
+    for task in proposed_tasks {
+        lines.push(format!("- {}", queue_task_line(&task)));
+        lines.push(format!("  rank_reasons={}", task.rank_reasons.join(" | ")));
+    }
+    lines
+}
+
+fn skipped_task_lines(queue_projection: &PriorityQueueProjection) -> Vec<String> {
+    if queue_projection.skipped_tasks.is_empty() {
+        return Vec::new();
+    }
+
+    let skipped_tasks = queue_projection
+        .skipped_tasks
+        .iter()
+        .take(MAX_SKIPPED_QUEUE_TASKS)
+        .collect::<Vec<_>>();
+    let mut lines = vec![format!(
+        "skipped_tasks=showing {} of {}",
+        skipped_tasks.len(),
+        queue_projection.skipped_tasks.len()
+    )];
+    for skipped_task in skipped_tasks {
         lines.push(format!(
-            "- proposed_tasks: top {} of {} promotable proposals",
-            proposed_tasks.len(),
-            queue_projection.proposed_tasks.len()
+            "- id={}; title={}; direction={}; status={}; reason={}",
+            skipped_task.task_id.trim(),
+            skipped_task.task_title.trim(),
+            skipped_task.direction_id.trim(),
+            skipped_task.status.label(),
+            skipped_task.reason.trim(),
         ));
-        for proposed_task in proposed_tasks {
-            lines.push(format!(
-                "  - proposal rank {} | {} | {} | direction={} | status={} | combined_priority={}",
-                proposed_task.rank,
-                proposed_task.task_id.trim(),
-                proposed_task.task_title.trim(),
-                proposed_task.direction_id.trim(),
-                proposed_task.status.label(),
-                proposed_task.combined_priority,
-            ));
-            lines.push(format!(
-                "    rank_reasons: {}",
-                proposed_task.rank_reasons.join(" | ")
-            ));
-        }
     }
+    lines
+}
 
-    if !queue_projection.skipped_tasks.is_empty() {
-        let skipped_tasks = queue_projection
-            .skipped_tasks
-            .iter()
-            .take(MAX_SKIPPED_QUEUE_TASKS)
-            .collect::<Vec<_>>();
-        lines.push(format!(
-            "- skipped_tasks: showing {} of {}",
-            skipped_tasks.len(),
-            queue_projection.skipped_tasks.len()
-        ));
-        for skipped_task in skipped_tasks {
-            lines.push(format!(
-                "  - {} | {} | direction={} | status={} | reason={}",
-                skipped_task.task_id.trim(),
-                skipped_task.task_title.trim(),
-                skipped_task.direction_id.trim(),
-                skipped_task.status.label(),
-                skipped_task.reason.trim(),
-            ));
-        }
-    }
+fn queue_task_line(task: &PriorityQueueTask) -> String {
+    format!(
+        "rank {}; id={}; title={}; direction={}; status={}; combined_priority={}",
+        task.rank,
+        task.task_id.trim(),
+        task.task_title.trim(),
+        task.direction_id.trim(),
+        task.status.label(),
+        task.combined_priority,
+    )
+}
 
-    lines.push(String::new());
-    lines.push("Task Authority Mutation Contract".to_string());
-    lines.push(format!("- Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH));
-    lines.push(
-        "- New tasks must attach to an existing `direction_id` and include `direction_relation_note`."
+fn task_authority_contract_rules() -> Vec<String> {
+    vec![
+        format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
+        "New tasks must attach to an existing `direction_id` and include `direction_relation_note`."
             .to_string(),
-    );
-    lines.push(
-        "- Do not write unrelated tasks that cannot be connected to the existing directions."
+        "Do not write unrelated tasks that cannot be connected to existing directions."
             .to_string(),
-    );
-    lines.push(
-        "- Task catalog mutations must go through the runtime task authority flow, then queue validation will refresh prompt state."
+        "Task catalog mutations must go through the runtime task authority flow; queue validation refreshes prompt state."
             .to_string(),
-    );
+    ]
+}
 
-    lines.push(String::new());
-    lines.push("Result Output Prompt".to_string());
-    if !result_output_markdown.is_empty() {
-        lines.push(result_output_markdown.to_string());
-    }
-    lines.push(String::new());
-    lines.push("Runtime Follow-up Proposal Rules".to_string());
-    lines.push(
-        "- If your final answer offers concrete follow-up options or variants, create each option through the task authority flow as a separate `proposed` task linked to an existing direction."
+fn follow_up_proposal_rules() -> Vec<String> {
+    vec![
+        "If the final answer offers concrete follow-up options, create each option through task authority as a separate `proposed` task linked to an existing direction."
             .to_string(),
-    );
-    lines.push(
-        "- Use `proposed` only for direction-linked follow-up candidates that should stay out of normal execution until the user explicitly promotes, prioritizes, queues, or executes them."
+        "Use `proposed` only for direction-linked candidates that should wait for explicit promote, prioritize, queue, or execute intent."
             .to_string(),
-    );
-    lines.push(
-        "- If `next_task` is `none` but `proposed_tasks` exist and you are told to keep going from the latest answer, move the actionable worklist into normal queue tasks with priorities, keep the remaining queue intact, execute only the single highest-priority executable task in this turn, and then show the remaining queued or proposed work in the final answer."
+        "If `next_task=none` but proposals exist and the user asks to keep going, promote the single highest-priority executable task and keep the rest queued or proposed."
             .to_string(),
-    );
-    lines.push(
-        "- When the user later asks to prioritize, queue, or execute earlier proposals, update the relevant proposal tasks instead of inventing duplicate tasks."
+        "When the user later asks to prioritize, queue, or execute earlier proposals, update the relevant proposal tasks instead of creating duplicates."
             .to_string(),
-    );
-
-    lines.join("\n")
+    ]
 }
 
 fn build_queue_summary(queue_projection: &PriorityQueueProjection) -> String {
