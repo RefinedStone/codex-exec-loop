@@ -4,25 +4,25 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
-};
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::task_mutation::{
+    PlanningTaskCreateInput, PlanningTaskCreatePreview, PlanningTaskCreatePreviewRequest,
+    PlanningTaskMutationService, PlanningTaskMutationSource,
+};
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
-    PlanningWorkspaceFiles, PriorityQueueProjection, PriorityQueueTask, TaskActor,
-    TaskAuthorityDocument, TaskDefinition, TaskStatus,
+    PlanningWorkspaceFiles, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
+    TaskStatus,
 };
 
 const DEFAULT_RUNTIME_TASK_PRIORITY: i32 = 80;
-const MAX_COLLISION_SUFFIX_ATTEMPTS: u32 = 20;
-const MAX_REVISION_CONFLICT_RETRIES: usize = 3;
 const TASK_TITLE_LIMIT: usize = 72;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +47,7 @@ pub struct PlanningTaskIntakeDraft {
 pub struct PlanningTaskIntakeProposal {
     pub request: PlanningTaskIntakeRequest,
     pub draft: PlanningTaskIntakeDraft,
+    pub mutation_preview: PlanningTaskCreatePreview,
     pub observed_planning_revision: i64,
     pub preview_lines: Vec<String>,
     pub warnings: Vec<String>,
@@ -249,10 +250,8 @@ pub struct PlanningTaskIntakeService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     planning_validation_service: PlanningValidationService,
-    priority_queue_service: PriorityQueueService,
     authority_seed_service: PlanningAuthoritySeedService,
-    intake_validation_service: PlanningTaskIntakeValidationService,
-    draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
+    mutation_service: PlanningTaskMutationService,
 }
 
 impl PlanningTaskIntakeService {
@@ -276,8 +275,12 @@ impl PlanningTaskIntakeService {
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
-        draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
+        _draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
     ) -> Self {
+        let mutation_service = PlanningTaskMutationService::new(
+            planning_task_repository_port.clone(),
+            priority_queue_service.clone(),
+        );
         Self {
             authority_seed_service: PlanningAuthoritySeedService::new(
                 planning_workspace_port.clone(),
@@ -288,9 +291,7 @@ impl PlanningTaskIntakeService {
             planning_workspace_port,
             planning_task_repository_port,
             planning_validation_service,
-            priority_queue_service,
-            intake_validation_service: PlanningTaskIntakeValidationService::new(),
-            draft_generator,
+            mutation_service,
         }
     }
 
@@ -298,15 +299,23 @@ impl PlanningTaskIntakeService {
         &self,
         request: PlanningTaskIntakeRequest,
     ) -> Result<PlanningTaskIntakeProposal> {
-        let context = self.load_context(&request)?;
-        let generated_at = Utc::now();
-        let draft = self.generate_valid_draft(&request, &context, generated_at, None)?;
+        self.validate_intake_workspace(&request)?;
+        let mutation_preview =
+            self.mutation_service
+                .preview_create_task(PlanningTaskCreatePreviewRequest {
+                    workspace_directory: request.workspace_directory.clone(),
+                    source: PlanningTaskMutationSource::User,
+                    source_turn_id: request.active_turn_id.clone(),
+                    input: create_input_from_request(&request),
+                })?;
+        let draft = draft_from_mutation_preview(&request, &mutation_preview);
         Ok(PlanningTaskIntakeProposal {
             preview_lines: build_preview_lines(&draft),
             warnings: Vec::new(),
-            observed_planning_revision: context.planning_revision,
+            observed_planning_revision: mutation_preview.observed_planning_revision,
             request,
             draft,
+            mutation_preview,
         })
     }
 
@@ -314,60 +323,22 @@ impl PlanningTaskIntakeService {
         &self,
         proposal: &PlanningTaskIntakeProposal,
     ) -> Result<PlanningTaskIntakeCommitResult> {
-        let mut next_suffix = proposal.draft.collision_suffix;
-        let generated_at = proposal.draft.generated_at;
-        let mut observed_revision = proposal.observed_planning_revision;
-
-        for _ in 0..=MAX_REVISION_CONFLICT_RETRIES {
-            let context = self.load_context(&proposal.request)?;
-            let draft = if context.planning_revision == proposal.observed_planning_revision
-                && next_suffix == proposal.draft.collision_suffix
-            {
-                proposal.draft.clone()
-            } else {
-                self.generate_valid_draft(&proposal.request, &context, generated_at, next_suffix)?
-            };
-            let (next_task_authority, queue_projection) =
-                self.build_accepted_mutation(&proposal.request, &draft, &context)?;
-
-            match self
-                .planning_task_repository_port
-                .commit_task_authority_snapshot(
-                    &proposal.request.workspace_directory,
-                    PlanningTaskAuthorityCommit {
-                        observed_planning_revision: Some(observed_revision),
-                        task_authority: &next_task_authority,
-                        queue_projection: &queue_projection,
-                    },
-                )? {
-                PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
-                    return Ok(PlanningTaskIntakeCommitResult {
-                        committed_task_id: draft.task.id,
-                        committed_planning_revision: planning_revision,
-                        queue_head: queue_projection.next_task,
-                        task_authority_committed: true,
-                    });
-                }
-                PlanningTaskAuthorityCommitResult::Conflict {
-                    current_planning_revision,
-                    ..
-                } => {
-                    observed_revision = current_planning_revision;
-                    next_suffix = increment_suffix(next_suffix);
-                    continue;
-                }
-            }
-        }
-
-        Err(anyhow!(
-            "planning task intake could not commit because planning state kept changing; retry :task"
-        ))
+        let result = self
+            .mutation_service
+            .commit_create_preview(&proposal.mutation_preview)?;
+        Ok(PlanningTaskIntakeCommitResult {
+            committed_task_id: result
+                .committed_task_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| proposal.draft.task.id.clone()),
+            committed_planning_revision: result.committed_planning_revision,
+            queue_head: result.queue_head,
+            task_authority_committed: result.task_authority_changed,
+        })
     }
 
-    fn load_context(
-        &self,
-        request: &PlanningTaskIntakeRequest,
-    ) -> Result<PlanningTaskIntakeContext> {
+    fn validate_intake_workspace(&self, request: &PlanningTaskIntakeRequest) -> Result<()> {
         self.authority_seed_service
             .ensure_default_authority(&request.workspace_directory)?;
         let workspace_record = self
@@ -423,7 +394,7 @@ impl PlanningTaskIntakeService {
             ));
         }
 
-        let directions = validation_result
+        let _directions = validation_result
             .directions
             .ok_or_else(|| anyhow!("valid planning workspace did not include directions"))?;
         let task_authority = validation_result
@@ -436,103 +407,8 @@ impl PlanningTaskIntakeService {
                 PLANNING_FORMAT_VERSION
             ));
         }
-        let planning_revision = repository_snapshot.planning_revision;
-
-        Ok(PlanningTaskIntakeContext {
-            workspace_record,
-            directions,
-            task_authority,
-            planning_revision,
-        })
+        Ok(())
     }
-
-    fn generate_valid_draft(
-        &self,
-        request: &PlanningTaskIntakeRequest,
-        context: &PlanningTaskIntakeContext,
-        generated_at: DateTime<Utc>,
-        starting_suffix: Option<u32>,
-    ) -> Result<PlanningTaskIntakeDraft> {
-        let mut suffix = starting_suffix;
-        for _ in 0..MAX_COLLISION_SUFFIX_ATTEMPTS {
-            let draft = self
-                .draft_generator
-                .generate(&PlanningTaskIntakeGenerationRequest {
-                    request,
-                    directions: &context.directions,
-                    generated_at,
-                    collision_suffix: suffix,
-                })?;
-            match self.intake_validation_service.validate_draft(
-                request,
-                &draft,
-                &context.directions,
-                &context.task_authority,
-            ) {
-                Ok(()) => return Ok(draft),
-                Err(error) if error.code == "duplicate_task_id" => {
-                    suffix = increment_suffix(suffix);
-                }
-                Err(error) => return Err(error.into_anyhow()),
-            }
-        }
-
-        Err(anyhow!(
-            "Runtime task intake could not allocate a unique task id; retry with a more specific prompt."
-        ))
-    }
-
-    fn build_accepted_mutation(
-        &self,
-        request: &PlanningTaskIntakeRequest,
-        draft: &PlanningTaskIntakeDraft,
-        context: &PlanningTaskIntakeContext,
-    ) -> Result<(TaskAuthorityDocument, PriorityQueueProjection)> {
-        self.intake_validation_service
-            .validate_draft(request, draft, &context.directions, &context.task_authority)
-            .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
-
-        let mut next_task_authority = context.task_authority.clone();
-        next_task_authority.tasks.push(draft.task.clone());
-        let next_task_authority_json = serde_json::to_string_pretty(&next_task_authority)
-            .context("failed to serialize runtime task intake ledger")?;
-        let validation_result =
-            self.planning_validation_service
-                .validate_workspace_files(PlanningWorkspaceFiles {
-                    directions: &context.directions,
-                    task_authority_json: &next_task_authority_json,
-                    result_output_markdown: required_workspace_body(
-                        &context.workspace_record,
-                        RESULT_OUTPUT_FILE_PATH,
-                        context.workspace_record.result_output_markdown.as_deref(),
-                    )?,
-                });
-        if !validation_result.is_valid() {
-            return Err(anyhow!(
-                "Runtime task intake produced an invalid task ledger: {}",
-                validation_result
-                    .report
-                    .errors()
-                    .first()
-                    .map(|issue| issue.message.as_str())
-                    .unwrap_or("planning validation failed")
-            ));
-        }
-        let queue_projection = self
-            .priority_queue_service
-            .build_projection(&context.directions, &next_task_authority)
-            .map_err(|error| anyhow!("Runtime task intake queue rebuild failed: {error}"))?;
-
-        Ok((next_task_authority, queue_projection))
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PlanningTaskIntakeContext {
-    workspace_record: PlanningWorkspaceLoadRecord,
-    directions: DirectionCatalogDocument,
-    task_authority: TaskAuthorityDocument,
-    planning_revision: i64,
 }
 
 fn required_workspace_body<'a>(
@@ -693,8 +569,38 @@ fn stable_short_hash(value: &str) -> String {
     format!("{hash:016x}")[..12].to_string()
 }
 
+#[cfg(test)]
 fn increment_suffix(suffix: Option<u32>) -> Option<u32> {
     Some(suffix.unwrap_or(0) + 1)
+}
+
+fn create_input_from_request(request: &PlanningTaskIntakeRequest) -> PlanningTaskCreateInput {
+    let normalized_prompt = normalize_prompt(&request.raw_prompt);
+    PlanningTaskCreateInput {
+        direction_id: request.requested_direction_id.clone(),
+        direction_relation_note: None,
+        title: build_task_title(&normalized_prompt),
+        description: Some(format!("User prompt:\n\n{}", request.raw_prompt.trim())),
+        status: Some(TaskStatus::Ready),
+        base_priority: Some(DEFAULT_RUNTIME_TASK_PRIORITY),
+        dynamic_priority_delta: Some(0),
+        priority_reason: Some("User requested this task through runtime intake.".to_string()),
+        depends_on: Vec::new(),
+        blocked_by: Vec::new(),
+    }
+}
+
+fn draft_from_mutation_preview(
+    request: &PlanningTaskIntakeRequest,
+    preview: &PlanningTaskCreatePreview,
+) -> PlanningTaskIntakeDraft {
+    PlanningTaskIntakeDraft {
+        task: preview.task.clone(),
+        direction_title: preview.direction_title.clone(),
+        normalized_prompt: normalize_prompt(&request.raw_prompt),
+        generated_at: preview.generated_at,
+        collision_suffix: preview.collision_suffix,
+    }
 }
 
 fn build_preview_lines(draft: &PlanningTaskIntakeDraft) -> Vec<String> {

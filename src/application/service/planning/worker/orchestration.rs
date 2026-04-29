@@ -24,6 +24,10 @@ use crate::application::service::planning::shared::prompt_sections::{
     add_worker_authority_context_sections, worker_previous_handoff_lines, worker_role_lines,
     worker_task_authority_output_contract,
 };
+use crate::application::service::planning::task_mutation::{
+    PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
+    PlanningTaskMutationSource, extract_planning_task_commands,
+};
 use crate::application::service::prompt_component::PromptDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +83,7 @@ pub struct PlanningWorkerOrchestrationService {
     runtime_facade: PlanningRuntimeFacadeService,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    task_mutation_service: PlanningTaskMutationService,
 }
 
 #[derive(Clone)]
@@ -122,11 +127,16 @@ impl PlanningWorkerOrchestrationService {
         planning_authority: Arc<dyn PlanningAuthorityPort>,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     ) -> Self {
+        let task_mutation_service = PlanningTaskMutationService::new(
+            planning_task_repository_port.clone(),
+            crate::domain::planning::PriorityQueueService::new(),
+        );
         Self {
             planning_worker_port,
             runtime_facade,
             planning_authority,
             planning_task_repository_port,
+            task_mutation_service,
         }
     }
 
@@ -273,7 +283,7 @@ impl PlanningWorkerOrchestrationService {
         synthetic_turn_id: &str,
         operation: PlanningWorkerOperation,
         prompt: String,
-        previous_handoff: Option<&PlanningTaskHandoff>,
+        _previous_handoff: Option<&PlanningTaskHandoff>,
     ) -> Result<PlanningWorkerRunOutcome> {
         let execution_snapshot = self
             .runtime_facade
@@ -285,23 +295,47 @@ impl PlanningWorkerOrchestrationService {
                     workspace_directory: workspace_directory.to_string(),
                     prompt,
                 })?;
-        let task_authority_update = worker_response
-            .final_agent_message
-            .as_deref()
-            .and_then(extract_task_authority_update);
         let mut authority_result = PlanningReconciliationResult::default();
-        if let Some(candidate_task_authority) = task_authority_update.as_ref() {
-            authority_result = self.runtime_facade.commit_task_authority_candidate(
-                workspace_directory,
-                candidate_task_authority,
-                &execution_snapshot,
-                previous_handoff.map(|task| PlanningRepairPromptHandoff {
-                    task_id: task.task_id.as_str(),
-                    task_title: task.task_title.as_str(),
-                    updated_at: task.updated_at.as_str(),
-                    status_label: task.status_label.as_str(),
-                }),
-            )?;
+        let mut task_authority_changed = false;
+        if let Some(final_message) = worker_response.final_agent_message.as_deref() {
+            match extract_planning_task_commands(final_message) {
+                PlanningTaskCommandExtraction::Commands(commands) => {
+                    let mutation_result =
+                        self.task_mutation_service
+                            .apply_commands(PlanningTaskMutationRequest {
+                                workspace_directory: workspace_directory.to_string(),
+                                source: PlanningTaskMutationSource::Llm,
+                                source_turn_id: Some(synthetic_turn_id.to_string()),
+                                commands,
+                            })?;
+                    task_authority_changed = mutation_result.task_authority_changed;
+                    if mutation_result.task_authority_changed {
+                        authority_result.queue_projection_action =
+                            Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
+                        authority_result.notices.push(format!(
+                            "planning worker committed {} task command(s)",
+                            mutation_result.applied_command_count
+                        ));
+                    }
+                }
+                PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(rejected_json) => {
+                    authority_result = self.build_rejected_command_result(
+                        workspace_directory,
+                        "planning worker returned legacy task_authority; expected planning_task_commands",
+                        Some(rejected_json),
+                    )?;
+                }
+                PlanningTaskCommandExtraction::InvalidCommands(error) => {
+                    authority_result = self.build_rejected_command_result(
+                        workspace_directory,
+                        &format!(
+                            "planning worker returned invalid planning_task_commands: {error}"
+                        ),
+                        None,
+                    )?;
+                }
+                PlanningTaskCommandExtraction::None => {}
+            }
         }
         let reconciliation_result = self.runtime_facade.reconcile_after_turn(
             workspace_directory,
@@ -327,7 +361,6 @@ impl PlanningWorkerOrchestrationService {
             .repair_request
             .as_ref()
             .map(|request| request.failure_summary.clone());
-        let task_authority_changed = task_authority_update.is_some();
         let mut notices = reconciliation_result.notices;
         if let Some(worker_summary) = worker_summary.as_deref() {
             notices.push(format!(
@@ -399,6 +432,50 @@ impl PlanningWorkerOrchestrationService {
                 }
             }
         }
+    }
+
+    fn build_rejected_command_result(
+        &self,
+        workspace_directory: &str,
+        failure_summary: &str,
+        rejected_payload: Option<String>,
+    ) -> Result<PlanningReconciliationResult> {
+        let mut result = PlanningReconciliationResult {
+            rejected_task_authority: true,
+            ..PlanningReconciliationResult::default()
+        };
+        let direction_snapshot = self
+            .planning_task_repository_port
+            .load_direction_authority_snapshot(workspace_directory)?;
+        let task_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_directory)?;
+        let direction_authority_json = direction_snapshot
+            .as_ref()
+            .map(|snapshot| serde_json::to_string_pretty(&snapshot.directions))
+            .transpose()?
+            .unwrap_or_default();
+        let accepted_task_authority_json = task_snapshot
+            .as_ref()
+            .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_authority))
+            .transpose()?
+            .unwrap_or_default();
+        let accepted_queue_projection_json = task_snapshot
+            .as_ref()
+            .map(|snapshot| serde_json::to_string_pretty(&snapshot.queue_projection))
+            .transpose()?
+            .unwrap_or_default();
+        result.repair_request = Some(PlanningRepairRequest {
+            failure_summary: failure_summary.to_string(),
+            validation_errors: vec![failure_summary.to_string()],
+            direction_authority_json,
+            accepted_task_authority_json,
+            accepted_queue_projection_json,
+            rejected_task_authority_json: rejected_payload,
+            rejected_archive_path: None,
+        });
+        result.notices.push(failure_summary.to_string());
+        Ok(result)
     }
 }
 
@@ -574,43 +651,6 @@ fn operation_label(operation: PlanningWorkerOperation) -> &'static str {
     }
 }
 
-fn extract_task_authority_update(message: &str) -> Option<String> {
-    candidate_json_sections(message)
-        .into_iter()
-        .find_map(parse_task_authority_update)
-}
-
-fn candidate_json_sections(message: &str) -> Vec<&str> {
-    let mut sections = Vec::new();
-    let mut remainder = message;
-    while let Some(start) = remainder.find("```") {
-        remainder = &remainder[start + 3..];
-        let body_start = remainder.find('\n').map(|index| index + 1).unwrap_or(0);
-        let after_header = &remainder[body_start..];
-        let Some(end) = after_header.find("```") else {
-            break;
-        };
-        sections.push(after_header[..end].trim());
-        remainder = &after_header[end + 3..];
-    }
-    sections.push(message.trim());
-    sections
-}
-
-fn parse_task_authority_update(candidate: &str) -> Option<String> {
-    if candidate.trim().is_empty() {
-        return None;
-    }
-    let value = serde_json::from_str::<serde_json::Value>(candidate).ok()?;
-    if let Some(task_authority) = value.get("task_authority") {
-        return serde_json::to_string_pretty(task_authority).ok();
-    }
-    if value.get("version").is_some() && value.get("tasks").is_some() {
-        return serde_json::to_string_pretty(&value).ok();
-    }
-    None
-}
-
 fn merge_reconciliation_results(
     mut primary: PlanningReconciliationResult,
     secondary: PlanningReconciliationResult,
@@ -680,6 +720,8 @@ mod tests {
         assert!(prompt.contains("[accepted-db-task-authority]"));
         assert!(prompt.contains("{\"version\":1,\"tasks\":[]}"));
         assert!(prompt.contains("[db-queue-projection]"));
+        assert!(prompt.contains("\"planning_task_commands\""));
+        assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("task-ledger.json,directions.toml,queue.snapshot.json"));
         assert!(prompt.contains(
             "Do not read or infer planning authority from stale legacy/export artifacts."
