@@ -19,6 +19,7 @@ const DEFAULT_TASK_PRIORITY: i32 = 80;
 const MAX_REVISION_CONFLICT_RETRIES: usize = 3;
 const MAX_COLLISION_SUFFIX_ATTEMPTS: u32 = 20;
 const TASK_ID_HASH_CHARS: usize = 12;
+const MAX_TASK_MUTATION_COMMANDS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningTaskMutationSource {
@@ -257,6 +258,11 @@ impl PlanningTaskMutationService {
         &self,
         request: PlanningTaskMutationRequest,
     ) -> Result<PlanningTaskMutationCommitResult> {
+        if request.commands.len() > MAX_TASK_MUTATION_COMMANDS {
+            bail!(
+                "planning task mutation accepts at most {MAX_TASK_MUTATION_COMMANDS} command(s) per worker response"
+            );
+        }
         if request.commands.is_empty() {
             let context = self.load_context(&request.workspace_directory)?;
             let queue_projection =
@@ -275,7 +281,7 @@ impl PlanningTaskMutationService {
             let context = self.load_context(&request.workspace_directory)?;
             observed_revision = Some(context.task_planning_revision);
             let mut next_task_authority = context.task_authority.clone();
-            let committed_task_ids = self.apply_commands_to_authority(
+            let application = self.apply_commands_to_authority(
                 &request,
                 &context.directions,
                 &mut next_task_authority,
@@ -283,6 +289,15 @@ impl PlanningTaskMutationService {
             )?;
             let queue_projection =
                 self.validate_and_project(&context.directions, &next_task_authority)?;
+            if !application.changed {
+                return Ok(PlanningTaskMutationCommitResult {
+                    committed_planning_revision: context.task_planning_revision,
+                    queue_head: queue_projection.next_task,
+                    task_authority_changed: false,
+                    applied_command_count: 0,
+                    committed_task_ids: application.committed_task_ids,
+                });
+            }
 
             match self.commit_authority(
                 &request.workspace_directory,
@@ -296,7 +311,7 @@ impl PlanningTaskMutationService {
                         queue_head: queue_projection.next_task,
                         task_authority_changed: true,
                         applied_command_count: request.commands.len(),
-                        committed_task_ids,
+                        committed_task_ids: application.committed_task_ids,
                     });
                 }
                 PlanningTaskAuthorityCommitResult::Conflict { .. } => continue,
@@ -346,8 +361,9 @@ impl PlanningTaskMutationService {
         directions: &DirectionCatalogDocument,
         task_authority: &mut TaskAuthorityDocument,
         updated_at: DateTime<Utc>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<PlanningTaskMutationApplication> {
         let mut committed_task_ids = Vec::new();
+        let mut changed = false;
         for command in &request.commands {
             match command {
                 PlanningTaskMutationCommand::CreateTask(input) => {
@@ -364,9 +380,10 @@ impl PlanningTaskMutationService {
                     )?;
                     committed_task_ids.push(task.id.clone());
                     task_authority.tasks.push(task);
+                    changed = true;
                 }
                 PlanningTaskMutationCommand::UpdateTask(input) => {
-                    self.apply_update(
+                    let updated = self.apply_update(
                         input,
                         request.source,
                         request.source_turn_id.as_deref(),
@@ -375,10 +392,14 @@ impl PlanningTaskMutationService {
                         updated_at,
                     )?;
                     committed_task_ids.push(input.task_id.trim().to_string());
+                    changed |= updated;
                 }
             }
         }
-        Ok(committed_task_ids)
+        Ok(PlanningTaskMutationApplication {
+            committed_task_ids,
+            changed,
+        })
     }
 
     fn build_unique_task(
@@ -473,13 +494,14 @@ impl PlanningTaskMutationService {
         directions: &DirectionCatalogDocument,
         task_authority: &mut TaskAuthorityDocument,
         updated_at: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let task_id = required_id(&input.task_id, "task id")?.to_string();
         let task = task_authority
             .tasks
             .iter_mut()
             .find(|task| task.id.trim() == task_id)
             .ok_or_else(|| anyhow!("task `{task_id}` does not exist"))?;
+        let previous_task = task.clone();
 
         if let Some(direction_id) = input.direction_id.as_deref() {
             let direction = find_direction(direction_id, directions)?;
@@ -531,6 +553,9 @@ impl PlanningTaskMutationService {
                 task.id.trim()
             );
         }
+        if *task == previous_task {
+            return Ok(false);
+        }
         task.last_updated_by = source.actor();
         if let Some(source_turn_id) = source_turn_id
             .map(str::trim)
@@ -539,7 +564,7 @@ impl PlanningTaskMutationService {
             task.source_turn_id = Some(source_turn_id.to_string());
         }
         task.updated_at = format_timestamp(updated_at);
-        Ok(())
+        Ok(true)
     }
 
     fn validate_and_project(
@@ -603,6 +628,12 @@ struct PlanningTaskMutationContext {
     directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
     task_planning_revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanningTaskMutationApplication {
+    committed_task_ids: Vec<String>,
+    changed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1251,6 +1282,106 @@ mod tests {
         assert_eq!(updated.created_by, TaskActor::User);
         assert_eq!(updated.last_updated_by, TaskActor::Llm);
         assert_eq!(updated.source_turn_id.as_deref(), Some("turn-2"));
+    }
+
+    #[test]
+    fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
+        let repo = repo();
+        let workspace = workspace("noop-update");
+        seed(
+            repo.as_ref(),
+            &workspace,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task("task-1", TaskStatus::Ready)],
+            },
+        );
+        let before = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        let service = PlanningTaskMutationService::new(
+            repo.clone(),
+            crate::domain::planning::PriorityQueueService::new(),
+        );
+
+        let result = service
+            .apply_commands(PlanningTaskMutationRequest {
+                workspace_directory: workspace.clone(),
+                source: PlanningTaskMutationSource::Llm,
+                source_turn_id: Some("turn-noop".to_string()),
+                commands: vec![PlanningTaskMutationCommand::UpdateTask(
+                    PlanningTaskUpdateInput {
+                        task_id: "task-1".to_string(),
+                        direction_id: None,
+                        direction_relation_note: None,
+                        title: None,
+                        description: None,
+                        status: None,
+                        base_priority: None,
+                        dynamic_priority_delta: None,
+                        priority_reason: None,
+                        depends_on: None,
+                        blocked_by: None,
+                    },
+                )],
+            })
+            .unwrap();
+
+        let after = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        assert!(!result.task_authority_changed);
+        assert_eq!(result.applied_command_count, 0);
+        assert_eq!(result.committed_task_ids, vec!["task-1"]);
+        assert_eq!(after.planning_revision, before.planning_revision);
+        assert_eq!(after.task_authority, before.task_authority);
+    }
+
+    #[test]
+    fn oversized_worker_command_batch_is_rejected_before_mutation() {
+        let repo = repo();
+        let workspace = workspace("command-budget");
+        seed(
+            repo.as_ref(),
+            &workspace,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: Vec::new(),
+            },
+        );
+        let service = PlanningTaskMutationService::new(
+            repo,
+            crate::domain::planning::PriorityQueueService::new(),
+        );
+        let commands = (0..17)
+            .map(|index| {
+                PlanningTaskMutationCommand::CreateTask(PlanningTaskCreateInput {
+                    direction_id: None,
+                    direction_relation_note: None,
+                    title: format!("Generated follow-up {index}"),
+                    description: None,
+                    status: None,
+                    base_priority: None,
+                    dynamic_priority_delta: None,
+                    priority_reason: None,
+                    depends_on: Vec::new(),
+                    blocked_by: Vec::new(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let error = service
+            .apply_commands(PlanningTaskMutationRequest {
+                workspace_directory: workspace,
+                source: PlanningTaskMutationSource::Llm,
+                source_turn_id: Some("turn-many".to_string()),
+                commands,
+            })
+            .unwrap_err();
+
+        assert!(error.to_string().contains("at most 16 command"));
     }
 
     #[test]

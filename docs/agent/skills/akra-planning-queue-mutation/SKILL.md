@@ -43,6 +43,7 @@ Do not wrap commands as `{"create_task":{...}}` or `{"update_task":{...}}`.
 - Do not include application-controlled fields: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`.
 - Use `status=cancelled` to cancel work; do not emit delete operations.
 - Keep commands minimal and tied to the latest operator request, latest main-session reply, existing direction frame, and accepted queue state.
+- Emit at most 16 commands in one response; prefer one precise update or create over broad queue rewrites.
 
 ## Command Fields
 
