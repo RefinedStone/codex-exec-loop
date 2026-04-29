@@ -692,11 +692,6 @@ mod tests {
     use crate::application::service::planning::shared::prompt_sections::PlanningWorkerAuthorityPromptContext;
 
     #[test]
-    fn test_module_compiles_after_task_authority_file_removal() {
-        assert!(std::env::current_dir().is_ok());
-    }
-
-    #[test]
     fn refresh_prompt_embeds_db_authority_and_legacy_ignore_contract() {
         let authority_context = PlanningWorkerAuthorityPromptContext {
             status_lines: vec![

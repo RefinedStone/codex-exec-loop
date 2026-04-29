@@ -46,7 +46,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
 }
 
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue [apply]  :directions  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -225,12 +225,8 @@ impl InlineShellCommandInput {
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::Queue => match self.argument() {
-                Some(value) if value.eq_ignore_ascii_case("apply") => {
-                    "Tracked queue import was removed; use :task for structured task changes."
-                        .to_string()
-                }
                 Some(value) => format!(
-                    "Press Enter to apply `:queue {value}`. Supported arguments: apply."
+                    "Press Enter to apply `:queue {value}`. Supported command: :queue."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -417,7 +413,7 @@ impl InlineShellCommand {
     fn help_usage(self) -> &'static str {
         match self {
             InlineShellCommand::Parallel => ":parallel [on|off]",
-            InlineShellCommand::Queue => ":queue [apply]",
+            InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Task => ":task [prompt]",
             InlineShellCommand::Turns => ":turns <number|infinite>",
@@ -534,10 +530,6 @@ mod tests {
             (":sessions", Some((InlineShellCommand::Sessions, None))),
             (":q", Some((InlineShellCommand::Queue, None))),
             (":queue", Some((InlineShellCommand::Queue, None))),
-            (
-                ":queue apply",
-                Some((InlineShellCommand::Queue, Some("apply"))),
-            ),
             (":directions", Some((InlineShellCommand::Directions, None))),
             (":task", Some((InlineShellCommand::Task, None))),
             (
@@ -762,7 +754,6 @@ mod tests {
     #[test]
     fn queue_command_hint_is_argument_aware() {
         let plain = InlineShellCommandInput::parse(":queue").expect("command should parse");
-        let apply = InlineShellCommandInput::parse(":queue apply").expect("command should parse");
         let invalid = InlineShellCommandInput::parse(":queue later").expect("command should parse");
 
         assert_eq!(
@@ -770,12 +761,8 @@ mod tests {
             "Press Enter to open the planning queue inspection."
         );
         assert_eq!(
-            apply.buffered_hint(),
-            "Tracked queue import was removed; use :task for structured task changes."
-        );
-        assert_eq!(
             invalid.buffered_hint(),
-            "Press Enter to apply `:queue later`. Supported arguments: apply."
+            "Press Enter to apply `:queue later`. Supported command: :queue."
         );
     }
 

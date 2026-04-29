@@ -817,11 +817,3 @@ pub(super) struct ThreadStatus {
 pub(super) struct ThreadGitInfo {
     branch: Option<String>,
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_module_compiles_after_task_authority_file_removal() {
-        assert!(std::env::current_dir().is_ok());
-    }
-}

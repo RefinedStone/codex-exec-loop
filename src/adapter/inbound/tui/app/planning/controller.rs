@@ -310,17 +310,10 @@ impl NativeTuiApp {
     ) {
         match argument.map(str::trim).filter(|value| !value.is_empty()) {
             None => self.show_queue_overlay(),
-            Some(value) if value.eq_ignore_ascii_case("apply") => {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text:
-                        "tracked task authority import was removed; use :task or admin task management"
-                            .to_string(),
-                })
-            }
             Some(value) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "unsupported :queue argument `{value}` / supported: :queue, :queue apply"
+                        "unsupported :queue argument `{value}` / supported: :queue"
                     ),
                 })
             }
@@ -1266,7 +1259,7 @@ fn parse_reset_shell_argument(argument: Option<&str>) -> Result<ParsedResetShell
 fn planning_reset_preview_text(target: PlanningResetTarget) -> String {
     match target {
         PlanningResetTarget::Queue => {
-            "reset queue preview: rewrites the task catalog compatibility file and clears derived queue state"
+            "reset queue preview: rewrites DB task authority and clears derived queue state"
                 .to_string()
         }
         PlanningResetTarget::Directions => "reset directions preview: rewrites DB direction authority, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue".to_string(),
