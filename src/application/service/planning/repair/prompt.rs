@@ -1,6 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
 
-use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::shared::prompt_sections::{
+    PlanningPromptHandoff, repair_constraints, repair_previous_handoff_lines,
+    repair_task_authority_output_contract,
+};
 use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::{TaskAuthorityDocument, TaskDefinition};
 
@@ -52,10 +55,13 @@ pub fn build_planning_repair_prompt(
 
     PromptDocument::builder("planning-repair")
         .lines("role", repair_role_lines(attempt_number, max_attempts))
-        .bullets("output-contract", repair_output_contract())
+        .bullets("output-contract", repair_task_authority_output_contract())
         .bullets("constraints", repair_constraints())
         .lines("retry", retry_instruction_lines(retry_reason))
-        .lines("previous-handoff", previous_handoff_lines(previous_handoff))
+        .lines(
+            "previous-handoff",
+            repair_previous_handoff_lines(previous_handoff.map(repair_handoff)),
+        )
         .lines("validation", validation_lines(request))
         .code_block(
             "direction-authority",
@@ -82,45 +88,19 @@ fn repair_role_lines(attempt_number: usize, max_attempts: usize) -> Vec<String> 
     ]
 }
 
-fn repair_output_contract() -> Vec<String> {
-    vec![
-        "Final answer must include exactly one fenced JSON object: `{\"task_authority\": {...}}`."
-            .to_string(),
-        "`task_authority` must be the full updated task authority document.".to_string(),
-        "Resolve every validation error listed below.".to_string(),
-    ]
-}
-
-fn repair_constraints() -> Vec<String> {
-    vec![
-        "Do not edit planning files in this turn; return the corrected ledger as JSON only."
-            .to_string(),
-        format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
-        "Use the last accepted DB snapshot as the current task authority baseline.".to_string(),
-        "Ignore stale legacy/export artifacts such as `task-ledger.json`, `directions.toml`, `queue.snapshot.json`, `planning-snapshot.json`, and `.codex-exec-loop/runtime/exports/*`."
-            .to_string(),
-        "Do not add unrelated work outside the existing direction frame.".to_string(),
-    ]
-}
-
 fn retry_instruction_lines(retry_reason: Option<PlanningRepairRetryReason>) -> Vec<String> {
     retry_reason
         .map(|retry_reason| vec![format!("instruction={}", retry_reason.instruction())])
         .unwrap_or_default()
 }
 
-fn previous_handoff_lines(
-    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
-) -> Vec<String> {
-    previous_handoff.map_or_else(Vec::new, |previous_handoff| {
-        vec![
-            format!("task_id={}", previous_handoff.task_id),
-            format!("title={}", previous_handoff.task_title),
-            format!("updated_at={}", previous_handoff.updated_at),
-            format!("status={}", previous_handoff.status_label),
-            "If this task stays active, the ledger must show what changed.".to_string(),
-        ]
-    })
+fn repair_handoff(handoff: PlanningRepairPromptHandoff<'_>) -> PlanningPromptHandoff<'_> {
+    PlanningPromptHandoff {
+        task_id: handoff.task_id,
+        task_title: handoff.task_title,
+        updated_at: handoff.updated_at,
+        status_label: handoff.status_label,
+    }
 }
 
 fn validation_lines(request: &PlanningRepairRequest) -> Vec<String> {

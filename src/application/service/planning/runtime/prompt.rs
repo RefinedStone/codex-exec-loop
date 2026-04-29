@@ -10,6 +10,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::shared::prompt_sections::runtime_task_authority_contract_rules;
 use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
@@ -514,7 +515,10 @@ fn build_prompt_fragment(
         .lines("directions", direction_context_lines(directions))
         .lines("queue-idle", queue_idle_lines(directions))
         .lines("queue", queue_context_lines(queue_projection))
-        .bullets("task-authority-contract", task_authority_contract_rules())
+        .bullets(
+            "task-authority-contract",
+            runtime_task_authority_contract_rules(),
+        )
         .optional_text("result-output-prompt", Some(result_output_markdown))
         .bullets("follow-up-proposals", follow_up_proposal_rules())
         .build()
@@ -656,20 +660,6 @@ fn queue_task_line(task: &PriorityQueueTask) -> String {
     )
 }
 
-fn task_authority_contract_rules() -> Vec<String> {
-    vec![
-        format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
-        "New tasks must attach to an existing `direction_id` and include `direction_relation_note`."
-            .to_string(),
-        "Do not write unrelated tasks that cannot be connected to existing directions."
-            .to_string(),
-        "Task catalog mutations must go through the runtime task authority flow; queue validation refreshes prompt state."
-            .to_string(),
-        "Ignore stale legacy/export artifacts (`task-ledger.json`, `directions.toml`, `queue.snapshot.json`, `planning-snapshot.json`, `.codex-exec-loop/runtime/exports/*`); DB authority is the only planning source of truth."
-            .to_string(),
-    ]
-}
-
 fn follow_up_proposal_rules() -> Vec<String> {
     vec![
         "If the final answer offers concrete follow-up options, create each option through task authority as a separate `proposed` task linked to an existing direction."
@@ -749,11 +739,10 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        missing_workspace_paths, task_authority_contract_rules, workspace_record_to_files,
-    };
+    use super::{missing_workspace_paths, workspace_record_to_files};
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use crate::application::service::planning::shared::prompt_sections::runtime_task_authority_contract_rules;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig,
     };
@@ -772,7 +761,7 @@ mod tests {
 
     #[test]
     fn task_authority_contract_names_legacy_artifacts_as_ignored_inputs() {
-        let rules = task_authority_contract_rules().join("\n");
+        let rules = runtime_task_authority_contract_rules().join("\n");
 
         assert!(rules.contains("DB authority is the only planning source of truth"));
         assert!(rules.contains("task-ledger.json"));
