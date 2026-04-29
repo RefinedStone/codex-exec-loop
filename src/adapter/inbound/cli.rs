@@ -1,16 +1,18 @@
 use std::ffi::{OsStr, OsString};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
-    PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
+    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningWorkspaceInitResult,
+    PlanningWorkspaceResetResult,
 };
 
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
@@ -18,6 +20,7 @@ const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
+const PLANNING_TOOL_USAGE: &str = "Usage: akra planning-tool <contract|run> [workspace_dir]";
 const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
 const TELEGRAM_BOT_ALIAS_USAGE: &str = "Alias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
 
@@ -65,6 +68,14 @@ struct ResetReport {
     removed_paths: Vec<String>,
     status: Option<String>,
     issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PlanningToolErrorReport {
+    ok: bool,
+    operation: String,
+    error: String,
+    guidance: Vec<String>,
 }
 
 impl InitReport {
@@ -169,6 +180,7 @@ where
             writeln!(stdout, "{DOCTOR_USAGE}")?;
             writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
+            writeln!(stdout, "{PLANNING_TOOL_USAGE}")?;
             Ok(Some(0))
         }
         [command] if is_admin_command(command) => Ok(Some(run_admin_server(&[])?)),
@@ -191,6 +203,14 @@ where
             Some(workspace.as_os_str()),
             stdout,
         )?)),
+        [command, subcommand] if is_planning_tool_command(command) => Ok(Some(run_planning_tool(
+            subcommand.as_os_str(),
+            None,
+            stdout,
+        )?)),
+        [command, subcommand, workspace] if is_planning_tool_command(command) => Ok(Some(
+            run_planning_tool(subcommand.as_os_str(), Some(workspace.as_os_str()), stdout)?,
+        )),
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
         }
@@ -199,6 +219,9 @@ where
         }
         [command, _, _, ..] if command == OsStr::new("reset") => {
             bail!("{RESET_USAGE}");
+        }
+        [command, _, _, ..] if is_planning_tool_command(command) => {
+            bail!("{PLANNING_TOOL_USAGE}");
         }
         [command, ..] => {
             bail!("unsupported command: {}", command.to_string_lossy());
@@ -216,6 +239,13 @@ fn is_admin_command(command: &OsStr) -> bool {
 
 fn is_telegram_command(command: &OsStr) -> bool {
     matches!(command.to_str(), Some("telegram" | "telegram-bot"))
+}
+
+fn is_planning_tool_command(command: &OsStr) -> bool {
+    matches!(
+        command.to_str(),
+        Some("planning-tool" | "planning-task-tool")
+    )
 }
 
 fn run_admin_server(args: &[OsString]) -> Result<i32> {
@@ -260,6 +290,65 @@ fn run_reset(
     let report = reset_workspace(&workspace_path, target);
     render_reset_report(stdout, &report)?;
     Ok(report.exit_code())
+}
+
+fn run_planning_tool(
+    subcommand: &OsStr,
+    workspace_arg: Option<&OsStr>,
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    let planning = build_production_planning_services();
+    match subcommand.to_str() {
+        Some("contract") => {
+            writeln!(stdout, "{}", planning.task_tool.contract_json())?;
+            Ok(0)
+        }
+        Some("run") => {
+            let workspace_path = resolve_workspace_path(workspace_arg)?;
+            let workspace_label = workspace_path.display().to_string();
+            let result = run_planning_tool_request(&planning, &workspace_path);
+            match result {
+                Ok(response) => {
+                    render_json_line(stdout, &response)?;
+                    Ok(0)
+                }
+                Err(error) => {
+                    render_json_line(
+                        stdout,
+                        &PlanningToolErrorReport {
+                            ok: false,
+                            operation: "planning-tool".to_string(),
+                            error: error.to_string(),
+                            guidance: vec![
+                                format!("usage: {PLANNING_TOOL_USAGE}"),
+                                format!("workspace: {workspace_label}"),
+                                "Run `akra planning-tool contract` for the compact JSON contract."
+                                    .to_string(),
+                            ],
+                        },
+                    )?;
+                    Ok(1)
+                }
+            }
+        }
+        _ => bail!("{PLANNING_TOOL_USAGE}"),
+    }
+}
+
+fn run_planning_tool_request(
+    planning: &PlanningServices,
+    workspace_path: &Path,
+) -> Result<PlanningTaskToolResponse> {
+    validate_workspace_path(workspace_path).map_err(anyhow::Error::msg)?;
+    let mut request_json = String::new();
+    std::io::stdin()
+        .read_to_string(&mut request_json)
+        .context("failed to read planning-tool JSON request from stdin")?;
+    let request = serde_json::from_str::<PlanningTaskToolRequest>(&request_json)
+        .context("failed to parse planning-tool JSON request")?;
+    planning
+        .task_tool
+        .run(workspace_path.to_string_lossy().as_ref(), request)
 }
 
 fn resolve_workspace_path(workspace_arg: Option<&OsStr>) -> Result<PathBuf> {
@@ -436,6 +525,12 @@ fn render_reset_report(stdout: &mut impl Write, report: &ResetReport) -> Result<
     Ok(())
 }
 
+fn render_json_line<T: Serialize>(stdout: &mut impl Write, value: &T) -> Result<()> {
+    serde_json::to_writer(&mut *stdout, value).context("failed to serialize JSON response")?;
+    writeln!(stdout)?;
+    Ok(())
+}
+
 fn bootstrap_mode_label(
     mode: crate::application::service::planning::PlanningBootstrapMode,
 ) -> &'static str {
@@ -456,5 +551,40 @@ fn parse_reset_target(target: &OsStr) -> Result<PlanningResetTarget> {
         "directions" => Ok(PlanningResetTarget::Directions),
         "all" => Ok(PlanningResetTarget::All),
         _ => bail!("{RESET_USAGE}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_with_args;
+
+    #[test]
+    fn help_lists_planning_tool_command() {
+        let mut output = Vec::new();
+
+        let exit_code = run_with_args(["--help"], &mut output)
+            .expect("help should render")
+            .expect("help should exit");
+        let rendered = String::from_utf8(output).expect("help should be utf8");
+
+        assert_eq!(exit_code, 0);
+        assert!(rendered.contains("akra planning-tool <contract|run>"));
+    }
+
+    #[test]
+    fn planning_tool_contract_is_json_and_llm_oriented() {
+        let mut output = Vec::new();
+
+        let exit_code = run_with_args(["planning-tool", "contract"], &mut output)
+            .expect("contract should render")
+            .expect("contract should exit");
+        let rendered = String::from_utf8(output).expect("contract should be utf8");
+        let value: serde_json::Value =
+            serde_json::from_str(rendered.trim()).expect("contract should be JSON");
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(value["tool"], "akra planning-tool");
+        assert!(rendered.contains("bash scripts/planning-tool.sh run"));
+        assert!(rendered.contains("list_tasks|create_task|update_task"));
     }
 }

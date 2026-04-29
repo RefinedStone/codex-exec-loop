@@ -7,6 +7,7 @@ pub(crate) mod repair;
 pub(crate) mod runtime;
 pub(crate) mod shared;
 pub(crate) mod task_mutation;
+pub(crate) mod task_tool;
 mod use_cases;
 pub(crate) mod worker;
 
@@ -70,8 +71,13 @@ pub use self::task_mutation::{
     PlanningTaskMutationCommitResult, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, PlanningTaskUpdateInput, extract_planning_task_commands,
 };
+pub use self::task_tool::{
+    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
+    planning_task_tool_contract_json,
+};
 pub use self::use_cases::{
-    PlanningRuntimeUseCases, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningWorkerUseCases,
+    PlanningWorkspaceUseCases,
 };
 pub use self::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,

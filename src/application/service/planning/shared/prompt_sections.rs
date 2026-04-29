@@ -75,6 +75,8 @@ pub(crate) fn worker_task_authority_output_contract() -> Vec<String> {
         PLANNING_TASK_COMMANDS_SHAPE_RULE.to_string(),
         PLANNING_TASK_COMMANDS_WRAPPER_RULE.to_string(),
         "`commands` may contain only `create_task` or `update_task` operations.".to_string(),
+        "If `planning-task-tool` has already applied a mutation successfully, return an empty `commands` array so the host does not apply it twice."
+            .to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
         "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
             .to_string(),
@@ -198,6 +200,8 @@ mod tests {
         assert!(contract.contains("create_task"));
         assert!(contract.contains("\"op\":\"create_task\""));
         assert!(contract.contains("Do not wrap commands"));
+        assert!(contract.contains("planning-task-tool"));
+        assert!(contract.contains("does not apply it twice"));
         assert!(contract.contains("Do not return `task_authority`"));
     }
 

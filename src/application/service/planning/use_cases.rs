@@ -25,6 +25,10 @@ use super::runtime::intake::{
     PlanningTaskIntakeService,
 };
 use super::runtime::prompt::PlanningRuntimeSnapshot;
+use super::task_tool::{
+    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
+    planning_task_tool_contract_json,
+};
 use super::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
     PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService, PlanningWorkerRunOutcome,
@@ -268,6 +272,29 @@ impl PlanningRuntimeUseCases {
             changed_planning_file_paths,
             execution_snapshot,
         )
+    }
+}
+
+#[derive(Clone)]
+pub struct PlanningTaskToolUseCases {
+    task_tool: PlanningTaskToolService,
+}
+
+impl PlanningTaskToolUseCases {
+    pub(crate) fn new(task_tool: PlanningTaskToolService) -> Self {
+        Self { task_tool }
+    }
+
+    pub fn contract_json(&self) -> &'static str {
+        planning_task_tool_contract_json()
+    }
+
+    pub fn run(
+        &self,
+        workspace_dir: &str,
+        request: PlanningTaskToolRequest,
+    ) -> anyhow::Result<PlanningTaskToolResponse> {
+        self.task_tool.handle_request(workspace_dir, request)
     }
 }
 

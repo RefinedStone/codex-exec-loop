@@ -36,11 +36,23 @@ Each command must be a flat object with a top-level `op` field:
 
 Do not wrap commands as `{"create_task":{...}}` or `{"update_task":{...}}`.
 
+## Preferred Tool Adapter
+
+When the prompt includes `[planning-task-tool-contract]`, prefer the repo-local adapter over final-only mutation JSON:
+
+```bash
+bash scripts/planning-tool.sh contract
+bash scripts/planning-tool.sh run . < request.json
+```
+
+Use `list_tasks` before choosing create vs update. If a `create_task` or `update_task` call succeeds, return an empty `commands` array in the final JSON to avoid applying the same mutation twice.
+
 ## Rules
 
 - Do not edit planning files directly.
 - Do not return a full `task_authority` document.
-- The host extracts `planning_task_commands`; actual mutation is applied host-side through `PlanningTaskMutationService`.
+- Mutations must go through the application-owned `PlanningTaskMutationService` path: either `planning-task-tool` during the turn or final `planning_task_commands` extracted by the host.
+- Do not repeat a mutation in final `planning_task_commands` after `planning-task-tool` reports success.
 - Emit only `create_task` and `update_task` commands.
 - Do not include application-controlled fields: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`.
 - Use `status=cancelled` to cancel work; do not emit delete operations.

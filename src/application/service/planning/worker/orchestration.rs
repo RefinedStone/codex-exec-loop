@@ -28,6 +28,7 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, extract_planning_task_commands,
 };
+use crate::application::service::planning::task_tool::planning_task_tool_contract_json;
 use crate::application::service::prompt_component::PromptDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -503,6 +504,10 @@ fn build_planning_queue_refresh_prompt(
         authority_context,
     )
     .bullets("output-contract", worker_task_authority_output_contract())
+    .text(
+        "planning-task-tool-contract",
+        planning_task_tool_contract_json(),
+    )
     .bullets("refresh-policy", queue_refresh_policy_rules())
     .bullets("queue-advancement", queue_advancement_rules())
     .optional_text("latest-operator-request", latest_user_message)
@@ -528,6 +533,10 @@ fn build_planning_queue_idle_derive_prompt(
         authority_context,
     )
     .bullets("output-contract", worker_task_authority_output_contract())
+    .text(
+        "planning-task-tool-contract",
+        planning_task_tool_contract_json(),
+    )
     .bullets("idle-review-policy", queue_idle_review_policy_rules())
     .optional_text("latest-operator-request", latest_user_message)
     .lines(
@@ -560,6 +569,10 @@ fn build_planning_official_completion_prompt(
         authority_context,
     )
     .bullets("output-contract", worker_task_authority_output_contract())
+    .text(
+        "planning-task-tool-contract",
+        planning_task_tool_contract_json(),
+    )
     .bullets("completion-policy", official_completion_policy_rules())
     .bullets("queue-advancement", queue_advancement_rules())
     .optional_text("latest-operator-request", latest_user_message)
@@ -751,6 +764,8 @@ mod tests {
         assert!(prompt.contains("{\"version\":1,\"tasks\":[]}"));
         assert!(prompt.contains("[db-queue-projection]"));
         assert!(prompt.contains("\"planning_task_commands\""));
+        assert!(prompt.contains("[planning-task-tool-contract]"));
+        assert!(prompt.contains("bash scripts/planning-tool.sh run"));
         assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("Use only the accepted DB authority sections"));
     }
