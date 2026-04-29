@@ -536,6 +536,10 @@ fn build_planning_queue_idle_derive_prompt(
     )
     .text("queue-idle-review-prompt", queue_idle_prompt_markdown)
     .text("main-session-latest-reply", latest_main_reply)
+    .bullets(
+        "final-queue-idle-decision-rules",
+        queue_idle_final_decision_rules(),
+    )
     .build()
     .render()
 }
@@ -613,6 +617,21 @@ fn queue_idle_review_policy_rules() -> Vec<String> {
         "Put only the single clearest immediate follow-up in `ready` or `in_progress`; keep alternatives as `proposed`."
             .to_string(),
         "If no useful work remains, keep the queue empty and summarize why.".to_string(),
+    ]
+}
+
+fn queue_idle_final_decision_rules() -> Vec<String> {
+    vec![
+        "These rules are the final authority for the queue-idle decision, even if older direction copy or queue-idle prompt text says otherwise."
+            .to_string(),
+        "Ignore legacy wording that treats `directions.toml`, `task-ledger`, or `latest answer clearly implies` as the completion test; accepted DB authority and independent evaluator judgment win."
+            .to_string(),
+        "Do not leave `commands` empty solely because the main reply says the work is complete, merged, tested, or validated."
+            .to_string(),
+        "If the latest operator request asked for nontrivial code, DB, runtime, or planning behavior changes and accepted DB task authority is empty or has no matching completed task, create one narrow follow-up task for independent review, verification, or hardening unless the supplied DB authority itself proves no work remains."
+            .to_string(),
+        "The follow-up task should check the implementation against the original request and any risks visible in the main reply; it must not re-run the entire project or duplicate completed work."
+            .to_string(),
     ]
 }
 
@@ -767,6 +786,15 @@ mod tests {
         assert!(prompt.contains("not completion authority"));
         assert!(prompt.contains("success criteria"));
         assert!(prompt.contains("even if the main reply has no explicit TODO list"));
+        assert!(prompt.contains("final-queue-idle-decision-rules"));
+        assert!(prompt.contains(
+            "Do not leave `commands` empty solely because the main reply says the work is complete"
+        ));
+        assert!(prompt.contains("create one narrow follow-up task for independent review"));
         assert!(prompt.contains("[main-session-latest-reply]"));
+        assert!(
+            prompt.find("[final-queue-idle-decision-rules]")
+                > prompt.find("[main-session-latest-reply]")
+        );
     }
 }
