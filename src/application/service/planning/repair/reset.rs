@@ -21,6 +21,15 @@ use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, TaskStatus};
 
 const LEGACY_RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
+const RESET_DIRECTIONS_REMOVED_PATHS: &[&str] = &[
+    PLANNING_DIRECTION_DOCS_DIRECTORY,
+    PLANNING_PROMPTS_DIRECTORY,
+];
+const RESET_ALL_GENERATED_ARTIFACT_PATHS: &[&str] = &[
+    PLANNING_DRAFTS_DIRECTORY,
+    PLANNING_REJECTED_DIRECTORY,
+    LEGACY_RUNTIME_EXPORTS_DIRECTORY,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningResetTarget {
@@ -198,10 +207,7 @@ impl PlanningResetService {
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::Directions,
             rewritten_paths: vec![DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()],
-            removed_paths: vec![
-                PLANNING_DIRECTION_DOCS_DIRECTORY.to_string(),
-                PLANNING_PROMPTS_DIRECTORY.to_string(),
-            ],
+            removed_paths: removed_path_strings(RESET_DIRECTIONS_REMOVED_PATHS),
         })
     }
 
@@ -231,22 +237,12 @@ impl PlanningResetService {
                 RESULT_OUTPUT_FILE_PATH.to_string(),
                 DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
             ],
-            removed_paths: vec![
-                PLANNING_DIRECTION_DOCS_DIRECTORY.to_string(),
-                PLANNING_PROMPTS_DIRECTORY.to_string(),
-                PLANNING_DRAFTS_DIRECTORY.to_string(),
-                PLANNING_REJECTED_DIRECTORY.to_string(),
-                LEGACY_RUNTIME_EXPORTS_DIRECTORY.to_string(),
-            ],
+            removed_paths: reset_all_removed_path_strings(),
         })
     }
 
     fn reset_all_generated_artifacts(&self, workspace_dir: &str) -> Result<()> {
-        for path in [
-            PLANNING_DRAFTS_DIRECTORY,
-            PLANNING_REJECTED_DIRECTORY,
-            LEGACY_RUNTIME_EXPORTS_DIRECTORY,
-        ] {
+        for path in RESET_ALL_GENERATED_ARTIFACT_PATHS {
             self.planning_workspace_port
                 .remove_planning_workspace_entry(workspace_dir, path)?;
         }
@@ -258,10 +254,10 @@ impl PlanningResetService {
         workspace_dir: &str,
         bootstrap: &PlanningBootstrapArtifacts,
     ) -> Result<()> {
-        self.planning_workspace_port
-            .remove_planning_workspace_entry(workspace_dir, PLANNING_DIRECTION_DOCS_DIRECTORY)?;
-        self.planning_workspace_port
-            .remove_planning_workspace_entry(workspace_dir, PLANNING_PROMPTS_DIRECTORY)?;
+        for path in RESET_DIRECTIONS_REMOVED_PATHS {
+            self.planning_workspace_port
+                .remove_planning_workspace_entry(workspace_dir, path)?;
+        }
         self.commit_direction_authority_from_bootstrap(workspace_dir, &bootstrap.directions)?;
         for supplemental_file in &bootstrap.supplemental_files {
             self.planning_workspace_port
@@ -348,6 +344,18 @@ impl PlanningResetService {
             )
             .map(|_| ())
     }
+}
+
+fn reset_all_removed_path_strings() -> Vec<String> {
+    RESET_DIRECTIONS_REMOVED_PATHS
+        .iter()
+        .chain(RESET_ALL_GENERATED_ARTIFACT_PATHS.iter())
+        .map(|path| (*path).to_string())
+        .collect()
+}
+
+fn removed_path_strings(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|path| (*path).to_string()).collect()
 }
 
 #[cfg(test)]

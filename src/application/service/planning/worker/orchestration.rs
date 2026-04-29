@@ -20,7 +20,7 @@ use crate::application::service::planning::runtime::facade::{
 };
 use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::prompt_sections::{
-    PlanningPromptHandoff, PlanningWorkerAuthorityPromptContext,
+    LEGACY_AUTHORITY_ARTIFACTS, PlanningPromptHandoff, PlanningWorkerAuthorityPromptContext,
     add_worker_authority_context_sections, worker_previous_handoff_lines, worker_role_lines,
     worker_task_authority_output_contract,
 };
@@ -367,13 +367,20 @@ impl PlanningWorkerOrchestrationService {
                             direction_snapshot.planning_revision
                         ),
                         format!("task_revision={}", task_snapshot.planning_revision),
-                        "ignore_legacy_files=task-ledger.json,directions.toml,queue.snapshot.json,planning-snapshot.json,.codex-exec-loop/runtime/exports/*".to_string(),
+                        format!("ignore_legacy_artifacts={LEGACY_AUTHORITY_ARTIFACTS}"),
                     ],
-                    direction_authority_json: serde_json::to_string(&direction_snapshot.directions)
-                        .ok(),
-                    task_authority_json: serde_json::to_string(&task_snapshot.task_authority).ok(),
-                    queue_projection_json: serde_json::to_string(&task_snapshot.queue_projection)
-                        .ok(),
+                    direction_authority_json: serde_json::to_string_pretty(
+                        &direction_snapshot.directions,
+                    )
+                    .ok(),
+                    task_authority_json: serde_json::to_string_pretty(
+                        &task_snapshot.task_authority,
+                    )
+                    .ok(),
+                    queue_projection_json: serde_json::to_string_pretty(
+                        &task_snapshot.queue_projection,
+                    )
+                    .ok(),
                 }
             }
             (direction_result, task_result) => {
@@ -384,7 +391,7 @@ impl PlanningWorkerOrchestrationService {
                         "source_of_truth=accepted DB authority only".to_string(),
                         format!("direction_authority={direction_status}"),
                         format!("task_authority={task_status}"),
-                        "ignore_legacy_files=task-ledger.json,directions.toml,queue.snapshot.json,planning-snapshot.json,.codex-exec-loop/runtime/exports/*".to_string(),
+                        format!("ignore_legacy_artifacts={LEGACY_AUTHORITY_ARTIFACTS}"),
                     ],
                     direction_authority_json: None,
                     task_authority_json: None,

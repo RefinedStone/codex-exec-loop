@@ -57,9 +57,8 @@ impl PromptDocumentBuilder {
         let lines = lines
             .into_iter()
             .map(|line| line.trim_end().to_string())
-            .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>();
-        if !lines.is_empty() {
+        if lines.iter().any(|line| !line.trim().is_empty()) {
             self.sections.push(PromptSection {
                 title: title.into(),
                 lines,
@@ -132,7 +131,7 @@ mod tests {
             .lines("empty", vec![String::new(), "   ".to_string()])
             .bullets("rules", vec!["do this".to_string(), "do that".to_string()])
             .optional_text("missing", None)
-            .text("payload", "alpha\nbeta")
+            .text("payload", "alpha\n\nbeta")
             .optional_code_block("missing-code", "json", None)
             .code_block("json", "json", "{\n  \"ok\": true\n}")
             .build()
@@ -140,7 +139,7 @@ mod tests {
 
         assert_eq!(
             prompt,
-            "# task\n\n[rules]\n- do this\n- do that\n\n[payload]\nalpha\nbeta\n\n[json]\n```json\n{\n  \"ok\": true\n}\n```"
+            "# task\n\n[rules]\n- do this\n- do that\n\n[payload]\nalpha\n\nbeta\n\n[json]\n```json\n{\n  \"ok\": true\n}\n```"
         );
     }
 }

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot,
+    PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
@@ -186,16 +187,8 @@ impl PlanningReconciliationService {
             let accepted_snapshot = self
                 .planning_task_repository_port
                 .load_task_authority_snapshot(workspace_dir)?;
-            let accepted_task_authority_json = accepted_snapshot
-                .as_ref()
-                .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_authority))
-                .transpose()?
-                .unwrap_or_default();
-            let accepted_queue_projection_json = accepted_snapshot
-                .as_ref()
-                .map(|snapshot| serde_json::to_string(&snapshot.queue_projection))
-                .transpose()?
-                .unwrap_or_default();
+            let (accepted_task_authority_json, accepted_queue_projection_json) =
+                accepted_authority_prompt_jsons(accepted_snapshot.as_ref())?;
             result.repair_request = Some(PlanningRepairRequest {
                 failure_summary: failure_summary.clone(),
                 validation_errors,
@@ -235,16 +228,8 @@ impl PlanningReconciliationService {
             task_authority,
             &queue_projection,
         ) {
-            let accepted_task_authority_json = authority_snapshot
-                .as_ref()
-                .map(|snapshot| serde_json::to_string_pretty(&snapshot.task_authority))
-                .transpose()?
-                .unwrap_or_default();
-            let accepted_queue_projection_json = authority_snapshot
-                .as_ref()
-                .map(|snapshot| serde_json::to_string(&snapshot.queue_projection))
-                .transpose()?
-                .unwrap_or_default();
+            let (accepted_task_authority_json, accepted_queue_projection_json) =
+                accepted_authority_prompt_jsons(authority_snapshot.as_ref())?;
             result.repair_request = Some(PlanningRepairRequest {
                 failure_summary: failure_summary.clone(),
                 validation_errors: vec![failure_summary.clone()],
@@ -298,6 +283,19 @@ pub(super) fn execution_snapshot_to_workspace_record(
     PlanningWorkspaceLoadRecord {
         result_output_markdown: execution_snapshot.result_output_markdown.clone(),
     }
+}
+
+fn accepted_authority_prompt_jsons(
+    snapshot: Option<&PlanningTaskAuthoritySnapshot>,
+) -> Result<(String, String)> {
+    let Some(snapshot) = snapshot else {
+        return Ok((String::new(), String::new()));
+    };
+
+    Ok((
+        serde_json::to_string_pretty(&snapshot.task_authority)?,
+        serde_json::to_string_pretty(&snapshot.queue_projection)?,
+    ))
 }
 
 fn validation_error_summaries(

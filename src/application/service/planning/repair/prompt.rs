@@ -52,6 +52,10 @@ pub fn build_planning_repair_prompt(
         .rejected_heading
         .clone()
         .unwrap_or_else(|| "rejected-candidate".to_string());
+    let direction_authority_excerpt =
+        truncate_prompt_section(&request.direction_authority_json, 4_000);
+    let accepted_queue_projection_excerpt =
+        truncate_prompt_section(&request.accepted_queue_projection_json, 2_000);
 
     PromptDocument::builder("planning-repair")
         .lines("role", repair_role_lines(attempt_number, max_attempts))
@@ -63,17 +67,17 @@ pub fn build_planning_repair_prompt(
             repair_previous_handoff_lines(previous_handoff.map(repair_handoff)),
         )
         .lines("validation", validation_lines(request))
-        .code_block(
+        .optional_code_block(
             "direction-authority",
             "json",
-            &truncate_prompt_section(&request.direction_authority_json, 4_000),
+            Some(&direction_authority_excerpt),
         )
-        .code_block(
+        .optional_code_block(
             "accepted-db-queue-projection",
             "json",
-            &truncate_prompt_section(&request.accepted_queue_projection_json, 2_000),
+            Some(&accepted_queue_projection_excerpt),
         )
-        .code_block(&accepted_heading, "json", &accepted_excerpt)
+        .optional_code_block(&accepted_heading, "json", Some(&accepted_excerpt))
         .optional_code_block(&rejected_heading, "json", rejected_excerpt.as_deref())
         .bullets("final-response", final_response_rules())
         .build()
@@ -109,6 +113,7 @@ fn validation_lines(request: &PlanningRepairRequest) -> Vec<String> {
         request
             .validation_errors
             .iter()
+            .filter(|error| !error.trim().is_empty())
             .map(|error| format!("- {error}")),
     );
     if let Some(rejected_archive_path) = request.rejected_archive_path.as_deref() {
