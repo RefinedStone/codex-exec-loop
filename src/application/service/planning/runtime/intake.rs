@@ -252,6 +252,7 @@ pub struct PlanningTaskIntakeService {
     planning_validation_service: PlanningValidationService,
     authority_seed_service: PlanningAuthoritySeedService,
     mutation_service: PlanningTaskMutationService,
+    draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
 }
 
 impl PlanningTaskIntakeService {
@@ -275,7 +276,7 @@ impl PlanningTaskIntakeService {
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
-        _draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
+        draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
     ) -> Self {
         let mutation_service = PlanningTaskMutationService::new(
             planning_task_repository_port.clone(),
@@ -292,6 +293,7 @@ impl PlanningTaskIntakeService {
             planning_task_repository_port,
             planning_validation_service,
             mutation_service,
+            draft_generator,
         }
     }
 
@@ -299,14 +301,30 @@ impl PlanningTaskIntakeService {
         &self,
         request: PlanningTaskIntakeRequest,
     ) -> Result<PlanningTaskIntakeProposal> {
-        self.validate_intake_workspace(&request)?;
+        if normalize_prompt(&request.raw_prompt).is_empty() {
+            return Err(PlanningTaskIntakeValidationError::new(
+                "blank_prompt",
+                "Type a task prompt before previewing runtime intake.",
+            )
+            .into_anyhow());
+        }
+        let context = self.load_intake_context(&request)?;
+        let generated_at = Utc::now();
+        let generated_draft =
+            self.draft_generator
+                .generate(&PlanningTaskIntakeGenerationRequest {
+                    request: &request,
+                    directions: &context.directions,
+                    generated_at,
+                    collision_suffix: None,
+                })?;
         let mutation_preview =
             self.mutation_service
                 .preview_create_task(PlanningTaskCreatePreviewRequest {
                     workspace_directory: request.workspace_directory.clone(),
                     source: PlanningTaskMutationSource::User,
                     source_turn_id: request.active_turn_id.clone(),
-                    input: create_input_from_request(&request),
+                    input: create_input_from_draft(&generated_draft),
                 })?;
         let draft = draft_from_mutation_preview(&request, &mutation_preview);
         Ok(PlanningTaskIntakeProposal {
@@ -338,7 +356,10 @@ impl PlanningTaskIntakeService {
         })
     }
 
-    fn validate_intake_workspace(&self, request: &PlanningTaskIntakeRequest) -> Result<()> {
+    fn load_intake_context(
+        &self,
+        request: &PlanningTaskIntakeRequest,
+    ) -> Result<PlanningTaskIntakeContext> {
         self.authority_seed_service
             .ensure_default_authority(&request.workspace_directory)?;
         let workspace_record = self
@@ -394,7 +415,7 @@ impl PlanningTaskIntakeService {
             ));
         }
 
-        let _directions = validation_result
+        let directions = validation_result
             .directions
             .ok_or_else(|| anyhow!("valid planning workspace did not include directions"))?;
         let task_authority = validation_result
@@ -407,8 +428,13 @@ impl PlanningTaskIntakeService {
                 PLANNING_FORMAT_VERSION
             ));
         }
-        Ok(())
+        Ok(PlanningTaskIntakeContext { directions })
     }
+}
+
+#[derive(Debug, Clone)]
+struct PlanningTaskIntakeContext {
+    directions: DirectionCatalogDocument,
 }
 
 fn required_workspace_body<'a>(
@@ -574,19 +600,18 @@ fn increment_suffix(suffix: Option<u32>) -> Option<u32> {
     Some(suffix.unwrap_or(0) + 1)
 }
 
-fn create_input_from_request(request: &PlanningTaskIntakeRequest) -> PlanningTaskCreateInput {
-    let normalized_prompt = normalize_prompt(&request.raw_prompt);
+fn create_input_from_draft(draft: &PlanningTaskIntakeDraft) -> PlanningTaskCreateInput {
     PlanningTaskCreateInput {
-        direction_id: request.requested_direction_id.clone(),
-        direction_relation_note: None,
-        title: build_task_title(&normalized_prompt),
-        description: Some(format!("User prompt:\n\n{}", request.raw_prompt.trim())),
-        status: Some(TaskStatus::Ready),
-        base_priority: Some(DEFAULT_RUNTIME_TASK_PRIORITY),
-        dynamic_priority_delta: Some(0),
-        priority_reason: Some("User requested this task through runtime intake.".to_string()),
-        depends_on: Vec::new(),
-        blocked_by: Vec::new(),
+        direction_id: Some(draft.task.direction_id.clone()),
+        direction_relation_note: Some(draft.task.direction_relation_note.clone()),
+        title: draft.task.title.clone(),
+        description: Some(draft.task.description.clone()),
+        status: Some(draft.task.status),
+        base_priority: Some(draft.task.base_priority),
+        dynamic_priority_delta: Some(draft.task.dynamic_priority_delta),
+        priority_reason: Some(draft.task.priority_reason.clone()),
+        depends_on: draft.task.depends_on.clone(),
+        blocked_by: draft.task.blocked_by.clone(),
     }
 }
 

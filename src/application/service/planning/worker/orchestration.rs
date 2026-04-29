@@ -300,22 +300,34 @@ impl PlanningWorkerOrchestrationService {
         if let Some(final_message) = worker_response.final_agent_message.as_deref() {
             match extract_planning_task_commands(final_message) {
                 PlanningTaskCommandExtraction::Commands(commands) => {
-                    let mutation_result =
-                        self.task_mutation_service
-                            .apply_commands(PlanningTaskMutationRequest {
-                                workspace_directory: workspace_directory.to_string(),
-                                source: PlanningTaskMutationSource::Llm,
-                                source_turn_id: Some(synthetic_turn_id.to_string()),
-                                commands,
-                            })?;
-                    task_authority_changed = mutation_result.task_authority_changed;
-                    if mutation_result.task_authority_changed {
-                        authority_result.queue_projection_action =
-                            Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
-                        authority_result.notices.push(format!(
-                            "planning worker committed {} task command(s)",
-                            mutation_result.applied_command_count
-                        ));
+                    match self
+                        .task_mutation_service
+                        .apply_commands(PlanningTaskMutationRequest {
+                            workspace_directory: workspace_directory.to_string(),
+                            source: PlanningTaskMutationSource::Llm,
+                            source_turn_id: Some(synthetic_turn_id.to_string()),
+                            commands,
+                        }) {
+                        Ok(mutation_result) => {
+                            task_authority_changed = mutation_result.task_authority_changed;
+                            if mutation_result.task_authority_changed {
+                                authority_result.queue_projection_action =
+                                    Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
+                                authority_result.notices.push(format!(
+                                    "planning worker committed {} task command(s)",
+                                    mutation_result.applied_command_count
+                                ));
+                            }
+                        }
+                        Err(error) => {
+                            authority_result = self.build_rejected_command_result(
+                                workspace_directory,
+                                &format!(
+                                    "planning worker task commands failed validation: {error}"
+                                ),
+                                None,
+                            )?;
+                        }
                     }
                 }
                 PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(rejected_json) => {

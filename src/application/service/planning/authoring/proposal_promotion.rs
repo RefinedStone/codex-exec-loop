@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use chrono::{SecondsFormat, Utc};
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -83,7 +83,7 @@ impl PlanningProposalPromotionService {
         let workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(request.workspace_directory)?;
-        let (directions, mut task_authority) =
+        let (directions, mut task_authority, observed_planning_revision) =
             self.load_valid_workspace_documents(request.workspace_directory, &workspace_record)?;
         let queue_projection = self
             .priority_queue_service
@@ -122,15 +122,26 @@ impl PlanningProposalPromotionService {
         let next_queue_projection = self
             .priority_queue_service
             .build_projection(&directions, &task_authority)?;
-        self.planning_task_repository_port
+        match self
+            .planning_task_repository_port
             .commit_task_authority_snapshot(
                 request.workspace_directory,
                 PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
+                    observed_planning_revision: Some(observed_planning_revision),
                     task_authority: &task_authority,
                     queue_projection: &next_queue_projection,
                 },
-            )?;
+            )? {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => {}
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => {
+                anyhow::bail!(
+                    "planning db changed while promoting proposal (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                );
+            }
+        }
 
         let runtime_snapshot = self
             .planning_prompt_service
@@ -155,7 +166,7 @@ impl PlanningProposalPromotionService {
         &self,
         workspace_dir: &str,
         workspace_record: &PlanningWorkspaceLoadRecord,
-    ) -> Result<(DirectionCatalogDocument, TaskAuthorityDocument)> {
+    ) -> Result<(DirectionCatalogDocument, TaskAuthorityDocument, i64)> {
         let snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_dir)?
@@ -198,7 +209,7 @@ impl PlanningProposalPromotionService {
             ));
         }
 
-        Ok((directions, task_authority))
+        Ok((directions, task_authority, snapshot.planning_revision))
     }
 }
 
