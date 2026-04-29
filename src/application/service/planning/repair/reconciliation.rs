@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn repair_prompt_requests_task_command_payload_without_file_artifacts() {
+    fn repair_prompt_requests_task_command_payload_from_db_authority() {
         let prompt = build_planning_repair_prompt(
             &PlanningRepairRequest {
                 failure_summary: "invalid task".to_string(),
@@ -307,7 +307,8 @@ mod tests {
         assert!(prompt.contains("\"planning_task_commands\""));
         assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("[accepted-db-queue-projection]"));
-        assert!(prompt.contains("task-ledger.json"));
+        assert!(prompt.contains("last accepted DB snapshot"));
+        assert!(!prompt.contains("task-ledger.json"));
         assert!(!prompt.contains("task authority schema file"));
         assert!(!prompt.contains("queue snapshot artifact"));
     }

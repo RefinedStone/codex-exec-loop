@@ -760,13 +760,12 @@ mod tests {
     }
 
     #[test]
-    fn task_authority_contract_names_legacy_artifacts_as_ignored_inputs() {
+    fn task_authority_contract_uses_db_authority_source_of_truth() {
         let rules = runtime_task_authority_contract_rules().join("\n");
 
-        assert!(rules.contains("DB authority is the only planning source of truth"));
-        assert!(rules.contains("task-ledger.json"));
-        assert!(rules.contains("directions.toml"));
-        assert!(rules.contains(".codex-exec-loop/runtime/exports/*"));
+        assert!(rules.contains("accepted DB authority"));
+        assert!(!rules.contains("task-ledger.json"));
+        assert!(!rules.contains(".codex-exec-loop/runtime/exports/*"));
     }
 
     #[test]

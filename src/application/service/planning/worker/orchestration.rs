@@ -20,7 +20,7 @@ use crate::application::service::planning::runtime::facade::{
 };
 use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::prompt_sections::{
-    LEGACY_AUTHORITY_ARTIFACTS, PlanningPromptHandoff, PlanningWorkerAuthorityPromptContext,
+    PlanningPromptHandoff, PlanningWorkerAuthorityPromptContext,
     add_worker_authority_context_sections, worker_previous_handoff_lines, worker_role_lines,
     worker_task_authority_output_contract,
 };
@@ -412,7 +412,6 @@ impl PlanningWorkerOrchestrationService {
                             direction_snapshot.planning_revision
                         ),
                         format!("task_revision={}", task_snapshot.planning_revision),
-                        format!("ignore_legacy_artifacts={LEGACY_AUTHORITY_ARTIFACTS}"),
                     ],
                     direction_authority_json: serde_json::to_string_pretty(
                         &direction_snapshot.directions,
@@ -436,7 +435,6 @@ impl PlanningWorkerOrchestrationService {
                         "source_of_truth=accepted DB authority only".to_string(),
                         format!("direction_authority={direction_status}"),
                         format!("task_authority={task_status}"),
-                        format!("ignore_legacy_artifacts={LEGACY_AUTHORITY_ARTIFACTS}"),
                     ],
                     direction_authority_json: None,
                     task_authority_json: None,
@@ -692,13 +690,12 @@ mod tests {
     use crate::application::service::planning::shared::prompt_sections::PlanningWorkerAuthorityPromptContext;
 
     #[test]
-    fn refresh_prompt_embeds_db_authority_and_legacy_ignore_contract() {
+    fn refresh_prompt_embeds_db_authority_contract() {
         let authority_context = PlanningWorkerAuthorityPromptContext {
             status_lines: vec![
                 "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
                 "direction_revision=7".to_string(),
                 "task_revision=8".to_string(),
-                "ignore_legacy_files=task-ledger.json,directions.toml,queue.snapshot.json,planning-snapshot.json,.codex-exec-loop/runtime/exports/*".to_string(),
             ],
             direction_authority_json: Some("{\"version\":1,\"directions\":[]}".to_string()),
             task_authority_json: Some("{\"version\":1,\"tasks\":[]}".to_string()),
@@ -729,9 +726,6 @@ mod tests {
         assert!(prompt.contains("[db-queue-projection]"));
         assert!(prompt.contains("\"planning_task_commands\""));
         assert!(prompt.contains("Do not return `task_authority`"));
-        assert!(prompt.contains("task-ledger.json,directions.toml,queue.snapshot.json"));
-        assert!(prompt.contains(
-            "Do not read or infer planning authority from stale legacy/export artifacts."
-        ));
+        assert!(prompt.contains("Use only the accepted DB authority sections"));
     }
 }

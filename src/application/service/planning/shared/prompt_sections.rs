@@ -1,7 +1,6 @@
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::prompt_component::PromptDocumentBuilder;
 
-pub(crate) const LEGACY_AUTHORITY_ARTIFACTS: &str = "`task-ledger.json`, `directions.toml`, `queue.snapshot.json`, `planning-snapshot.json`, and `.codex-exec-loop/runtime/exports/*`";
 const PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT: &str = "Final answer must include exactly one fenced JSON object: `{\"planning_task_commands\":{\"version\":1,\"commands\":[...]}}`.";
 const MAX_WORKER_DIRECTION_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_TASK_AUTHORITY_CHARS: usize = 4_000;
@@ -28,7 +27,7 @@ pub(crate) fn worker_role_lines() -> Vec<String> {
         "session=planning-only".to_string(),
         "protected_files=`result-output.md`, direction detail docs, queue-idle review prompt"
             .to_string(),
-        "Do not read or infer planning authority from stale legacy/export artifacts.".to_string(),
+        "Use only the accepted DB authority sections as planning authority.".to_string(),
     ]
 }
 
@@ -100,9 +99,7 @@ pub(crate) fn runtime_task_authority_contract_rules() -> Vec<String> {
             .to_string(),
         "Task catalog mutations must go through `planning_task_commands`; queue validation refreshes prompt state."
             .to_string(),
-        format!(
-            "Ignore stale legacy/export artifacts ({LEGACY_AUTHORITY_ARTIFACTS}); DB authority is the only planning source of truth."
-        ),
+        "Use accepted DB authority as the only planning source of truth.".to_string(),
     ]
 }
 
@@ -112,7 +109,6 @@ pub(crate) fn repair_constraints() -> Vec<String> {
             .to_string(),
         format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
         "Use the last accepted DB snapshot as the current task authority baseline.".to_string(),
-        format!("Ignore stale legacy/export artifacts such as {LEGACY_AUTHORITY_ARTIFACTS}."),
         "Do not add unrelated work outside the existing direction frame.".to_string(),
     ]
 }
@@ -177,14 +173,12 @@ mod tests {
     use crate::application::service::prompt_component::PromptDocument;
 
     #[test]
-    fn shared_contract_sections_keep_legacy_ignore_language() {
+    fn shared_contract_sections_keep_db_authority_source_of_truth() {
         let runtime_rules = runtime_task_authority_contract_rules().join("\n");
         let repair_rules = repair_constraints().join("\n");
 
-        assert!(runtime_rules.contains("DB authority is the only planning source of truth"));
-        assert!(runtime_rules.contains("task-ledger.json"));
-        assert!(repair_rules.contains("directions.toml"));
-        assert!(repair_rules.contains(".codex-exec-loop/runtime/exports/*"));
+        assert!(runtime_rules.contains("accepted DB authority"));
+        assert!(repair_rules.contains("last accepted DB snapshot"));
     }
 
     #[test]
