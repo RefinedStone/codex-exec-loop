@@ -117,6 +117,8 @@ impl PlanningAdminFacadeService {
                 );
             }
         };
+        // Direction and task authority share the same planning DB revision. After the
+        // direction snapshot commits, the task snapshot must observe that new revision.
         match self
             .planning_task_repository_port
             .commit_task_authority_snapshot(

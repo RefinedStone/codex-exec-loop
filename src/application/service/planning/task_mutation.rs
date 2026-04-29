@@ -146,21 +146,38 @@ impl PlanningTaskMutationService {
         request: PlanningTaskCreatePreviewRequest,
     ) -> Result<PlanningTaskCreatePreview> {
         let context = self.load_context(&request.workspace_directory)?;
+        self.preview_create_task_with_authority(
+            request,
+            &context.directions,
+            &context.task_authority,
+            context.task_planning_revision,
+        )
+    }
+
+    pub(crate) fn preview_create_task_with_authority(
+        &self,
+        request: PlanningTaskCreatePreviewRequest,
+        directions: &DirectionCatalogDocument,
+        task_authority: &TaskAuthorityDocument,
+        task_planning_revision: i64,
+    ) -> Result<PlanningTaskCreatePreview> {
         let generated_at = Utc::now();
         let task = self.build_unique_task(
             &request.input,
             request.source,
             request.source_turn_id.as_deref(),
-            &context,
+            PlanningTaskAuthorityView {
+                directions,
+                task_authority,
+            },
             generated_at,
             None,
         )?;
-        let direction_title = direction_title(&context.directions, &task.direction_id)
+        let direction_title = direction_title(directions, &task.direction_id)
             .unwrap_or_else(|| task.direction_id.clone());
-        let mut next_task_authority = context.task_authority.clone();
+        let mut next_task_authority = task_authority.clone();
         next_task_authority.tasks.push(task.clone());
-        let queue_projection =
-            self.validate_and_project(&context.directions, &next_task_authority)?;
+        let queue_projection = self.validate_and_project(directions, &next_task_authority)?;
 
         Ok(PlanningTaskCreatePreview {
             request,
@@ -168,7 +185,7 @@ impl PlanningTaskMutationService {
             direction_title,
             generated_at,
             collision_suffix: None,
-            observed_planning_revision: context.task_planning_revision,
+            observed_planning_revision: task_planning_revision,
             queue_head: queue_projection.next_task,
         })
     }
@@ -191,7 +208,10 @@ impl PlanningTaskMutationService {
                     &preview.request.input,
                     preview.request.source,
                     preview.request.source_turn_id.as_deref(),
-                    &context,
+                    PlanningTaskAuthorityView {
+                        directions: &context.directions,
+                        task_authority: &context.task_authority,
+                    },
                     preview.generated_at,
                     next_suffix,
                 )?
@@ -332,10 +352,9 @@ impl PlanningTaskMutationService {
                         input,
                         request.source,
                         request.source_turn_id.as_deref(),
-                        &PlanningTaskMutationContext {
-                            directions: directions.clone(),
-                            task_authority: task_authority.clone(),
-                            task_planning_revision: 0,
+                        PlanningTaskAuthorityView {
+                            directions,
+                            task_authority,
                         },
                         updated_at,
                         None,
@@ -364,15 +383,21 @@ impl PlanningTaskMutationService {
         input: &PlanningTaskCreateInput,
         source: PlanningTaskMutationSource,
         source_turn_id: Option<&str>,
-        context: &PlanningTaskMutationContext,
+        authority: PlanningTaskAuthorityView<'_>,
         generated_at: DateTime<Utc>,
         starting_suffix: Option<u32>,
     ) -> Result<TaskDefinition> {
         let mut suffix = starting_suffix;
         for _ in 0..MAX_COLLISION_SUFFIX_ATTEMPTS {
-            let task =
-                self.build_task(input, source, source_turn_id, context, generated_at, suffix)?;
-            if !task_id_exists(&context.task_authority, &task.id) {
+            let task = self.build_task(
+                input,
+                source,
+                source_turn_id,
+                authority.directions,
+                generated_at,
+                suffix,
+            )?;
+            if !task_id_exists(authority.task_authority, &task.id) {
                 return Ok(task);
             }
             suffix = increment_suffix(suffix);
@@ -385,7 +410,7 @@ impl PlanningTaskMutationService {
         input: &PlanningTaskCreateInput,
         source: PlanningTaskMutationSource,
         source_turn_id: Option<&str>,
-        context: &PlanningTaskMutationContext,
+        directions: &DirectionCatalogDocument,
         generated_at: DateTime<Utc>,
         collision_suffix: Option<u32>,
     ) -> Result<TaskDefinition> {
@@ -397,7 +422,7 @@ impl PlanningTaskMutationService {
             .filter(|value| !value.is_empty())
             .unwrap_or(title.as_str())
             .to_string();
-        let direction = select_direction(input.direction_id.as_deref(), &context.directions)?;
+        let direction = select_direction(input.direction_id.as_deref(), directions)?;
         let actor = source.actor();
         let dynamic_priority_delta = input.dynamic_priority_delta.unwrap_or(0);
         let priority_reason = input
@@ -575,6 +600,12 @@ struct PlanningTaskMutationContext {
     directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
     task_planning_revision: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlanningTaskAuthorityView<'a> {
+    directions: &'a DirectionCatalogDocument,
+    task_authority: &'a TaskAuthorityDocument,
 }
 
 #[derive(Debug, Deserialize)]
@@ -928,7 +959,54 @@ fn candidate_json_sections(message: &str) -> Vec<&str> {
         sections.push(after_header[..end].trim());
         remainder = &after_header[end + 3..];
     }
+    sections.extend(balanced_json_object_sections(message));
     sections.push(message.trim());
+    sections
+}
+
+fn balanced_json_object_sections(message: &str) -> Vec<&str> {
+    let mut sections = Vec::new();
+    let mut start = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, character) in message.char_indices() {
+        let Some(start_index) = start else {
+            if character == '{' {
+                start = Some(index);
+                depth = 1;
+                in_string = false;
+                escaped = false;
+            }
+            continue;
+        };
+
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match character {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    sections.push(message[start_index..index + character.len_utf8()].trim());
+                    start = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
     sections
 }
 
@@ -1186,6 +1264,25 @@ mod tests {
         assert!(matches!(
             extract_planning_task_commands(delete_op),
             PlanningTaskCommandExtraction::InvalidCommands(_)
+        ));
+    }
+
+    #[test]
+    fn extractor_accepts_balanced_json_embedded_in_markdown_text() {
+        let message = r#"Updated planning commands:
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Write review response"}]}}
+
+Summary: one task added."#;
+
+        let extraction = extract_planning_task_commands(message);
+
+        assert!(matches!(
+            extraction,
+            PlanningTaskCommandExtraction::Commands(commands) if matches!(
+                commands.as_slice(),
+                [PlanningTaskMutationCommand::CreateTask(input)]
+                    if input.title == "Write review response"
+            )
         ));
     }
 

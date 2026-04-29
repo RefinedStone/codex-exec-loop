@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use super::direction_mutation::{
     PlanningAdminDirectionMutationCommand, PlanningAdminDirectionMutationService,
@@ -82,11 +82,9 @@ impl PlanningAdminFacadeService {
                 source_turn_id: None,
                 commands: vec![command],
             })?;
-        let task_id = commit
-            .committed_task_ids
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "unknown".to_string());
+        let task_id = commit.committed_task_ids.first().cloned().ok_or_else(|| {
+            anyhow!("planning task mutation completed without returning a task id")
+        })?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
             notice: if updated {

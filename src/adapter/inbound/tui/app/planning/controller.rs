@@ -313,7 +313,7 @@ impl NativeTuiApp {
             Some(value) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "unsupported :queue argument `{value}` / supported: :queue"
+                        "`:queue` does not accept arguments (`{value}`); use :queue to open queue inspection"
                     ),
                 })
             }

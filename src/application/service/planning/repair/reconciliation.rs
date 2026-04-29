@@ -196,9 +196,19 @@ fn terminal_status(status: TaskStatus) -> bool {
 fn timestamp_regressed(candidate_updated_at: &str, accepted_updated_at: &str) -> bool {
     let candidate_updated_at = candidate_updated_at.trim();
     let accepted_updated_at = accepted_updated_at.trim();
-    !candidate_updated_at.is_empty()
-        && !accepted_updated_at.is_empty()
-        && candidate_updated_at < accepted_updated_at
+    if candidate_updated_at.is_empty() || accepted_updated_at.is_empty() {
+        return false;
+    }
+
+    let Ok(candidate_updated_at) = chrono::DateTime::parse_from_rfc3339(candidate_updated_at)
+    else {
+        return false;
+    };
+    let Ok(accepted_updated_at) = chrono::DateTime::parse_from_rfc3339(accepted_updated_at) else {
+        return false;
+    };
+
+    candidate_updated_at < accepted_updated_at
 }
 
 #[cfg(test)]
@@ -429,6 +439,22 @@ mod tests {
                 "planner task authority candidate regressed accepted DB task `task-1` updated_at from `2026-04-29T03:00:32Z` to `2026-04-29T01:43:52Z`"
             )
         );
+    }
+
+    #[test]
+    fn stale_candidate_guard_compares_rfc3339_timestamps_by_time() {
+        let accepted = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32+00:00")],
+        };
+        let candidate = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32.500Z")],
+        };
+
+        let failure = stale_candidate_guard_failure(Some(&accepted), &candidate);
+
+        assert_eq!(failure, None);
     }
 
     fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
