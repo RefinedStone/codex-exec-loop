@@ -602,9 +602,13 @@ fn queue_refresh_policy_rules() -> Vec<String> {
 
 fn queue_idle_review_policy_rules() -> Vec<String> {
     vec![
-        "The queue is empty; re-check direction goals, success criteria, detail docs, latest request, latest reply, and work list."
+        "The queue is empty; act as a post-turn evaluator, not a TODO extractor for the main session."
             .to_string(),
-        "If the latest reply implies next work, create or update follow-up tasks even when directions are generic."
+        "`main-session-latest-reply` is evidence only; it is not completion authority and must not override DB direction goals or success criteria."
+            .to_string(),
+        "Compare the latest operator request and main-session result against DB direction success criteria, detail docs, accepted task authority, and DB queue projection."
+            .to_string(),
+        "Create or update a task when criteria remain unmet, validation is missing, or the next execution slice is clear, even if the main reply has no explicit TODO list."
             .to_string(),
         "Put only the single clearest immediate follow-up in `ready` or `in_progress`; keep alternatives as `proposed`."
             .to_string(),
@@ -688,7 +692,7 @@ fn merge_reconciliation_results(
 
 #[cfg(test)]
 mod tests {
-    use super::build_planning_queue_refresh_prompt;
+    use super::{build_planning_queue_idle_derive_prompt, build_planning_queue_refresh_prompt};
     use crate::application::service::planning::runtime::facade::PlanningTaskHandoff;
     use crate::application::service::planning::shared::prompt_sections::PlanningWorkerAuthorityPromptContext;
 
@@ -730,5 +734,39 @@ mod tests {
         assert!(prompt.contains("\"planning_task_commands\""));
         assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("Use only the accepted DB authority sections"));
+    }
+
+    #[test]
+    fn queue_idle_prompt_renders_evaluator_policy() {
+        let authority_context = PlanningWorkerAuthorityPromptContext {
+            status_lines: vec![
+                "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
+                "direction_revision=7".to_string(),
+                "task_revision=8".to_string(),
+            ],
+            direction_authority_json: Some(
+                "{\"version\":1,\"directions\":[{\"id\":\"direction-a\",\"success_criteria\":[\"validated\"]}]}".to_string(),
+            ),
+            task_authority_json: Some("{\"version\":1,\"tasks\":[]}".to_string()),
+            queue_projection_json: Some(
+                "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                    .to_string(),
+            ),
+        };
+
+        let prompt = build_planning_queue_idle_derive_prompt(
+            Some("latest user"),
+            "Implemented everything.",
+            None,
+            "Queue idle operator prompt",
+            &authority_context,
+        );
+
+        assert!(prompt.contains("post-turn evaluator"));
+        assert!(prompt.contains("not a TODO extractor"));
+        assert!(prompt.contains("not completion authority"));
+        assert!(prompt.contains("success criteria"));
+        assert!(prompt.contains("even if the main reply has no explicit TODO list"));
+        assert!(prompt.contains("[main-session-latest-reply]"));
     }
 }

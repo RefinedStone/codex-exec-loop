@@ -109,11 +109,11 @@ fn directions_for_mode(mode: PlanningBootstrapMode) -> DirectionCatalogDocument 
             directions: vec![DirectionDefinition {
                 id: "general-workstream".to_string(),
                 title: "General workstream".to_string(),
-                summary: "No detailed direction taxonomy is defined yet. Derive the next actionable work from the latest user request and the latest accepted answer, capture it in DB task authority, and work from the derived queue.".to_string(),
+                summary: "No detailed direction taxonomy is defined yet. After each main result, evaluate the latest user request and accepted answer against this generic direction, capture the next queue-driven task in DB task authority, and work from the derived queue.".to_string(),
                 success_criteria: vec![
-                    "Actionable goals are represented in DB task authority before execution."
+                    "Actionable goals are represented in DB task authority as queue-driven execution slices."
                         .to_string(),
-                    "When the latest answer clearly implies a next step, that follow-up is derived into task authority instead of leaving the queue idle.".to_string(),
+                    "When the latest request and main result leave a clear follow-up, gap, or verification need, that next task is derived into task authority instead of leaving the queue idle.".to_string(),
                     "Work advances by updating task authority instead of inventing unmanaged side tasks."
                         .to_string(),
                 ],
@@ -122,7 +122,7 @@ fn directions_for_mode(mode: PlanningBootstrapMode) -> DirectionCatalogDocument 
                         .to_string(),
                     "Represent concrete next actions and proposals in accepted task authority."
                         .to_string(),
-                    "If the user asked for a multi-step artifact, convert the next obvious step from the latest answer into a queued task.".to_string(),
+                    "If the user asked for a multi-step artifact, evaluate the latest main result and queue the next concrete slice only when the follow-up is clear.".to_string(),
                 ],
                 detail_doc_path: String::new(),
                 state: DirectionState::Active,
@@ -179,13 +179,39 @@ mod tests {
         assert!(
             directions.directions[0]
                 .summary
-                .contains("DB task authority")
+                .contains("After each main result")
+        );
+        assert!(
+            directions.directions[0]
+                .success_criteria
+                .iter()
+                .any(|criterion| { criterion.contains("follow-up, gap, or verification need") })
+        );
+        assert!(
+            directions.directions[0]
+                .scope_hints
+                .iter()
+                .any(|hint| hint.contains("evaluate the latest main result"))
         );
         assert_eq!(artifacts.supplemental_files.len(), 1);
         assert_eq!(
             artifacts.supplemental_files[0].active_path,
             DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
         );
-        assert!(!artifacts.supplemental_files[0].body.trim().is_empty());
+        assert!(
+            artifacts.supplemental_files[0]
+                .body
+                .contains("post-turn planning evaluator")
+        );
+        assert!(
+            artifacts.supplemental_files[0]
+                .body
+                .contains("완료 authority가 아닙니다")
+        );
+        assert!(
+            artifacts.supplemental_files[0]
+                .body
+                .contains("명시 TODO가 없어도")
+        );
     }
 }
