@@ -724,9 +724,15 @@ fn merge_reconciliation_results(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_planning_queue_idle_derive_prompt, build_planning_queue_refresh_prompt};
+    use super::{
+        build_planning_official_completion_prompt, build_planning_queue_idle_derive_prompt,
+        build_planning_queue_refresh_prompt,
+    };
     use crate::application::service::planning::runtime::facade::PlanningTaskHandoff;
     use crate::application::service::planning::shared::prompt_sections::PlanningWorkerAuthorityPromptContext;
+    use crate::domain::planning::{
+        PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+    };
 
     #[test]
     fn refresh_prompt_embeds_db_authority_contract() {
@@ -765,7 +771,8 @@ mod tests {
         assert!(prompt.contains("[db-queue-projection]"));
         assert!(prompt.contains("\"planning_task_commands\""));
         assert!(prompt.contains("[planning-task-tool-contract]"));
-        assert!(prompt.contains("bash scripts/planning-tool.sh run"));
+        assert!(prompt.contains("bash scripts/planning-tool.sh run ."));
+        assert!(prompt.contains("do not use payload.worktree_path"));
         assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("Use only the accepted DB authority sections"));
     }
@@ -811,5 +818,53 @@ mod tests {
             prompt.find("[final-queue-idle-decision-rules]")
                 > prompt.find("[main-session-latest-reply]")
         );
+    }
+
+    #[test]
+    fn official_completion_prompt_keeps_parallel_worktree_out_of_tool_workspace() {
+        let authority_context = PlanningWorkerAuthorityPromptContext {
+            status_lines: vec![
+                "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
+                "direction_revision=7".to_string(),
+                "task_revision=8".to_string(),
+            ],
+            direction_authority_json: Some("{\"version\":1,\"directions\":[]}".to_string()),
+            task_authority_json: Some("{\"version\":1,\"tasks\":[]}".to_string()),
+            queue_projection_json: Some(
+                "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                    .to_string(),
+            ),
+        };
+        let contract = PlanningOfficialCompletionRefreshContract::new(
+            "turn-1",
+            11,
+            PlanningOfficialCompletionRefreshPayload::new(
+                "agent-1",
+                "task-1",
+                "Task 1",
+                "akra-agent/slot-1/task-1",
+                "/tmp/parallel-worktree",
+                "abc123",
+                "validated",
+                "completed",
+                Some("done".to_string()),
+                None,
+                "2026-04-29T00:00:00Z",
+            ),
+        );
+
+        let prompt = build_planning_official_completion_prompt(
+            Some("latest user"),
+            "latest reply",
+            None,
+            &contract,
+            &authority_context,
+        );
+
+        assert!(prompt.contains("[planning-task-tool-contract]"));
+        assert!(prompt.contains("bash scripts/planning-tool.sh run ."));
+        assert!(prompt.contains("do not use payload.worktree_path"));
+        assert!(prompt.contains("/tmp/parallel-worktree"));
+        assert!(prompt.contains("worktree_path` are provenance"));
     }
 }

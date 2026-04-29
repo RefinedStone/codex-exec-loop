@@ -45,7 +45,7 @@ bash scripts/planning-tool.sh contract
 bash scripts/planning-tool.sh run . < request.json
 ```
 
-Use `list_tasks` before choosing create vs update. If a `create_task` or `update_task` call succeeds, return an empty `commands` array in the final JSON to avoid applying the same mutation twice.
+Use `.` from the planning worker cwd. In parallel official-completion prompts, do not pass the completion payload's `worktree_path` as the planning-tool workspace. Use `list_tasks` before choosing create vs update. If a `create_task` or `update_task` call succeeds, return an empty `commands` array in the final JSON to avoid applying the same mutation twice.
 
 ## Rules
 

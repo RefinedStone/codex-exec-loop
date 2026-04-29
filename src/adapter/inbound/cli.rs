@@ -584,7 +584,8 @@ mod tests {
 
         assert_eq!(exit_code, 0);
         assert_eq!(value["tool"], "akra planning-tool");
-        assert!(rendered.contains("bash scripts/planning-tool.sh run"));
+        assert!(rendered.contains("bash scripts/planning-tool.sh run ."));
+        assert!(rendered.contains("do not use payload.worktree_path"));
         assert!(rendered.contains("list_tasks|create_task|update_task"));
     }
 }
