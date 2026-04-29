@@ -13,7 +13,7 @@ use super::task_mutation::{
     PlanningTaskMutationService, PlanningTaskMutationSource, PlanningTaskUpdateInput,
 };
 
-const TASK_TOOL_CONTRACT_JSON: &str = r#"{"tool":"akra planning-tool","version":1,"commands":["bash scripts/planning-tool.sh contract","bash scripts/planning-tool.sh run [workspace_dir] < request.json"],"request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"boolean, required for create_task/update_task","source_turn_id":"optional string","task":"flat create/update fields"},"rules":["Use this instead of editing planning files, writing SQL, or inventing final-only mutations.","Read state with list_tasks before deciding create vs update.","For create_task/update_task, set apply=true only after payload is specific and tied to accepted DB authority.","Use one narrow task per call; avoid broad backlog generation.","If a mutation succeeds, final planning_task_commands should be empty to avoid double apply."],"create_task_fields":["title required","description optional","direction_id optional","direction_relation_note optional","status optional: ready|blocked|in_progress|done|cancelled|awaiting_user|proposed","base_priority optional","dynamic_priority_delta optional","priority_reason optional","depends_on optional array","blocked_by optional array"],"update_task_fields":["task_id required","all other create fields optional"],"response":{"ok":"boolean","error":"string when failed","tasks":"list_tasks result","committed_task_ids":"mutation result","queue_head":"queue head after mutation"}}"#;
+const TASK_TOOL_CONTRACT_JSON: &str = r#"{"tool":"akra planning-tool","version":1,"commands":["bash scripts/planning-tool.sh contract","bash scripts/planning-tool.sh run . < request.json"],"request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"boolean, required for create_task/update_task","source_turn_id":"optional string","task":"flat create/update fields"},"rules":["Use this instead of editing planning files, writing SQL, or inventing final-only mutations.","Run against `.` from the planning worker cwd; in parallel official completion do not use payload.worktree_path as the tool workspace.","Read state with list_tasks before deciding create vs update.","For create_task/update_task, set apply=true only after payload is specific and tied to accepted DB authority.","Use one narrow task per call; avoid broad backlog generation.","If a mutation succeeds, final planning_task_commands should be empty to avoid double apply."],"create_task_fields":["title required","description optional","direction_id optional","direction_relation_note optional","status optional: ready|blocked|in_progress|done|cancelled|awaiting_user|proposed","base_priority optional","dynamic_priority_delta optional","priority_reason optional","depends_on optional array","blocked_by optional array"],"update_task_fields":["task_id required","all other create fields optional"],"response":{"ok":"boolean","error":"string when failed","tasks":"list_tasks result","committed_task_ids":"mutation result","queue_head":"queue head after mutation"}}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -302,9 +302,10 @@ mod tests {
     fn contract_is_compact_and_names_run_command() {
         let contract = planning_task_tool_contract_json();
 
-        assert!(contract.contains("bash scripts/planning-tool.sh run"));
+        assert!(contract.contains("bash scripts/planning-tool.sh run ."));
+        assert!(contract.contains("do not use payload.worktree_path"));
         assert!(contract.contains("list_tasks|create_task|update_task"));
-        assert!(contract.len() < 1400);
+        assert!(contract.len() < 1550);
     }
 
     #[test]
