@@ -288,14 +288,22 @@ mod tests {
     fn repair_prompt_requests_task_command_payload_from_db_authority() {
         let prompt = build_planning_repair_prompt(
             &PlanningRepairRequest {
-                failure_summary: "invalid task".to_string(),
-                validation_errors: vec!["task has unknown direction".to_string()],
+                failure_summary:
+                    "planning worker returned invalid planning_task_commands: missing field `op`"
+                        .to_string(),
+                validation_errors: vec![
+                    "planning worker returned invalid planning_task_commands: missing field `op`"
+                        .to_string(),
+                ],
                 direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
                 accepted_task_authority_json: "{\"version\":1,\"tasks\":[]}".to_string(),
                 accepted_queue_projection_json:
                     "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
                         .to_string(),
-                rejected_task_authority_json: Some("{ invalid json".to_string()),
+                rejected_task_authority_json: Some(
+                    "{\"planning_task_commands\":{\"version\":1,\"commands\":[{\"create_task\":{\"title\":\"Queue follow-up\"}}]}}"
+                        .to_string(),
+                ),
                 rejected_archive_path: None,
             },
             None,
@@ -305,6 +313,11 @@ mod tests {
         );
 
         assert!(prompt.contains("\"planning_task_commands\""));
+        assert!(prompt.contains("\"op\":\"create_task\""));
+        assert!(prompt.contains("Do not wrap commands"));
+        assert!(prompt.contains("preserve the same task intent"));
+        assert!(prompt.contains("[rejected-candidate]"));
+        assert!(prompt.contains("\"create_task\""));
         assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("[accepted-db-queue-projection]"));
         assert!(prompt.contains("last accepted DB snapshot"));

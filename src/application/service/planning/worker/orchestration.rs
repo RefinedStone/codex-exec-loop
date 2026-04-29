@@ -337,13 +337,16 @@ impl PlanningWorkerOrchestrationService {
                         Some(rejected_json),
                     )?;
                 }
-                PlanningTaskCommandExtraction::InvalidCommands(error) => {
+                PlanningTaskCommandExtraction::InvalidCommands {
+                    error,
+                    rejected_json,
+                } => {
                     authority_result = self.build_rejected_command_result(
                         workspace_directory,
                         &format!(
                             "planning worker returned invalid planning_task_commands: {error}"
                         ),
-                        None,
+                        rejected_json,
                     )?;
                 }
                 PlanningTaskCommandExtraction::None => {}

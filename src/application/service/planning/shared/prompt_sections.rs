@@ -2,6 +2,9 @@ use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_
 use crate::application::service::prompt_component::PromptDocumentBuilder;
 
 const PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT: &str = "Final answer must include exactly one fenced JSON object: `{\"planning_task_commands\":{\"version\":1,\"commands\":[...]}}`.";
+const PLANNING_TASK_COMMANDS_SHAPE_RULE: &str = "Each command must be a flat object with a required top-level `op` field, for example `{\"op\":\"create_task\",\"title\":\"...\"}` or `{\"op\":\"update_task\",\"task_id\":\"...\"}`.";
+const PLANNING_TASK_COMMANDS_WRAPPER_RULE: &str =
+    "Do not wrap commands as `{\"create_task\":{...}}` or `{\"update_task\":{...}}`.";
 const MAX_WORKER_DIRECTION_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_TASK_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_QUEUE_PROJECTION_CHARS: usize = 2_000;
@@ -69,6 +72,8 @@ pub(crate) fn add_worker_authority_context_sections(
 pub(crate) fn worker_task_authority_output_contract() -> Vec<String> {
     vec![
         PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT.to_string(),
+        PLANNING_TASK_COMMANDS_SHAPE_RULE.to_string(),
+        PLANNING_TASK_COMMANDS_WRAPPER_RULE.to_string(),
         "`commands` may contain only `create_task` or `update_task` operations.".to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
         "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
@@ -81,7 +86,11 @@ pub(crate) fn worker_task_authority_output_contract() -> Vec<String> {
 pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
     vec![
         PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT.to_string(),
+        PLANNING_TASK_COMMANDS_SHAPE_RULE.to_string(),
+        PLANNING_TASK_COMMANDS_WRAPPER_RULE.to_string(),
         "`commands` must be the smallest create/update set needed to resolve the validation errors."
+            .to_string(),
+        "When the rejected candidate used wrapped commands, preserve the same task intent and rewrite it into the flat `op` command shape."
             .to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
         "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
@@ -187,6 +196,8 @@ mod tests {
 
         assert!(contract.contains("\"planning_task_commands\""));
         assert!(contract.contains("create_task"));
+        assert!(contract.contains("\"op\":\"create_task\""));
+        assert!(contract.contains("Do not wrap commands"));
         assert!(contract.contains("Do not return `task_authority`"));
     }
 

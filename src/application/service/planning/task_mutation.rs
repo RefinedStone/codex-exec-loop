@@ -120,7 +120,10 @@ pub struct PlanningTaskMutationCommitResult {
 pub enum PlanningTaskCommandExtraction {
     Commands(Vec<PlanningTaskMutationCommand>),
     LegacyTaskAuthorityRejected(String),
-    InvalidCommands(String),
+    InvalidCommands {
+        error: String,
+        rejected_json: Option<String>,
+    },
     None,
 }
 
@@ -679,13 +682,18 @@ pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtra
             return PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(rejected);
         }
         if value.get("planning_task_commands").is_some() {
+            let rejected_json =
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| candidate.to_string());
             match serde_json::from_value::<PlanningTaskCommandsDocument>(value) {
                 Ok(document) => {
                     if document.planning_task_commands.version != 1 {
-                        return PlanningTaskCommandExtraction::InvalidCommands(format!(
-                            "planning_task_commands version {} is not supported",
-                            document.planning_task_commands.version
-                        ));
+                        return PlanningTaskCommandExtraction::InvalidCommands {
+                            error: format!(
+                                "planning_task_commands version {} is not supported",
+                                document.planning_task_commands.version
+                            ),
+                            rejected_json: Some(rejected_json),
+                        };
                     }
                     return PlanningTaskCommandExtraction::Commands(
                         document
@@ -696,13 +704,18 @@ pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtra
                             .collect(),
                     );
                 }
-                Err(error) => first_invalid = Some(error.to_string()),
+                Err(error) => first_invalid = Some((error.to_string(), rejected_json)),
             }
         }
     }
 
     first_invalid
-        .map(PlanningTaskCommandExtraction::InvalidCommands)
+        .map(
+            |(error, rejected_json)| PlanningTaskCommandExtraction::InvalidCommands {
+                error,
+                rejected_json: Some(rejected_json),
+            },
+        )
         .unwrap_or(PlanningTaskCommandExtraction::None)
 }
 
@@ -1259,11 +1272,27 @@ mod tests {
 
         assert!(matches!(
             extract_planning_task_commands(unknown_field),
-            PlanningTaskCommandExtraction::InvalidCommands(_)
+            PlanningTaskCommandExtraction::InvalidCommands { .. }
         ));
         assert!(matches!(
             extract_planning_task_commands(delete_op),
-            PlanningTaskCommandExtraction::InvalidCommands(_)
+            PlanningTaskCommandExtraction::InvalidCommands { .. }
+        ));
+    }
+
+    #[test]
+    fn invalid_command_extraction_preserves_rejected_payload_for_repair() {
+        let wrapped_command = r#"{"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Queue follow-up"}}]}}"#;
+
+        let extraction = extract_planning_task_commands(wrapped_command);
+
+        assert!(matches!(
+            extraction,
+            PlanningTaskCommandExtraction::InvalidCommands {
+                error,
+                rejected_json: Some(rejected_json),
+            } if error.contains("missing field `op`")
+                && rejected_json.contains("\"create_task\"")
         ));
     }
 
