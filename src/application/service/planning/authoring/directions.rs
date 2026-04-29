@@ -212,7 +212,8 @@ impl PlanningDirectionsService {
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
         let prompt_markdown = prompt_path
             .as_deref()
-            .and_then(|path| self.load_supporting_file_best_effort(workspace_dir, path));
+            .and_then(|path| self.load_supporting_file_best_effort(workspace_dir, path))
+            .map(|prompt| normalize_queue_idle_review_prompt_markdown(&prompt));
 
         Ok(QueueIdleReviewContext {
             policy: directions.queue_idle.policy,
@@ -620,6 +621,27 @@ fn trimmed_non_empty(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
+fn normalize_queue_idle_review_prompt_markdown(prompt_markdown: &str) -> String {
+    if is_legacy_queue_idle_review_prompt(prompt_markdown) {
+        DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN.to_string()
+    } else {
+        prompt_markdown.to_string()
+    }
+}
+
+fn is_legacy_queue_idle_review_prompt(prompt_markdown: &str) -> bool {
+    let normalized = prompt_markdown.to_lowercase();
+    [
+        "directions.toml",
+        "task-ledger",
+        "task catalog compatibility",
+        "latest answer clearly implies",
+        "latest accepted answer",
+    ]
+    .iter()
+    .any(|legacy_marker| normalized.contains(legacy_marker))
+}
+
 fn build_maintenance_draft_name() -> String {
     let now = Utc::now();
     format!(
@@ -720,4 +742,36 @@ fn set_direction_detail_doc_path(
 
 fn set_queue_idle_prompt_path(directions: &mut DirectionCatalogDocument, prompt_path: &str) {
     directions.queue_idle.prompt_path = prompt_path.to_string();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_queue_idle_review_prompt_markdown;
+    use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
+
+    #[test]
+    fn queue_idle_review_prompt_normalizes_legacy_file_authority_copy() {
+        let legacy_prompt = r#"# Queue Idle Review Prompt
+
+- `directions.toml`의 direction 목표, success criteria, detail doc를 기준으로 현재 task-ledger work list를 다시 점검하세요.
+- When the latest answer clearly implies a next step, derive it.
+"#;
+
+        let normalized = normalize_queue_idle_review_prompt_markdown(legacy_prompt);
+
+        assert_eq!(normalized, DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN);
+        assert!(normalized.contains("[accepted-db-direction-authority]"));
+        assert!(normalized.contains("[accepted-db-task-authority]"));
+        assert!(normalized.contains("[db-queue-projection]"));
+        assert!(!normalized.contains("directions.toml"));
+        assert!(!normalized.contains("task-ledger"));
+        assert!(!normalized.contains("latest answer clearly implies"));
+    }
+
+    #[test]
+    fn queue_idle_review_prompt_keeps_db_authority_copy() {
+        let prompt = "# Queue Idle Review Prompt\n\n- Use accepted DB authority.";
+
+        assert_eq!(normalize_queue_idle_review_prompt_markdown(prompt), prompt);
+    }
 }
