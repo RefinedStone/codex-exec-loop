@@ -22,6 +22,7 @@
         <label class="field">
           <span>Status</span>
           <select name="status">
+            <option value="">default: ready</option>
             <option value="ready">ready</option>
             <option value="blocked">blocked</option>
             <option value="in_progress">in_progress</option>
@@ -33,7 +34,7 @@
         </label>
         <label class="field">
           <span>Base priority</span>
-          <input type="text" name="base_priority" value="10">
+          <input type="text" name="base_priority" placeholder="default: 80">
         </label>
       </div>
       <label class="field">
@@ -55,11 +56,6 @@
   </details>
 
   <div class="actions">
-    <form method="post" action="/admin/drafts">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="kind" value="task_authority">
-      <button type="submit" class="secondary">Raw task catalog</button>
-    </form>
     <form method="post" action="/admin/files/export">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="secondary">Export files</button>

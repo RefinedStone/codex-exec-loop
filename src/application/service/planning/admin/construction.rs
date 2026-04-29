@@ -7,6 +7,7 @@ use crate::application::port::outbound::{
 };
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::task_mutation::PlanningTaskMutationService;
 use crate::domain::planning::PriorityQueueService;
 
 use super::PlanningAdminFacadeService;
@@ -33,6 +34,11 @@ impl PlanningAdminFacadeService {
         planning_authority_port: Arc<dyn PlanningAuthorityPort>,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     ) -> Self {
+        let priority_queue_service = PriorityQueueService::new();
+        let task_mutation_service = PlanningTaskMutationService::new(
+            planning_task_repository_port.clone(),
+            priority_queue_service.clone(),
+        );
         Self {
             workspace_dir: workspace_dir.into(),
             planning,
@@ -40,7 +46,8 @@ impl PlanningAdminFacadeService {
             planning_authority_port,
             planning_task_repository_port,
             planning_validation_service: PlanningValidationService::new(),
-            priority_queue_service: PriorityQueueService::new(),
+            priority_queue_service,
+            task_mutation_service,
         }
     }
 
