@@ -721,7 +721,7 @@ pub(super) struct ThreadResumeParams {
 #[serde(rename_all = "camelCase")]
 pub(super) struct TurnStartParams {
     pub(super) thread_id: String,
-    pub(super) input: Vec<TurnInputText>,
+    pub(super) input: Vec<TurnInputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) approval_policy: Option<ApprovalPolicyValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -734,18 +734,24 @@ pub(super) struct TurnStartParams {
     pub(super) effort: Option<ReasoningEffortValue>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct TurnInputText {
-    #[serde(rename = "type")]
-    input_type: &'static str,
-    text: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type")]
+pub(super) enum TurnInputItem {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "skill")]
+    Skill { name: String, path: String },
 }
 
-impl TurnInputText {
+impl TurnInputItem {
     pub(super) fn text(text: impl Into<String>) -> Self {
-        Self {
-            input_type: "text",
-            text: text.into(),
+        Self::Text { text: text.into() }
+    }
+
+    pub(super) fn skill(name: impl Into<String>, path: impl Into<String>) -> Self {
+        Self::Skill {
+            name: name.into(),
+            path: path.into(),
         }
     }
 }

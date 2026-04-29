@@ -1,5 +1,6 @@
 pub(crate) mod connection;
 mod planning_worker;
+mod planning_worker_skill;
 pub(crate) mod protocol;
 pub(crate) mod runtime;
 
@@ -11,9 +12,10 @@ use anyhow::{Result, anyhow};
 use self::connection::{AppServerConnection, AppServerConnectionConfig};
 pub use self::planning_worker::AppServerPlanningWorkerAdapter;
 pub(crate) use self::planning_worker::PlanningThreadLauncher;
+use self::planning_worker_skill::PlanningWorkerSkillAdapter;
 use self::protocol::{
     ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
-    ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputText, TurnStartParams,
+    ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem, TurnStartParams,
     initialize_detail, sort_and_dedup_warnings, thread_title, to_conversation_snapshot,
     to_session_summary,
 };
@@ -44,6 +46,7 @@ pub struct CodexAppServerAdapter {
     connection_config: AppServerConnectionConfig,
     execution_policy: AppServerExecutionPolicy,
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
+    planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,6 +163,7 @@ impl CodexAppServerAdapter {
             connection_config,
             execution_policy,
             shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
+            planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
         }
     }
 
@@ -198,7 +202,7 @@ impl CodexAppServerAdapter {
             self.start_turn_and_wait_for_stream(
                 connection,
                 &thread_id,
-                prompt,
+                vec![TurnInputItem::text(prompt)],
                 model,
                 effort,
                 &event_sender,
@@ -233,7 +237,7 @@ impl CodexAppServerAdapter {
             self.start_turn_and_wait_for_stream(
                 connection,
                 &thread_id,
-                prompt,
+                self.planning_worker_turn_input(prompt),
                 Some(PLANNING_WORKER_MODEL),
                 Some(ReasoningEffortValue::Medium),
                 &event_sender,
@@ -389,14 +393,14 @@ impl CodexAppServerAdapter {
         &self,
         connection: &mut AppServerConnection,
         thread_id: &str,
-        prompt: &str,
+        input: Vec<TurnInputItem>,
         model: Option<&str>,
         effort: Option<ReasoningEffortValue>,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         let turn_response = connection.start_turn(TurnStartParams {
             thread_id: thread_id.to_string(),
-            input: vec![TurnInputText::text(prompt)],
+            input,
             approval_policy: Some(self.execution_policy.approval_policy),
             approvals_reviewer: self.execution_policy.approvals_reviewer,
             sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
@@ -409,6 +413,14 @@ impl CodexAppServerAdapter {
         });
 
         connection.wait_for_turn_stream(thread_id, &turn_response.turn.id, event_sender)
+    }
+
+    fn planning_worker_turn_input(&self, prompt: &str) -> Vec<TurnInputItem> {
+        vec![
+            self.planning_worker_skill_adapter
+                .queue_mutation_skill_input(),
+            TurnInputItem::text(prompt),
+        ]
     }
 
     fn reset_shared_runtime(&self, notice: Option<String>) {
@@ -506,7 +518,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             self.start_turn_and_wait_for_stream(
                 connection,
                 thread_id,
-                prompt,
+                vec![TurnInputItem::text(prompt)],
                 None,
                 None,
                 &event_sender,
@@ -545,7 +557,7 @@ fn finish_stream_result(
 mod tests {
     use super::{
         APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AppServerExecutionPolicy,
-        SANDBOX_MODE_ENV_VAR,
+        CodexAppServerAdapter, SANDBOX_MODE_ENV_VAR,
     };
     use crate::adapter::outbound::app_server::protocol::{
         ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue,
@@ -601,5 +613,20 @@ mod tests {
             SANDBOX_MODE_ENV_VAR,
             "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE"
         );
+    }
+
+    #[test]
+    fn planning_worker_turn_input_attaches_queue_mutation_skill_before_prompt() {
+        let adapter = CodexAppServerAdapter::new("test-client", "test-version");
+        let input = adapter.planning_worker_turn_input("refresh queue");
+        let serialized = serde_json::to_value(input).expect("turn input should serialize");
+        let input_items = serialized
+            .as_array()
+            .expect("turn input should be an array");
+
+        assert_eq!(input_items[0]["type"], "skill");
+        assert_eq!(input_items[0]["name"], "akra-planning-queue-mutation");
+        assert_eq!(input_items[1]["type"], "text");
+        assert_eq!(input_items[1]["text"], "refresh queue");
     }
 }
