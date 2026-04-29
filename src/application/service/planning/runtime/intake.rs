@@ -318,14 +318,17 @@ impl PlanningTaskIntakeService {
                     generated_at,
                     collision_suffix: None,
                 })?;
-        let mutation_preview =
-            self.mutation_service
-                .preview_create_task(PlanningTaskCreatePreviewRequest {
-                    workspace_directory: request.workspace_directory.clone(),
-                    source: PlanningTaskMutationSource::User,
-                    source_turn_id: request.active_turn_id.clone(),
-                    input: create_input_from_draft(&generated_draft),
-                })?;
+        let mutation_preview = self.mutation_service.preview_create_task_with_authority(
+            PlanningTaskCreatePreviewRequest {
+                workspace_directory: request.workspace_directory.clone(),
+                source: PlanningTaskMutationSource::User,
+                source_turn_id: request.active_turn_id.clone(),
+                input: create_input_from_draft(&generated_draft),
+            },
+            &context.directions,
+            &context.task_authority,
+            context.task_planning_revision,
+        )?;
         let draft = draft_from_mutation_preview(&request, &mutation_preview);
         Ok(PlanningTaskIntakeProposal {
             preview_lines: build_preview_lines(&draft),
@@ -428,13 +431,19 @@ impl PlanningTaskIntakeService {
                 PLANNING_FORMAT_VERSION
             ));
         }
-        Ok(PlanningTaskIntakeContext { directions })
+        Ok(PlanningTaskIntakeContext {
+            directions,
+            task_authority,
+            task_planning_revision: repository_snapshot.planning_revision,
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 struct PlanningTaskIntakeContext {
     directions: DirectionCatalogDocument,
+    task_authority: TaskAuthorityDocument,
+    task_planning_revision: i64,
 }
 
 fn required_workspace_body<'a>(

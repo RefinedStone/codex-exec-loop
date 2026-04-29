@@ -226,7 +226,7 @@ impl InlineShellCommandInput {
             },
             InlineShellCommand::Queue => match self.argument() {
                 Some(value) => format!(
-                    "Press Enter to apply `:queue {value}`. Supported command: :queue."
+                    "`:queue` does not accept arguments (`{value}`); press Enter to open queue inspection."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -762,7 +762,7 @@ mod tests {
         );
         assert_eq!(
             invalid.buffered_hint(),
-            "Press Enter to apply `:queue later`. Supported command: :queue."
+            "`:queue` does not accept arguments (`later`); press Enter to open queue inspection."
         );
     }
 

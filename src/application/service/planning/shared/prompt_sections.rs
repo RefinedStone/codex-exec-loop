@@ -156,7 +156,7 @@ fn truncate_optional_prompt_section(body: Option<&str>, max_chars: usize) -> Opt
         .filter(|body| !body.trim().is_empty())
 }
 
-fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
     let body = body.trim();
     if body.chars().count() <= max_chars {
         return body.to_string();

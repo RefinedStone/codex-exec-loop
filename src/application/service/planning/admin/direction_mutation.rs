@@ -10,6 +10,7 @@ use super::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminFacadeService,
 };
+use crate::domain::planning::TaskAuthorityDocument;
 
 pub(super) struct PlanningAdminDirectionMutationService<'a> {
     facade: &'a PlanningAdminFacadeService,
@@ -50,7 +51,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
         let mut documents = self.facade.load_operator_planning_documents()?;
         let direction = direction_from_request(request, &documents.directions)?;
-        let direction_id = direction.id.trim().to_string();
+        let direction_id = direction.id.clone();
         let updated = if let Some(existing) = documents
             .directions
             .directions
@@ -99,17 +100,8 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
             bail!("direction `{direction_id}` was not found");
         }
 
-        let removed_task_ids = documents
-            .task_authority
-            .tasks
-            .iter()
-            .filter(|task| task.direction_id.trim() == direction_id)
-            .map(|task| task.id.trim().to_string())
-            .collect::<BTreeSet<_>>();
-        documents
-            .task_authority
-            .tasks
-            .retain(|task| task.direction_id.trim() != direction_id);
+        let removed_task_ids =
+            remove_tasks_for_direction(&mut documents.task_authority, &direction_id);
         remove_task_references(&mut documents.task_authority, &removed_task_ids);
 
         let removed_task_count = removed_task_ids.len();
@@ -123,4 +115,19 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
             removed_task_count,
         })
     }
+}
+
+fn remove_tasks_for_direction(
+    task_authority: &mut TaskAuthorityDocument,
+    direction_id: &str,
+) -> BTreeSet<String> {
+    let mut removed_task_ids = BTreeSet::new();
+    task_authority.tasks.retain(|task| {
+        if task.direction_id.trim() == direction_id {
+            removed_task_ids.insert(task.id.trim().to_string());
+            return false;
+        }
+        true
+    });
+    removed_task_ids
 }

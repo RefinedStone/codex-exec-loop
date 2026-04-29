@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::application::service::planning::shared::prompt_sections::{
     PlanningPromptHandoff, repair_constraints, repair_previous_handoff_lines,
-    repair_task_authority_output_contract,
+    repair_task_authority_output_contract, truncate_prompt_section,
 };
 use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::{TaskAuthorityDocument, TaskDefinition};
@@ -353,16 +353,6 @@ fn serialize_focused_task_authority_excerpt(
         tasks: focused_tasks,
     })
     .ok()
-}
-
-fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
-    let body = body.trim();
-    if body.chars().count() <= max_chars {
-        return body.to_string();
-    }
-
-    let truncated = body.chars().take(max_chars).collect::<String>();
-    format!("{truncated}\n... [truncated]")
 }
 
 impl PlanningRepairRetryReason {
