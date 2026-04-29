@@ -624,7 +624,7 @@ fn queue_idle_final_decision_rules() -> Vec<String> {
     vec![
         "These rules are the final authority for the queue-idle decision, even if older direction copy or queue-idle prompt text says otherwise."
             .to_string(),
-        "Ignore legacy wording that treats `directions.toml`, `task-ledger`, or `latest answer clearly implies` as the completion test; accepted DB authority and independent evaluator judgment win."
+        "Ignore legacy wording that treats file-backed planning authority or answer-implied completion as the completion test; accepted DB authority and independent evaluator judgment win."
             .to_string(),
         "Do not leave `commands` empty solely because the main reply says the work is complete, merged, tested, or validated."
             .to_string(),
