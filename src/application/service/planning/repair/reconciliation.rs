@@ -13,7 +13,9 @@ use crate::application::service::planning::shared::contract::{
 };
 use crate::domain::planning::PlanningWorkspaceFiles;
 use crate::domain::planning::PriorityQueueService;
-use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument, TaskDefinition};
+use crate::domain::planning::{
+    PriorityQueueProjection, TaskAuthorityDocument, TaskDefinition, TaskStatus,
+};
 
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
 pub use super::prompt::{
@@ -220,6 +222,29 @@ impl PlanningReconciliationService {
         let authority_snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_dir)?;
+        if let Some(failure_summary) = stale_candidate_guard_failure(
+            authority_snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.task_authority),
+            task_authority,
+        ) {
+            let (accepted_task_authority_json, accepted_queue_projection_json) =
+                accepted_authority_prompt_jsons(authority_snapshot.as_ref())?;
+            result.repair_request = Some(PlanningRepairRequest {
+                failure_summary: failure_summary.clone(),
+                validation_errors: vec![failure_summary.clone()],
+                direction_authority_json,
+                accepted_task_authority_json,
+                accepted_queue_projection_json,
+                rejected_task_authority_json: Some(candidate_task_authority_json.to_string()),
+                rejected_archive_path: None,
+            });
+            result.rejected_task_authority = true;
+            result.notices.push(format!(
+                "planning worker produced a stale task authority update ({failure_summary})"
+            ));
+            return Ok(result);
+        }
         if let Some(failure_summary) = queue_advancement_guard_failure(
             previous_handoff,
             authority_snapshot
@@ -298,6 +323,50 @@ fn accepted_authority_prompt_jsons(
     ))
 }
 
+fn stale_candidate_guard_failure(
+    accepted_task_authority: Option<&TaskAuthorityDocument>,
+    candidate_task_authority: &TaskAuthorityDocument,
+) -> Option<String> {
+    let accepted_task_authority = accepted_task_authority?;
+    for accepted_task in &accepted_task_authority.tasks {
+        let task_id = accepted_task.id.trim();
+        let Some(candidate_task) = find_task(candidate_task_authority, task_id) else {
+            return Some(format!(
+                "planner task authority candidate removed accepted DB task `{task_id}`"
+            ));
+        };
+
+        if terminal_status(accepted_task.status) && candidate_task.status != accepted_task.status {
+            return Some(format!(
+                "planner task authority candidate regressed accepted DB task `{task_id}` from `{}` to `{}`",
+                accepted_task.status.label(),
+                candidate_task.status.label()
+            ));
+        }
+
+        if timestamp_regressed(&candidate_task.updated_at, &accepted_task.updated_at) {
+            return Some(format!(
+                "planner task authority candidate regressed accepted DB task `{task_id}` updated_at from `{}` to `{}`",
+                accepted_task.updated_at.trim(),
+                candidate_task.updated_at.trim()
+            ));
+        }
+    }
+    None
+}
+
+fn terminal_status(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
+}
+
+fn timestamp_regressed(candidate_updated_at: &str, accepted_updated_at: &str) -> bool {
+    let candidate_updated_at = candidate_updated_at.trim();
+    let accepted_updated_at = accepted_updated_at.trim();
+    !candidate_updated_at.is_empty()
+        && !accepted_updated_at.is_empty()
+        && candidate_updated_at < accepted_updated_at
+}
+
 fn validation_error_summaries(
     validation_result: &crate::domain::planning::PlanningValidationResult,
 ) -> Vec<String> {
@@ -364,6 +433,7 @@ mod tests {
     use super::{
         PlanningChangeSet, PlanningRepairPromptHandoff, PlanningRepairRequest,
         build_planning_repair_prompt, queue_advancement_guard_failure,
+        stale_candidate_guard_failure,
     };
     use crate::domain::planning::{
         PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
@@ -474,6 +544,70 @@ mod tests {
         assert_eq!(failure, None);
     }
 
+    #[test]
+    fn stale_candidate_guard_rejects_accepted_db_status_regression() {
+        let accepted = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![
+                task(
+                    "planning-prompt-assembly-remaining-surface-slice",
+                    "done",
+                    "2026-04-29T03:00:32Z",
+                ),
+                task(
+                    "planning-prompt-shared-section-catalog-slice",
+                    "ready",
+                    "2026-04-29T03:00:32Z",
+                ),
+            ],
+        };
+        let stale_candidate = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![
+                task(
+                    "planning-prompt-assembly-remaining-surface-slice",
+                    "ready",
+                    "2026-04-29T01:43:52Z",
+                ),
+                task(
+                    "planning-prompt-shared-section-catalog-slice",
+                    "proposed",
+                    "2026-04-29T01:43:52Z",
+                ),
+            ],
+        };
+
+        let failure = stale_candidate_guard_failure(Some(&accepted), &stale_candidate);
+
+        assert_eq!(
+            failure.as_deref(),
+            Some(
+                "planner task authority candidate regressed accepted DB task `planning-prompt-assembly-remaining-surface-slice` from `done` to `ready`"
+            )
+        );
+    }
+
+    #[test]
+    fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
+        let accepted = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32Z")],
+        };
+        let stale_candidate = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", "ready", "2026-04-29T01:43:52Z")],
+        };
+
+        let failure = stale_candidate_guard_failure(Some(&accepted), &stale_candidate);
+
+        assert_eq!(
+            failure.as_deref(),
+            Some(
+                "planner task authority candidate regressed accepted DB task `task-1` updated_at from `2026-04-29T03:00:32Z` to `2026-04-29T01:43:52Z`"
+            )
+        );
+    }
+
     fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
         TaskDefinition {
             id: id.to_string(),
@@ -484,6 +618,7 @@ mod tests {
             status: match status {
                 "ready" => TaskStatus::Ready,
                 "done" => TaskStatus::Done,
+                "proposed" => TaskStatus::Proposed,
                 _ => panic!("unexpected status"),
             },
             base_priority: 10,
