@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use anyhow::{Result, bail};
 
-use super::documents::{
-    DEFAULT_DIRECTION_ID, default_direction_id, direction_from_request, ensure_default_direction,
-    normalized_required_id, remove_task_references,
+use super::direction_mutation::{
+    PlanningAdminDirectionMutationCommand, PlanningAdminDirectionMutationService,
 };
+use super::documents::{default_direction_id, normalized_required_id, remove_task_references};
 use super::projection::map_management_view;
 use super::{
     PlanningAdminCrudOutcome, PlanningAdminDirectionDeleteRequest,
@@ -20,7 +20,7 @@ use crate::domain::planning::TaskStatus;
 
 impl PlanningAdminFacadeService {
     pub fn load_management_view(&self) -> Result<PlanningAdminManagementView> {
-        let documents = self.load_admin_documents()?;
+        let documents = self.load_operator_planning_documents()?;
         Ok(map_management_view(
             &documents.directions,
             &documents.task_authority,
@@ -32,28 +32,14 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDirectionMutationRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
-        let mut documents = self.load_admin_documents()?;
-        let direction = direction_from_request(request, &documents.directions)?;
-        let id = direction.id.trim().to_string();
-        let updated = if let Some(existing) = documents
-            .directions
-            .directions
-            .iter_mut()
-            .find(|existing| existing.id.trim() == id)
-        {
-            *existing = direction;
-            true
-        } else {
-            documents.directions.directions.push(direction);
-            false
-        };
-        self.commit_admin_documents(documents)?;
+        let outcome = PlanningAdminDirectionMutationService::new(self)
+            .apply(PlanningAdminDirectionMutationCommand::Upsert(request))?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
-            notice: if updated {
-                format!("direction `{id}` updated")
+            notice: if outcome.updated {
+                format!("direction `{}` updated", outcome.direction_id)
             } else {
-                format!("direction `{id}` added")
+                format!("direction `{}` added", outcome.direction_id)
             },
             management,
         })
@@ -63,46 +49,19 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDirectionDeleteRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
-        let direction_id = normalized_required_id(&request.id, "direction id")?;
-        let mut documents = self.load_admin_documents()?;
-        if direction_id == DEFAULT_DIRECTION_ID {
-            ensure_default_direction(&mut documents.directions)?;
-            self.commit_admin_documents(documents)?;
-            let management = self.load_management_view()?;
+        let outcome = PlanningAdminDirectionMutationService::new(self)
+            .apply(PlanningAdminDirectionMutationCommand::Delete(request))?;
+        let management = self.load_management_view()?;
+        if !outcome.deleted {
             return Ok(PlanningAdminCrudOutcome {
-                notice: format!("default direction `{DEFAULT_DIRECTION_ID}` is retained"),
+                notice: format!("default direction `{}` is retained", outcome.direction_id),
                 management,
             });
         }
-        let original_count = documents.directions.directions.len();
-        documents
-            .directions
-            .directions
-            .retain(|direction| direction.id.trim() != direction_id);
-        if documents.directions.directions.len() == original_count {
-            bail!("direction `{direction_id}` was not found");
-        }
-
-        let removed_task_ids = documents
-            .task_authority
-            .tasks
-            .iter()
-            .filter(|task| task.direction_id.trim() == direction_id)
-            .map(|task| task.id.trim().to_string())
-            .collect::<BTreeSet<_>>();
-        documents
-            .task_authority
-            .tasks
-            .retain(|task| task.direction_id.trim() != direction_id);
-        remove_task_references(&mut documents.task_authority, &removed_task_ids);
-
-        let removed_task_count = removed_task_ids.len();
-        ensure_default_direction(&mut documents.directions)?;
-        self.commit_admin_documents(documents)?;
-        let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
             notice: format!(
-                "direction `{direction_id}` deleted with {removed_task_count} child tasks"
+                "direction `{}` deleted with {} child tasks",
+                outcome.direction_id, outcome.removed_task_count
             ),
             management,
         })
@@ -143,8 +102,10 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminTaskDeleteRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
+        // Admin delete is an explicit operator maintenance action. LLM and runtime task
+        // commands still cannot delete tasks; they must move work to `cancelled`.
         let task_id = normalized_required_id(&request.id, "task id")?;
-        let mut documents = self.load_admin_documents()?;
+        let mut documents = self.load_operator_planning_documents()?;
         let original_count = documents.task_authority.tasks.len();
         documents
             .task_authority
@@ -157,7 +118,7 @@ impl PlanningAdminFacadeService {
             &mut documents.task_authority,
             &BTreeSet::from([task_id.to_string()]),
         );
-        self.commit_admin_documents(documents)?;
+        self.commit_operator_planning_documents(documents)?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
             notice: format!("task `{task_id}` deleted"),

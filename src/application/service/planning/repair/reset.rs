@@ -317,6 +317,8 @@ impl PlanningResetService {
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid reset queue build failed: {error}"))?;
+        // Reset is an operator/system authority rewrite boundary, not an incremental
+        // task mutation. The caller selected a destructive reset target explicitly.
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
                 workspace_dir,

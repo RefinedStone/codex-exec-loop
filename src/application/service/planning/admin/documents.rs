@@ -36,7 +36,9 @@ impl PlanningAdminFacadeService {
         .map(|_| ())
     }
 
-    pub(super) fn load_admin_documents(&self) -> Result<PlanningAdminDocuments> {
+    pub(super) fn load_operator_planning_documents(
+        &self,
+    ) -> Result<PlanningOperatorPlanningDocuments> {
         self.ensure_default_authority()?;
         let workspace = self
             .planning_workspace_port
@@ -56,7 +58,7 @@ impl PlanningAdminFacadeService {
             .ok_or_else(|| {
                 anyhow!("default planning authority seed did not provide task authority")
             })?;
-        Ok(PlanningAdminDocuments {
+        Ok(PlanningOperatorPlanningDocuments {
             directions: direction_authority_snapshot.directions,
             task_authority: task_authority_snapshot.task_authority,
             result_output_markdown,
@@ -64,9 +66,9 @@ impl PlanningAdminFacadeService {
         })
     }
 
-    pub(super) fn commit_admin_documents(
+    pub(super) fn commit_operator_planning_documents(
         &self,
-        mut documents: PlanningAdminDocuments,
+        mut documents: PlanningOperatorPlanningDocuments,
     ) -> Result<()> {
         ensure_default_direction(&mut documents.directions)?;
         remove_tasks_with_unresolved_directions(&mut documents);
@@ -146,7 +148,7 @@ impl PlanningAdminFacadeService {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PlanningAdminDocuments {
+pub(super) struct PlanningOperatorPlanningDocuments {
     pub(super) directions: DirectionCatalogDocument,
     pub(super) task_authority: TaskAuthorityDocument,
     pub(super) result_output_markdown: String,
@@ -215,7 +217,7 @@ fn build_default_direction_definition() -> Result<DirectionDefinition, String> {
         .ok_or_else(|| format!("bootstrap default direction `{DEFAULT_DIRECTION_ID}` is missing"))
 }
 
-fn remove_tasks_with_unresolved_directions(documents: &mut PlanningAdminDocuments) {
+fn remove_tasks_with_unresolved_directions(documents: &mut PlanningOperatorPlanningDocuments) {
     let direction_ids = documents
         .directions
         .directions
