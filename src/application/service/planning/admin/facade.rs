@@ -5,6 +5,7 @@ use crate::application::port::outbound::planning_task_repository_port::PlanningT
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::task_mutation::PlanningTaskMutationService;
 use crate::domain::planning::PriorityQueueService;
 
 #[derive(Clone)]
@@ -16,6 +17,7 @@ pub struct PlanningAdminFacadeService {
     pub(super) planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     pub(super) planning_validation_service: PlanningValidationService,
     pub(super) priority_queue_service: PriorityQueueService,
+    pub(super) task_mutation_service: PlanningTaskMutationService,
 }
 
 impl PlanningAdminFacadeService {

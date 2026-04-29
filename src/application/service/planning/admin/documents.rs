@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::Utc;
 
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
@@ -15,17 +14,13 @@ use crate::application::service::planning::authoring::bootstrap::{
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningWorkspaceFiles,
-    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
+    TaskAuthorityDocument,
 };
 
-use super::{
-    PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService,
-    PlanningAdminTaskMutationRequest,
-};
+use super::{PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService};
 
 pub(super) const DEFAULT_DIRECTION_ID: &str = "general-workstream";
 const GENERATED_DIRECTION_ID_PREFIX: &str = "dir";
-const GENERATED_TASK_ID_PREFIX: &str = "task";
 static DEFAULT_DIRECTION_DEFINITION: OnceLock<Result<DirectionDefinition, String>> =
     OnceLock::new();
 
@@ -190,60 +185,6 @@ pub(super) fn direction_from_request(
     })
 }
 
-pub(super) fn task_from_request(
-    request: PlanningAdminTaskMutationRequest,
-    task_authority: &TaskAuthorityDocument,
-    default_direction_id: &str,
-) -> Result<TaskDefinition> {
-    let title = normalized_required_text(&request.title, "task title")?;
-    let id = if request.id.trim().is_empty() {
-        generated_unique_id(
-            GENERATED_TASK_ID_PREFIX,
-            title,
-            task_authority.tasks.iter().map(|task| task.id.trim()),
-        )
-    } else {
-        normalized_required_id(&request.id, "task id")?.to_string()
-    };
-    let now = Utc::now().to_rfc3339();
-    let existing = task_authority
-        .tasks
-        .iter()
-        .find(|task| task.id.trim() == id.as_str())
-        .cloned();
-    let direction_id = if request.direction_id.trim().is_empty() {
-        default_direction_id.to_string()
-    } else {
-        normalized_required_id(&request.direction_id, "direction id")?.to_string()
-    };
-    let base_priority = parse_i32_or_default(&request.base_priority, 10, "base priority")?;
-    let dynamic_priority_delta =
-        parse_i32_or_default(&request.dynamic_priority_delta, 0, "dynamic priority delta")?;
-    Ok(TaskDefinition {
-        id,
-        direction_id,
-        direction_relation_note: existing
-            .as_ref()
-            .map(|task| task.direction_relation_note.clone())
-            .unwrap_or_default(),
-        title: title.to_string(),
-        description: non_empty_or(&request.description, title),
-        status: parse_task_status(&request.status)?,
-        base_priority,
-        dynamic_priority_delta,
-        priority_reason: request.priority_reason.trim().to_string(),
-        depends_on: split_references(&request.depends_on_text),
-        blocked_by: split_references(&request.blocked_by_text),
-        created_by: existing
-            .as_ref()
-            .map(|task| task.created_by)
-            .unwrap_or(TaskActor::User),
-        last_updated_by: TaskActor::User,
-        source_turn_id: existing.and_then(|task| task.source_turn_id),
-        updated_at: now,
-    })
-}
-
 pub(super) fn ensure_default_direction(directions: &mut DirectionCatalogDocument) -> Result<()> {
     if directions
         .directions
@@ -304,19 +245,6 @@ fn parse_direction_state(raw: &str) -> Result<DirectionState> {
     }
 }
 
-fn parse_task_status(raw: &str) -> Result<TaskStatus> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "" | "ready" => Ok(TaskStatus::Ready),
-        "blocked" => Ok(TaskStatus::Blocked),
-        "in_progress" => Ok(TaskStatus::InProgress),
-        "done" => Ok(TaskStatus::Done),
-        "cancelled" => Ok(TaskStatus::Cancelled),
-        "awaiting_user" => Ok(TaskStatus::AwaitingUser),
-        "proposed" => Ok(TaskStatus::Proposed),
-        other => bail!("unknown task status `{other}`"),
-    }
-}
-
 pub(super) fn default_direction_id(directions: &DirectionCatalogDocument) -> Result<&str> {
     if let Some(direction) = directions
         .directions
@@ -333,20 +261,6 @@ pub(super) fn default_direction_id(directions: &DirectionCatalogDocument) -> Res
         .map(|direction| direction.id.trim())
         .filter(|id| !id.is_empty())
         .ok_or_else(|| anyhow!("at least one direction is required"))
-}
-
-pub(super) fn ensure_direction_exists(
-    directions: &DirectionCatalogDocument,
-    direction_id: &str,
-) -> Result<()> {
-    if directions
-        .directions
-        .iter()
-        .any(|direction| direction.id.trim() == direction_id.trim())
-    {
-        return Ok(());
-    }
-    bail!("direction `{}` does not exist", direction_id.trim())
 }
 
 pub(super) fn normalized_required_id<'a>(value: &'a str, label: &str) -> Result<&'a str> {
@@ -420,27 +334,10 @@ fn slugify_title(title: &str) -> String {
     }
 }
 
-fn parse_i32_or_default(raw: &str, default: i32, label: &str) -> Result<i32> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(default);
-    }
-    raw.parse::<i32>()
-        .with_context(|| format!("{label} must be an integer"))
-}
-
 fn split_lines(raw: &str) -> Vec<String> {
     raw.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn split_references(raw: &str) -> Vec<String> {
-    raw.split([',', '\n'])
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
         .map(str::to_string)
         .collect()
 }
