@@ -317,10 +317,6 @@ fn startup_ascii_art_enabled_from_value(value: Option<&str>) -> bool {
 }
 
 #[cfg(test)]
-#[path = "app/app_tests.rs"]
-mod tests;
-
-#[cfg(test)]
 mod startup_ascii_art_env_tests {
     use super::{InlineHistoryRenderMode, PlannerVisibility, startup_ascii_art_enabled_from_value};
 

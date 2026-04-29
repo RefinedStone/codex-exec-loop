@@ -721,11 +721,3 @@ fn set_direction_detail_doc_path(
 fn set_queue_idle_prompt_path(directions: &mut DirectionCatalogDocument, prompt_path: &str) {
     directions.queue_idle.prompt_path = prompt_path.to_string();
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_module_compiles_after_task_authority_file_removal() {
-        assert!(std::env::current_dir().is_ok());
-    }
-}

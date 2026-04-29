@@ -277,11 +277,3 @@ fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> St
         .build()
         .render()
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_module_compiles_after_task_authority_file_removal() {
-        assert!(std::env::current_dir().is_ok());
-    }
-}

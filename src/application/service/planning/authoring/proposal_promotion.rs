@@ -227,11 +227,3 @@ fn workspace_record_to_files<'a>(
             .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_module_compiles_after_task_authority_file_removal() {
-        assert!(std::env::current_dir().is_ok());
-    }
-}
