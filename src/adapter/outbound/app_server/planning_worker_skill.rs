@@ -65,4 +65,17 @@ mod tests {
             "/repo/docs/agent/skills/akra-planning-queue-mutation/SKILL.md"
         );
     }
+
+    #[test]
+    fn queue_mutation_skill_documents_evaluator_contract() {
+        let skill =
+            std::fs::read_to_string(skill_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))))
+                .expect("repo-local planning queue mutation skill should be readable");
+
+        assert!(skill.contains("post-turn planning evaluator"));
+        assert!(skill.contains("not as a TODO extractor"));
+        assert!(skill.contains("not completion authority"));
+        assert!(skill.contains("PlanningTaskMutationService"));
+        assert!(skill.contains("planning_task_commands"));
+    }
 }
