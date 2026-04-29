@@ -40,6 +40,9 @@ canonicalize_path() {
 path_is_kept() {
   local candidate="$1"
   local kept
+  if ((${#keep_paths[@]} == 0)); then
+    return 1
+  fi
   for kept in "${keep_paths[@]}"; do
     if [[ "${candidate}" == "${kept}" ]]; then
       return 0
@@ -51,6 +54,9 @@ path_is_kept() {
 branch_is_kept() {
   local candidate="$1"
   local kept
+  if ((${#keep_branches[@]} == 0)); then
+    return 1
+  fi
   for kept in "${keep_branches[@]}"; do
     if [[ "${candidate}" == "${kept}" ]]; then
       return 0
@@ -62,6 +68,9 @@ branch_is_kept() {
 path_is_targeted() {
   local candidate="$1"
   local target
+  if ((${#target_paths[@]} == 0)); then
+    return 1
+  fi
   for target in "${target_paths[@]}"; do
     if [[ "${candidate}" == "${target}" ]]; then
       return 0
@@ -73,6 +82,9 @@ path_is_targeted() {
 branch_is_targeted() {
   local candidate="$1"
   local target
+  if ((${#target_branches[@]} == 0)); then
+    return 1
+  fi
   for target in "${target_branches[@]}"; do
     if [[ "${candidate}" == "${target}" ]]; then
       return 0
