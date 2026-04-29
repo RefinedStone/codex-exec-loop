@@ -292,6 +292,8 @@ impl PlanningInitService {
                 applied_paths.push(file.active_path.clone());
             }
             self.commit_direction_authority_from_bootstrap(workspace_dir, directions)?;
+            // Draft promotion is an operator authority rewrite: it replaces an accepted
+            // planning snapshot after validation instead of applying incremental task commands.
             self.planning_task_repository_port
                 .commit_task_authority_snapshot(
                     workspace_dir,
@@ -545,6 +547,8 @@ impl PlanningInitService {
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
+        // Bootstrap seeds a complete system-owned authority snapshot. It intentionally
+        // bypasses task-level mutation commands, which only handle incremental changes.
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
                 workspace_dir,

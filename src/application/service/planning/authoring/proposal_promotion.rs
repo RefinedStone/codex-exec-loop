@@ -122,6 +122,8 @@ impl PlanningProposalPromotionService {
         let next_queue_projection = self
             .priority_queue_service
             .build_projection(&directions, &task_authority)?;
+        // Proposal promotion is a system-owned authority rewrite for one queued
+        // proposal, guarded by the observed revision from the loaded snapshot.
         match self
             .planning_task_repository_port
             .commit_task_authority_snapshot(
