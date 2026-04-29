@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
+use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::{TaskAuthorityDocument, TaskDefinition};
 
 use super::reconciliation::PlanningRepairRequest;
@@ -33,92 +35,123 @@ pub fn build_planning_repair_prompt(
     max_attempts: usize,
     retry_reason: Option<PlanningRepairRetryReason>,
 ) -> String {
-    let mut lines = vec![
-        "대리인입니다.".to_string(),
-        format!("planning repair {attempt_number}/{max_attempts} 입니다."),
-        "이전 턴에서 DB task authority 후보가 validation을 통과하지 못했습니다.".to_string(),
-        "이번 턴에서는 planning 파일을 수정하지 말고, 마지막 답변에 fenced JSON 하나를 포함하세요: `{\"task_authority\": {...}}`.".to_string(),
-        "- `result-output.md` 은 수정하지 마세요.".to_string(),
-        "- 현재 task authority는 마지막 accepted DB snapshot 기준입니다."
-            .to_string(),
-        "- 아래 validation 오류를 모두 해결하는 전체 task authority JSON을 `task_authority` 값으로 반환하세요.".to_string(),
-        "- 기존 direction frame 밖의 관련 없는 새 작업은 추가하지 마세요.".to_string(),
-    ];
-
-    if let Some(retry_reason) = retry_reason {
-        lines.push(format!("- 추가 지시: {}", retry_reason.instruction()));
-    }
-
-    if let Some(previous_handoff) = previous_handoff {
-        lines.push(String::new());
-        lines.push("직전에 main session으로 넘긴 task:".to_string());
-        lines.push(format!("- task_id: {}", previous_handoff.task_id));
-        lines.push(format!("- title: {}", previous_handoff.task_title));
-        lines.push(format!("- updated_at: {}", previous_handoff.updated_at));
-        lines.push(format!("- status: {}", previous_handoff.status_label));
-        lines.push(
-            "- 같은 task를 유지하려면 그 task 자체가 바뀌었다는 근거가 ledger에 있어야 합니다."
-                .to_string(),
-        );
-    }
-
-    lines.push(String::new());
-    lines.push(format!("Failure summary: {}", request.failure_summary));
-    lines.push(String::new());
-    lines.push("Validation errors:".to_string());
-    for error in &request.validation_errors {
-        lines.push(format!("- {error}"));
-    }
-    if let Some(rejected_archive_path) = request.rejected_archive_path.as_deref() {
-        lines.push(format!("- rejected archive: {rejected_archive_path}"));
-    }
-
-    lines.push(String::new());
-    lines.push("Accepted direction authority:".to_string());
-    lines.push(prompt_code_block(
-        "json",
-        truncate_prompt_section(&request.direction_authority_json, 4_000).as_str(),
-    ));
-
     let prompt_context = build_planning_repair_prompt_context(request, previous_handoff);
     let accepted_excerpt = prompt_context
         .accepted_excerpt
         .clone()
         .unwrap_or_else(|| truncate_prompt_section(&request.accepted_task_authority_json, 4_000));
+    let accepted_heading = prompt_context
+        .accepted_heading
+        .clone()
+        .unwrap_or_else(|| "accepted-task-authority".to_string());
+    let rejected_excerpt = rejected_excerpt(request, &prompt_context);
+    let rejected_heading = prompt_context
+        .rejected_heading
+        .clone()
+        .unwrap_or_else(|| "rejected-candidate".to_string());
 
-    lines.push(String::new());
-    lines.push(
-        prompt_context
-            .accepted_heading
-            .unwrap_or_else(|| "Current accepted task authority snapshot:".to_string()),
+    PromptDocument::builder("planning-repair")
+        .lines("role", repair_role_lines(attempt_number, max_attempts))
+        .bullets("output-contract", repair_output_contract())
+        .bullets("constraints", repair_constraints())
+        .lines("retry", retry_instruction_lines(retry_reason))
+        .lines("previous-handoff", previous_handoff_lines(previous_handoff))
+        .lines("validation", validation_lines(request))
+        .code_block(
+            "direction-authority",
+            "json",
+            &truncate_prompt_section(&request.direction_authority_json, 4_000),
+        )
+        .code_block(&accepted_heading, "json", &accepted_excerpt)
+        .optional_code_block(&rejected_heading, "json", rejected_excerpt.as_deref())
+        .bullets("final-response", final_response_rules())
+        .build()
+        .render()
+}
+
+fn repair_role_lines(attempt_number: usize, max_attempts: usize) -> Vec<String> {
+    vec![
+        "session=planning-repair-only".to_string(),
+        format!("attempt={attempt_number}/{max_attempts}"),
+        "reason=previous DB task authority candidate failed validation".to_string(),
+    ]
+}
+
+fn repair_output_contract() -> Vec<String> {
+    vec![
+        "Final answer must include exactly one fenced JSON object: `{\"task_authority\": {...}}`."
+            .to_string(),
+        "`task_authority` must be the full updated task authority document.".to_string(),
+        "Resolve every validation error listed below.".to_string(),
+    ]
+}
+
+fn repair_constraints() -> Vec<String> {
+    vec![
+        "Do not edit planning files in this turn; return the corrected ledger as JSON only."
+            .to_string(),
+        format!("Do not edit `{}`.", RESULT_OUTPUT_FILE_PATH),
+        "Use the last accepted DB snapshot as the current task authority baseline.".to_string(),
+        "Do not add unrelated work outside the existing direction frame.".to_string(),
+    ]
+}
+
+fn retry_instruction_lines(retry_reason: Option<PlanningRepairRetryReason>) -> Vec<String> {
+    retry_reason
+        .map(|retry_reason| vec![format!("instruction={}", retry_reason.instruction())])
+        .unwrap_or_default()
+}
+
+fn previous_handoff_lines(
+    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
+) -> Vec<String> {
+    previous_handoff.map_or_else(Vec::new, |previous_handoff| {
+        vec![
+            format!("task_id={}", previous_handoff.task_id),
+            format!("title={}", previous_handoff.task_title),
+            format!("updated_at={}", previous_handoff.updated_at),
+            format!("status={}", previous_handoff.status_label),
+            "If this task stays active, the ledger must show what changed.".to_string(),
+        ]
+    })
+}
+
+fn validation_lines(request: &PlanningRepairRequest) -> Vec<String> {
+    let mut lines = vec![format!("failure_summary={}", request.failure_summary)];
+    lines.extend(
+        request
+            .validation_errors
+            .iter()
+            .map(|error| format!("- {error}")),
     );
-    lines.push(prompt_code_block("json", &accepted_excerpt));
+    if let Some(rejected_archive_path) = request.rejected_archive_path.as_deref() {
+        lines.push(format!("rejected_archive={rejected_archive_path}"));
+    }
+    lines
+}
 
-    if let Some(rejected_task_authority_json) = request
+fn rejected_excerpt(
+    request: &PlanningRepairRequest,
+    prompt_context: &PlanningRepairPromptContext,
+) -> Option<String> {
+    request
         .rejected_task_authority_json
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-    {
-        let rejected_excerpt = prompt_context
-            .rejected_excerpt
-            .clone()
-            .unwrap_or_else(|| truncate_prompt_section(rejected_task_authority_json, 4_000));
-        lines.push(String::new());
-        lines.push(
+        .map(|rejected_task_authority_json| {
             prompt_context
-                .rejected_heading
-                .unwrap_or_else(|| "Rejected candidate excerpt:".to_string()),
-        );
-        lines.push(prompt_code_block("json", &rejected_excerpt));
-    }
+                .rejected_excerpt
+                .clone()
+                .unwrap_or_else(|| truncate_prompt_section(rejected_task_authority_json, 4_000))
+        })
+}
 
-    lines.push(String::new());
-    lines.push(
-        "수정이 끝나면 무엇을 고쳤는지 짧게 요약하고, 반드시 갱신된 전체 task authority를 fenced JSON으로 함께 반환하세요. 더 이상 고칠 것이 없어도 `DONE` 만 단독으로 출력하지 말고 이유를 설명하세요."
-            .to_string(),
-    );
-
-    lines.join("\n")
+fn final_response_rules() -> Vec<String> {
+    vec![
+        "Briefly summarize what was fixed.".to_string(),
+        "Return the updated full task authority in the required fenced JSON object.".to_string(),
+        "Do not answer with bare `DONE`; explain why if no ledger change is needed.".to_string(),
+    ]
 }
 
 fn build_planning_repair_prompt_context(
@@ -147,8 +180,7 @@ fn build_planning_repair_prompt_context(
 
     PlanningRepairPromptContext {
         accepted_heading: Some(
-            "Current accepted task authority focus (current handoff + validation context):"
-                .to_string(),
+            "accepted-task-authority-focus-current-handoff-and-validation".to_string(),
         ),
         accepted_excerpt: serialize_focused_task_authority_excerpt(
             accepted_task_authority,
@@ -156,7 +188,7 @@ fn build_planning_repair_prompt_context(
         ),
         rejected_heading: rejected_task_authority
             .as_ref()
-            .map(|_| "Rejected candidate focus (changed tasks + validation context):".to_string()),
+            .map(|_| "rejected-candidate-focus-changed-tasks-and-validation".to_string()),
         rejected_excerpt: rejected_task_authority.as_ref().and_then(|task_authority| {
             serialize_focused_task_authority_excerpt(task_authority, &focus_ids)
         }),
@@ -328,10 +360,6 @@ fn serialize_focused_task_authority_excerpt(
         tasks: focused_tasks,
     })
     .ok()
-}
-
-fn prompt_code_block(language: &str, body: &str) -> String {
-    format!("```{language}\n{body}\n```")
 }
 
 fn truncate_prompt_section(body: &str, max_chars: usize) -> String {

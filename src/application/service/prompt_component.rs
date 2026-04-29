@@ -39,6 +39,20 @@ pub(crate) struct PromptDocumentBuilder {
 }
 
 impl PromptDocumentBuilder {
+    pub(crate) fn raw_lines(mut self, title: impl Into<String>, lines: Vec<String>) -> Self {
+        let lines = lines
+            .into_iter()
+            .map(|line| line.trim_end().to_string())
+            .collect::<Vec<_>>();
+        if lines.iter().any(|line| !line.trim().is_empty()) {
+            self.sections.push(PromptSection {
+                title: title.into(),
+                lines,
+            });
+        }
+        self
+    }
+
     pub(crate) fn lines(mut self, title: impl Into<String>, lines: Vec<String>) -> Self {
         let lines = lines
             .into_iter()
@@ -80,6 +94,26 @@ impl PromptDocumentBuilder {
         }
     }
 
+    pub(crate) fn code_block(self, title: impl Into<String>, language: &str, body: &str) -> Self {
+        let body = body.trim();
+        let mut lines = vec![format!("```{language}")];
+        lines.extend(body.lines().map(|line| line.trim_end().to_string()));
+        lines.push("```".to_string());
+        self.raw_lines(title, lines)
+    }
+
+    pub(crate) fn optional_code_block(
+        self,
+        title: impl Into<String>,
+        language: &str,
+        body: Option<&str>,
+    ) -> Self {
+        match body.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(body) => self.code_block(title, language, body),
+            None => self,
+        }
+    }
+
     pub(crate) fn build(self) -> PromptDocument {
         PromptDocument {
             title: self.title,
@@ -99,12 +133,14 @@ mod tests {
             .bullets("rules", vec!["do this".to_string(), "do that".to_string()])
             .optional_text("missing", None)
             .text("payload", "alpha\nbeta")
+            .optional_code_block("missing-code", "json", None)
+            .code_block("json", "json", "{\n  \"ok\": true\n}")
             .build()
             .render();
 
         assert_eq!(
             prompt,
-            "# task\n\n[rules]\n- do this\n- do that\n\n[payload]\nalpha\nbeta"
+            "# task\n\n[rules]\n- do this\n- do that\n\n[payload]\nalpha\nbeta\n\n[json]\n```json\n{\n  \"ok\": true\n}\n```"
         );
     }
 }
