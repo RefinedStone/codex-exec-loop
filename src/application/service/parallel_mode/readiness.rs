@@ -7,7 +7,6 @@ use crate::application::service::planning::{
 };
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeReadinessState,
 };
 
 use super::{AKRA_BRANCH, DEFAULT_PUSH_REMOTE_NAME};
@@ -346,26 +345,6 @@ pub(super) fn blocked_prerequisite_capability(
         detail,
         Some(next_action.to_string()),
     )
-}
-
-pub(super) fn derive_readiness(
-    capabilities: &[ParallelModeCapabilitySnapshot],
-) -> ParallelModeReadinessState {
-    if capabilities
-        .iter()
-        .any(|capability| capability.state == ParallelModeCapabilityState::Blocked)
-    {
-        return ParallelModeReadinessState::Blocked;
-    }
-
-    if capabilities
-        .iter()
-        .any(|capability| capability.state != ParallelModeCapabilityState::Ready)
-    {
-        return ParallelModeReadinessState::Degraded;
-    }
-
-    ParallelModeReadinessState::Ready
 }
 
 pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {

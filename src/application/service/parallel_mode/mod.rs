@@ -11,8 +11,9 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseRequest,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 
@@ -34,7 +35,7 @@ use self::pool::{
     short_sha, write_slot_lease,
 };
 use self::readiness::{
-    blocked_prerequisite_capability, command_succeeds, derive_readiness, inspect_akra_branch,
+    blocked_prerequisite_capability, command_succeeds, inspect_akra_branch,
     inspect_authority_store, inspect_gh_auth, inspect_gh_binary, inspect_git_worktree,
     inspect_planning, inspect_push_remote, run_command,
 };
@@ -58,9 +59,6 @@ use self::pool::{
 use self::readiness::parse_https_remote;
 #[cfg(test)]
 use self::session_detail::{agent_session_detail_record_path, read_agent_session_detail_record};
-#[cfg(test)]
-use crate::domain::parallel_mode::ParallelModeReadinessState;
-
 const AKRA_BRANCH: &str = "akra";
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
 const DEFAULT_POOL_SIZE: usize = 3;
@@ -195,7 +193,7 @@ impl ParallelModeService {
             planning,
             authority_store,
         ];
-        let readiness = derive_readiness(&capabilities);
+        let readiness = ParallelModeReadinessState::derive_from_capabilities(&capabilities);
         let top_alert = capabilities
             .iter()
             .find(|capability| capability.state != ParallelModeCapabilityState::Ready)

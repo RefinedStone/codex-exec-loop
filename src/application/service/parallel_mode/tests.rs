@@ -4,10 +4,10 @@ use super::{
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeService, ParallelModeSupervisorState,
     agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
-    derive_default_pool_root, derive_readiness, detect_canonical_repo_root, lease_session_key,
-    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
-    resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash,
-    short_sha, slot_id, slot_lease_file_path,
+    derive_default_pool_root, detect_canonical_repo_root, lease_session_key, parse_https_remote,
+    read_agent_session_detail_record, reconcile_pool_board, resolve_workspace_slot_lease,
+    run_command, sanitize_task_slug, short_branch_slug_hash, short_sha, slot_id,
+    slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -470,46 +470,6 @@ fn test_parallel_mode_service_with_github(
 mod distributor;
 mod pool;
 mod supervisor;
-
-#[test]
-fn derive_readiness_marks_blocked_when_any_blocker_exists() {
-    let readiness = derive_readiness(&[
-        ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::GitRepository,
-            ParallelModeCapabilityState::Ready,
-            "ready",
-            None,
-        ),
-        ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::Planning,
-            ParallelModeCapabilityState::Blocked,
-            "planning invalid",
-            Some("repair planning".to_string()),
-        ),
-    ]);
-
-    assert_eq!(readiness, ParallelModeReadinessState::Blocked);
-}
-
-#[test]
-fn derive_readiness_marks_degraded_when_only_optional_capabilities_fail() {
-    let readiness = derive_readiness(&[
-        ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::GitRepository,
-            ParallelModeCapabilityState::Ready,
-            "ready",
-            None,
-        ),
-        ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::PushRemote,
-            ParallelModeCapabilityState::Degraded,
-            "push unavailable",
-            Some("restore auth".to_string()),
-        ),
-    ]);
-
-    assert_eq!(readiness, ParallelModeReadinessState::Degraded);
-}
 
 #[test]
 fn parse_https_remote_extracts_host_and_path() {

@@ -21,6 +21,24 @@ impl ParallelModeReadinessState {
     pub fn allows_parallel_mode(self) -> bool {
         matches!(self, Self::Ready | Self::Degraded)
     }
+
+    pub fn derive_from_capabilities(capabilities: &[ParallelModeCapabilitySnapshot]) -> Self {
+        if capabilities
+            .iter()
+            .any(|capability| capability.state == ParallelModeCapabilityState::Blocked)
+        {
+            return Self::Blocked;
+        }
+
+        if capabilities
+            .iter()
+            .any(|capability| capability.state != ParallelModeCapabilityState::Ready)
+        {
+            return Self::Degraded;
+        }
+
+        Self::Ready
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -730,5 +748,53 @@ impl ParallelModeSupervisorSnapshot {
 
     pub fn state_label(&self) -> &'static str {
         self.state.label()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+        ParallelModeReadinessState,
+    };
+
+    #[test]
+    fn readiness_derivation_marks_blocked_when_any_blocker_exists() {
+        let readiness = ParallelModeReadinessState::derive_from_capabilities(&[
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GitRepository,
+                ParallelModeCapabilityState::Ready,
+                "ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::Planning,
+                ParallelModeCapabilityState::Blocked,
+                "planning invalid",
+                Some("repair planning".to_string()),
+            ),
+        ]);
+
+        assert_eq!(readiness, ParallelModeReadinessState::Blocked);
+    }
+
+    #[test]
+    fn readiness_derivation_marks_degraded_when_only_optional_capabilities_fail() {
+        let readiness = ParallelModeReadinessState::derive_from_capabilities(&[
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GitRepository,
+                ParallelModeCapabilityState::Ready,
+                "ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Degraded,
+                "push unavailable",
+                Some("restore auth".to_string()),
+            ),
+        ]);
+
+        assert_eq!(readiness, ParallelModeReadinessState::Degraded);
     }
 }
