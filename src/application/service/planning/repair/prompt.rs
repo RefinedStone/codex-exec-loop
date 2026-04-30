@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::application::service::planning::shared::prompt_sections::{
-    PlanningPromptHandoff, repair_constraints, repair_previous_handoff_lines,
-    repair_task_authority_output_contract, truncate_prompt_section,
+    PlanningPromptHandoff, PlanningTaskMutationPromptMode, add_planning_task_mutation_sections,
+    repair_constraints, repair_previous_handoff_lines, truncate_prompt_section,
 };
 use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::{TaskAuthorityDocument, TaskDefinition};
@@ -57,9 +57,8 @@ pub fn build_planning_repair_prompt(
     let accepted_queue_projection_excerpt =
         truncate_prompt_section(&request.accepted_queue_projection_json, 2_000);
 
-    PromptDocument::builder("planning-repair")
+    let builder = PromptDocument::builder("planning-repair")
         .lines("role", repair_role_lines(attempt_number, max_attempts))
-        .bullets("output-contract", repair_task_authority_output_contract())
         .bullets("constraints", repair_constraints())
         .lines("retry", retry_instruction_lines(retry_reason))
         .lines(
@@ -76,7 +75,8 @@ pub fn build_planning_repair_prompt(
             "accepted-db-queue-projection",
             "json",
             Some(&accepted_queue_projection_excerpt),
-        )
+        );
+    add_planning_task_mutation_sections(builder, PlanningTaskMutationPromptMode::Repair)
         .optional_code_block(&accepted_heading, "json", Some(&accepted_excerpt))
         .optional_code_block(&rejected_heading, "json", rejected_excerpt.as_deref())
         .bullets("final-response", final_response_rules())

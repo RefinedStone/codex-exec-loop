@@ -19,24 +19,7 @@ You are running as an Akra planning-only sub session. Your job is to evaluate wh
 - Keep the executable queue narrow: at most one clearest immediate follow-up should become `ready` or `in_progress`; alternatives should remain `proposed`.
 - If no useful work remains, emit no mutation commands.
 
-## Required Output
-
-Return exactly one fenced JSON object containing `planning_task_commands`:
-
-```json
-{"planning_task_commands":{"version":1,"commands":[]}}
-```
-
-Each command must be a flat object with a top-level `op` field:
-
-```json
-{"op":"create_task","title":"..."}
-{"op":"update_task","task_id":"..."}
-```
-
-Do not wrap commands as `{"create_task":{...}}` or `{"update_task":{...}}`.
-
-## Preferred Tool Adapter
+## Mutation Workflow
 
 When the prompt includes `[planning-task-tool-contract]`, prefer the repo-local adapter over final-only mutation JSON:
 
@@ -45,13 +28,32 @@ akra planning-tool contract
 akra planning-tool run . < request.json
 ```
 
-Use `.` from the planning worker cwd. In parallel official-completion prompts, do not pass the completion payload's `worktree_path` as the planning-tool workspace. Use `list_tasks` before choosing create vs update. If a `create_task` or `update_task` call succeeds, return an empty `commands` array in the final JSON to avoid applying the same mutation twice.
+Use `.` from the planning worker cwd. In parallel official-completion prompts, do not pass the completion payload's `worktree_path` as the planning-tool workspace. Use `list_tasks` before choosing create vs update.
+
+When the tool succeeds, return an empty `commands` array in the final JSON to avoid applying the same mutation twice. Use non-empty final `planning_task_commands` only as a fallback when the tool cannot be used or rejects a payload you cannot repair within the turn.
+
+## Required Final Output
+
+Always end with exactly one fenced JSON object containing `planning_task_commands`:
+
+```json
+{"planning_task_commands":{"version":1,"commands":[]}}
+```
+
+If and only if the tool was unavailable and a mutation still needs to be applied by the host, include flat command objects with a top-level `op` field:
+
+```json
+{"op":"create_task","title":"..."}
+{"op":"update_task","task_id":"..."}
+```
+
+Do not wrap commands as `{"create_task":{...}}` or `{"update_task":{...}}`.
 
 ## Rules
 
 - Do not edit planning files directly.
 - Do not return a full `task_authority` document.
-- Mutations must go through the application-owned `PlanningTaskMutationService` path: either `planning-task-tool` during the turn or final `planning_task_commands` extracted by the host.
+- Mutations must go through the application-owned `PlanningTaskMutationService` path: preferably `planning-task-tool` during the turn, or final `planning_task_commands` extracted by the host as fallback.
 - Do not repeat a mutation in final `planning_task_commands` after `planning-task-tool` reports success.
 - Emit only `create_task` and `update_task` commands.
 - Do not include application-controlled fields: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`.
