@@ -703,7 +703,12 @@ fn format_elapsed_seconds(elapsed_seconds: i64) -> String {
         return format!("{elapsed_seconds}s");
     }
     if elapsed_seconds < 60 * 60 {
-        return format!("{}m", elapsed_seconds / 60);
+        let minutes = elapsed_seconds / 60;
+        let seconds = elapsed_seconds % 60;
+        if seconds == 0 {
+            return format!("{minutes}m");
+        }
+        return format!("{minutes}m {seconds}s");
     }
     if elapsed_seconds < 60 * 60 * 24 {
         let hours = elapsed_seconds / (60 * 60);
@@ -714,4 +719,15 @@ fn format_elapsed_seconds(elapsed_seconds: i64) -> String {
     let days = elapsed_seconds / (60 * 60 * 24);
     let hours = (elapsed_seconds % (60 * 60 * 24)) / (60 * 60);
     format!("{days}d {hours}h")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_elapsed_seconds;
+
+    #[test]
+    fn elapsed_label_keeps_seconds_for_short_running_agents() {
+        assert_eq!(format_elapsed_seconds(65), "1m 5s");
+        assert_eq!(format_elapsed_seconds(120), "2m");
+    }
 }
