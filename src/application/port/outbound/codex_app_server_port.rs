@@ -7,7 +7,7 @@ pub use super::session_catalog_port::SessionCatalogPort;
 pub use super::startup_probe_port::{AppServerStartupContext, StartupProbePort};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
-use crate::domain::recent_sessions::SessionCatalog;
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 
 // This remains as a Codex-shaped compatibility port while application services migrate to
 // capability-owned seams.
@@ -46,8 +46,8 @@ impl<T> SessionCatalogPort for T
 where
     T: CodexAppServerPort + ?Sized,
 {
-    fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
-        CodexAppServerPort::load_recent_sessions(self, limit)
+    fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog> {
+        CodexAppServerPort::load_recent_sessions(self, request.limit)
     }
 }
 
@@ -99,7 +99,9 @@ mod tests {
     use crate::domain::conversation::{
         ConversationControlSupport, ConversationRuntimeControlTruth, ConversationSnapshot,
     };
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+    use crate::domain::recent_sessions::{
+        RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+    };
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[derive(Default)]
@@ -217,7 +219,7 @@ mod tests {
         let session_catalog_port: &dyn SessionCatalogPort = &port;
 
         session_catalog_port
-            .load_recent_sessions(25)
+            .load_session_catalog(SessionCatalogRequest::for_workspace(25, "/tmp/root"))
             .expect("recent sessions should load");
 
         assert_eq!(

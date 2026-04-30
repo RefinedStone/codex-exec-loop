@@ -110,7 +110,10 @@ pub enum ShellChromeEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellChromeEffect {
     RunStartupChecks,
-    LoadRecentSessions { limit: usize },
+    LoadSessionCatalog {
+        limit: usize,
+        current_workspace_directory: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -136,11 +139,13 @@ pub fn reduce_shell_chrome(
         } => match result {
             Ok(diagnostics) => {
                 let can_continue = diagnostics.can_continue();
+                let workspace_path = diagnostics.workspace_path.clone();
                 state.startup_state = StartupState::Ready(diagnostics);
                 if can_continue && matches!(state.session_state, SessionState::Idle) {
                     state.session_state = SessionState::Loading;
-                    effects.push(ShellChromeEffect::LoadRecentSessions {
+                    effects.push(ShellChromeEffect::LoadSessionCatalog {
                         limit: session_page_size,
+                        current_workspace_directory: Some(workspace_path),
                     });
                 }
             }
@@ -260,7 +265,10 @@ fn queue_session_load_if_allowed(
 ) {
     if state.can_open_session_list() && matches!(state.session_state, SessionState::Idle) {
         state.session_state = SessionState::Loading;
-        effects.push(ShellChromeEffect::LoadRecentSessions { limit });
+        effects.push(ShellChromeEffect::LoadSessionCatalog {
+            limit,
+            current_workspace_directory: None,
+        });
     }
 }
 
@@ -271,7 +279,10 @@ fn queue_session_reload_if_allowed(
 ) {
     if state.can_open_session_list() && !matches!(state.session_state, SessionState::Loading) {
         state.session_state = SessionState::Loading;
-        effects.push(ShellChromeEffect::LoadRecentSessions { limit });
+        effects.push(ShellChromeEffect::LoadSessionCatalog {
+            limit,
+            current_workspace_directory: None,
+        });
     }
 }
 
@@ -305,7 +316,10 @@ mod tests {
         assert!(matches!(reduced.state.session_state, SessionState::Loading));
         assert_eq!(
             reduced.effects,
-            vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
+            vec![ShellChromeEffect::LoadSessionCatalog {
+                limit: 10,
+                current_workspace_directory: Some("/tmp/root".to_string()),
+            }]
         );
     }
 
@@ -324,7 +338,10 @@ mod tests {
         assert_eq!(first.state.shell_overlay, ShellOverlay::Sessions);
         assert_eq!(
             first.effects,
-            vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
+            vec![ShellChromeEffect::LoadSessionCatalog {
+                limit: 10,
+                current_workspace_directory: None
+            }]
         );
         assert!(second.effects.is_empty());
     }
@@ -340,7 +357,10 @@ mod tests {
         assert!(matches!(reduced.state.session_state, SessionState::Loading));
         assert_eq!(
             reduced.effects,
-            vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
+            vec![ShellChromeEffect::LoadSessionCatalog {
+                limit: 10,
+                current_workspace_directory: None
+            }]
         );
     }
 
@@ -385,7 +405,10 @@ mod tests {
         assert!(matches!(opened.state.session_state, SessionState::Loading));
         assert_eq!(
             opened.effects,
-            vec![ShellChromeEffect::LoadRecentSessions { limit: 10 }]
+            vec![ShellChromeEffect::LoadSessionCatalog {
+                limit: 10,
+                current_workspace_directory: None
+            }]
         );
         assert_eq!(closed.state.shell_overlay, ShellOverlay::Hidden);
         assert!(closed.effects.is_empty());

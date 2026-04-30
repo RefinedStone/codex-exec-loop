@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
-use crate::domain::recent_sessions::SessionCatalog;
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 
 #[derive(Clone)]
 pub struct SessionService {
@@ -17,8 +17,8 @@ impl SessionService {
         }
     }
 
-    pub fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
-        self.session_catalog_port.load_recent_sessions(limit)
+    pub fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog> {
+        self.session_catalog_port.load_session_catalog(request)
     }
 }
 
@@ -27,28 +27,19 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::application::port::outbound::codex_app_server_port::{
-        AppServerStartupContext, CodexAppServerPort,
-    };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::domain::conversation::ConversationSnapshot;
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
 
     #[derive(Default)]
-    struct FakeCodexAppServerPort {
-        limits: Mutex<Vec<usize>>,
+    struct FakeSessionCatalogPort {
+        requests: Mutex<Vec<SessionCatalogRequest>>,
     }
 
-    impl CodexAppServerPort for FakeCodexAppServerPort {
-        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
-            unreachable!("startup context is not used in session service tests")
-        }
-
-        fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
-            self.limits
+    impl SessionCatalogPort for FakeSessionCatalogPort {
+        fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            self.requests
                 .lock()
-                .expect("session limit mutex poisoned")
-                .push(limit);
+                .expect("session request mutex poisoned")
+                .push(request);
             Ok(RecentSessions {
                 items: Vec::new(),
                 warnings: Vec::new(),
@@ -56,42 +47,23 @@ mod tests {
             }
             .into())
         }
-
-        fn load_conversation_snapshot(&self, _thread_id: &str) -> Result<ConversationSnapshot> {
-            unreachable!("conversation snapshots are not used in session service tests")
-        }
-
-        fn run_new_thread_stream(
-            &self,
-            _cwd: &str,
-            _prompt: &str,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
-        ) -> Result<()> {
-            unreachable!("new-thread streaming is not used in session service tests")
-        }
-
-        fn run_turn_stream(
-            &self,
-            _thread_id: &str,
-            _prompt: &str,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
-        ) -> Result<()> {
-            unreachable!("turn streaming is not used in session service tests")
-        }
     }
 
     #[test]
-    fn load_recent_sessions_delegates_requested_limit() {
-        let port = Arc::new(FakeCodexAppServerPort::default());
+    fn load_session_catalog_delegates_capability_request() {
+        let port = Arc::new(FakeSessionCatalogPort::default());
         let service = SessionService::new(port.clone());
 
         service
-            .load_recent_sessions(25)
-            .expect("load recent sessions should succeed");
+            .load_session_catalog(SessionCatalogRequest::for_workspace(25, "/tmp/root"))
+            .expect("load session catalog should succeed");
 
         assert_eq!(
-            *port.limits.lock().expect("session limit mutex poisoned"),
-            vec![25]
+            *port
+                .requests
+                .lock()
+                .expect("session request mutex poisoned"),
+            vec![SessionCatalogRequest::for_workspace(25, "/tmp/root")]
         );
     }
 }

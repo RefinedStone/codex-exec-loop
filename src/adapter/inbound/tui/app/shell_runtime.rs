@@ -347,7 +347,7 @@ impl TuiFrameScheduler {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -359,12 +359,15 @@ mod tests {
     use crate::adapter::inbound::tui::app::{
         ConversationInputState, ConversationState, InlineShellCommand,
     };
-    use crate::adapter::inbound::tui::shell_chrome::{ShellOverlay, StartupState};
+    use crate::adapter::inbound::tui::shell_chrome::{
+        ShellChromeEvent, ShellOverlay, StartupState,
+    };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::codex_app_server_port::{
         AppServerStartupContext, CodexAppServerPort,
     };
     use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::github_review_poller_service::GithubReviewPollerService;
@@ -377,7 +380,7 @@ mod tests {
     use crate::domain::github_review::{
         GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
     };
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -456,11 +459,48 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeSessionCatalogPort {
+        requests: Mutex<Vec<SessionCatalogRequest>>,
+    }
+
+    impl SessionCatalogPort for FakeSessionCatalogPort {
+        fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            self.requests
+                .lock()
+                .expect("session catalog request mutex poisoned")
+                .push(request);
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            }
+            .into())
+        }
+    }
+
     fn make_test_runtime() -> ShellRuntime {
         let codex_port = Arc::new(FakeCodexAppServerPort);
         let app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
+            ConversationService::new(codex_port),
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+            PlanningServices::from_workspace_port(Arc::new(
+                FilesystemPlanningWorkspaceAdapter::new(),
+            )),
+        );
+
+        ShellRuntime::new(app)
+    }
+
+    fn make_test_runtime_with_session_port(
+        session_port: Arc<dyn SessionCatalogPort>,
+    ) -> ShellRuntime {
+        let codex_port = Arc::new(FakeCodexAppServerPort);
+        let app = NativeTuiApp::new(
+            StartupService::new(codex_port.clone()),
+            SessionService::new(session_port),
             ConversationService::new(codex_port),
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
             PlanningServices::from_workspace_port(Arc::new(
@@ -611,6 +651,38 @@ mod tests {
             }
             other => panic!("expected ready startup state, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn session_catalog_request_uses_current_workspace_context() {
+        let session_port = Arc::new(FakeSessionCatalogPort::default());
+        let mut runtime = make_test_runtime_with_session_port(session_port.clone());
+        runtime.app_mut().startup_state =
+            StartupState::Ready(sample_startup_diagnostics("/tmp/session-root"));
+
+        runtime
+            .app_mut()
+            .dispatch_shell_chrome(ShellChromeEvent::SessionsRequested { limit: 7 });
+
+        for _ in 0..20 {
+            if !session_port
+                .requests
+                .lock()
+                .expect("session catalog request mutex poisoned")
+                .is_empty()
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(
+            *session_port
+                .requests
+                .lock()
+                .expect("session catalog request mutex poisoned"),
+            vec![SessionCatalogRequest::for_workspace(7, "/tmp/session-root")]
+        );
     }
 
     #[test]

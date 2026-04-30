@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use crate::domain::recent_sessions::SessionCatalog;
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 
 pub trait SessionCatalogPort: Send + Sync {
-    fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog>;
+    fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog>;
 }

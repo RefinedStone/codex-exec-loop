@@ -9,7 +9,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
-use crate::domain::recent_sessions::SessionCatalog;
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::conversation_runtime::ConversationPostTurnEvaluation;
@@ -140,12 +140,18 @@ impl NativeTuiApp {
                     let _ = tx.send(BackgroundMessage::StartupLoaded(result));
                 });
             }
-            ShellChromeEffect::LoadRecentSessions { limit } => {
+            ShellChromeEffect::LoadSessionCatalog {
+                limit,
+                current_workspace_directory,
+            } => {
                 let tx = self.tx.clone();
                 let service = self.session_service.clone();
+                let workspace_directory = current_workspace_directory
+                    .unwrap_or_else(|| self.current_workspace_directory());
+                let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
                 thread::spawn(move || {
                     let result = service
-                        .load_recent_sessions(limit)
+                        .load_session_catalog(request)
                         .map_err(|error| error.to_string());
                     let _ = tx.send(BackgroundMessage::SessionsLoaded(result));
                 });

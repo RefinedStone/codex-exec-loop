@@ -1,5 +1,27 @@
 use crate::domain::session_summary::SessionSummary;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCatalogRequest {
+    pub limit: usize,
+    pub current_workspace_directory: Option<String>,
+}
+
+impl SessionCatalogRequest {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            current_workspace_directory: None,
+        }
+    }
+
+    pub fn for_workspace(limit: usize, current_workspace_directory: impl Into<String>) -> Self {
+        Self {
+            limit,
+            current_workspace_directory: Some(current_workspace_directory.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RecentSessions {
     pub items: Vec<SessionSummary>,
