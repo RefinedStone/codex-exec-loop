@@ -880,6 +880,49 @@ mod tests {
     }
 
     #[test]
+    fn supersession_overlay_allows_r_prompt_input() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::empty(),
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.input_buffer, "r");
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn supersession_overlay_ctrl_r_refreshes_readiness() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL,
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert!(conversation.input_buffer.is_empty());
+        assert!(
+            conversation
+                .status_text
+                .starts_with("parallel readiness refreshed / state:")
+        );
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
     fn supersession_overlay_allows_enter_to_submit_prompt() {
         let mut runtime = make_test_runtime();
         runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
