@@ -1,7 +1,8 @@
 use ratatui::text::Line;
 
 use crate::domain::parallel_mode::{
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
+    ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
 };
 
 use super::super::super::super::{AkraTheme, NativeTuiApp};
@@ -141,15 +142,20 @@ fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
     }
 
     lines.extend(roster.entries.iter().map(|entry| {
+        let state_label = display_supersession_state_label(&entry.state_label);
+        let duration_label =
+            display_roster_duration_label(&entry.state_label, &entry.duration_label);
+        let slot_health = slot_health_summary(supervisor_snapshot, &entry.slot_id);
         Line::from(format!(
-            "{}: {} / {} / {} / {} / {} / {}",
+            "{}: {} / {} / {} / {} / {} / {} / {}",
             entry.agent_id,
             entry.task_title,
             entry.slot_id,
             entry.branch_name,
-            display_supersession_state_label(&entry.state_label),
-            entry.duration_label,
-            entry.latest_summary
+            state_label,
+            duration_label,
+            entry.latest_summary,
+            slot_health
         ))
     }));
     lines
@@ -181,6 +187,10 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
         Line::from(format!(
             "thread: {}",
             detail.thread_id.as_deref().unwrap_or("not captured yet")
+        )),
+        Line::from(format!(
+            "slot health: {}",
+            slot_health_summary(supervisor_snapshot, &detail.slot_id)
         )),
         Line::from(format!("worktree: {}", detail.worktree_path)),
         Line::from(format!("branch: {}", detail.branch_name)),
@@ -276,6 +286,57 @@ fn display_supersession_state_label(state_label: &str) -> String {
     }
 }
 
+fn display_roster_duration_label(state_label: &str, duration_label: &str) -> String {
+    if state_label == "running" && !duration_label.trim().is_empty() {
+        return format!("working {}", duration_label.trim());
+    }
+
+    duration_label.to_string()
+}
+
+fn slot_health_summary(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    slot_id: &str,
+) -> String {
+    supervisor_snapshot
+        .pool
+        .slots
+        .iter()
+        .find(|slot| slot.slot_id == slot_id)
+        .map(slot_health_summary_from_slot)
+        .unwrap_or_else(|| "slot not projected".to_string())
+}
+
+fn slot_health_summary_from_slot(slot: &ParallelModePoolSlotSnapshot) -> String {
+    match slot.state {
+        ParallelModePoolSlotState::Leased
+        | ParallelModePoolSlotState::Running
+        | ParallelModePoolSlotState::AwaitingCleanup => "slot ok".to_string(),
+        ParallelModePoolSlotState::Idle => "slot idle mismatch".to_string(),
+        ParallelModePoolSlotState::Missing => format!(
+            "slot missing: {}",
+            worktree_health_detail(&slot.worktree_label)
+        ),
+        ParallelModePoolSlotState::Blocked => format!(
+            "slot blocked: {}",
+            worktree_health_detail(&slot.worktree_label)
+        ),
+        ParallelModePoolSlotState::Unavailable => format!(
+            "slot unavailable: {}",
+            worktree_health_detail(&slot.worktree_label)
+        ),
+    }
+}
+
+fn worktree_health_detail(worktree_label: &str) -> String {
+    worktree_label
+        .rsplit_once(" / ")
+        .map(|(_, detail)| detail.trim())
+        .filter(|detail| !detail.is_empty())
+        .unwrap_or(worktree_label.trim())
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{build_detail_lines, build_distributor_lines, build_roster_lines};
@@ -283,7 +344,8 @@ mod tests {
         ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
         ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
         ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
-        ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeQueueItemState,
+        ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
+        ParallelModePoolSlotSnapshot, ParallelModePoolSlotState, ParallelModeQueueItemState,
         ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
         ParallelModeSupervisorState,
     };
@@ -470,5 +532,79 @@ mod tests {
             "2026-04-17T00:02:00Z / official / official ledger refresh accepted the completion report"
         ));
         assert!(!detail_rendered.contains("commit_ready"));
+    }
+
+    #[test]
+    fn roster_and_detail_lines_surface_missing_slot_worktree_health() {
+        let snapshot = ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/workspace",
+            ParallelModePoolBoardSnapshot::new(
+                3,
+                "/tmp/pool",
+                "reconcile blocked",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Blocked,
+                    "akra-agent/slot-1/task-one",
+                    "akra-pool/slot-1 / lease exists but worktree is missing",
+                    "agent-1 / task-1",
+                )],
+            ),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Task One",
+                    "slot-1",
+                    "akra-agent/slot-1/task-one",
+                    "running",
+                    "1m 5s",
+                    "agent session is active in the leased slot",
+                )],
+                "empty",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(
+                Some(ParallelModeAgentSessionDetailSnapshot::new(
+                    "slot-1:task-1",
+                    "agent-1",
+                    "task-1",
+                    "Task One",
+                    "slot-1",
+                    Some("thread-1".to_string()),
+                    "/tmp/missing-worktree",
+                    "akra-agent/slot-1/task-one",
+                    "2026-04-17T00:00:00Z",
+                    "running",
+                    "in_progress",
+                    "agent session is active in the leased slot",
+                    "not checked yet",
+                    "not refreshed yet",
+                    None,
+                    Vec::new(),
+                    "2026-04-17T00:01:05Z",
+                )),
+                "empty",
+            ),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queued"),
+            None,
+        );
+
+        let roster_rendered = build_roster_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail_rendered = build_detail_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(roster_rendered.contains("running / working 1m 5s"));
+        assert!(roster_rendered.contains("slot blocked: lease exists but worktree is missing"));
+        assert!(
+            detail_rendered
+                .contains("slot health: slot blocked: lease exists but worktree is missing")
+        );
     }
 }
