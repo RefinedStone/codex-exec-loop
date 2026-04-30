@@ -9,7 +9,7 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
 
-use super::{AKRA_BRANCH, DEFAULT_PUSH_REMOTE_NAME};
+use super::{DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH};
 
 pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
     run_command(
@@ -56,7 +56,7 @@ pub(super) fn inspect_akra_branch(
             "show-ref",
             "--verify",
             "--quiet",
-            "refs/heads/akra",
+            &format!("refs/heads/{POOL_BASELINE_BRANCH}"),
         ],
     ) || runtime.command_succeeds(
         "git",
@@ -66,13 +66,13 @@ pub(super) fn inspect_akra_branch(
             "show-ref",
             "--verify",
             "--quiet",
-            "refs/remotes/origin/akra",
+            &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
         ],
     ) {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::AkraBranch,
             ParallelModeCapabilityState::Ready,
-            format!("{AKRA_BRANCH} is available"),
+            format!("{POOL_BASELINE_BRANCH} is available"),
             None,
         );
     }
@@ -81,7 +81,7 @@ pub(super) fn inspect_akra_branch(
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::AkraBranch,
             ParallelModeCapabilityState::Ready,
-            format!("{AKRA_BRANCH} is missing locally but can be created from HEAD"),
+            format!("{POOL_BASELINE_BRANCH} is missing locally but can be created from HEAD"),
             None,
         );
     }
@@ -89,7 +89,7 @@ pub(super) fn inspect_akra_branch(
     ParallelModeCapabilitySnapshot::new(
         ParallelModeCapabilityKey::AkraBranch,
         ParallelModeCapabilityState::Blocked,
-        format!("{AKRA_BRANCH} is missing and this repository has no usable HEAD yet"),
+        format!("{POOL_BASELINE_BRANCH} is missing and this repository has no usable HEAD yet"),
         Some("create an initial commit or restore the integration branch before enabling parallel mode".to_string()),
     )
 }

@@ -15,7 +15,8 @@ use super::session_detail::{
     record_official_completion_failed_session_detail, record_reported_complete_session_detail,
 };
 use super::{
-    AKRA_BRANCH, ParallelModeOfficialCompletionReport, ParallelModeService, current_timestamp,
+    POOL_BASELINE_BRANCH, ParallelModeOfficialCompletionReport, ParallelModeService,
+    current_timestamp,
 };
 
 impl ParallelModeService {
@@ -226,7 +227,7 @@ impl ParallelModeService {
             &resolution.lease.branch_name,
         ) {
             return Err(format!(
-                "slot `{}` could not be reset to `{AKRA_BRANCH}` after successful completion",
+                "slot `{}` could not be reset to `{POOL_BASELINE_BRANCH}` after successful completion",
                 resolution.lease.slot_id
             ));
         }

@@ -16,8 +16,8 @@ use super::current_branch_name;
 use super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
 use super::{
-    AKRA_AGENT_BRANCH_PREFIX, AKRA_BRANCH, DEFAULT_POOL_SIZE,
-    NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL,
+    NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION, POOL_BASELINE_BRANCH,
     ensure_directory_exists,
 };
 
@@ -71,7 +71,7 @@ impl SlotGitStatus {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PoolReconcileExecution {
-    created_akra_branch: bool,
+    created_baseline_branch: bool,
     created_pool_root: bool,
     provisioned_slots: usize,
     cleaned_slots: usize,
@@ -79,7 +79,7 @@ struct PoolReconcileExecution {
 
 impl PoolReconcileExecution {
     fn has_actions(self) -> bool {
-        self.created_akra_branch
+        self.created_baseline_branch
             || self.created_pool_root
             || self.provisioned_slots > 0
             || self.cleaned_slots > 0
@@ -91,7 +91,7 @@ pub(super) struct PoolRuntimeContext {
     pub(super) repo_root: String,
     pub(super) canonical_repo_root: PathBuf,
     pub(super) pool_root: PathBuf,
-    akra_head: String,
+    baseline_head: String,
     worktree_records: Vec<GitWorktreeRecord>,
     pub(super) slot_leases: BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
     invalid_slot_leases: BTreeSet<String>,
@@ -197,19 +197,19 @@ pub(super) fn reconcile_pool_board_and_context(
     }
     let created_pool_root = !pool_root_existed;
     let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
-    let can_refresh_akra_baseline =
-        can_refresh_akra_baseline_from_workspace(&repo_root, &runtime_projection);
-    let Ok((_akra_head, created_akra_branch)) =
-        ensure_akra_branch(&repo_root, can_refresh_akra_baseline)
+    let can_refresh_pool_baseline =
+        can_refresh_pool_baseline_from_workspace(&repo_root, &runtime_projection);
+    let Ok((_baseline_head, created_baseline_branch)) =
+        ensure_pool_baseline_branch(&repo_root, can_refresh_pool_baseline)
     else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
                 workspace_dir,
-                "reconcile blocked / `akra` baseline could not be created",
-                "`akra` is unavailable during reconcile",
+                "reconcile blocked / pool baseline could not be created",
+                "pool baseline is unavailable during reconcile",
             ),
-            "`akra` is unavailable during reconcile".to_string(),
+            "pool baseline is unavailable during reconcile".to_string(),
         )));
     };
     let Some(mut worktree_records) = load_worktree_records(&repo_root) else {
@@ -223,16 +223,12 @@ pub(super) fn reconcile_pool_board_and_context(
             "worktree list inspection failed".to_string(),
         )));
     };
-    let reset_reusable_baseline_slots = if can_refresh_akra_baseline {
-        reset_reusable_detached_baseline_slots(
-            &repo_root,
-            &pool_root,
-            &worktree_records,
-            &runtime_projection.slot_leases,
-        )
-    } else {
-        0
-    };
+    let reset_reusable_baseline_slots = reset_reusable_detached_baseline_slots(
+        &repo_root,
+        &pool_root,
+        &worktree_records,
+        &runtime_projection.slot_leases,
+    );
     if reset_reusable_baseline_slots > 0
         && let Some(refreshed_records) = load_worktree_records(&repo_root)
     {
@@ -278,7 +274,7 @@ pub(super) fn reconcile_pool_board_and_context(
             &build_pool_slots(&context),
             &context.pool_root,
             Some(PoolReconcileExecution {
-                created_akra_branch,
+                created_baseline_branch,
                 created_pool_root,
                 provisioned_slots,
                 cleaned_slots,
@@ -325,7 +321,7 @@ pub(super) fn inspect_pool_board_and_context(
     }
 }
 
-fn can_refresh_akra_baseline_from_workspace(
+fn can_refresh_pool_baseline_from_workspace(
     repo_root: &str,
     runtime_projection: &PlanningAuthorityRuntimeProjectionSnapshot,
 ) -> bool {
@@ -337,26 +333,37 @@ fn can_refresh_akra_baseline_from_workspace(
             )
         })
         && current_branch_name(Path::new(repo_root)).is_some_and(|branch_name| {
-            branch_name != AKRA_BRANCH
+            branch_name != POOL_BASELINE_BRANCH
                 && !branch_name.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/"))
         })
 }
 
-fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(String, bool), ()> {
+fn ensure_pool_baseline_branch(
+    repo_root: &str,
+    reset_to_current_head: bool,
+) -> Result<(String, bool), ()> {
     if reset_to_current_head && let Some(head_sha) = resolve_branch_head(repo_root, "HEAD") {
-        let existed = resolve_branch_head(repo_root, AKRA_BRANCH).is_some();
+        let existed = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH).is_some();
         if command_succeeds(
             "git",
-            ["-C", repo_root, "branch", "-f", AKRA_BRANCH, "HEAD"],
+            [
+                "-C",
+                repo_root,
+                "branch",
+                "-f",
+                POOL_BASELINE_BRANCH,
+                "HEAD",
+            ],
         ) {
             return Ok((head_sha, !existed));
         }
     }
 
-    if let Some(akra_head) = resolve_branch_head(repo_root, AKRA_BRANCH) {
-        return Ok((akra_head, false));
+    if let Some(baseline_head) = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH) {
+        return Ok((baseline_head, false));
     }
 
+    let remote_ref = format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}");
     let created = if command_succeeds(
         "git",
         [
@@ -365,7 +372,7 @@ fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(S
             "show-ref",
             "--verify",
             "--quiet",
-            "refs/remotes/origin/akra",
+            remote_ref.as_str(),
         ],
     ) {
         command_succeeds(
@@ -374,12 +381,15 @@ fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(S
                 "-C",
                 repo_root,
                 "branch",
-                AKRA_BRANCH,
-                "refs/remotes/origin/akra",
+                POOL_BASELINE_BRANCH,
+                remote_ref.as_str(),
             ],
         )
     } else if command_succeeds("git", ["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
-        command_succeeds("git", ["-C", repo_root, "branch", AKRA_BRANCH, "HEAD"])
+        command_succeeds(
+            "git",
+            ["-C", repo_root, "branch", POOL_BASELINE_BRANCH, "HEAD"],
+        )
     } else {
         false
     };
@@ -388,8 +398,8 @@ fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(S
         return Err(());
     }
 
-    resolve_branch_head(repo_root, AKRA_BRANCH)
-        .map(|akra_head| (akra_head, true))
+    resolve_branch_head(repo_root, POOL_BASELINE_BRANCH)
+        .map(|baseline_head| (baseline_head, true))
         .ok_or(())
 }
 pub(super) fn load_pool_runtime_context(
@@ -474,8 +484,8 @@ fn load_pool_runtime_context_from_roots(
     repo_root: &str,
     canonical_repo_root: &Path,
 ) -> Result<PoolRuntimeContext, &'static str> {
-    let Some(akra_head) = resolve_akra_baseline_head(repo_root) else {
-        return Err("`akra` baseline is unavailable during inspection");
+    let Some(baseline_head) = resolve_pool_baseline_head(repo_root) else {
+        return Err("pool baseline is unavailable during inspection");
     };
     let Some(worktree_records) = load_worktree_records(repo_root) else {
         return Err("worktree list inspection failed");
@@ -487,7 +497,7 @@ fn load_pool_runtime_context_from_roots(
         repo_root: repo_root.to_string(),
         canonical_repo_root: canonical_repo_root.to_path_buf(),
         pool_root,
-        akra_head,
+        baseline_head,
         worktree_records,
         slot_leases: runtime_projections.slot_leases,
         invalid_slot_leases: runtime_projections.invalid_slot_leases,
@@ -564,7 +574,7 @@ fn provision_missing_slots(
                 "add",
                 "--detach",
                 slot_path_string.as_str(),
-                AKRA_BRANCH,
+                POOL_BASELINE_BRANCH,
             ],
         ) {
             provisioned_slots += 1;
@@ -580,8 +590,8 @@ fn reset_reusable_detached_baseline_slots(
     worktree_records: &[GitWorktreeRecord],
     slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
 ) -> usize {
-    let akra_head = resolve_akra_baseline_head(repo_root).unwrap_or_default();
-    if akra_head.is_empty() {
+    let baseline_head = resolve_pool_baseline_head(repo_root).unwrap_or_default();
+    if baseline_head.is_empty() {
         return 0;
     }
 
@@ -602,7 +612,7 @@ fn reset_reusable_detached_baseline_slots(
             continue;
         }
         let slot_status = inspect_slot_git_status(&slot_path);
-        if worktree_record.head_sha == akra_head
+        if worktree_record.head_sha == baseline_head
             && slot_status.is_some_and(SlotGitStatus::is_clean_baseline)
         {
             continue;
@@ -677,7 +687,7 @@ fn cleanup_reusable_slots(
 }
 
 pub(super) fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {
-    branch_is_integrated_into(repo_root, branch_name, AKRA_BRANCH)
+    branch_is_integrated_into(repo_root, branch_name, POOL_BASELINE_BRANCH)
 }
 
 pub(super) fn branch_is_integrated_into(
@@ -738,26 +748,26 @@ pub(super) fn reset_slot_worktree_to_akra(
 ) -> super::git_sequence::GitCommandSequenceReport {
     let slot_path_string = slot_path.display().to_string();
     run_git_sequence(
-        "reset slot worktree to akra",
+        "reset slot worktree to pool baseline",
         vec![
             GitCommandStep::new(
-                "checkout akra detached",
+                "checkout pool baseline detached",
                 [
                     "-C",
                     slot_path_string.as_str(),
                     "checkout",
                     "--detach",
-                    AKRA_BRANCH,
+                    POOL_BASELINE_BRANCH,
                 ],
             ),
             GitCommandStep::new(
-                "hard reset to akra",
+                "hard reset to pool baseline",
                 [
                     "-C",
                     slot_path_string.as_str(),
                     "reset",
                     "--hard",
-                    AKRA_BRANCH,
+                    POOL_BASELINE_BRANCH,
                 ],
             ),
             GitCommandStep::new(
@@ -862,7 +872,7 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
             ParallelModePoolSlotState::Missing,
-            AKRA_BRANCH,
+            POOL_BASELINE_BRANCH,
             base_worktree_label,
             "reconcile pending",
         );
@@ -882,13 +892,13 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
         );
     };
 
-    if worktree_record.branch_name.as_deref() == Some(AKRA_BRANCH)
-        || (worktree_record.detached && worktree_record.head_sha == context.akra_head)
+    if worktree_record.branch_name.as_deref() == Some(POOL_BASELINE_BRANCH)
+        || (worktree_record.detached && worktree_record.head_sha == context.baseline_head)
     {
         let branch_label = if worktree_record.detached {
-            format!("{AKRA_BRANCH} (detached)")
+            format!("{POOL_BASELINE_BRANCH} (detached)")
         } else {
-            AKRA_BRANCH.to_string()
+            POOL_BASELINE_BRANCH.to_string()
         };
 
         if let Some(slot_lease) = slot_lease {
@@ -1025,7 +1035,10 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
         slot_id,
         ParallelModePoolSlotState::Blocked,
         detached_label,
-        annotate_worktree_label(base_worktree_label, "detached away from `akra` baseline"),
+        annotate_worktree_label(
+            base_worktree_label,
+            &format!("detached away from `{POOL_BASELINE_BRANCH}` baseline"),
+        ),
         slot_lease
             .map(ParallelModeSlotLeaseSnapshot::owner_label)
             .unwrap_or_else(|| "operator recovery".to_string()),
@@ -1056,8 +1069,8 @@ fn summarize_pool_reconcile_status(
     let mut prefix = String::new();
     if let Some(execution) = execution.filter(|execution| execution.has_actions()) {
         let mut action_parts = Vec::new();
-        if execution.created_akra_branch {
-            action_parts.push("created `akra`".to_string());
+        if execution.created_baseline_branch {
+            action_parts.push(format!("created `{POOL_BASELINE_BRANCH}`"));
         }
         if execution.created_pool_root {
             action_parts.push("created pool root".to_string());
@@ -1105,14 +1118,14 @@ fn summarize_pool_reconcile_status(
 
     if awaiting_cleanup_slots > 0 {
         return format!(
-            "{}cleanup pending / {awaiting_cleanup_slots} slot(s) still need reset to `{AKRA_BRANCH}`",
+            "{}cleanup pending / {awaiting_cleanup_slots} slot(s) still need reset to `{POOL_BASELINE_BRANCH}`",
             prefix
         );
     }
 
     if idle_slots == slots.len() && !slots.is_empty() {
         return format!(
-            "{}reconcile complete / all slots are clean on `{AKRA_BRANCH}` baseline",
+            "{}reconcile complete / all slots are clean on `{POOL_BASELINE_BRANCH}` baseline",
             prefix
         );
     }
@@ -1166,7 +1179,7 @@ pub(super) fn pool_operator_recovery_notice(
 
 fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> String {
     format!(
-        "{slot_id} branch `{branch_name}` is not integrated into `{AKRA_BRANCH}` and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}"
+        "{slot_id} branch `{branch_name}` is not integrated into `{POOL_BASELINE_BRANCH}` and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}"
     )
 }
 
@@ -1219,9 +1232,14 @@ fn stable_short_hash(value: &str) -> String {
     format!("{hash:016x}")[..12].to_string()
 }
 
-fn resolve_akra_baseline_head(repo_root: &str) -> Option<String> {
-    resolve_branch_head(repo_root, AKRA_BRANCH)
-        .or_else(|| resolve_branch_head(repo_root, "refs/remotes/origin/akra"))
+fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
+    resolve_branch_head(repo_root, POOL_BASELINE_BRANCH)
+        .or_else(|| {
+            resolve_branch_head(
+                repo_root,
+                &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
+            )
+        })
         .or_else(|| {
             run_command(
                 "git",

@@ -107,7 +107,7 @@ impl TempGitRepo {
                 "add",
                 "--detach",
                 slot_path.to_str().expect("slot path should be valid utf-8"),
-                "akra",
+                "prerelease",
             ],
         );
         slot_path
@@ -130,7 +130,7 @@ impl TempGitRepo {
                 "-b",
                 branch_name.as_str(),
                 slot_path.to_str().expect("slot path should be valid utf-8"),
-                "akra",
+                "prerelease",
             ],
         );
         slot_path
@@ -160,8 +160,8 @@ impl TempGitRepo {
         worktree_path
     }
 
-    fn delete_local_akra_branch(&self) {
-        run_git(&self.repo_root, &["branch", "-D", "akra"]);
+    fn delete_local_prerelease_branch(&self) {
+        run_git(&self.repo_root, &["branch", "-D", "prerelease"]);
     }
 
     fn commit_file_in_slot(
@@ -179,7 +179,7 @@ impl TempGitRepo {
     fn merge_agent_slot_into_akra(&self, slot_path: &Path) {
         let branch_name = current_branch(slot_path);
         let original_branch = current_branch(&self.repo_root);
-        run_git(&self.repo_root, &["checkout", "akra"]);
+        run_git(&self.repo_root, &["checkout", "prerelease"]);
         run_git(
             &self.repo_root,
             &["merge", "--ff-only", branch_name.as_str()],
@@ -318,7 +318,7 @@ impl FakeGithubAutomationPort {
                 77,
                 "https://github.com/RefinedStone/codex-exec-loop/pull/77",
                 "OPEN",
-                "akra",
+                "prerelease",
                 "placeholder",
                 false,
             ),
@@ -413,7 +413,7 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             .lock()
             .expect("fake github base branch mutex poisoned")
             .clone()
-            .unwrap_or_else(|| "akra".to_string());
+            .unwrap_or_else(|| "prerelease".to_string());
         let head_branch = self
             .head_branch
             .lock()

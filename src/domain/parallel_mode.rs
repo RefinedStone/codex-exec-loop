@@ -799,7 +799,7 @@ fn live_distributor_outcome(lease: &ParallelModeSlotLeaseSnapshot) -> Option<Str
     match lease.state {
         ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => None,
         ParallelModeSlotLeaseState::CleanupPending => {
-            Some("branch is merged into akra and the slot is awaiting cleanup".to_string())
+            Some("branch is merged into prerelease and the slot is awaiting cleanup".to_string())
         }
     }
 }
@@ -1410,7 +1410,7 @@ mod tests {
         assert_eq!(enriched.authority_refresh_outcome, "authority unavailable");
         assert_eq!(
             enriched.distributor_outcome.as_deref(),
-            Some("branch is merged into akra and the slot is awaiting cleanup")
+            Some("branch is merged into prerelease and the slot is awaiting cleanup")
         );
         assert_eq!(enriched.updated_at, "2026-01-01T00:25:00Z");
     }

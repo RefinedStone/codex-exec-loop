@@ -464,15 +464,16 @@ pub(super) fn record_cleanup_pending_session_detail(
             detail.state_label = "cleanup_pending".to_string();
             detail.completion_state_label = "merged".to_string();
             detail.latest_summary =
-                "agent branch is merged into akra and awaiting slot cleanup".to_string();
-            detail.distributor_outcome =
-                Some("branch is merged into akra and the slot is awaiting cleanup".to_string());
+                "agent branch is merged into prerelease and awaiting slot cleanup".to_string();
+            detail.distributor_outcome = Some(
+                "branch is merged into prerelease and the slot is awaiting cleanup".to_string(),
+            );
             detail.updated_at = timestamp.clone();
             push_session_history(
                 &mut detail,
                 "merged",
                 timestamp.clone(),
-                "branch is integrated into akra".to_string(),
+                "branch is integrated into prerelease".to_string(),
             );
             push_session_history(
                 &mut detail,
@@ -504,7 +505,7 @@ pub(super) fn record_cleaned_session_detail(
             detail.latest_summary =
                 "merged session cleaned up and the slot returned to the idle pool".to_string();
             detail.distributor_outcome =
-                Some("branch merged into akra and the slot returned to idle".to_string());
+                Some("branch merged into prerelease and the slot returned to idle".to_string());
             detail.updated_at = timestamp.clone();
             push_session_history(
                 &mut detail,

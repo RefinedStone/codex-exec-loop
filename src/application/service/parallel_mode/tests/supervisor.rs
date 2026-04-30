@@ -161,7 +161,7 @@ fn build_supervisor_snapshot_projects_running_and_cleanup_pending_roster_states(
     assert_eq!(cleanup_entry.duration_label, "complete");
     assert_eq!(
         cleanup_entry.latest_summary,
-        "agent branch is merged into akra and awaiting slot cleanup"
+        "agent branch is merged into prerelease and awaiting slot cleanup"
     );
 }
 
@@ -259,7 +259,7 @@ fn build_supervisor_snapshot_keeps_cleaned_session_detail_after_slot_return() {
     assert_eq!(detail.completion_state_label, "cleaned");
     assert_eq!(
         detail.distributor_outcome.as_deref(),
-        Some("branch merged into akra and the slot returned to idle")
+        Some("branch merged into prerelease and the slot returned to idle")
     );
     assert_eq!(
         detail

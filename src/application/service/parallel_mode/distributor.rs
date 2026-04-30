@@ -19,7 +19,7 @@ use super::{
     DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH, PoolRuntimeContext,
     WorkspaceSlotLeaseResolution, branch_exists, branch_is_integrated_into, cleanup_slot,
     command_succeeds, current_branch_name, current_timestamp, ensure_directory_exists,
-    inspect_slot_git_status, lease_session_key, load_pool_runtime_context,
+    inspect_slot_git_status, lease_session_key, load_pool_runtime_context, reconcile_pool_board,
     record_cleaned_session_detail, record_cleanup_pending_session_detail,
     record_distributor_failed_session_detail, record_integrating_session_detail,
     record_merge_pending_session_detail, record_merge_queued_session_detail,
@@ -186,6 +186,7 @@ impl ParallelModeDistributorService {
     }
 
     pub(super) fn process_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
+        let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
         let context = self.recover_runtime_state(workspace_dir)?;
         let mut records = context.distributor_queue_records.clone();
         let Some(head_index) = records

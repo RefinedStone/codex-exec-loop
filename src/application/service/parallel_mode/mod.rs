@@ -60,15 +60,15 @@ use self::pool::{derive_default_pool_root, slot_id, slot_lease_file_path};
 use self::readiness::parse_https_remote;
 #[cfg(test)]
 use self::session_detail::{agent_session_detail_record_path, read_agent_session_detail_record};
-const AKRA_BRANCH: &str = "akra";
 const DISTRIBUTOR_INTEGRATION_BRANCH: &str = "prerelease";
+const POOL_BASELINE_BRANCH: &str = DISTRIBUTOR_INTEGRATION_BRANCH;
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
 const MAX_AGENT_BRANCH_SLUG_LEN: usize = 96;
 const AGENT_BRANCH_TRUNCATION_HASH_LEN: usize = 10;
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL: &str =
-    "agent branch is not integrated into `akra` and has no lease metadata";
+    "agent branch is not integrated into `prerelease` and has no lease metadata";
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
     "inspect the slot branch, merge or discard it manually, then rerun reconcile";
 
@@ -315,7 +315,7 @@ impl ParallelModeService {
                 "checkout",
                 "-b",
                 branch_name.as_str(),
-                AKRA_BRANCH,
+                POOL_BASELINE_BRANCH,
             ],
         ) {
             return Err(format!(
@@ -528,7 +528,7 @@ impl ParallelModeService {
         }
         if !branch_is_cleanup_ready(&context.repo_root, &lease.branch_name) {
             return Err(format!(
-                "slot `{slot_id}` branch `{}` is not integrated into `{AKRA_BRANCH}` yet",
+                "slot `{slot_id}` branch `{}` is not integrated into `{POOL_BASELINE_BRANCH}` yet",
                 lease.branch_name
             ));
         }
@@ -603,7 +603,7 @@ impl ParallelModeService {
             &resolution.lease.branch_name,
         ) {
             return Err(format!(
-                "slot `{}` could not be reset to `{AKRA_BRANCH}` after startup failure",
+                "slot `{}` could not be reset to `{POOL_BASELINE_BRANCH}` after startup failure",
                 resolution.lease.slot_id
             ));
         }

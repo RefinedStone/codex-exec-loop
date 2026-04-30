@@ -389,7 +389,7 @@ fn distributor_retries_blocked_head_after_clean_slot_branch_recovery() {
             "checkout",
             "-B",
             "akra-agent/slot-1/stale-clean-checkout",
-            "akra",
+            "prerelease",
         ],
     );
     let mut record = load_distributor_queue_records(&repo.pool_root())

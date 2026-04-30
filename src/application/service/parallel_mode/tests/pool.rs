@@ -149,7 +149,7 @@ fn reconcile_marks_missing_slots_when_pool_root_has_not_been_created() {
 }
 
 #[test]
-fn detached_akra_slot_counts_as_idle_baseline() {
+fn detached_prerelease_slot_counts_as_idle_baseline() {
     let repo = TempGitRepo::new("idle-slot");
     repo.create_detached_slot(1);
     let readiness = ParallelModeReadinessSnapshot::new(
@@ -167,7 +167,7 @@ fn detached_akra_slot_counts_as_idle_baseline() {
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
-    assert_eq!(slot.branch_name, "akra (detached)");
+    assert_eq!(slot.branch_name, "prerelease (detached)");
     assert_eq!(pool.idle_slots, 1);
     assert_eq!(pool.missing_slots, DEFAULT_POOL_SIZE - 1);
 }
@@ -234,12 +234,12 @@ fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
         .expect("operator recovery notice should be surfaced");
     assert!(notice.contains("pool: blocked"));
     assert!(notice.contains("slot-1"));
-    assert!(notice.contains("not integrated into `akra`"));
+    assert!(notice.contains("not integrated into `prerelease`"));
     assert!(notice.contains("next action: inspect the slot branch"));
 }
 
 #[test]
-fn dirty_akra_baseline_slot_is_blocked_for_operator_recovery() {
+fn dirty_prerelease_baseline_slot_is_blocked_for_operator_recovery() {
     let repo = TempGitRepo::new("dirty-slot");
     let slot_path = repo.create_detached_slot(1);
     fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
@@ -326,11 +326,11 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
                 "-C",
                 repo.repo_root.to_str().expect("repo root should be utf-8"),
                 "rev-parse",
-                "akra",
+                "prerelease",
             ],
             None,
         )
-        .expect("akra should resolve"),
+        .expect("prerelease should resolve"),
         current_head
     );
 }
@@ -360,7 +360,7 @@ fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
 
     assert!(
         normalized.contains("/repo-akra-worktrees/"),
-        "pool root should live under a repo sibling akra worktrees root: {normalized}"
+        "pool root should live under a repo sibling prerelease worktrees root: {normalized}"
     );
     assert!(
         normalized.ends_with("/akra-pool"),
@@ -369,28 +369,28 @@ fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
 }
 
 #[test]
-fn reconcile_creates_local_akra_branch_before_provisioning_slots() {
+fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
     let repo = TempGitRepo::new("create-akra");
-    repo.delete_local_akra_branch();
-    assert!(!repo.branch_exists("akra"));
+    repo.delete_local_prerelease_branch();
+    assert!(!repo.branch_exists("prerelease"));
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
     );
 
-    assert!(repo.branch_exists("akra"));
+    assert!(repo.branch_exists("prerelease"));
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert!(pool.reconcile_status.contains("created `akra`"));
+    assert!(pool.reconcile_status.contains("created `prerelease`"));
 }
 
 #[test]
-fn reconcile_resets_empty_akra_baseline_to_current_head() {
+fn reconcile_resets_empty_prerelease_baseline_to_current_head() {
     let repo = TempGitRepo::new("reset-akra");
-    let old_akra_head = repo.head_sha();
+    let old_prerelease_head = repo.head_sha();
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
     let current_head = repo.head_sha();
-    assert_ne!(old_akra_head, current_head);
+    assert_ne!(old_prerelease_head, current_head);
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
@@ -404,18 +404,18 @@ fn reconcile_resets_empty_akra_baseline_to_current_head() {
                 "-C",
                 repo.repo_root.to_str().expect("repo root should be utf-8"),
                 "rev-parse",
-                "akra",
+                "prerelease",
             ],
             None,
         )
-        .expect("akra should resolve"),
+        .expect("prerelease should resolve"),
         current_head
     );
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
 
 #[test]
-fn reconcile_resets_clean_detached_slots_after_empty_akra_baseline_moves() {
+fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves() {
     let repo = TempGitRepo::new("reset-detached-slots");
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
@@ -435,28 +435,28 @@ fn reconcile_resets_clean_detached_slots_after_empty_akra_baseline_moves() {
     assert!(refreshed_pool.slots.iter().all(|slot| {
         !slot
             .worktree_label
-            .contains("detached away from `akra` baseline")
+            .contains("detached away from `prerelease` baseline")
     }));
 }
 
 #[test]
-fn reconcile_does_not_refresh_akra_from_agent_slot_workspace() {
+fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
     let repo = TempGitRepo::new("agent-slot-does-not-reset-akra");
     let slot_path = repo.create_agent_slot(1, "task-one");
-    let original_akra_head = run_command(
+    let original_prerelease_head = run_command(
         "git",
         [
             "-C",
             repo.repo_root.to_str().expect("repo root should be utf-8"),
             "rev-parse",
-            "akra",
+            "prerelease",
         ],
         None,
     )
-    .expect("akra should resolve");
+    .expect("prerelease should resolve");
     repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
     assert_ne!(
-        original_akra_head,
+        original_prerelease_head,
         run_command(
             "git",
             [
@@ -482,18 +482,18 @@ fn reconcile_does_not_refresh_akra_from_agent_slot_workspace() {
                 "-C",
                 repo.repo_root.to_str().expect("repo root should be utf-8"),
                 "rev-parse",
-                "akra",
+                "prerelease",
             ],
             None,
         )
-        .expect("akra should resolve"),
-        original_akra_head
+        .expect("prerelease should resolve"),
+        original_prerelease_head
     );
     assert!(pool.blocked_slots > 0);
 }
 
 #[test]
-fn build_pool_board_uses_remote_akra_when_local_branch_is_missing() {
+fn build_pool_board_uses_remote_prerelease_when_local_branch_is_missing() {
     let repo = TempGitRepo::new("remote-akra");
     let readiness = ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
@@ -502,8 +502,8 @@ fn build_pool_board_uses_remote_akra_when_local_branch_is_missing() {
         None,
     );
     let head_sha = repo.head_sha();
-    repo.delete_local_akra_branch();
-    repo.set_remote_tracking_branch("origin/akra", &head_sha);
+    repo.delete_local_prerelease_branch();
+    repo.set_remote_tracking_branch("origin/prerelease", &head_sha);
 
     let pool = build_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
@@ -608,7 +608,7 @@ fn reconcile_cleans_merged_agent_slot_back_to_idle() {
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
-    assert!(slot.branch_name.starts_with("akra"));
+    assert!(slot.branch_name.starts_with("prerelease"));
     assert!(!slot_path.join("scratch.tmp").exists());
     assert!(!repo.branch_exists(&branch_name));
     assert!(!repo.slot_lease_path(1).exists());
@@ -732,7 +732,7 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
         "task-1",
         "Task One",
     );
-    run_git(&repo.repo_root, &["branch", first.as_str(), "akra"]);
+    run_git(&repo.repo_root, &["branch", first.as_str(), "prerelease"]);
 
     let second = allocate_agent_branch_name(
         &repo.workspace_dir(),
@@ -1024,7 +1024,7 @@ fn mark_slot_cleanup_pending_requires_running_state_and_merged_branch() {
     let not_merged_error = service
         .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
         .expect_err("cleanup pending should require an integrated branch");
-    assert!(not_merged_error.contains("is not integrated into `akra` yet"));
+    assert!(not_merged_error.contains("is not integrated into `prerelease` yet"));
 }
 
 #[test]
