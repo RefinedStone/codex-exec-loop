@@ -440,6 +440,9 @@ impl NativeTuiApp {
         if self.handle_supersession_overlay_key(key) {
             return true;
         }
+        if self.shell_overlay == ShellOverlay::Supersession {
+            return false;
+        }
 
         if self.shell_overlay == ShellOverlay::TaskIntake {
             return self.handle_task_intake_overlay_key(key);

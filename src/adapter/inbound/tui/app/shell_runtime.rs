@@ -779,6 +779,51 @@ mod tests {
     }
 
     #[test]
+    fn supersession_overlay_allows_prompt_input() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert_eq!(conversation.input_buffer, "a");
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn supersession_overlay_allows_enter_to_submit_prompt() {
+        let mut runtime = make_test_runtime();
+        runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
+            &runtime.app().current_workspace_directory(),
+        ));
+        runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+        for character in "run next".chars() {
+            runtime.app_mut().push_input_character(character);
+        }
+        runtime.take_redraw_request();
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        assert!(conversation.input_buffer.is_empty());
+        assert!(conversation.has_running_turn());
+        assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
     fn enter_executes_selected_inline_command_palette_item() {
         let mut runtime = make_test_runtime();
         runtime.app_mut().push_input_character(':');

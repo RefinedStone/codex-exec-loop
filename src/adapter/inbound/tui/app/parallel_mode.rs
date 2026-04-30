@@ -260,7 +260,7 @@ impl NativeTuiApp {
             KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
                 self.handle_parallel_shell_command(Some("off"));
             }
-            _ => {}
+            _ => return false,
         }
 
         true
