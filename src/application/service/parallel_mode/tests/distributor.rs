@@ -544,6 +544,36 @@ fn distributor_queue_keeps_later_item_queued_behind_blocked_head() {
     assert_eq!(snapshot.distributor.head_summary, "blocked");
     assert_eq!(snapshot.distributor.queue_depth(), 2);
     assert_eq!(
+        snapshot.distributor.orchestrator_status.queue_head,
+        "agent-1 / task-1 / blocked"
+    );
+    assert_eq!(
+        snapshot.distributor.orchestrator_status.barrier_state,
+        "blocked"
+    );
+    assert_eq!(snapshot.distributor.orchestrator_status.held_queue_count, 1);
+    assert!(
+        snapshot
+            .distributor
+            .orchestrator_status
+            .blocked_reason
+            .as_deref()
+            .expect("blocked reason should be surfaced")
+            .contains("source worktree is missing")
+    );
+    assert!(
+        snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+            .contains("akra"),
+        "integration worktree readiness should be surfaced: {}",
+        snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+    );
+    assert_eq!(
         snapshot.distributor.queue_items[0].queue_state,
         ParallelModeQueueItemState::Blocked
     );
@@ -927,6 +957,27 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
     let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
     assert_eq!(snapshot.distributor.head_summary, "blocked");
     assert_eq!(snapshot.distributor.queue_depth(), 1);
+    assert_eq!(
+        snapshot.distributor.orchestrator_status.queue_head,
+        "agent-1 / task-1 / blocked"
+    );
+    assert_eq!(
+        snapshot.distributor.orchestrator_status.barrier_state,
+        "blocked"
+    );
+    assert_eq!(
+        snapshot.distributor.orchestrator_status.conflict_files,
+        vec!["conflict.txt"]
+    );
+    assert!(
+        snapshot
+            .distributor
+            .orchestrator_status
+            .blocked_reason
+            .as_deref()
+            .expect("blocked reason should be surfaced")
+            .contains("could not cherry-pick into `akra` cleanly")
+    );
     assert_eq!(
         snapshot.distributor.queue_items[0].queue_state,
         ParallelModeQueueItemState::Blocked

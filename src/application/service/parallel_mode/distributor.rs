@@ -9,8 +9,9 @@ use crate::application::port::outbound::planning_authority_port::{
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCompletionFeedEntry,
-    ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot, ParallelModeQueueItemState,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot,
+    ParallelModeOrchestratorStatus, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
 use super::supervisor::selected_runtime_session_detail;
@@ -451,7 +452,8 @@ fn build_distributor_snapshot_from_context(
             queue_head.integration_note.clone(),
         )
         .with_head_blocked_detail(blocked_head_detail(queue_head))
-        .with_head_rebase_provenance(rebase_provenance_label(queue_head));
+        .with_head_rebase_provenance(rebase_provenance_label(queue_head))
+        .with_orchestrator_status(build_orchestrator_status(context, queue_head));
     }
 
     let Some(detail) = selected_runtime_session_detail(context, &history, &queue_records) else {
@@ -485,6 +487,118 @@ fn build_distributor_snapshot_from_context(
 
     ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
         .with_head_rebase_provenance(history_rebase_provenance(&detail))
+        .with_orchestrator_status(build_idle_orchestrator_status(context))
+}
+
+fn build_orchestrator_status(
+    context: &PoolRuntimeContext,
+    queue_head: &ParallelModeDistributorQueueRecord,
+) -> ParallelModeOrchestratorStatus {
+    let active_records = context
+        .distributor_queue_records
+        .iter()
+        .filter(|record| record.queue_state.is_active())
+        .collect::<Vec<_>>();
+    let matching_lease = matching_lease_for_queue_record(context, queue_head);
+
+    ParallelModeOrchestratorStatus {
+        queue_head: format!(
+            "{} / {} / {}",
+            queue_head.agent_id,
+            queue_head.task_id,
+            queue_head.queue_state.label()
+        ),
+        barrier_state: orchestrator_barrier_state(queue_head, active_records.len()),
+        blocked_reason: blocked_head_detail(queue_head).or_else(|| {
+            queue_head
+                .recovery_note
+                .clone()
+                .filter(|note| !note.trim().is_empty())
+        }),
+        conflict_files: queue_head.conflict_files.clone(),
+        held_queue_count: active_records.len().saturating_sub(1),
+        integration_worktree_readiness: inspect_integration_worktree_readiness(context),
+        slot_return_wait_reason: slot_return_wait_reason(queue_head, matching_lease),
+    }
+}
+
+fn build_idle_orchestrator_status(context: &PoolRuntimeContext) -> ParallelModeOrchestratorStatus {
+    let mut status = ParallelModeOrchestratorStatus::idle();
+    status.integration_worktree_readiness = inspect_integration_worktree_readiness(context);
+    status
+}
+
+fn orchestrator_barrier_state(
+    queue_head: &ParallelModeDistributorQueueRecord,
+    active_record_count: usize,
+) -> String {
+    match queue_head.queue_state {
+        ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => {
+            "blocked".to_string()
+        }
+        ParallelModeQueueItemState::Cleaning => "slot return".to_string(),
+        _ if active_record_count > 1 => {
+            format!(
+                "head {} holds later queue items",
+                queue_head.queue_state.label()
+            )
+        }
+        _ => format!("head {}", queue_head.queue_state.label()),
+    }
+}
+
+fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> String {
+    let repo_root = context.canonical_repo_root.as_path();
+    let Some(branch_name) = current_branch_name(repo_root) else {
+        return "unknown: branch could not be inspected".to_string();
+    };
+    if branch_name != AKRA_BRANCH {
+        return format!("blocked: expected `{AKRA_BRANCH}` but checked out `{branch_name}`");
+    }
+
+    let Some(status) = inspect_slot_git_status(repo_root) else {
+        return "unknown: git status could not be inspected".to_string();
+    };
+    if status.is_clean_baseline() {
+        "ready: akra worktree clean".to_string()
+    } else {
+        format!("blocked: {}", status.detail_label())
+    }
+}
+
+fn slot_return_wait_reason(
+    queue_head: &ParallelModeDistributorQueueRecord,
+    matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+) -> Option<String> {
+    let lease = matching_lease?;
+    match (queue_head.queue_state, lease.state) {
+        (ParallelModeQueueItemState::Cleaning, ParallelModeSlotLeaseState::CleanupPending) => {
+            Some(format!(
+                "slot `{}` is waiting for cleanup to return idle",
+                lease.slot_id
+            ))
+        }
+        (_, ParallelModeSlotLeaseState::CleanupPending) => Some(format!(
+            "slot `{}` is waiting for distributor cleanup",
+            lease.slot_id
+        )),
+        (_, ParallelModeSlotLeaseState::Running)
+            if matches!(
+                queue_head.queue_state,
+                ParallelModeQueueItemState::Queued
+                    | ParallelModeQueueItemState::Pushing
+                    | ParallelModeQueueItemState::PrPending
+                    | ParallelModeQueueItemState::MergePending
+                    | ParallelModeQueueItemState::Integrating
+            ) =>
+        {
+            Some(format!(
+                "slot `{}` stays running until the queue head is integrated",
+                lease.slot_id
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn active_distributor_queue_head(
