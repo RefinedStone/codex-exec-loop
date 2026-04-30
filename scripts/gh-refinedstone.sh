@@ -128,11 +128,11 @@ url_encode() {
   local value
   value="$1"
 
-  VALUE="${value}" python3 -c '
-import os
+  printf '%s' "${value}" | python3 -c '
+import sys
 import urllib.parse
 
-print(urllib.parse.quote(os.environ["VALUE"], safe=""))
+print(urllib.parse.quote(sys.stdin.read(), safe=""))
 '
 }
 
@@ -243,38 +243,48 @@ list_prs_with_api() {
     endpoint="${endpoint}&base=$(url_encode "${base_branch}")"
   fi
   if [[ -n "${head_branch}" ]]; then
-    endpoint="${endpoint}&head=$(url_encode "RefinedStone:${head_branch}")"
+    local head_owner
+    head_owner="${repo_full_name%%/*}"
+    if [[ "${head_branch}" == *:* ]]; then
+      endpoint="${endpoint}&head=$(url_encode "${head_branch}")"
+    else
+      endpoint="${endpoint}&head=$(url_encode "${head_owner}:${head_branch}")"
+    fi
   fi
 
   local response_body
   response_body="$(api_request GET "${endpoint}")"
-  JSON_BODY="${response_body}" JSON_FIELDS="${json_fields}" python3 -c '
+  printf '%s' "${response_body}" | JSON_FIELDS="${json_fields}" python3 -c '
 import json
 import os
+import sys
 
-items = json.loads(os.environ["JSON_BODY"])
+items = json.load(sys.stdin)
 fields = {field for field in os.environ.get("JSON_FIELDS", "").split(",") if field}
 
-def include(name):
-    return not fields or name in fields
+def state_label(item):
+    state = item.get("state", "").upper()
+    if state == "CLOSED" and item.get("merged_at"):
+        return "MERGED"
+    return state
+
+field_map = {
+    "number": lambda item: item.get("number"),
+    "url": lambda item: item.get("html_url"),
+    "title": lambda item: item.get("title"),
+    "state": state_label,
+    "baseRefName": lambda item: (item.get("base") or {}).get("ref"),
+    "headRefName": lambda item: (item.get("head") or {}).get("ref"),
+    "isDraft": lambda item: bool(item.get("draft")),
+}
 
 result = []
 for item in items:
-    row = {}
-    if include("number"):
-        row["number"] = item.get("number")
-    if include("url"):
-        row["url"] = item.get("html_url")
-    if include("title"):
-        row["title"] = item.get("title")
-    if include("state"):
-        row["state"] = item.get("state", "").upper()
-    if include("baseRefName"):
-        row["baseRefName"] = (item.get("base") or {}).get("ref")
-    if include("headRefName"):
-        row["headRefName"] = (item.get("head") or {}).get("ref")
-    if include("isDraft"):
-        row["isDraft"] = bool(item.get("draft"))
+    row = {
+        field_name: field_map[field_name](item)
+        for field_name in (fields or field_map.keys())
+        if field_name in field_map
+    }
     result.append(row)
 
 print(json.dumps(result))
@@ -351,7 +361,9 @@ create_pr_with_api() {
     :
   else
     if grep -q 'A pull request already exists' "${error_log}"; then
-      response_body="$(api_request GET "/repos/${repo_full_name}/pulls?state=open&head=RefinedStone:${head_branch}&base=${base_branch}")"
+      local head_owner
+      head_owner="${repo_full_name%%/*}"
+      response_body="$(api_request GET "/repos/${repo_full_name}/pulls?state=open&head=$(url_encode "${head_owner}:${head_branch}")&base=$(url_encode "${base_branch}")")"
       local existing_url
       existing_url="$(json_string_field "${response_body}" "html_url")"
       if [[ -n "${existing_url}" ]]; then
@@ -411,31 +423,35 @@ view_pr_with_api() {
     return 0
   fi
 
-  JSON_BODY="${response_body}" JSON_FIELDS="${json_fields}" python3 -c '
+  printf '%s' "${response_body}" | JSON_FIELDS="${json_fields}" python3 -c '
 import json
 import os
+import sys
 
-item = json.loads(os.environ["JSON_BODY"])
+item = json.load(sys.stdin)
 fields = {field for field in os.environ.get("JSON_FIELDS", "").split(",") if field}
 
-def include(name):
-    return not fields or name in fields
+def state_label(item):
+    state = item.get("state", "").upper()
+    if state == "CLOSED" and item.get("merged_at"):
+        return "MERGED"
+    return state
 
-row = {}
-if include("number"):
-    row["number"] = item.get("number")
-if include("url"):
-    row["url"] = item.get("html_url")
-if include("title"):
-    row["title"] = item.get("title")
-if include("state"):
-    row["state"] = item.get("state", "").upper()
-if include("baseRefName"):
-    row["baseRefName"] = (item.get("base") or {}).get("ref")
-if include("headRefName"):
-    row["headRefName"] = (item.get("head") or {}).get("ref")
-if include("isDraft"):
-    row["isDraft"] = bool(item.get("draft"))
+field_map = {
+    "number": lambda item: item.get("number"),
+    "url": lambda item: item.get("html_url"),
+    "title": lambda item: item.get("title"),
+    "state": state_label,
+    "baseRefName": lambda item: (item.get("base") or {}).get("ref"),
+    "headRefName": lambda item: (item.get("head") or {}).get("ref"),
+    "isDraft": lambda item: bool(item.get("draft")),
+}
+
+row = {
+    field_name: field_map[field_name](item)
+    for field_name in (fields or field_map.keys())
+    if field_name in field_map
+}
 
 print(json.dumps(row))
 '

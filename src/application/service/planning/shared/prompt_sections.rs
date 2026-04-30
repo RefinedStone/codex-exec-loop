@@ -99,11 +99,11 @@ pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
         PLANNING_TASK_COMMANDS_WRAPPER_RULE.to_string(),
         "`commands` must be the smallest create/update set needed to resolve the validation errors."
             .to_string(),
-        "Priority repairs must keep `base_priority + dynamic_priority_delta` within `0..100`."
+        "Priority repairs must keep `base_priority + dynamic_priority_delta` within `0-100` inclusive."
             .to_string(),
         "When `dynamic_priority_delta != 0`, include `priority_reason` or preserve the existing non-empty reason."
             .to_string(),
-        "Do not use an empty `commands` array to resolve a listed validation error when a rejected candidate command or task id is present."
+        "Do not use an empty `commands` array to resolve a listed validation error when a rejected candidate command or task id is present, unless the mutation was already applied via `akra planning-tool`."
             .to_string(),
         "When the rejected candidate used wrapped commands, preserve the same task intent and rewrite it into the flat `op` command shape."
             .to_string(),
@@ -156,7 +156,7 @@ fn planning_task_mutation_workflow_rules(mode: PlanningTaskMutationPromptMode) -
     ];
     if mode == PlanningTaskMutationPromptMode::Repair {
         rules.extend([
-            "In repair mode, do not answer with empty commands until the listed validation errors are actually resolved."
+            "In repair mode, empty final commands are valid only after `akra planning-tool` has successfully applied the repair; otherwise keep correcting the repair payload."
                 .to_string(),
             "If planning-tool rejects the repair mutation, correct the payload and retry within this turn before falling back to final commands."
                 .to_string(),
@@ -173,7 +173,7 @@ printf '%s\n' '{"version":1,"op":"update_task","apply":true,"task_id":"task-123"
         }
         PlanningTaskMutationPromptMode::Repair => {
             r#"printf '%s\n' '{"version":1,"op":"list_tasks","limit":20}' | akra planning-tool run .
-printf '%s\n' '{"version":1,"op":"update_task","apply":true,"task_id":"task-123","dynamic_priority_delta":-10,"priority_reason":"Adjusted so combined priority stays within 0..100."}' | akra planning-tool run ."#
+printf '%s\n' '{"version":1,"op":"update_task","apply":true,"task_id":"task-123","dynamic_priority_delta":-10,"priority_reason":"Adjusted so combined priority stays within 0-100 inclusive."}' | akra planning-tool run ."#
         }
     }
 }
@@ -307,7 +307,7 @@ mod tests {
         let contract = repair_task_authority_output_contract().join("\n");
 
         assert!(contract.contains("base_priority + dynamic_priority_delta"));
-        assert!(contract.contains("within `0..100`"));
+        assert!(contract.contains("within `0-100` inclusive"));
         assert!(contract.contains("priority_reason"));
         assert!(contract.contains("empty `commands` array"));
     }
