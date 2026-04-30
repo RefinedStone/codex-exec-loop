@@ -20,6 +20,7 @@ use crate::domain::planning::PriorityQueueTask;
 
 mod completion;
 pub(crate) mod distributor;
+mod git_sequence;
 mod pool;
 mod readiness;
 mod session_detail;
@@ -27,13 +28,14 @@ pub(crate) mod supervisor;
 pub(crate) mod turn;
 
 use self::distributor::ParallelModeDistributorService;
+use self::git_sequence::{GitCommandStep, run_git_sequence};
 use self::pool::{
     PoolBoardWithContextResult, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
     branch_is_cleanup_ready, branch_is_integrated_into_akra, build_pool_board, build_pool_slots,
     cleanup_slot, detect_canonical_repo_root, inspect_pool_board_and_context,
     inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
-    reconcile_pool_board, reconcile_pool_board_and_context, resolve_workspace_head_sha,
-    resolve_workspace_slot_lease, short_sha, write_slot_lease,
+    reconcile_pool_board, reconcile_pool_board_and_context, reset_slot_worktree_to_akra,
+    resolve_workspace_head_sha, resolve_workspace_slot_lease, short_sha, write_slot_lease,
 };
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds, inspect_akra_branch,
@@ -823,27 +825,15 @@ fn current_branch_name(worktree_path: &Path) -> Option<String> {
 }
 
 fn discard_unstarted_slot_branch(repo_root: &str, slot_path: &Path, branch_name: &str) -> bool {
-    let slot_path_string = slot_path.display().to_string();
-    command_succeeds(
-        "git",
-        [
-            "-C",
-            slot_path_string.as_str(),
-            "checkout",
-            "--detach",
-            AKRA_BRANCH,
-        ],
-    ) && command_succeeds(
-        "git",
-        [
-            "-C",
-            slot_path_string.as_str(),
-            "reset",
-            "--hard",
-            AKRA_BRANCH,
-        ],
-    ) && command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fdx"])
-        && command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name])
+    reset_slot_worktree_to_akra(slot_path).succeeded()
+        && run_git_sequence(
+            "delete unstarted slot branch",
+            vec![GitCommandStep::new(
+                "delete agent branch",
+                ["-C", repo_root, "branch", "-D", branch_name],
+            )],
+        )
+        .succeeded()
 }
 
 #[cfg(test)]
