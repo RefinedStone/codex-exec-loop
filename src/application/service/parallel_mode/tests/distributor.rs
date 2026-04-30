@@ -147,6 +147,174 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
 }
 
 #[test]
+fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
+    let repo = TempGitRepo::new("distributor-prerelease-based-branch");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    repo.commit_on_current_branch(
+        "prerelease-only.txt",
+        "current baseline\n",
+        "advance prerelease before lease",
+    );
+    let prerelease_head = run_command(
+        "git",
+        [
+            "-C",
+            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            "rev-parse",
+            "prerelease",
+        ],
+        None,
+    )
+    .expect("prerelease should resolve before lease");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    assert_eq!(
+        run_command(
+            "git",
+            ["-C", lease.worktree_path.as_str(), "rev-parse", "HEAD"],
+            None,
+        )
+        .as_deref(),
+        Some(prerelease_head.as_str())
+    );
+
+    service
+        .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-prerelease-base")
+        .expect("thread prepared should be recorded");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    let source_commit = run_command(
+        "git",
+        ["-C", lease.worktree_path.as_str(), "rev-parse", "HEAD"],
+        None,
+    )
+    .expect("source commit should resolve");
+    let source_parent = run_command(
+        "git",
+        ["-C", lease.worktree_path.as_str(), "rev-parse", "HEAD^"],
+        None,
+    )
+    .expect("source commit parent should resolve");
+    assert_eq!(source_parent, prerelease_head);
+
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-prerelease-based-branch",
+            None,
+            Some("Prerelease based distributor slice completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: prerelease based delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should be enqueued")
+        .expect("queue item should be created");
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "processing should integrate the prerelease-based branch: {notices:?}"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "prerelease:prerelease-only.txt",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some("current baseline")
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "prerelease:feature.txt",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some("done")
+    );
+    let integrated_as_ancestor = command_succeeds(
+        "git",
+        [
+            "-C",
+            repo.workspace_dir().as_str(),
+            "merge-base",
+            "--is-ancestor",
+            source_commit.as_str(),
+            "prerelease",
+        ],
+    );
+    let patch_equivalent = run_command(
+        "git",
+        [
+            "-C",
+            repo.workspace_dir().as_str(),
+            "cherry",
+            "prerelease",
+            source_commit.as_str(),
+        ],
+        None,
+    )
+    .is_some_and(|output| output.starts_with("- "));
+    assert!(
+        integrated_as_ancestor || patch_equivalent,
+        "source commit should be integrated or patch-equivalent in prerelease"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            format!("ensure-pr:prerelease:{}", lease.branch_name),
+            "inspect-pr:77".to_string(),
+            "push-integration:prerelease".to_string(),
+            "inspect-pr:77".to_string(),
+            "close-pr:77".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn build_supervisor_snapshot_prefers_active_distributor_queue_head_for_selected_detail() {
     let repo = TempGitRepo::new("distributor-detail-selection");
     let service = test_parallel_mode_service();

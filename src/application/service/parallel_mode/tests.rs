@@ -3,7 +3,7 @@ use super::{
     DEFAULT_POOL_SIZE, MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey,
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeService, agent_session_detail_record_path,
-    allocate_agent_branch_name, build_pool_board, derive_default_pool_root,
+    allocate_agent_branch_name, build_pool_board, command_succeeds, derive_default_pool_root,
     detect_canonical_repo_root, lease_session_key, parse_https_remote,
     read_agent_session_detail_record, reconcile_pool_board, resolve_workspace_slot_lease,
     run_command, sanitize_task_slug, short_branch_slug_hash, slot_id, slot_lease_file_path,
