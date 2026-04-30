@@ -221,12 +221,12 @@ pub(super) fn reconcile_pool_board_and_context(
             "worktree list inspection failed".to_string(),
         )));
     };
-    let reset_stale_baseline_slots = if can_reset_akra_baseline {
-        reset_stale_detached_baseline_slots(&repo_root, &pool_root, &worktree_records)
+    let reset_reusable_baseline_slots = if can_reset_akra_baseline {
+        reset_reusable_detached_baseline_slots(&repo_root, &pool_root, &worktree_records)
     } else {
         0
     };
-    if reset_stale_baseline_slots > 0
+    if reset_reusable_baseline_slots > 0
         && let Some(refreshed_records) = load_worktree_records(&repo_root)
     {
         worktree_records = refreshed_records;
@@ -560,7 +560,7 @@ fn provision_missing_slots(
     provisioned_slots
 }
 
-fn reset_stale_detached_baseline_slots(
+fn reset_reusable_detached_baseline_slots(
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
@@ -579,10 +579,13 @@ fn reset_stale_detached_baseline_slots(
         else {
             continue;
         };
-        if !worktree_record.detached || worktree_record.head_sha == akra_head {
+        if !worktree_record.detached {
             continue;
         }
-        if !inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline) {
+        let Some(slot_status) = inspect_slot_git_status(&slot_path) else {
+            continue;
+        };
+        if worktree_record.head_sha == akra_head && slot_status.is_clean_baseline() {
             continue;
         }
         let slot_path_string = slot_path.display().to_string();

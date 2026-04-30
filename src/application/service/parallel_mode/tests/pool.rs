@@ -144,6 +144,25 @@ fn dirty_akra_baseline_slot_is_blocked_for_operator_recovery() {
 }
 
 #[test]
+fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
+    let repo = TempGitRepo::new("dirty-reusable-slot");
+    let slot_path = repo.create_detached_slot(1);
+    fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.blocked_slots, 0);
+    assert_eq!(
+        fs::read_to_string(slot_path.join("README.md")).expect("README should be readable"),
+        "seed\n"
+    );
+}
+
+#[test]
 fn reconcile_provisions_missing_slots_into_idle_baselines() {
     let repo = TempGitRepo::new("provision-slots");
 
