@@ -107,11 +107,37 @@ impl NativeTuiApp {
                 let status_text = if snapshot.allows_parallel_mode() {
                     self.parallel_mode_enabled = true;
                     self.sync_parallel_mode_supervisor_snapshot(true);
+                    format!(
+                        "parallel mode: on / readiness: {} / control tower opened",
+                        snapshot.readiness_label()
+                    )
+                } else {
+                    self.parallel_mode_enabled = false;
+                    self.sync_parallel_mode_supervisor_snapshot(false);
+                    let cause = snapshot
+                        .top_alert
+                        .as_deref()
+                        .unwrap_or("inspect the readiness panel before retrying");
+                    format!(
+                        "parallel mode: blocked / readiness: {} / {cause}",
+                        snapshot.readiness_label()
+                    )
+                };
+                self.show_supersession_overlay();
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
+            Some(value) if value.eq_ignore_ascii_case("dispatch") => {
+                let snapshot = self.refresh_parallel_mode_readiness_snapshot();
+                let status_text = if !self.parallel_mode_enabled {
+                    self.sync_parallel_mode_supervisor_snapshot(false);
+                    "parallel mode: off / use `:parallel on` before dispatching queue head"
+                        .to_string()
+                } else if snapshot.allows_parallel_mode() {
+                    self.sync_parallel_mode_supervisor_snapshot(true);
                     self.dispatch_next_parallel_queue_head().unwrap_or_else(|| {
-                        format!(
-                            "parallel mode: on / readiness: {} / control tower opened",
-                            snapshot.readiness_label()
-                        )
+                        "parallel mode: on / no actionable queue head to dispatch".to_string()
                     })
                 } else {
                     self.parallel_mode_enabled = false;
@@ -134,7 +160,7 @@ impl NativeTuiApp {
                 self.inspect_parallel_mode_shell();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "parallel mode command: unsupported argument `{value}` / supported: on, off"
+                        "parallel mode command: unsupported argument `{value}` / supported: on, off, dispatch"
                     ),
                 });
             }

@@ -46,7 +46,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
 }
 
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off|dispatch]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -191,11 +191,15 @@ impl InlineShellCommandInput {
                     "Press Enter to turn parallel mode off.".to_string()
                 }
                 Some(value) if value.eq_ignore_ascii_case("on") => {
-                    "Press Enter to inspect readiness and enter parallel mode when allowed."
+                    "Press Enter to inspect readiness and enter parallel mode without dispatching."
+                        .to_string()
+                }
+                Some(value) if value.eq_ignore_ascii_case("dispatch") => {
+                    "Press Enter to dispatch the current queue head to an agent slot."
                         .to_string()
                 }
                 Some(value) => format!(
-                    "Press Enter to apply `:parallel {value}`. Supported arguments: on, off."
+                    "Press Enter to apply `:parallel {value}`. Supported arguments: on, off, dispatch."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -412,7 +416,7 @@ impl InlineShellCommand {
 
     fn help_usage(self) -> &'static str {
         match self {
-            InlineShellCommand::Parallel => ":parallel [on|off]",
+            InlineShellCommand::Parallel => ":parallel [on|off|dispatch]",
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Task => ":task [prompt]",
@@ -712,7 +716,7 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains(":diag - diagnostics"));
-        assert!(rendered.contains(":parallel [on|off] - parallel mode"));
+        assert!(rendered.contains(":parallel [on|off|dispatch] - parallel mode"));
         assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
         assert!(!rendered.contains(":auto"));
         assert!(rendered.contains(":help - command help"));
@@ -771,6 +775,8 @@ mod tests {
         let plain = InlineShellCommandInput::parse(":parallel").expect("command should parse");
         let on = InlineShellCommandInput::parse(":parallel on").expect("command should parse");
         let off = InlineShellCommandInput::parse(":parallel off").expect("command should parse");
+        let dispatch =
+            InlineShellCommandInput::parse(":parallel dispatch").expect("command should parse");
         let invalid =
             InlineShellCommandInput::parse(":parallel later").expect("command should parse");
 
@@ -780,15 +786,19 @@ mod tests {
         );
         assert_eq!(
             on.buffered_hint(),
-            "Press Enter to inspect readiness and enter parallel mode when allowed."
+            "Press Enter to inspect readiness and enter parallel mode without dispatching."
         );
         assert_eq!(
             off.buffered_hint(),
             "Press Enter to turn parallel mode off."
         );
         assert_eq!(
+            dispatch.buffered_hint(),
+            "Press Enter to dispatch the current queue head to an agent slot."
+        );
+        assert_eq!(
             invalid.buffered_hint(),
-            "Press Enter to apply `:parallel later`. Supported arguments: on, off."
+            "Press Enter to apply `:parallel later`. Supported arguments: on, off, dispatch."
         );
     }
 

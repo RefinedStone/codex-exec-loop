@@ -195,10 +195,10 @@ pub(super) fn reconcile_pool_board_and_context(
     let created_pool_root = !pool_root_existed;
     let runtime_projection =
         load_runtime_projection_snapshot(planning_authority, &repo_root, &pool_root);
-    let can_reset_akra_baseline = runtime_projection.slot_leases.is_empty()
-        && runtime_projection.distributor_queue_records.is_empty();
+    let can_refresh_akra_baseline =
+        can_refresh_akra_baseline_from_workspace(&repo_root, &runtime_projection);
     let Ok((_akra_head, created_akra_branch)) =
-        ensure_akra_branch(&repo_root, can_reset_akra_baseline)
+        ensure_akra_branch(&repo_root, can_refresh_akra_baseline)
     else {
         return Err(Box::new((
             build_blocked_pool_board(
@@ -221,8 +221,13 @@ pub(super) fn reconcile_pool_board_and_context(
             "worktree list inspection failed".to_string(),
         )));
     };
-    let reset_reusable_baseline_slots = if can_reset_akra_baseline {
-        reset_reusable_detached_baseline_slots(&repo_root, &pool_root, &worktree_records)
+    let reset_reusable_baseline_slots = if can_refresh_akra_baseline {
+        reset_reusable_detached_baseline_slots(
+            &repo_root,
+            &pool_root,
+            &worktree_records,
+            &runtime_projection.slot_leases,
+        )
     } else {
         0
     };
@@ -316,6 +321,23 @@ pub(super) fn inspect_pool_board_and_context(
             detail.to_string(),
         ))),
     }
+}
+
+fn can_refresh_akra_baseline_from_workspace(
+    repo_root: &str,
+    runtime_projection: &PlanningAuthorityRuntimeProjectionSnapshot,
+) -> bool {
+    runtime_projection.distributor_queue_records.is_empty()
+        && runtime_projection.slot_leases.values().all(|lease| {
+            matches!(
+                lease.state,
+                ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running
+            )
+        })
+        && current_branch_name(Path::new(repo_root)).is_some_and(|branch_name| {
+            branch_name != AKRA_BRANCH
+                && !branch_name.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/"))
+        })
 }
 
 fn ensure_akra_branch(repo_root: &str, reset_to_current_head: bool) -> Result<(String, bool), ()> {
@@ -564,6 +586,7 @@ fn reset_reusable_detached_baseline_slots(
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
+    slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
 ) -> usize {
     let akra_head = resolve_akra_baseline_head(repo_root).unwrap_or_default();
     if akra_head.is_empty() {
@@ -572,7 +595,11 @@ fn reset_reusable_detached_baseline_slots(
 
     let mut reset_slots = 0;
     for slot_number in 1..=DEFAULT_POOL_SIZE {
-        let slot_path = pool_root.join(slot_id(slot_number));
+        let slot_id = slot_id(slot_number);
+        if slot_leases.contains_key(&slot_id) {
+            continue;
+        }
+        let slot_path = pool_root.join(&slot_id);
         let Some(worktree_record) = worktree_records
             .iter()
             .find(|record| record.path == slot_path)

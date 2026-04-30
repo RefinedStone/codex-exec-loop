@@ -163,6 +163,60 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
 }
 
 #[test]
+fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
+    let repo = TempGitRepo::new("dirty-reusable-slot-with-running-lease");
+    let service = test_parallel_mode_service();
+    let initial_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    service
+        .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
+        .expect("slot lease should transition to running");
+    repo.commit_on_current_branch("baseline.txt", "new baseline\n", "advance baseline");
+    let current_head = repo.head_sha();
+    let reusable_slot_path = repo.pool_root().join(slot_id(2));
+    fs::write(reusable_slot_path.join("README.md"), "dirty\n")
+        .expect("idle slot should become dirty");
+
+    let refreshed_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(refreshed_pool.running_slots, 1);
+    assert_eq!(refreshed_pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(refreshed_pool.blocked_slots, 0);
+    assert_eq!(
+        fs::read_to_string(reusable_slot_path.join("README.md"))
+            .expect("README should be readable"),
+        "seed\n"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "rev-parse",
+                "akra",
+            ],
+            None,
+        )
+        .expect("akra should resolve"),
+        current_head
+    );
+}
+
+#[test]
 fn reconcile_provisions_missing_slots_into_idle_baselines() {
     let repo = TempGitRepo::new("provision-slots");
 
@@ -264,6 +318,59 @@ fn reconcile_resets_clean_detached_slots_after_empty_akra_baseline_moves() {
             .worktree_label
             .contains("detached away from `akra` baseline")
     }));
+}
+
+#[test]
+fn reconcile_does_not_refresh_akra_from_agent_slot_workspace() {
+    let repo = TempGitRepo::new("agent-slot-does-not-reset-akra");
+    let slot_path = repo.create_agent_slot(1, "task-one");
+    let original_akra_head = run_command(
+        "git",
+        [
+            "-C",
+            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            "rev-parse",
+            "akra",
+        ],
+        None,
+    )
+    .expect("akra should resolve");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    assert_ne!(
+        original_akra_head,
+        run_command(
+            "git",
+            [
+                "-C",
+                slot_path.to_str().expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("slot head should resolve")
+    );
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        slot_path.to_str().expect("slot path should be utf-8"),
+    );
+
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "rev-parse",
+                "akra",
+            ],
+            None,
+        )
+        .expect("akra should resolve"),
+        original_akra_head
+    );
+    assert!(pool.blocked_slots > 0);
 }
 
 #[test]
