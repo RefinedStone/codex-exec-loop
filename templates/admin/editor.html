@@ -32,7 +32,14 @@
         >
           Validate
         </button>
-        <button type="submit" formaction="/admin/drafts/{{ session.draft_name }}/promote" class="warn">Promote</button>
+        <button
+          type="submit"
+          formaction="/admin/drafts/{{ session.draft_name }}/promote"
+          class="warn"
+          data-confirm="Promote this draft into active planning files?"
+        >
+          Promote
+        </button>
         <a class="button secondary" href="{{ session.return_path }}">Back</a>
       </div>
     </form>

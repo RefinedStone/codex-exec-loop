@@ -62,7 +62,7 @@
     </form>
     <form method="post" action="/admin/files/apply">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="warn">Apply files</button>
+      <button type="submit" class="warn" data-confirm="Apply edited planning files to the active workspace?">Apply files</button>
     </form>
   </div>
 </section>
@@ -173,7 +173,7 @@
         <form method="post" action="/admin/tasks/delete" class="danger-zone">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="id" value="{{ task.id }}">
-          <button type="submit" class="error">Delete task</button>
+          <button type="submit" class="error" data-confirm="Delete this task from the planning ledger?">Delete task</button>
         </form>
       </div>
     </details>

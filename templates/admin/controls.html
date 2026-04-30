@@ -19,7 +19,7 @@
       </form>
       <form method="post" action="/admin/files/apply">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="warn">Apply Edited Files</button>
+        <button type="submit" class="warn" data-confirm="Apply edited planning files to the active workspace?">Apply Edited Files</button>
       </form>
     </div>
   </article>
@@ -31,17 +31,17 @@
       <form method="post" action="/admin/controls/reset" class="actions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="target" value="queue">
-        <button type="submit" class="secondary">Reset Queue</button>
+        <button type="submit" class="secondary" data-confirm="Reset the current task queue state?">Reset Queue</button>
       </form>
       <form method="post" action="/admin/controls/reset" class="actions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="target" value="directions">
-        <button type="submit" class="warn">Reset Directions</button>
+        <button type="submit" class="warn" data-confirm="Reset direction state from the workspace defaults?">Reset Directions</button>
       </form>
       <form method="post" action="/admin/controls/reset" class="actions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="target" value="all">
-        <button type="submit" class="error">Reset All</button>
+        <button type="submit" class="error" data-confirm="Reset all planning admin state for this workspace?">Reset All</button>
       </form>
     </div>
   </article>

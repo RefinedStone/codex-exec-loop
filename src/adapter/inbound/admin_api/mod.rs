@@ -1101,6 +1101,12 @@ mod tests {
     use crate::application::service::planning::{PlanningAdminDraftKind, PlanningAdminFileKey};
     use std::collections::HashMap;
 
+    const BASE_TEMPLATE: &str = include_str!("../../../../templates/admin/base.html");
+    const CONTROLS_TEMPLATE: &str = include_str!("../../../../templates/admin/controls.html");
+    const DIRECTIONS_TEMPLATE: &str = include_str!("../../../../templates/admin/directions.html");
+    const EDITOR_TEMPLATE: &str = include_str!("../../../../templates/admin/editor.html");
+    const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.html");
+
     #[test]
     fn page_mutation_ignores_removed_raw_authority_file_updates() {
         let updates = extract_file_updates(HashMap::from([
@@ -1126,5 +1132,32 @@ mod tests {
             nav_for_kind(PlanningAdminDraftKind::QueueIdlePrompt),
             "directions"
         );
+    }
+
+    #[test]
+    fn risky_admin_mutations_require_browser_confirmation() {
+        assert!(BASE_TEMPLATE.contains("window.confirm(message)"));
+        assert!(BASE_TEMPLATE.contains("submitter?.dataset.confirm"));
+
+        for (template_name, template) in [
+            ("controls", CONTROLS_TEMPLATE),
+            ("directions", DIRECTIONS_TEMPLATE),
+            ("editor", EDITOR_TEMPLATE),
+            ("tasks", TASKS_TEMPLATE),
+        ] {
+            assert!(
+                template.contains("data-confirm="),
+                "{template_name} should mark risky submit buttons"
+            );
+        }
+
+        assert!(CONTROLS_TEMPLATE.contains("Reset All"));
+        assert!(CONTROLS_TEMPLATE.contains("data-confirm=\"Reset all planning admin state"));
+        assert!(DIRECTIONS_TEMPLATE.contains("Delete direction and tasks"));
+        assert!(DIRECTIONS_TEMPLATE.contains("data-confirm=\"Delete this direction"));
+        assert!(TASKS_TEMPLATE.contains("Delete task"));
+        assert!(TASKS_TEMPLATE.contains("data-confirm=\"Delete this task"));
+        assert!(EDITOR_TEMPLATE.contains("Promote"));
+        assert!(EDITOR_TEMPLATE.contains("data-confirm=\"Promote this draft"));
     }
 }

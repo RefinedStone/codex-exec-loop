@@ -410,6 +410,18 @@
           emptyState.classList.toggle("is-visible", visibleCount === 0);
         }
       });
+
+      document.addEventListener("submit", function (event) {
+        const form = event.target;
+        const submitter = event.submitter;
+        const message = submitter?.dataset.confirm || form?.dataset.confirm;
+        if (!message) return;
+
+        if (!window.confirm(message)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      });
     </script>
     <script type="module">
       const editors = [...document.querySelectorAll("textarea[data-editor-textarea]")];
