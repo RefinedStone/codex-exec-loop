@@ -18,6 +18,7 @@ pub trait CodexAppServerPort: Send + Sync {
         ConversationRuntimeControlTruth::codex_app_server()
     }
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
+    fn request_stop_all_sessions(&self) -> Result<()>;
     fn run_new_thread_stream(
         &self,
         cwd: &str,
@@ -60,6 +61,10 @@ where
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
         CodexAppServerPort::load_conversation_snapshot(self, thread_id)
+    }
+
+    fn request_stop_all_sessions(&self) -> Result<()> {
+        CodexAppServerPort::request_stop_all_sessions(self)
     }
 
     fn run_new_thread_stream(
@@ -142,6 +147,10 @@ mod tests {
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
             })
+        }
+
+        fn request_stop_all_sessions(&self) -> anyhow::Result<()> {
+            Ok(())
         }
 
         fn run_new_thread_stream(

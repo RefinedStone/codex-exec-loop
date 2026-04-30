@@ -28,6 +28,11 @@ impl ConversationService {
         self.interactive_turn_runtime_port.runtime_control_truth()
     }
 
+    pub fn request_stop_all_sessions(&self) -> Result<()> {
+        self.interactive_turn_runtime_port
+            .request_stop_all_sessions()
+    }
+
     pub fn run_new_thread_stream(
         &self,
         cwd: &str,

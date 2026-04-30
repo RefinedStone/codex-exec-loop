@@ -125,6 +125,10 @@ mod tests {
             })
         }
 
+        fn request_stop_all_sessions(&self) -> Result<()> {
+            Ok(())
+        }
+
         fn run_new_thread_stream(
             &self,
             _cwd: &str,

@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex, TryLockError};
 
 use anyhow::{Result, anyhow};
 
-use self::connection::{AppServerConnection, AppServerConnectionConfig};
+use self::connection::{
+    AppServerConnection, AppServerConnectionConfig, AppServerTurnInterruptSignal,
+};
 pub use self::planning_worker::AppServerPlanningWorkerAdapter;
 pub(crate) use self::planning_worker::PlanningThreadLauncher;
 use self::planning_worker_skill::PlanningWorkerSkillAdapter;
@@ -46,6 +48,7 @@ pub struct CodexAppServerAdapter {
     connection_config: AppServerConnectionConfig,
     execution_policy: AppServerExecutionPolicy,
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
+    turn_interrupt_signal: AppServerTurnInterruptSignal,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
 }
 
@@ -163,6 +166,7 @@ impl CodexAppServerAdapter {
             connection_config,
             execution_policy,
             shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
+            turn_interrupt_signal: AppServerTurnInterruptSignal::default(),
             planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
         }
     }
@@ -398,6 +402,7 @@ impl CodexAppServerAdapter {
         effort: Option<ReasoningEffortValue>,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<()> {
+        let observed_interrupt_generation = self.turn_interrupt_signal.current_generation();
         let turn_response = connection.start_turn(TurnStartParams {
             thread_id: thread_id.to_string(),
             input,
@@ -412,7 +417,13 @@ impl CodexAppServerAdapter {
             turn_id: turn_response.turn.id.clone(),
         });
 
-        connection.wait_for_turn_stream(thread_id, &turn_response.turn.id, event_sender)
+        connection.wait_for_turn_stream(
+            thread_id,
+            &turn_response.turn.id,
+            &self.turn_interrupt_signal,
+            observed_interrupt_generation,
+            event_sender,
+        )
     }
 
     fn planning_worker_turn_input(&self, prompt: &str) -> Vec<TurnInputItem> {
@@ -430,6 +441,10 @@ impl CodexAppServerAdapter {
                 runtime.push_notice(notice);
             }
         }
+    }
+
+    fn request_turn_interrupt_for_all_streams(&self) {
+        self.turn_interrupt_signal.request_stop_all_sessions();
     }
 }
 
@@ -490,6 +505,11 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             output.value.thread,
             output.warnings,
         ))
+    }
+
+    fn request_stop_all_sessions(&self) -> Result<()> {
+        self.request_turn_interrupt_for_all_streams();
+        Ok(())
     }
 
     fn run_new_thread_stream(

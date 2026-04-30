@@ -8,6 +8,7 @@ use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationS
 pub trait InteractiveTurnRuntimePort: Send + Sync {
     fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth;
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
+    fn request_stop_all_sessions(&self) -> Result<()>;
     fn run_new_thread_stream(
         &self,
         cwd: &str,

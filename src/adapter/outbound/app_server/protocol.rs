@@ -734,6 +734,13 @@ pub(super) struct TurnStartParams {
     pub(super) effort: Option<ReasoningEffortValue>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TurnInterruptParams {
+    pub(super) thread_id: String,
+    pub(super) turn_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type")]
 pub(super) enum TurnInputItem {
@@ -783,6 +790,9 @@ pub(super) struct ThreadResumeResponse {
 pub(super) struct TurnStartResponse {
     pub(super) turn: TurnRecord,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct TurnInterruptResponse {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TurnRecord {

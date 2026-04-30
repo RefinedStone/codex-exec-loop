@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,8 +16,9 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use super::protocol::{
     AccountReadResponse, AppServerNotification, InitializeResponse, ThreadListParams,
     ThreadListResponse, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
-    ThreadStartParams, ThreadStartResponse, TurnNotificationHandling, TurnStartParams,
-    TurnStartResponse, handle_turn_notification, sort_and_dedup_warnings,
+    ThreadStartParams, ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse,
+    TurnNotificationHandling, TurnStartParams, TurnStartResponse, handle_turn_notification,
+    sort_and_dedup_warnings,
 };
 
 const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
@@ -24,6 +27,25 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const DEFAULT_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_FATAL_STDERR_LINES: usize = 4;
+
+#[derive(Clone, Default)]
+pub(super) struct AppServerTurnInterruptSignal {
+    generation: Arc<AtomicU64>,
+}
+
+impl AppServerTurnInterruptSignal {
+    pub(super) fn request_stop_all_sessions(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(super) fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    fn requested_after(&self, observed_generation: u64) -> bool {
+        self.current_generation() > observed_generation
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AppServerConnectionConfig {
@@ -200,19 +222,35 @@ impl AppServerConnection {
         self.send_request("turn/start", serde_json::to_value(params)?)
     }
 
+    pub(super) fn interrupt_turn(
+        &mut self,
+        params: TurnInterruptParams,
+    ) -> Result<TurnInterruptResponse> {
+        self.ensure_initialized()?;
+        self.send_request("turn/interrupt", serde_json::to_value(params)?)
+    }
+
     pub(super) fn wait_for_turn_stream(
         &mut self,
         thread_id: &str,
         turn_id: &str,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         let mut changed_planning_file_paths = Vec::new();
+        let mut interrupt_sent = false;
 
         loop {
             if let Some(status) = self.child.try_wait()? {
                 return Err(self.error_with_diagnostics(format!(
                     "app-server exited before the turn completed: {status}"
                 )));
+            }
+
+            if !interrupt_sent && interrupt_signal.requested_after(observed_interrupt_generation) {
+                self.interrupt_active_turn(thread_id, turn_id, event_sender);
+                interrupt_sent = true;
             }
 
             if self.process_pending_turn_notification(
@@ -253,6 +291,27 @@ impl AppServerConnection {
                     ));
                 }
             }
+        }
+    }
+
+    fn interrupt_active_turn(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        event_sender: &Sender<ConversationStreamEvent>,
+    ) {
+        match self.interrupt_turn(TurnInterruptParams {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+        }) {
+            Ok(_) => {
+                let _ = event_sender.send(ConversationStreamEvent::StatusUpdated {
+                    text: "stop requested / app-server interrupt sent".to_string(),
+                });
+            }
+            Err(error) => self.diagnostics.record_warning(format!(
+                "stop requested but app-server interrupt failed for turn `{turn_id}`: {error}"
+            )),
         }
     }
 

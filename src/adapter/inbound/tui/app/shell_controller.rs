@@ -140,6 +140,7 @@ impl NativeTuiApp {
             }
             InlineShellCommand::Task => self.handle_task_shell_command(command_input.argument()),
             InlineShellCommand::Turns => self.handle_turns_shell_command(command_input.argument()),
+            InlineShellCommand::Stop => self.handle_stop_shell_command(),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::Init => self.handle_init_shell_command(),
             InlineShellCommand::PlanningInit => {
@@ -172,6 +173,23 @@ impl NativeTuiApp {
     fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
         self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
             value: argument.unwrap_or_default().to_string(),
+        });
+    }
+
+    fn handle_stop_shell_command(&mut self) {
+        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowPaused);
+        self.parallel_mode_enabled = false;
+        self.invalidate_parallel_mode_supervisor_snapshot();
+
+        let status_text = match self.conversation_service.request_stop_all_sessions() {
+            Ok(()) if self.conversation_has_running_turn() => {
+                "stop requested / active app-server sessions will be interrupted".to_string()
+            }
+            Ok(()) => "stop requested / no active turn is running".to_string(),
+            Err(error) => format!("stop request failed: {error}"),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
         });
     }
 
