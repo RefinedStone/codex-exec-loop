@@ -32,7 +32,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let roster_lines = build_roster_lines(&supervisor_snapshot);
     let detail_lines = build_detail_lines(&supervisor_snapshot);
     let distributor_lines = build_distributor_lines(&supervisor_snapshot.distributor);
-    let mut key_lines = vec![AkraTheme::key_line("r: rerun readiness")];
+    let mut key_lines = vec![AkraTheme::key_line("Ctrl+R: rerun readiness")];
     if app.parallel_mode_enabled() {
         key_lines.push(AkraTheme::key_line("Ctrl+P: parallel off"));
     } else if readiness_snapshot.is_some_and(|snapshot| snapshot.allows_parallel_mode()) {

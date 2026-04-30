@@ -274,7 +274,7 @@ impl NativeTuiApp {
         }
 
         match key.code {
-            KeyCode::Char('r') if key.modifiers.is_empty() => {
+            KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
                 let snapshot = self.refresh_parallel_mode_readiness_snapshot();
                 self.sync_parallel_mode_supervisor_snapshot(self.parallel_mode_enabled());
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
