@@ -399,6 +399,39 @@ fn build_supervisor_snapshot_prefers_active_distributor_queue_head_for_selected_
 }
 
 #[test]
+fn build_supervisor_snapshot_populates_idle_orchestrator_without_session_detail() {
+    let repo = TempGitRepo::new("distributor-empty-orchestrator");
+    let service = test_parallel_mode_service();
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+
+    let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+    assert_eq!(snapshot.distributor.head_summary, "idle");
+    assert_eq!(snapshot.distributor.orchestrator_status.queue_head, "none");
+    assert_eq!(
+        snapshot.distributor.orchestrator_status.barrier_state,
+        "idle"
+    );
+    assert!(
+        snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+            .contains("prerelease"),
+        "idle snapshot should still inspect integration readiness: {}",
+        snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+    );
+}
+
+#[test]
 fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
     let repo = TempGitRepo::new("distributor-queue-gh-blocked");
     let github = FakeGithubAutomationPort::with_capabilities(GithubAutomationCapabilities::new(

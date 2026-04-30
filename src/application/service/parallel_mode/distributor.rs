@@ -518,11 +518,9 @@ fn recover_integrated_queue_record(
         }
     } else if !branch_exists(&context.repo_root, &record.branch_name) {
         record.queue_state = ParallelModeQueueItemState::Done;
-        record.integration_note =
-            format!(
-                "recovered after restart: branch is already integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} and slot cleanup completed"
-            )
-                .to_string();
+        record.integration_note = format!(
+            "recovered after restart: branch is already integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} and slot cleanup completed"
+        );
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
             planning_authority,
@@ -587,7 +585,8 @@ fn build_distributor_snapshot_from_context(
         return build_placeholder_distributor_snapshot(
             ParallelModeQueueItemState::Idle.label(),
             "no distributor queue items are waiting",
-        );
+        )
+        .with_orchestrator_status(build_idle_orchestrator_status(context));
     };
 
     let (head_summary, note) = match detail.state_label.as_str() {
@@ -621,11 +620,11 @@ fn build_orchestrator_status(
     context: &PoolRuntimeContext,
     queue_head: &ParallelModeDistributorQueueRecord,
 ) -> ParallelModeOrchestratorStatus {
-    let active_records = context
+    let active_record_count = context
         .distributor_queue_records
         .iter()
         .filter(|record| record.queue_state.is_active())
-        .collect::<Vec<_>>();
+        .count();
     let matching_lease = matching_lease_for_queue_record(context, queue_head);
 
     ParallelModeOrchestratorStatus {
@@ -635,7 +634,7 @@ fn build_orchestrator_status(
             queue_head.task_id,
             queue_head.queue_state.label()
         ),
-        barrier_state: orchestrator_barrier_state(queue_head, active_records.len()),
+        barrier_state: orchestrator_barrier_state(queue_head, active_record_count),
         blocked_reason: blocked_head_detail(queue_head).or_else(|| {
             queue_head
                 .recovery_note
@@ -643,7 +642,7 @@ fn build_orchestrator_status(
                 .filter(|note| !note.trim().is_empty())
         }),
         conflict_files: queue_head.conflict_files.clone(),
-        held_queue_count: active_records.len().saturating_sub(1),
+        held_queue_count: active_record_count.saturating_sub(1),
         integration_worktree_readiness: inspect_integration_worktree_readiness(context),
         slot_return_wait_reason: slot_return_wait_reason(queue_head, matching_lease),
     }

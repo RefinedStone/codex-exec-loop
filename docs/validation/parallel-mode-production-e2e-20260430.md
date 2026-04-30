@@ -1,6 +1,8 @@
 # Parallel Mode Production E2E Validation
 
 Date: 2026-04-30
+Task ID: prod-e2e-20260430
+Agent: agent-prod-e2e
 
 This document is the payload committed through a live production queued-result validation.
 

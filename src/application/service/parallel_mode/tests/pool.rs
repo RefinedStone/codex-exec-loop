@@ -664,17 +664,7 @@ fn acquire_slot_lease_starts_agent_branch_at_prerelease_head() {
         "pool baseline\n",
         "advance prerelease baseline",
     );
-    let prerelease_head = run_command(
-        "git",
-        [
-            "-C",
-            repo.repo_root.to_str().expect("repo root should be utf-8"),
-            "rev-parse",
-            "prerelease",
-        ],
-        None,
-    )
-    .expect("prerelease should resolve before lease");
+    let prerelease_head = repo.head_sha();
     let service = test_parallel_mode_service();
 
     let lease = service
@@ -693,7 +683,7 @@ fn acquire_slot_lease_starts_agent_branch_at_prerelease_head() {
         "git",
         [
             "-C",
-            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            &repo.workspace_dir(),
             "rev-parse",
             lease.branch_name.as_str(),
         ],
