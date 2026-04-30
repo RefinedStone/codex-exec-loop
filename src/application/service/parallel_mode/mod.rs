@@ -39,7 +39,7 @@ use self::readiness::{
     inspect_planning, inspect_push_remote, run_command,
 };
 use self::session_detail::{
-    build_assigned_session_detail, default_authority_refresh_outcome, default_validation_summary,
+    default_authority_refresh_outcome, default_validation_summary,
     format_elapsed_label_from_timestamp, lease_session_key, record_assigned_session_detail,
     record_cleaned_session_detail, record_cleanup_pending_session_detail,
     record_distributor_failed_session_detail, record_failed_start_session_detail,

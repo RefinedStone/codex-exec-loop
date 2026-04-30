@@ -6,7 +6,7 @@ use chrono::Utc;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
-    ParallelModeSlotLeaseSnapshot,
+    ParallelModeLiveSessionDetailDefaults, ParallelModeSlotLeaseSnapshot,
 };
 
 use super::{current_timestamp, ensure_directory_exists};
@@ -26,28 +26,12 @@ pub(super) fn lease_session_key(lease: &ParallelModeSlotLeaseSnapshot) -> String
 pub(super) fn build_assigned_session_detail(
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> ParallelModeAgentSessionDetailSnapshot {
-    ParallelModeAgentSessionDetailSnapshot::new(
-        lease_session_key(lease),
-        lease.agent_id.clone(),
-        lease.task_id.clone(),
-        lease.task_title.clone(),
-        lease.slot_id.clone(),
-        None,
-        lease.worktree_path.clone(),
-        lease.branch_name.clone(),
-        lease.leased_at.clone(),
-        "assigned",
-        "in_progress",
-        "slot lease acquired and branch reserved for launch",
-        default_validation_summary(),
-        default_authority_refresh_outcome(),
-        None,
-        vec![ParallelModeAgentSessionHistoryEntry::new(
-            "assigned",
-            lease.leased_at.clone(),
-            "slot lease acquired and branch reserved for launch",
-        )],
-        lease.leased_at.clone(),
+    ParallelModeAgentSessionDetailSnapshot::assigned_for_lease(
+        lease,
+        ParallelModeLiveSessionDetailDefaults {
+            validation_summary: default_validation_summary(),
+            authority_refresh_outcome: default_authority_refresh_outcome(),
+        },
     )
 }
 

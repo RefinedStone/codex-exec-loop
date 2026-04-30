@@ -3,18 +3,18 @@ use std::collections::BTreeMap;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot,
-    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState, roster_latest_summary,
+    ParallelModeLiveSessionDetailDefaults, ParallelModePoolBoardSnapshot,
+    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 
 use super::distributor::{ParallelModeDistributorQueueRecord, ParallelModeDistributorService};
 use super::{
-    PoolBoardWithContextResult, PoolRuntimeContext, build_assigned_session_detail,
-    build_pool_board, default_authority_refresh_outcome, default_supervisor_notice,
-    default_validation_summary, format_elapsed_label_from_timestamp,
-    inspect_pool_board_and_context, lease_session_key, pool_operator_recovery_notice,
-    reconcile_pool_board_and_context,
+    PoolBoardWithContextResult, PoolRuntimeContext, build_pool_board,
+    default_authority_refresh_outcome, default_supervisor_notice, default_validation_summary,
+    format_elapsed_label_from_timestamp, inspect_pool_board_and_context, lease_session_key,
+    pool_operator_recovery_notice, reconcile_pool_board_and_context,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -221,169 +221,27 @@ fn build_supervisor_detail_from_context(
     )
 }
 
-fn build_live_session_detail(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: Option<ParallelModeAgentSessionDetailSnapshot>,
-) -> ParallelModeAgentSessionDetailSnapshot {
-    let mut detail = detail.unwrap_or_else(|| build_assigned_session_detail(lease));
-    detail.session_key = lease_session_key(lease);
-    detail.agent_id = lease.agent_id.clone();
-    detail.task_id = lease.task_id.clone();
-    detail.task_title = lease.task_title.clone();
-    detail.slot_id = lease.slot_id.clone();
-    detail.worktree_path = lease.worktree_path.clone();
-    detail.branch_name = lease.branch_name.clone();
-    detail.lease_started_at = lease.leased_at.clone();
-    detail.state_label = live_detail_state_label(lease, &detail);
-    detail.completion_state_label = live_completion_state_label(lease, &detail);
-    if detail.latest_summary.trim().is_empty() {
-        detail.latest_summary = roster_latest_summary(lease, Some(&detail));
-    }
-    if detail.validation_summary.trim().is_empty() {
-        detail.validation_summary = default_validation_summary().to_string();
-    }
-    if detail.authority_refresh_outcome.trim().is_empty() {
-        detail.authority_refresh_outcome = default_authority_refresh_outcome().to_string();
-    }
-    if detail.distributor_outcome.is_none() {
-        detail.distributor_outcome = live_distributor_outcome(lease);
-    }
-    if detail.updated_at.trim().is_empty() {
-        detail.updated_at = live_detail_updated_at(lease).to_string();
-    }
-    detail
-}
-
-fn live_detail_state_label(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: &ParallelModeAgentSessionDetailSnapshot,
-) -> String {
-    if let Some(label) = lease.runtime_state_override(detail) {
-        return label.to_string();
-    }
-
-    match lease.state {
-        ParallelModeSlotLeaseState::Leased => {
-            if detail.thread_id.is_some() || detail.state_label == "starting" {
-                "starting".to_string()
-            } else {
-                "assigned".to_string()
-            }
-        }
-        ParallelModeSlotLeaseState::Running => "running".to_string(),
-        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
-    }
-}
-
-fn live_completion_state_label(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: &ParallelModeAgentSessionDetailSnapshot,
-) -> String {
-    if lease.runtime_state_override(detail).is_some() {
-        return detail.completion_state_label.clone();
-    }
-
-    match lease.state {
-        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => {
-            "in_progress".to_string()
-        }
-        ParallelModeSlotLeaseState::CleanupPending => "merged".to_string(),
-    }
-}
-
-fn live_distributor_outcome(lease: &ParallelModeSlotLeaseSnapshot) -> Option<String> {
-    match lease.state {
-        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => None,
-        ParallelModeSlotLeaseState::CleanupPending => {
-            Some("branch is merged into akra and the slot is awaiting cleanup".to_string())
-        }
-    }
-}
-
-fn live_detail_updated_at(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
-    lease
-        .running_started_at
-        .as_deref()
-        .unwrap_or(lease.leased_at.as_str())
-}
-
 pub(super) fn selected_runtime_session_detail(
     context: &PoolRuntimeContext,
     history: &[ParallelModeAgentSessionDetailSnapshot],
     queue_records: &[ParallelModeDistributorQueueRecord],
 ) -> Option<ParallelModeAgentSessionDetailSnapshot> {
-    if let Some(queue_head) = queue_records
+    let leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    let active_queue_session_key = queue_records
         .iter()
         .find(|record| record.queue_state.is_active())
-        && let Some(detail) =
-            session_detail_for_runtime_session(context, history, &queue_head.session_key)
-    {
-        return Some(detail);
-    }
-
-    let active_leases = sorted_active_leases(context);
-
-    if let Some(lease) = active_leases.first() {
-        return Some(build_live_session_detail(
-            lease,
-            session_detail_for_lease(history, lease),
-        ));
-    }
-
-    history.first().cloned()
-}
-
-fn sorted_active_leases(context: &PoolRuntimeContext) -> Vec<ParallelModeSlotLeaseSnapshot> {
-    let mut leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
-    leases.sort_by(|left, right| {
-        slot_lease_selection_priority(right)
-            .cmp(&slot_lease_selection_priority(left))
-            .then_with(|| left.slot_id.cmp(&right.slot_id))
-    });
-    leases
-}
-
-fn slot_lease_selection_priority(lease: &ParallelModeSlotLeaseSnapshot) -> (u8, &str) {
-    let state_priority = match lease.state {
-        ParallelModeSlotLeaseState::Running => 3,
-        ParallelModeSlotLeaseState::Leased => 2,
-        ParallelModeSlotLeaseState::CleanupPending => 1,
-    };
-    (
-        state_priority,
-        lease
-            .running_started_at
-            .as_deref()
-            .unwrap_or(lease.leased_at.as_str()),
+        .map(|record| record.session_key.as_str());
+    ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+        &leases,
+        history,
+        active_queue_session_key,
+        live_detail_defaults(),
     )
 }
 
-fn session_detail_for_lease(
-    history: &[ParallelModeAgentSessionDetailSnapshot],
-    lease: &ParallelModeSlotLeaseSnapshot,
-) -> Option<ParallelModeAgentSessionDetailSnapshot> {
-    history
-        .iter()
-        .find(|detail| detail.session_key == lease_session_key(lease))
-        .cloned()
-}
-
-fn session_detail_for_runtime_session(
-    context: &PoolRuntimeContext,
-    history: &[ParallelModeAgentSessionDetailSnapshot],
-    session_key: &str,
-) -> Option<ParallelModeAgentSessionDetailSnapshot> {
-    let detail = history
-        .iter()
-        .find(|detail| detail.session_key == session_key)
-        .cloned();
-    if let Some(lease) = context
-        .slot_leases
-        .values()
-        .find(|lease| lease_session_key(lease) == session_key)
-    {
-        return Some(build_live_session_detail(lease, detail));
+fn live_detail_defaults() -> ParallelModeLiveSessionDetailDefaults<'static> {
+    ParallelModeLiveSessionDetailDefaults {
+        validation_summary: default_validation_summary(),
+        authority_refresh_outcome: default_authority_refresh_outcome(),
     }
-
-    detail
 }

@@ -542,6 +542,12 @@ pub struct ParallelModeAgentSessionDetailSnapshot {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelModeLiveSessionDetailDefaults<'a> {
+    pub validation_summary: &'a str,
+    pub authority_refresh_outcome: &'a str,
+}
+
 impl ParallelModeAgentSessionDetailSnapshot {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -583,6 +589,166 @@ impl ParallelModeAgentSessionDetailSnapshot {
             updated_at: updated_at.into(),
         }
     }
+
+    pub fn assigned_for_lease(
+        lease: &ParallelModeSlotLeaseSnapshot,
+        defaults: ParallelModeLiveSessionDetailDefaults<'_>,
+    ) -> Self {
+        Self::new(
+            lease.session_key(),
+            lease.agent_id.clone(),
+            lease.task_id.clone(),
+            lease.task_title.clone(),
+            lease.slot_id.clone(),
+            None,
+            lease.worktree_path.clone(),
+            lease.branch_name.clone(),
+            lease.leased_at.clone(),
+            "assigned",
+            "in_progress",
+            "slot lease acquired and branch reserved for launch",
+            defaults.validation_summary,
+            defaults.authority_refresh_outcome,
+            None,
+            vec![ParallelModeAgentSessionHistoryEntry::new(
+                "assigned",
+                lease.leased_at.clone(),
+                "slot lease acquired and branch reserved for launch",
+            )],
+            lease.leased_at.clone(),
+        )
+    }
+
+    pub fn live_for_lease(
+        lease: &ParallelModeSlotLeaseSnapshot,
+        detail: Option<Self>,
+        defaults: ParallelModeLiveSessionDetailDefaults<'_>,
+    ) -> Self {
+        let mut detail = detail.unwrap_or_else(|| Self::assigned_for_lease(lease, defaults));
+        detail.session_key = lease.session_key();
+        detail.agent_id = lease.agent_id.clone();
+        detail.task_id = lease.task_id.clone();
+        detail.task_title = lease.task_title.clone();
+        detail.slot_id = lease.slot_id.clone();
+        detail.worktree_path = lease.worktree_path.clone();
+        detail.branch_name = lease.branch_name.clone();
+        detail.lease_started_at = lease.leased_at.clone();
+        detail.state_label = live_detail_state_label(lease, &detail);
+        detail.completion_state_label = live_completion_state_label(lease, &detail);
+        if detail.latest_summary.trim().is_empty() {
+            detail.latest_summary = roster_latest_summary(lease, Some(&detail));
+        }
+        if detail.validation_summary.trim().is_empty() {
+            detail.validation_summary = defaults.validation_summary.to_string();
+        }
+        if detail.authority_refresh_outcome.trim().is_empty() {
+            detail.authority_refresh_outcome = defaults.authority_refresh_outcome.to_string();
+        }
+        if detail.distributor_outcome.is_none() {
+            detail.distributor_outcome = live_distributor_outcome(lease);
+        }
+        if detail.updated_at.trim().is_empty() {
+            detail.updated_at = live_detail_updated_at(lease).to_string();
+        }
+        detail
+    }
+
+    pub fn select_runtime_detail(
+        leases: &[ParallelModeSlotLeaseSnapshot],
+        history: &[ParallelModeAgentSessionDetailSnapshot],
+        active_queue_session_key: Option<&str>,
+        defaults: ParallelModeLiveSessionDetailDefaults<'_>,
+    ) -> Option<Self> {
+        if let Some(session_key) = active_queue_session_key
+            && let Some(detail) =
+                Self::detail_for_runtime_session(leases, history, session_key, defaults)
+        {
+            return Some(detail);
+        }
+
+        if let Some(lease) = sorted_active_leases(leases).first() {
+            return Some(Self::live_for_lease(
+                lease,
+                detail_for_lease(history, lease),
+                defaults,
+            ));
+        }
+
+        history.first().cloned()
+    }
+
+    fn detail_for_runtime_session(
+        leases: &[ParallelModeSlotLeaseSnapshot],
+        history: &[ParallelModeAgentSessionDetailSnapshot],
+        session_key: &str,
+        defaults: ParallelModeLiveSessionDetailDefaults<'_>,
+    ) -> Option<Self> {
+        let detail = history
+            .iter()
+            .find(|detail| detail.session_key == session_key)
+            .cloned();
+        if let Some(lease) = leases
+            .iter()
+            .find(|lease| lease.session_key() == session_key)
+        {
+            return Some(Self::live_for_lease(lease, detail, defaults));
+        }
+
+        detail
+    }
+}
+
+fn live_detail_state_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+) -> String {
+    if let Some(label) = lease.runtime_state_override(detail) {
+        return label.to_string();
+    }
+
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased => {
+            if detail.thread_id.is_some() || detail.state_label == "starting" {
+                "starting".to_string()
+            } else {
+                "assigned".to_string()
+            }
+        }
+        ParallelModeSlotLeaseState::Running => "running".to_string(),
+        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
+    }
+}
+
+fn live_completion_state_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+) -> String {
+    if lease.runtime_state_override(detail).is_some() {
+        return detail.completion_state_label.clone();
+    }
+
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => {
+            "in_progress".to_string()
+        }
+        ParallelModeSlotLeaseState::CleanupPending => "merged".to_string(),
+    }
+}
+
+fn live_distributor_outcome(lease: &ParallelModeSlotLeaseSnapshot) -> Option<String> {
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running => None,
+        ParallelModeSlotLeaseState::CleanupPending => {
+            Some("branch is merged into akra and the slot is awaiting cleanup".to_string())
+        }
+    }
+}
+
+fn live_detail_updated_at(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
+    lease
+        .running_started_at
+        .as_deref()
+        .unwrap_or(lease.leased_at.as_str())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -631,13 +797,7 @@ impl ParallelModeAgentRosterSnapshot {
         mode_enabled: bool,
         running_duration_labels: &BTreeMap<String, String>,
     ) -> Self {
-        let mut active_leases = leases.to_vec();
-        active_leases.sort_by(|left, right| {
-            roster_state_priority(right.state)
-                .cmp(&roster_state_priority(left.state))
-                .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
-                .then_with(|| left.slot_id.cmp(&right.slot_id))
-        });
+        let active_leases = sorted_active_leases(leases);
 
         let entries = active_leases
             .iter()
@@ -656,6 +816,29 @@ impl ParallelModeAgentRosterSnapshot {
 
         Self::new(entries, empty_state)
     }
+}
+
+fn sorted_active_leases(
+    leases: &[ParallelModeSlotLeaseSnapshot],
+) -> Vec<ParallelModeSlotLeaseSnapshot> {
+    let mut active_leases = leases.to_vec();
+    active_leases.sort_by(|left, right| {
+        roster_state_priority(right.state)
+            .cmp(&roster_state_priority(left.state))
+            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
+            .then_with(|| left.slot_id.cmp(&right.slot_id))
+    });
+    active_leases
+}
+
+fn detail_for_lease(
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Option<ParallelModeAgentSessionDetailSnapshot> {
+    history
+        .iter()
+        .find(|detail| detail.session_key == lease.session_key())
+        .cloned()
 }
 
 fn project_agent_roster_entry(
@@ -931,7 +1114,8 @@ mod tests {
 
     use super::{
         ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
-        ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
+        ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+        ParallelModeLiveSessionDetailDefaults, ParallelModeReadinessSnapshot,
         ParallelModeReadinessState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
         ParallelModeSupervisorState,
     };
@@ -1058,6 +1242,100 @@ mod tests {
         assert_eq!(roster.entries[2].duration_label, "complete");
     }
 
+    #[test]
+    fn live_detail_enrichment_fills_missing_runtime_fields_from_lease() {
+        let cleanup = lease(
+            "slot-3",
+            "task-3",
+            "Task Three",
+            "agent-3",
+            ParallelModeSlotLeaseState::CleanupPending,
+            "2026-01-01T00:20:00Z",
+            Some("2026-01-01T00:25:00Z"),
+        );
+        let mut detail = session_detail(&cleanup, "running", "");
+        detail.validation_summary.clear();
+        detail.authority_refresh_outcome.clear();
+        detail.updated_at.clear();
+
+        let enriched = ParallelModeAgentSessionDetailSnapshot::live_for_lease(
+            &cleanup,
+            Some(detail),
+            live_defaults(),
+        );
+
+        assert_eq!(enriched.session_key, cleanup.session_key());
+        assert_eq!(enriched.state_label, "cleanup_pending");
+        assert_eq!(enriched.completion_state_label, "merged");
+        assert_eq!(
+            enriched.latest_summary,
+            "agent session reported completion and slot cleanup is pending"
+        );
+        assert_eq!(enriched.validation_summary, "validation unavailable");
+        assert_eq!(enriched.authority_refresh_outcome, "authority unavailable");
+        assert_eq!(
+            enriched.distributor_outcome.as_deref(),
+            Some("branch is merged into akra and the slot is awaiting cleanup")
+        );
+        assert_eq!(enriched.updated_at, "2026-01-01T00:25:00Z");
+    }
+
+    #[test]
+    fn runtime_detail_selection_prefers_active_queue_head_then_active_lease_then_history() {
+        let running = lease(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            ParallelModeSlotLeaseState::Running,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:05:00Z"),
+        );
+        let leased = lease(
+            "slot-2",
+            "task-2",
+            "Task Two",
+            "agent-2",
+            ParallelModeSlotLeaseState::Leased,
+            "2026-01-01T00:10:00Z",
+            None,
+        );
+        let history = vec![session_detail(
+            &running,
+            "running",
+            "agent session entered the running state",
+        )];
+
+        let queue_selected = ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+            &[running.clone(), leased.clone()],
+            &history,
+            Some(leased.session_key().as_str()),
+            live_defaults(),
+        )
+        .expect("active queue lease should produce live detail");
+        assert_eq!(queue_selected.slot_id, "slot-2");
+        assert_eq!(queue_selected.state_label, "assigned");
+
+        let lease_selected = ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+            &[leased, running],
+            &history,
+            None,
+            live_defaults(),
+        )
+        .expect("active lease should produce live detail");
+        assert_eq!(lease_selected.slot_id, "slot-1");
+        assert_eq!(lease_selected.state_label, "running");
+
+        let history_selected = ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+            &[],
+            &history,
+            None,
+            live_defaults(),
+        )
+        .expect("history fallback should be selected");
+        assert_eq!(history_selected.slot_id, "slot-1");
+    }
+
     fn lease(
         slot_id: &str,
         task_id: &str,
@@ -1104,5 +1382,12 @@ mod tests {
             Vec::new(),
             "2026-01-01T00:30:00Z",
         )
+    }
+
+    fn live_defaults() -> ParallelModeLiveSessionDetailDefaults<'static> {
+        ParallelModeLiveSessionDetailDefaults {
+            validation_summary: "validation unavailable",
+            authority_refresh_outcome: "authority unavailable",
+        }
     }
 }
