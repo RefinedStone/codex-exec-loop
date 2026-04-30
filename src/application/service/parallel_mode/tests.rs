@@ -4,15 +4,17 @@ use super::{
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeService, agent_session_detail_record_path,
     allocate_agent_branch_name, build_pool_board, command_succeeds, derive_default_pool_root,
-    detect_canonical_repo_root, lease_session_key, parse_https_remote,
-    read_agent_session_detail_record, reconcile_pool_board, resolve_workspace_slot_lease,
-    run_command, sanitize_task_slug, short_branch_slug_hash, slot_id, slot_lease_file_path,
+    detect_canonical_repo_root, inspect_gh_auth, inspect_gh_binary, lease_session_key,
+    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
+    resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash, slot_id,
+    slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDistributorQueueRecord;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
@@ -279,6 +281,108 @@ fn sample_lease_request(
     task_slug: &str,
 ) -> ParallelModeSlotLeaseRequest {
     ParallelModeSlotLeaseRequest::new(task_id, task_title, agent_id, task_slug)
+}
+
+#[derive(Debug, Default)]
+struct FakeReadinessRuntime {
+    gh_path: Option<PathBuf>,
+    gh_auth_ok: bool,
+    fallback_auth_ok: bool,
+}
+
+impl ParallelModeRuntimePort for FakeReadinessRuntime {
+    fn detect_git_repo_root(&self, _workspace_dir: &str) -> Option<String> {
+        None
+    }
+
+    fn command_succeeds(&self, _program: &str, _args: &[&str]) -> bool {
+        false
+    }
+
+    fn run_command(
+        &self,
+        program: &str,
+        args: &[&str],
+        _current_dir: Option<&str>,
+    ) -> Option<String> {
+        if program == "bash"
+            && args.get(1) == Some(&"auth")
+            && args.get(2) == Some(&"status")
+            && self.fallback_auth_ok
+        {
+            return Some("Logged in to github.com as RefinedStone".to_string());
+        }
+        None
+    }
+
+    fn run_command_with_stdin(
+        &self,
+        _program: &str,
+        _args: &[&str],
+        _stdin_body: &str,
+    ) -> Option<String> {
+        None
+    }
+
+    fn find_executable(&self, program: &str) -> Option<PathBuf> {
+        (program == "gh").then(|| self.gh_path.clone()).flatten()
+    }
+
+    fn gh_auth_status(&self, _repo_root: Option<&str>) -> bool {
+        self.gh_auth_ok
+    }
+
+    fn current_timestamp(&self) -> String {
+        "2026-05-01T00:00:00Z".to_string()
+    }
+
+    fn canonicalize_best_effort(&self, path: &Path) -> PathBuf {
+        path.to_path_buf()
+    }
+
+    fn path_exists(&self, _path: &Path) -> bool {
+        false
+    }
+
+    fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn read_dir_paths(&self, _path: &Path) -> std::io::Result<Vec<PathBuf>> {
+        Ok(Vec::new())
+    }
+
+    fn read_to_string(&self, _path: &Path) -> std::io::Result<String> {
+        Ok(String::new())
+    }
+
+    fn write_string(&self, _path: &Path, _body: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn rename(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn remove_file(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn readiness_accepts_repo_github_fallback_when_gh_is_missing() {
+    let runtime = FakeReadinessRuntime {
+        fallback_auth_ok: true,
+        ..Default::default()
+    };
+
+    let gh_binary = inspect_gh_binary(&runtime);
+    assert_eq!(gh_binary.state, ParallelModeCapabilityState::Ready);
+    assert!(gh_binary.detail.contains("RefinedStone API fallback"));
+
+    let gh_auth = inspect_gh_auth(&runtime, &gh_binary, Some("/tmp/repo"));
+    assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
+    assert_eq!(gh_auth.detail, "GitHub automation authentication succeeded");
 }
 
 #[derive(Debug, Clone)]

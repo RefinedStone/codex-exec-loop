@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
@@ -10,6 +11,8 @@ use crate::domain::parallel_mode::{
 };
 
 use super::{DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH};
+
+const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
 
 pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
     run_command(
@@ -178,11 +181,19 @@ pub(super) fn inspect_gh_binary(
             format!("gh found at {}", path.display()),
             None,
         ),
+        None if github_fallback_script_available() => ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::GhBinary,
+            ParallelModeCapabilityState::Ready,
+            format!(
+                "gh is not installed; RefinedStone API fallback is available at {GITHUB_SCRIPT_PATH}"
+            ),
+            None,
+        ),
         None => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
             ParallelModeCapabilityState::Degraded,
-            "gh is not installed on PATH",
-            Some("install GitHub CLI or plan for manual PR handling".to_string()),
+            "gh is not installed on PATH and the RefinedStone fallback script is missing",
+            Some("install GitHub CLI or restore scripts/gh-refinedstone.sh".to_string()),
         ),
     }
 }
@@ -201,20 +212,34 @@ pub(super) fn inspect_gh_auth(
         );
     }
 
-    match runtime.gh_auth_status(repo_root) {
+    let auth_succeeded = if runtime.find_executable("gh").is_some() {
+        runtime.gh_auth_status(repo_root)
+    } else if github_fallback_script_available() {
+        runtime
+            .run_command("bash", &[GITHUB_SCRIPT_PATH, "auth", "status"], repo_root)
+            .is_some()
+    } else {
+        false
+    };
+
+    match auth_succeeded {
         true => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Ready,
-            "gh auth status succeeded",
+            "GitHub automation authentication succeeded",
             None,
         ),
         false => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
-            "gh is installed but not authenticated for this workspace",
-            Some("run `gh auth login` before enabling GitHub automation".to_string()),
+            "GitHub automation is not authenticated for this workspace",
+            Some("verify gh auth or the repo-local RefinedStone credential".to_string()),
         ),
     }
+}
+
+fn github_fallback_script_available() -> bool {
+    Path::new(GITHUB_SCRIPT_PATH).exists()
 }
 
 pub(super) fn inspect_planning(
