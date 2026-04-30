@@ -44,8 +44,10 @@ The canonical current contract for supersession, planning, and directions lives 
 
 - Shell runtime entrypoint: `src/adapter/inbound/tui/app.rs`
 - Supersession shell entrypoint: `src/adapter/inbound/tui/app/parallel_mode.rs`
-- Supersession application services: `src/application/service/parallel_mode_service.rs`
+- Supersession application services: `src/application/service/parallel_mode/`
+- Session browser domain rules: `src/domain/session_browser.rs`
+- Session catalog application service: `src/application/service/session_service.rs`
 - Planning authority port: `src/application/port/outbound/planning_authority_port.rs`
-- Planning authority adapter: `src/adapter/outbound/sqlite_planning_authority_adapter.rs`
+- Planning authority adapter: `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs`
 - Planning feature entrypoint: `src/adapter/inbound/tui/app/planning/`
 - Application planning services: `src/application/service/planning/`

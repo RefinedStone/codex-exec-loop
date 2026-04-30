@@ -4,7 +4,7 @@ use super::{
     ConversationIntentEvent, NativeTuiApp, SESSION_PAGE_SIZE, SessionState, ShellChromeEvent,
     ShellOverlay,
 };
-use crate::application::service::session_service::{
+use crate::domain::session_browser::{
     SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
 };
 use crate::domain::session_summary::SessionSummary;

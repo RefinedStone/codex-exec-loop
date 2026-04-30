@@ -14,7 +14,7 @@ every adapter and every helper file in the repo.
 - `src/application/service/planning`: planning feature facade with `authoring`, `runtime`, `repair`, `worker`, and `shared` sub-boundaries
 - `src/application/port/outbound`: boundaries for app-server, filesystem, and worker execution
 - `src/adapter/outbound`: concrete adapters grouped by infrastructure boundary such as app-server, DB, filesystem, and GitHub
-- `src/domain`: UI-neutral models and invariants
+- `src/domain`: UI-neutral models and invariants, including recent-session browser projection, planning semantic validation, and priority queue ranking
 
 ## Small-Context Rules
 
@@ -22,6 +22,7 @@ every adapter and every helper file in the repo.
 - Infrastructure adapters should be skippable when tracing operator-visible behavior; they are implementation detail, not the main narrative.
 - Files approaching roughly 800 LOC, or files mixing storage, recovery, rendering, and policy concerns, should be split by boundary in the same refactor campaign.
 - Composition roots may wire concrete adapters together, but feature logic should depend on ports or feature façades instead of leaf adapter modules.
+- If a rule can be tested with only domain inputs, move it to `src/domain` before growing the adapter or service that discovered it.
 
 ## Planning Boundary
 
@@ -35,6 +36,7 @@ every adapter and every helper file in the repo.
 
 - Mapping from protocol or filesystem shapes stays in adapters.
 - Domain types stay free of TUI, transport, and filesystem concerns.
+- Application services own orchestration and port calls, not pure collection projection or ranking rules.
 - New outbound capabilities still require ports owned by the application layer.
 - If a TUI change needs planning internals directly, the planning facade is missing an operation and should be extended instead of bypassed.
 - Outbound directory layout should make the storage boundary obvious at a glance, for example `outbound/db`, `outbound/github`, `outbound/filesystem`, and `outbound/app_server`.

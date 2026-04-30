@@ -12,12 +12,11 @@ use super::capability_copy::{
 use super::overlays::{OverlayListEntryView, OverlayListView};
 use super::{AkraTheme, NativeTuiApp};
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
-#[cfg(test)]
-use crate::application::service::session_service::SessionProjectFilterOption;
-use crate::application::service::session_service::{
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
+use crate::domain::session_browser::SessionProjectFilterOption;
+use crate::domain::session_browser::{
     SessionBrowserProjection, SessionBrowserView, SessionProjectFilter, build_session_browser_view,
 };
-use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
 use crate::domain::session_summary::SessionSummary;
 
 pub(super) fn build_session_overlay_content(
@@ -191,8 +190,8 @@ fn build_session_browser_summary_lines(
 ) -> Vec<Line<'static>> {
     let active_filter_option = browser_view.projection.active_project_filter_option();
     let filter_label = active_filter_option
-        .map(|option| option.label.as_str())
-        .unwrap_or("all projects");
+        .map(session_project_filter_option_label)
+        .unwrap_or_else(|| session_project_filter_label(&SessionProjectFilter::AllProjects));
     let filter_session_count = active_filter_option
         .map(|option| option.session_count)
         .unwrap_or(browser_view.projection.filtered_session_count);
@@ -214,7 +213,7 @@ fn build_session_browser_summary_lines(
         )),
         Line::from(format_session_filter_line(
             &browser_view.projection,
-            filter_label,
+            filter_label.as_str(),
             filter_session_count,
         )),
         Line::from(build_session_project_context_line(
@@ -223,7 +222,7 @@ fn build_session_browser_summary_lines(
         )),
         Line::from(format_session_browser_line(
             &browser_view.projection,
-            filter_label,
+            filter_label.as_str(),
         )),
     ];
 
@@ -294,13 +293,14 @@ fn build_session_empty_message(
     browser_view: &SessionBrowserView<'_>,
     search_query: &str,
 ) -> String {
+    let active_filter_label = browser_view
+        .projection
+        .active_project_filter_option()
+        .map(session_project_filter_option_label);
     format_session_empty_message(
         &browser_view.projection.active_project_filter,
         search_query,
-        browser_view
-            .projection
-            .active_project_filter_option()
-            .map(|option| option.label.as_str()),
+        active_filter_label.as_deref(),
         browser_view
             .projection
             .active_project_filter_option()
@@ -313,13 +313,14 @@ fn build_session_empty_detail_line(
     browser_view: &SessionBrowserView<'_>,
     search_query: &str,
 ) -> String {
+    let active_filter_label = browser_view
+        .projection
+        .active_project_filter_option()
+        .map(session_project_filter_option_label);
     format_session_empty_detail_line(
         &browser_view.projection.active_project_filter,
         search_query,
-        browser_view
-            .projection
-            .active_project_filter_option()
-            .map(|option| option.label.as_str()),
+        active_filter_label.as_deref(),
         browser_view
             .projection
             .active_project_filter_option()
@@ -518,6 +519,28 @@ fn format_session_filter_line(
     }
 }
 
+fn session_project_filter_option_label(option: &SessionProjectFilterOption) -> String {
+    if option.is_current_workspace {
+        return match &option.filter {
+            SessionProjectFilter::RecentProject {
+                workspace_directory,
+            } => format!("current workspace ({workspace_directory})"),
+            SessionProjectFilter::AllProjects => "current workspace".to_string(),
+        };
+    }
+
+    session_project_filter_label(&option.filter)
+}
+
+fn session_project_filter_label(filter: &SessionProjectFilter) -> String {
+    match filter {
+        SessionProjectFilter::AllProjects => "all projects".to_string(),
+        SessionProjectFilter::RecentProject {
+            workspace_directory,
+        } => workspace_directory.clone(),
+    }
+}
+
 fn format_session_browser_line(
     projection: &SessionBrowserProjection,
     filter_label: &str,
@@ -573,7 +596,6 @@ mod tests {
             vec![
                 SessionProjectFilterOption {
                     filter: SessionProjectFilter::AllProjects,
-                    label: "all projects".to_string(),
                     session_count: 5,
                     is_current_workspace: false,
                 },
@@ -581,7 +603,6 @@ mod tests {
                     filter: SessionProjectFilter::RecentProject {
                         workspace_directory: "/tmp/docs".to_string(),
                     },
-                    label: "/tmp/docs".to_string(),
                     session_count: 3,
                     is_current_workspace: false,
                 },
@@ -589,7 +610,6 @@ mod tests {
                     filter: SessionProjectFilter::RecentProject {
                         workspace_directory: "/tmp/root".to_string(),
                     },
-                    label: "current workspace (/tmp/root)".to_string(),
                     session_count: 2,
                     is_current_workspace: true,
                 },

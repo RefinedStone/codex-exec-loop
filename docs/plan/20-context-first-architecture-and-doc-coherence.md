@@ -58,7 +58,7 @@ Current target order:
 1. `src/adapter/inbound/tui/app/shell_presentation.rs` and nearby rendering or projection files
 2. `src/adapter/inbound/tui/app/conversation_runtime.rs`
 3. `src/adapter/inbound/tui/app/planning/controller.rs`
-4. `src/application/service/parallel_mode_service.rs`
+4. `src/application/service/parallel_mode/`
 
 The rule is simple: do not begin a later hotspot slice without first recording why the earlier one
 was skipped.

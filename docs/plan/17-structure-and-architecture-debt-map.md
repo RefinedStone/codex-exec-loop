@@ -19,7 +19,7 @@ Use this order for the current cycle when choosing a refactor slice:
 1. shell presentation: `src/adapter/inbound/tui/app/shell_presentation.rs` and nearby rendering or projection files
 2. conversation runtime: `src/adapter/inbound/tui/app/conversation_runtime.rs`
 3. planning controller: `src/adapter/inbound/tui/app/planning/controller.rs` and nearby authoring UI
-4. parallel mode service: `src/application/service/parallel_mode_service.rs`
+4. parallel mode service: `src/application/service/parallel_mode/`
 
 If a change starts with a later hotspot, record why an earlier hotspot was skipped.
 
@@ -30,7 +30,7 @@ If a change starts with a later hotspot, record why an earlier hotspot was skipp
 | shell presentation | `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels.rs` | status meaning is spread across rendering and presentation code, making UX iteration harder | separate state wording, layout policy, and overlay projection |
 | conversation runtime | `src/adapter/inbound/tui/app/conversation_runtime.rs`, `conversation_model.rs`, `conversation_model/view_model.rs` | turn lifecycle, continuation state, and shell status compete in one runtime surface | separate conversation lifecycle from continuation lifecycle and surface projection |
 | planning controller | `src/adapter/inbound/tui/app/planning/controller.rs`, `planning_draft_editor_ui.rs` | planning setup, editor safety, and direction-side authoring feel coupled | separate planning setup flow, authoring flow, and close-risk handling |
-| parallel mode service | `src/application/service/parallel_mode_service.rs` | storage, recovery, queue, slot, and snapshot concerns compete in one hotspot, so safe edits require too much context | split into readiness, slots, distributor, recovery, snapshot, and completion boundaries |
+| parallel mode service | `src/application/service/parallel_mode/` | storage, recovery, queue, slot, and snapshot concerns compete across the supersession service boundary, so safe edits still require too much context | keep split readiness, pool, distributor, supervisor, turn, and completion boundaries small enough to trace independently |
 | planning runtime services | `src/application/service/planning/authoring/directions.rs`, `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/repair/reconciliation.rs`, `src/application/service/planning/runtime/prompt.rs` | planning concepts are powerful but spread across many services with overlapping product language | distinguish authoring, validation, runtime projection, and recovery more sharply |
 | continuation policy and queue behavior | `src/application/service/planning/runtime/policy.rs`, `src/application/service/planning/runtime/facade.rs`, `src/application/service/planning/worker/orchestration.rs` | queue-driven continuation is hard to explain because policy, prompting, and recovery are separated differently than the operator sees them | align continuation policy surface with operator concepts such as next task, pause reason, and resume path |
 | outbound infrastructure layout | `src/adapter/outbound/` as one flat directory | DB, GitHub, filesystem, and app-server details are harder to skip when tracing feature logic | group outbound adapters by infrastructure boundary and keep composition near entrypoints |

@@ -1,6 +1,6 @@
 use ratatui::widgets::ListState;
 
-use crate::application::service::session_service::{SessionBrowserState, SessionProjectFilter};
+use crate::domain::session_browser::{SessionBrowserState, SessionProjectFilter};
 
 #[derive(Debug, Default)]
 struct SessionSearchQueryEditorState {
