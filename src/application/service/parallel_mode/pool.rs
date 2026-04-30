@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
@@ -20,6 +22,21 @@ use super::{
     NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION, POOL_BASELINE_BRANCH,
     ensure_directory_exists,
 };
+
+const POOL_ALLOCATION_LOCK_DIR: &str = ".allocation-lock";
+const POOL_ALLOCATION_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const POOL_ALLOCATION_LOCK_RETRY: Duration = Duration::from_millis(25);
+const POOL_ALLOCATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(300);
+
+pub(super) struct PoolAllocationLock {
+    lock_path: PathBuf,
+}
+
+impl Drop for PoolAllocationLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.lock_path);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GitWorktreeRecord {
@@ -139,6 +156,60 @@ pub(super) fn build_pool_board(
             "readiness has not been checked",
             "n/a",
         ),
+    }
+}
+
+pub(super) fn acquire_pool_allocation_lock(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Result<PoolAllocationLock, String> {
+    let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)
+        .ok_or_else(|| "canonical root inspection failed".to_string())?;
+    let pool_root = derive_default_pool_root(&canonical_repo_root);
+    ensure_directory_exists(&pool_root)
+        .map_err(|error| format!("pool root creation failed before allocation lock: {error}"))?;
+    acquire_pool_allocation_lock_at(&pool_root)
+}
+
+fn acquire_pool_allocation_lock_at(pool_root: &Path) -> Result<PoolAllocationLock, String> {
+    let lock_path = pool_root.join(POOL_ALLOCATION_LOCK_DIR);
+    let deadline = Instant::now() + POOL_ALLOCATION_LOCK_TIMEOUT;
+
+    loop {
+        match fs::create_dir(&lock_path) {
+            Ok(()) => return Ok(PoolAllocationLock { lock_path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                remove_stale_pool_allocation_lock(&lock_path);
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "pool allocation lock is busy at `{}`",
+                        lock_path.display()
+                    ));
+                }
+                thread::sleep(POOL_ALLOCATION_LOCK_RETRY);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "pool allocation lock could not be acquired at `{}`: {error}",
+                    lock_path.display()
+                ));
+            }
+        }
+    }
+}
+
+fn remove_stale_pool_allocation_lock(lock_path: &Path) {
+    let Ok(metadata) = fs::metadata(lock_path) else {
+        return;
+    };
+    let Ok(modified_at) = metadata.modified() else {
+        return;
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified_at) else {
+        return;
+    };
+    if age >= POOL_ALLOCATION_LOCK_STALE_AFTER {
+        let _ = fs::remove_dir(lock_path);
     }
 }
 

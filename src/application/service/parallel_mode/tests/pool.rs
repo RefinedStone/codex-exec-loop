@@ -1,4 +1,6 @@
 use super::*;
+use std::collections::BTreeSet;
+use std::sync::Barrier;
 
 fn planning_snapshot_with_active_tasks(task_ids: &[&str]) -> PlanningRuntimeSnapshot {
     let active_tasks = task_ids
@@ -125,6 +127,89 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
             .collect::<Vec<_>>(),
         vec!["task-3", "task-4"]
     );
+}
+
+#[test]
+fn concurrent_slot_lease_requests_are_serialized_across_idle_slots() {
+    let repo = TempGitRepo::new("concurrent-lease");
+    let service = Arc::new(test_parallel_mode_service());
+    let initial_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+
+    let worker_count = DEFAULT_POOL_SIZE + 3;
+    let barrier = Arc::new(Barrier::new(worker_count));
+    let mut handles = Vec::new();
+    for worker_index in 1..=worker_count {
+        let service = service.clone();
+        let barrier = barrier.clone();
+        let workspace_dir = repo.workspace_dir();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            service.acquire_slot_lease(
+                &workspace_dir,
+                sample_lease_request(
+                    &format!("task-{worker_index}"),
+                    &format!("Task {worker_index}"),
+                    &format!("agent-{worker_index}"),
+                    &format!("task-{worker_index}"),
+                ),
+            )
+        }));
+    }
+
+    let mut leases = Vec::new();
+    let mut errors = Vec::new();
+    for handle in handles {
+        match handle
+            .join()
+            .expect("concurrent lease worker should not panic")
+        {
+            Ok(lease) => leases.push(lease),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    let leased_slot_ids = leases
+        .iter()
+        .map(|lease| lease.slot_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let leased_task_ids = leases
+        .iter()
+        .map(|lease| lease.task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let leased_agent_ids = leases
+        .iter()
+        .map(|lease| lease.agent_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(leases.len(), DEFAULT_POOL_SIZE);
+    assert_eq!(leased_slot_ids.len(), DEFAULT_POOL_SIZE);
+    assert_eq!(leased_task_ids.len(), DEFAULT_POOL_SIZE);
+    assert_eq!(leased_agent_ids.len(), DEFAULT_POOL_SIZE);
+    assert_eq!(errors.len(), worker_count - DEFAULT_POOL_SIZE);
+    assert!(
+        errors
+            .iter()
+            .all(|error| error == "no idle slot is available for lease"),
+        "unexpected concurrent lease errors: {errors:?}"
+    );
+
+    let pool = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            vec![],
+            None,
+        )),
+    );
+    assert_eq!(pool.leased_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.blocked_slots, 0);
+    assert_eq!(pool.idle_slots, 0);
 }
 
 #[test]

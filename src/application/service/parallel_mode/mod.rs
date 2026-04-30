@@ -31,11 +31,12 @@ use self::distributor::ParallelModeDistributorService;
 use self::git_sequence::{GitCommandStep, run_git_sequence};
 use self::pool::{
     PoolBoardWithContextResult, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
-    branch_is_cleanup_ready, branch_is_integrated_into, build_pool_board, build_pool_slots,
-    cleanup_slot, detect_canonical_repo_root, inspect_pool_board_and_context,
-    inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
-    reconcile_pool_board, reconcile_pool_board_and_context, reset_slot_worktree_to_akra,
-    resolve_workspace_head_sha, resolve_workspace_slot_lease, short_sha, write_slot_lease,
+    acquire_pool_allocation_lock, branch_is_cleanup_ready, branch_is_integrated_into,
+    build_pool_board, build_pool_slots, cleanup_slot, detect_canonical_repo_root,
+    inspect_pool_board_and_context, inspect_slot_git_status, load_pool_runtime_context,
+    pool_operator_recovery_notice, reconcile_pool_board, reconcile_pool_board_and_context,
+    reset_slot_worktree_to_akra, resolve_workspace_head_sha, resolve_workspace_slot_lease,
+    short_sha, write_slot_lease,
 };
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds, inspect_akra_branch,
@@ -266,6 +267,8 @@ impl ParallelModeService {
         workspace_dir: &str,
         request: ParallelModeSlotLeaseRequest,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
+        let _allocation_lock =
+            acquire_pool_allocation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
         let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
             .map_err(|(_, detail)| detail.to_string())?;
