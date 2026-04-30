@@ -14,6 +14,7 @@ use crate::domain::parallel_mode::{
 
 use super::current_branch_name;
 use super::distributor::load_distributor_queue_records;
+use super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
 use super::session_detail::load_agent_session_detail_records;
 use super::{
@@ -615,27 +616,7 @@ fn reset_reusable_detached_baseline_slots(
         {
             continue;
         }
-        let slot_path_string = slot_path.display().to_string();
-        if command_succeeds(
-            "git",
-            [
-                "-C",
-                slot_path_string.as_str(),
-                "checkout",
-                "--detach",
-                AKRA_BRANCH,
-            ],
-        ) && command_succeeds(
-            "git",
-            [
-                "-C",
-                slot_path_string.as_str(),
-                "reset",
-                "--hard",
-                AKRA_BRANCH,
-            ],
-        ) && command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fdx"])
-        {
+        if reset_slot_worktree_to_akra(&slot_path).succeeded() {
             reset_slots += 1;
         }
     }
@@ -731,35 +712,20 @@ pub(super) fn cleanup_slot(
     slot_path: &Path,
     branch_name: &str,
 ) -> bool {
-    let slot_path_string = slot_path.display().to_string();
-    if !command_succeeds(
-        "git",
-        [
-            "-C",
-            slot_path_string.as_str(),
-            "checkout",
-            "--detach",
-            AKRA_BRANCH,
-        ],
-    ) {
+    let reset_report = reset_slot_worktree_to_akra(slot_path);
+    if !reset_report.succeeded() {
+        let _failure_summary = reset_report.failure_summary();
         return false;
     }
-    if !command_succeeds(
-        "git",
-        [
-            "-C",
-            slot_path_string.as_str(),
-            "reset",
-            "--hard",
-            AKRA_BRANCH,
-        ],
-    ) {
-        return false;
-    }
-    if !command_succeeds("git", ["-C", slot_path_string.as_str(), "clean", "-fdx"]) {
-        return false;
-    }
-    if !command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name]) {
+    let delete_branch = run_git_sequence(
+        "delete cleaned slot branch",
+        vec![GitCommandStep::new(
+            "delete agent branch",
+            ["-C", repo_root, "branch", "-D", branch_name],
+        )],
+    );
+    if !delete_branch.succeeded() {
+        let _failure_summary = delete_branch.failure_summary();
         return false;
     }
     if !remove_slot_lease(planning_authority, repo_root, pool_root, slot_id) {
@@ -767,6 +733,41 @@ pub(super) fn cleanup_slot(
     }
 
     inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
+}
+
+pub(super) fn reset_slot_worktree_to_akra(
+    slot_path: &Path,
+) -> super::git_sequence::GitCommandSequenceReport {
+    let slot_path_string = slot_path.display().to_string();
+    run_git_sequence(
+        "reset slot worktree to akra",
+        vec![
+            GitCommandStep::new(
+                "checkout akra detached",
+                [
+                    "-C",
+                    slot_path_string.as_str(),
+                    "checkout",
+                    "--detach",
+                    AKRA_BRANCH,
+                ],
+            ),
+            GitCommandStep::new(
+                "hard reset to akra",
+                [
+                    "-C",
+                    slot_path_string.as_str(),
+                    "reset",
+                    "--hard",
+                    AKRA_BRANCH,
+                ],
+            ),
+            GitCommandStep::new(
+                "clean untracked files",
+                ["-C", slot_path_string.as_str(), "clean", "-fdx"],
+            ),
+        ],
+    )
 }
 
 fn build_unavailable_pool_board(
