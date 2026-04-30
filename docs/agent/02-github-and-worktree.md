@@ -26,6 +26,7 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - After a PR merges or closes, start the next task from the latest target base branch on a new feature branch.
 - After a PR is integrated into `prerelease`, return to the integration checkout and remove the finished feature worktree instead of leaving it parked indefinitely.
 - Prefer `bash scripts/cleanup_merged_worktrees.sh --apply --branch <finished-branch>` for the lane you just integrated. The helper can also run without `--branch` as a conservative sweep, and it skips dirty or unmerged worktrees automatically.
+- Do not use the cleanup helper for `akra-agent/slot-*` parallel-mode slot branches. Those slots carry runtime leases and must return through the parallel runtime cleanup path so the slot worktree, lease, and session detail stay consistent.
 - If the finished lane is already integrated and its remaining worktree dirtiness is disposable repo noise, use `--force-dirty` only with an explicit `--branch` or `--path`. Do not use `--force-dirty` as a broad sweep.
 - For final integration, do not use GitHub's merge-commit flow.
 - Rebase locally, fast-forward the base branch with linear history, then close the PR after the base branch already contains the reviewed commits.

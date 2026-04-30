@@ -73,7 +73,7 @@ Prefer the cleanup helper from the integration checkout after a branch lands in 
 bash scripts/cleanup_merged_worktrees.sh --apply --branch feature/native-session-query-model
 ```
 
-The helper removes a targeted finished branch immediately, or can scan for conservative merged candidates when run without `--branch`. It removes only non-root worktrees whose workspace is clean, and the scan mode skips dirty or still-active lanes automatically.
+The helper removes a targeted finished branch immediately, or can scan for conservative merged candidates when run without `--branch`. It removes only non-root worktrees whose workspace is clean, and the scan mode skips dirty or still-active lanes automatically. Do not use it for `akra-agent/slot-*` parallel-mode branches; those slot worktrees are owned by the parallel runtime cleanup flow.
 
 If a finished lane is already integrated but still reports disposable worktree dirtiness, use the explicit force form for that one lane only:
 
