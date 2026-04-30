@@ -656,6 +656,56 @@ fn acquire_slot_lease_persists_metadata_and_marks_slot_leased() {
 }
 
 #[test]
+fn acquire_slot_lease_starts_agent_branch_at_prerelease_head() {
+    let repo = TempGitRepo::new("lease-slot-prerelease-start");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    repo.commit_on_current_branch(
+        "prerelease-only.txt",
+        "pool baseline\n",
+        "advance prerelease baseline",
+    );
+    let prerelease_head = run_command(
+        "git",
+        [
+            "-C",
+            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            "rev-parse",
+            "prerelease",
+        ],
+        None,
+    )
+    .expect("prerelease should resolve before lease");
+    let service = test_parallel_mode_service();
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let lease_head = run_command(
+        "git",
+        ["-C", lease.worktree_path.as_str(), "rev-parse", "HEAD"],
+        None,
+    )
+    .expect("leased slot head should resolve");
+    let branch_head = run_command(
+        "git",
+        [
+            "-C",
+            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            "rev-parse",
+            lease.branch_name.as_str(),
+        ],
+        None,
+    )
+    .expect("leased agent branch should resolve");
+
+    assert_eq!(lease_head, prerelease_head);
+    assert_eq!(branch_head, prerelease_head);
+}
+
+#[test]
 fn pool_ignores_stale_legacy_lease_mirror_after_store_removal() {
     let repo = TempGitRepo::new("stale-lease-mirror");
     let service = test_parallel_mode_service();
