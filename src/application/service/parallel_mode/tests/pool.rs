@@ -879,6 +879,22 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
 }
 
 #[test]
+fn allocate_agent_branch_name_numbers_remote_tracking_collisions() {
+    let repo = TempGitRepo::new("lease-slot-remote-branch-collision");
+    repo.set_remote_tracking_branch("origin/akra-agent/slot-1/task-one", "prerelease");
+
+    let branch_name = allocate_agent_branch_name(
+        &repo.workspace_dir(),
+        "slot-1",
+        "task-one",
+        "task-1",
+        "Task One",
+    );
+
+    assert_eq!(branch_name, "akra-agent/slot-1/task-one-2");
+}
+
+#[test]
 fn mark_slot_running_updates_persisted_lease_and_pool_state() {
     let repo = TempGitRepo::new("running-slot");
     let service = test_parallel_mode_service();

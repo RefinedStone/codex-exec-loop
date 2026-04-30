@@ -706,11 +706,15 @@ fn allocate_agent_branch_name(
     let mut collision_index = 1usize;
     loop {
         let candidate = build_agent_branch_name(slot_id, &sanitized_slug, collision_index);
-        if !branch_exists(repo_root, &candidate) {
+        if agent_branch_name_is_available(repo_root, &candidate) {
             return candidate;
         }
         collision_index += 1;
     }
+}
+
+fn agent_branch_name_is_available(repo_root: &str, branch_name: &str) -> bool {
+    !branch_exists(repo_root, branch_name) && !remote_branch_exists(repo_root, branch_name)
 }
 
 fn build_agent_branch_name(slot_id: &str, sanitized_slug: &str, collision_index: usize) -> String {
@@ -808,6 +812,35 @@ fn branch_exists(repo_root: &str, branch_name: &str) -> bool {
             "show-ref",
             "--verify",
             "--quiet",
+            &format!("refs/heads/{branch_name}"),
+        ],
+    )
+}
+
+fn remote_branch_exists(repo_root: &str, branch_name: &str) -> bool {
+    let remote_ref = format!("refs/remotes/{DEFAULT_PUSH_REMOTE_NAME}/{branch_name}");
+    if command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            remote_ref.as_str(),
+        ],
+    ) {
+        return true;
+    }
+
+    command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "ls-remote",
+            "--exit-code",
+            DEFAULT_PUSH_REMOTE_NAME,
             &format!("refs/heads/{branch_name}"),
         ],
     )
