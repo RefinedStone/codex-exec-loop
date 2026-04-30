@@ -3,8 +3,8 @@
 ## 세션 목표
 
 - Spring의 예외 전파와 Rust의 `Result` 중심 실패 모델 차이를 실제 코드에서 본다.
-- 포트와 어댑터 경계가 없으면 작은 lint도 왜 설계 문제로 커지는지 이해한다.
-- boundary hygiene 성격의 clippy 경고를 읽고 수정 우선순위를 정한다.
+- 포트와 어댑터 경계가 없으면 작은 helper도 왜 설계 문제로 커지는지 이해한다.
+- boundary hygiene 관점에서 현재 통과하는 코드를 읽고 다음 수정 우선순위를 정한다.
 
 ## Spring Boot/Kotlin 비교
 
@@ -24,13 +24,13 @@
 
 ## 이번 회차 이슈
 
-- 대상 이슈 묶음:
-  - [GithubAutomationAdapter::new](../../src/adapter/outbound/github/automation.rs)의 `new_without_default`
-  - [parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs)의 `needless_question_mark`, `iter_overeager_cloned`
-  - [planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs)의 `needless_borrow`
+- 대상 경계 묶음:
+  - [GithubAutomationAdapter](../../src/adapter/outbound/github/automation.rs)의 process execution boundary
+  - [parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs)의 GitHub/merge/delivery orchestration
+  - [planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs)의 worker prompt and result boundary
 - 수업에서 볼 질문:
-  - lint가 지적하는 불필요한 borrow와 clone은 단순 문법 문제인가, 아니면 API가 호출자에게 불필요한 부담을 준 결과인가?
-  - `new()`와 `Default` 중 무엇을 지원해야 객체 생성 의도가 더 분명한가?
+  - adapter helper가 application service에 너무 많은 infrastructure detail을 노출하고 있지는 않은가?
+  - 생성 API는 객체 생성 의도를 분명히 드러내는가?
   - `Result` 포장과 해제가 반복될 때 실패 경계가 오히려 흐려지지 않는가?
 
 ## 실습
@@ -40,15 +40,15 @@
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-- 위 세 파일의 clippy 메시지만 따로 정리한다.
-- 각 메시지를 “즉시 수정 가능”, “API 재설계 필요”, “보류 가능”으로 분류한다.
+- 위 세 파일에서 I/O 호출, domain 판단, prompt/copy assembly를 구분한다.
+- 각 helper를 “adapter detail”, “application orchestration”, “domain candidate”로 분류한다.
 - 수정 과제:
-  - `Default` 구현 추가가 실제 사용성을 높이는지 검토
-  - clone과 borrow가 사라지도록 helper 함수 시그니처를 재검토
-  - `Ok(...?)` 형태를 실패 경계가 더 분명한 형태로 정리
+  - 생성 API가 실제 사용성을 높이는지 검토
+  - helper 함수 시그니처가 호출자에게 infrastructure detail을 새게 하는지 재검토
+  - 실패 메시지가 port boundary를 기준으로 설명되는지 정리
 
 ## 수강생이 가져가야 할 판단 기준
 
 - Rust에서 에러 처리는 예외 처리 대체재가 아니라 API 설계의 일부다.
 - 포트 경계가 잘 서 있으면 lint 수정도 안전하고 작아진다.
-- clippy를 “자동 정리기”가 아니라 boundary review 도구로 사용해야 한다.
+- clippy와 테스트를 “자동 정리기”가 아니라 boundary review 기준선으로 사용해야 한다.

@@ -19,19 +19,19 @@
 ## 현재 기준선
 
 - 기준선 문서: [quality-baseline.md](./quality-baseline.md)
-- 이 커리큘럼 초안 작성 시점인 `2026-04-21` 기준으로 `cargo test`는 실패하고, `cargo clippy --all-targets --all-features -- -D warnings`도 실패한다.
-- 따라서 이 강의는 “좋은 예제 감상”보다 “복잡한 Rust 프로젝트를 안전하게 읽고 복구하는 법”에 맞춘다.
+- `2026-04-30` 기준 `cargo test`와 `cargo clippy --all-targets --all-features -- -D warnings`는 통과한다.
+- 따라서 이 강의는 과거 실패 재현보다 현재 경계가 왜 안정화됐는지, 그리고 다음 리팩터링을 어떻게 작게 잡을지에 맞춘다.
 
 ## 강의 흐름
 
-| 회차 | 주제 | 저장소 진입점 | 이번 회차 이슈 |
+| 회차 | 주제 | 저장소 진입점 | 이번 회차 관찰 지점 |
 | --- | --- | --- | --- |
-| 1 | Rust 사고방식과 저장소 지도 | [README.md](../../README.md), [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [src/lib.rs](../../src/lib.rs) | `app_tests.rs` unused imports로 인한 clippy 실패 |
-| 2 | 타입 모델링과 직렬화 계약 | [src/domain/planning.rs](../../src/domain/planning.rs), [src/domain/parallel_mode.rs](../../src/domain/parallel_mode.rs) | `ParallelModeSlotLeaseSnapshot::new` 고인자 생성자 |
-| 3 | 에러 처리와 포트 경계 | [src/application/service/planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs), [src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs), [src/adapter/outbound/github/automation.rs](../../src/adapter/outbound/github/automation.rs) | boundary hygiene clippy 묶음 |
-| 4 | 상태 머신과 이벤트 기반 런타임 | [src/adapter/inbound/tui/app/conversation_runtime.rs](../../src/adapter/inbound/tui/app/conversation_runtime.rs), [src/adapter/inbound/tui/app/shell_runtime.rs](../../src/adapter/inbound/tui/app/shell_runtime.rs) | `stream_worker_forces_failure_when_service_exits_without_terminal_event` 실패 |
-| 5 | 파일시스템, Git, SQLite를 명시적으로 다루기 | [src/application/service/parallel_mode/mod.rs](../../src/application/service/parallel_mode/mod.rs), [src/adapter/outbound/db/sqlite_planning_authority_adapter.rs](../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs) | slot lease / pool / queue persistence 실패군 |
-| 6 | 구조 부채 지도와 안전한 리팩터링 | [docs/plan/17-structure-and-architecture-debt-map.md](../plan/17-structure-and-architecture-debt-map.md), [src/application/service/parallel_mode/mod.rs](../../src/application/service/parallel_mode/mod.rs), [src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs) | mixed-responsibility hotspot 분해 계획 |
+| 1 | Rust 사고방식과 저장소 지도 | [README.md](../../README.md), [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [src/lib.rs](../../src/lib.rs) | 계층과 테스트 게이트를 함께 읽는 법 |
+| 2 | 타입 모델링과 직렬화 계약 | [src/domain/planning](../../src/domain/planning), [src/domain/parallel_mode.rs](../../src/domain/parallel_mode.rs) | planning/parallel domain projection이 허용 상태를 닫는 방식 |
+| 3 | 에러 처리와 포트 경계 | [src/application/service/planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs), [src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs), [src/adapter/outbound/github/automation.rs](../../src/adapter/outbound/github/automation.rs) | 실패 경계와 포트 책임 |
+| 4 | 상태 머신과 이벤트 기반 런타임 | [src/adapter/inbound/tui/app/conversation_runtime.rs](../../src/adapter/inbound/tui/app/conversation_runtime.rs), [src/adapter/inbound/tui/app/shell_runtime.rs](../../src/adapter/inbound/tui/app/shell_runtime.rs) | 통과하는 상태 전이 테스트를 근거로 런타임 읽기 |
+| 5 | 파일시스템, Git, SQLite를 명시적으로 다루기 | [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs), [src/adapter/outbound/db/sqlite_planning_authority_adapter.rs](../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs) | authority store, worktree, projection의 진실 소스 분리 |
+| 6 | 구조 부채 지도와 안전한 리팩터링 | [docs/plan/17-structure-and-architecture-debt-map.md](../plan/17-structure-and-architecture-debt-map.md), [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs), [src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs) | 남은 mixed-responsibility hotspot 분해 계획 |
 
 ## 회차별 교안
 

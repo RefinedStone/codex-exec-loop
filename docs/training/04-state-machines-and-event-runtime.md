@@ -4,7 +4,7 @@
 
 - 요청-응답형 서버 사고에서 벗어나, 이벤트 기반 TUI 런타임을 상태 전이로 읽는 법을 배운다.
 - “왜 이 상태가 남아 있었는가”를 테스트 이름과 reducer-style 흐름으로 추적한다.
-- 실패 테스트 하나를 끝까지 따라가며 원인 후보를 세운다.
+- 상태 전이 테스트 하나를 끝까지 따라가며 어떤 계약을 보호하는지 설명한다.
 
 ## Spring Boot/Kotlin 비교
 
@@ -19,16 +19,16 @@
 
 1. [../../src/adapter/inbound/tui/app/conversation_runtime.rs](../../src/adapter/inbound/tui/app/conversation_runtime.rs)
 2. [../../src/adapter/inbound/tui/app/shell_runtime.rs](../../src/adapter/inbound/tui/app/shell_runtime.rs)
-3. [../../src/adapter/inbound/tui/app/app_tests/shell_surface_tests.rs](../../src/adapter/inbound/tui/app/app_tests/shell_surface_tests.rs)
-4. [../../src/adapter/inbound/tui/app/app_tests/parallel_mode_runtime_tests.rs](../../src/adapter/inbound/tui/app/app_tests/parallel_mode_runtime_tests.rs)
+3. [../../src/adapter/inbound/tui/app/conversation_model_tests.rs](../../src/adapter/inbound/tui/app/conversation_model_tests.rs)
+4. [../../src/adapter/inbound/tui/app/turn_submission_runtime](../../src/adapter/inbound/tui/app/turn_submission_runtime)
 
 ## 이번 회차 이슈
 
-- 대표 실패:
-  - `stream_worker_forces_failure_when_service_exits_without_terminal_event`
-- 보조 실패:
-  - `leased_slot_success_completion_waits_for_official_refresh_before_cleanup`
-  - `parallel_mode_runtime_keeps_cleaned_session_detail_after_slot_return`
+- 대표 회귀 테스트:
+  - `missing_terminal_event_becomes_forced_failure_and_notice`
+- 보조 회귀 테스트:
+  - `successful_running_turn_is_cleanup_candidate`
+  - `build_supervisor_snapshot_keeps_cleaned_session_detail_after_slot_return`
 - 수업에서 볼 질문:
   - terminal event가 오지 않았을 때 상태를 `ReadyToContinue`로 되돌려야 하는가, 아니면 `SubmittingTurn` 유지가 맞는가?
   - background worker 종료와 UI 상태 전이는 같은 이벤트에서 처리되어야 하는가?
@@ -38,10 +38,10 @@
 
 ```bash
 . "$HOME/.cargo/env"
-cargo test adapter::inbound::tui::app::tests::shell_surface_tests::stream_worker_forces_failure_when_service_exits_without_terminal_event -- --nocapture
+cargo test missing_terminal_event_becomes_forced_failure_and_notice -- --nocapture
 ```
 
-- 실패 전후 상태를 표로 정리한다.
+- 테스트 전후 상태를 표로 정리한다.
 - 이벤트가 실제로 몇 번 발생했는지 추적한다.
 - 수정 과제:
   - 종료 이벤트 누락 시 fallback 상태 전이 명시

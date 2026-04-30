@@ -35,6 +35,8 @@ The operator-facing current contract lives in
   normal queue state.
 - Builtin `next-task` uses the accepted queue head only.
 - Queue-idle behavior is driven by DB direction authority.
+- `PriorityQueueService` builds the domain `PriorityQueueProjection`; the projection owns
+  queue/proposal summary facts, while prompt sections and shell copy remain outside the domain.
 
 ## Runtime Task Intake
 
@@ -109,5 +111,6 @@ snapshot, regenerates any colliding id suffix, revalidates, and retries within a
 - Planning authority port: `src/application/port/outbound/planning_authority_port.rs`
 - Planning task repository port: `src/application/port/outbound/planning_task_repository_port.rs`
 - Planning authority adapter: `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs`
+- Planning domain model and queue projection: `src/domain/planning`
 - TUI entrypoint: `src/adapter/inbound/tui/app/planning`
 - CLI lifecycle entrypoint: `src/adapter/inbound/cli.rs`

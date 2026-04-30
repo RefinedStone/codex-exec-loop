@@ -17,36 +17,42 @@
 
 ## 읽기 순서
 
-1. [../../src/domain/planning.rs](../../src/domain/planning.rs)
+1. [../../src/domain/planning](../../src/domain/planning)
 2. [../../src/domain/parallel_mode.rs](../../src/domain/parallel_mode.rs)
 3. [../../src/application/service/planning/runtime/validation.rs](../../src/application/service/planning/runtime/validation.rs)
 
 ## 강의 흐름
 
-1. planning 도메인에서 `enum`과 `serde`가 계약을 어떻게 닫는지 읽는다.
-2. `Option`, default, validation 책임을 어디에 둘지 설명한다.
-3. 타입이 풍부해질수록 함수 인자 개수가 왜 줄어야 하는지 설명한다.
+1. planning 도메인에서 `enum`, `serde`, semantic validation이 계약을 어떻게 닫는지 읽는다.
+2. `PriorityQueueProjection`이 queue/proposal summary를 domain fact로 제공하는 이유를 설명한다.
+3. parallel mode domain에서 readiness, roster, selected detail, cleanup decision이 service 밖으로 빠진 효과를 읽는다.
+4. `Option`, default, validation 책임을 어디에 둘지 설명한다.
+5. 타입이 풍부해질수록 함수 인자 개수가 왜 줄어야 하는지 설명한다.
 
 ## 이번 회차 이슈
 
-- 대상 심볼: [ParallelModeSlotLeaseSnapshot::new](../../src/domain/parallel_mode.rs)
+- 대상 심볼:
+  - [PriorityQueueProjection](../../src/domain/planning/mod.rs)
+  - [ParallelModeAgentRosterSnapshot::project_from_leases](../../src/domain/parallel_mode.rs)
+  - [ParallelModePoolSlotCleanupDecision](../../src/domain/parallel_mode.rs)
 - 현재 증상:
-  - `clippy::too_many_arguments`가 걸린다.
+  - planning과 parallel mode의 순수 projection이 application service에서 domain으로 내려와 있다.
 - 수업에서 볼 질문:
-  - 생성자 인자가 많다는 것은 호출자가 너무 많은 내부 결정을 알고 있다는 뜻인가?
-  - `slot_id`, `task_id`, `task_title`, `agent_id`, `branch_name`, `worktree_path`, `state`, `leased_at`, `running_started_at`를 한 번에 받는 이유가 정당한가?
-  - `LeaseMetadata`, `LeaseLifecycle`, `NewLeaseSnapshot` 같은 중간 입력 모델이 더 읽기 쉬운가?
+  - queue summary와 proposal summary는 UI copy인가, domain fact인가?
+  - lease state에서 pool slot state와 cleanup 가능 여부를 정하는 책임은 왜 domain에 있는가?
+  - roster 정렬과 selected-detail 선택은 service orchestration인가, 순수 projection인가?
 
 ## 실습
 
-- `ParallelModeSlotLeaseSnapshot` 호출부를 찾는다.
-- 호출부를 “필수 입력”과 “파생 값”으로 나눈다.
+- `PriorityQueueProjection::queue_summary`와 `proposal_summary` 호출부를 찾는다.
+- `ParallelModeAgentRosterSnapshot::project_from_leases` 호출부를 찾는다.
+- 호출부를 “I/O가 필요한 입력 수집”과 “순수 파생 값”으로 나눈다.
 - 수정 과제:
-  - 고인자 생성자를 입력 struct 기반 팩토리로 바꾸는 설계안 작성
-  - 테스트 fixture 생성 시 named-field struct literal을 쓸지 factory를 쓸지 비교
+  - application service에 남은 projection 후보 하나를 찾고 domain으로 옮겨도 되는지 판정한다.
+  - 테스트 fixture 생성 시 domain factory를 쓸지 named-field struct literal을 쓸지 비교한다.
 
 ## 수강생이 가져가야 할 판단 기준
 
 - Rust 타입 설계는 DTO 나열이 아니라 “어떤 상태를 허용하지 않을지”를 정하는 작업이다.
-- clippy의 `too_many_arguments`는 스타일 지적이 아니라 모델 경계가 흐리다는 신호일 수 있다.
+- 순수 projection은 application service보다 domain에 있을 때 테스트와 문서가 더 짧아진다.
 - 직렬화 계약과 런타임 validation은 경쟁 관계가 아니라 상호 보완 관계다.

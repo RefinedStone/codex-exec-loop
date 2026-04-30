@@ -14,7 +14,9 @@ every adapter and every helper file in the repo.
 - `src/application/service/planning`: planning feature facade with `authoring`, `runtime`, `repair`, `worker`, and `shared` sub-boundaries
 - `src/application/port/outbound`: boundaries for app-server, filesystem, and worker execution
 - `src/adapter/outbound`: concrete adapters grouped by infrastructure boundary such as app-server, DB, filesystem, and GitHub
-- `src/domain`: UI-neutral models and invariants, including recent-session browser projection, planning semantic validation, and priority queue ranking
+- `src/domain`: UI-neutral models and invariants, including recent-session browser projection,
+  planning semantic validation, planning queue projection summaries, and parallel-mode readiness,
+  supervisor, roster, live-detail, pool-slot, and cleanup decisions
 
 ## Small-Context Rules
 
@@ -24,6 +26,18 @@ every adapter and every helper file in the repo.
 - Composition roots may wire concrete adapters together, but feature logic should depend on ports or feature façades instead of leaf adapter modules.
 - If a rule can be tested with only domain inputs, move it to `src/domain` before growing the adapter or service that discovered it.
 
+## Current Domain Extraction Checkpoint
+
+- Planning domain owns semantic validation, priority queue ranking, queue visibility limits, and
+  queue/proposal summary projection on `PriorityQueueProjection`.
+- Parallel-mode domain owns readiness derivation, supervisor state derivation, pool slot state
+  projection from leases, cleanup-ready judgment, live session detail enrichment, selected-detail
+  selection, and active agent roster projection.
+- Application services still own orchestration, port calls, process execution, Git/DB/filesystem
+  decisions, and prompt or UI copy assembly.
+- Adapters still own transport, terminal rendering, filesystem shape mapping, DB row mapping, and
+  app-server protocol mapping.
+
 ## Planning Boundary
 
 - TUI code should depend on `PlanningFeature` only.
@@ -31,6 +45,8 @@ every adapter and every helper file in the repo.
 - `PlanningFeature` is split into `workspace`, `runtime`, and `worker` use cases.
 - Planning internals such as validation, prompt assembly, reconciliation, and proposal promotion stay behind those facades.
 - Planning-specific TUI flow lives under `src/adapter/inbound/tui/app/planning`.
+- Pure planning queue facts should be exposed by `crate::domain::planning`; prompt text and shell
+  status copy stay in application/TUI boundaries.
 
 ## Invariants
 

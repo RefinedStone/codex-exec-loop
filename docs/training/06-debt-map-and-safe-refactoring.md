@@ -10,14 +10,14 @@
 
 | Kotlin/Spring에서 흔한 문제 | 이 저장소에서 보이는 형태 |
 | --- | --- |
-| 서비스 클래스 비대화 | `parallel_mode/mod.rs` 같은 mixed-responsibility 모듈 |
+| 서비스 클래스 비대화 | `parallel_mode/pool.rs`, `parallel_mode/distributor.rs` 같은 큰 service child module |
 | presentation/service/repository 경계 침식 | TUI presentation과 상태 wording이 한 파일에 섞임 |
 | 테스트가 구현 파일 구조를 그대로 따라감 | operator journey보다 현재 모듈 경계를 따라가는 테스트 클러스터 |
 
 ## 읽기 순서
 
 1. [../plan/17-structure-and-architecture-debt-map.md](../plan/17-structure-and-architecture-debt-map.md)
-2. [../../src/application/service/parallel_mode/mod.rs](../../src/application/service/parallel_mode/mod.rs)
+2. [../../src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs)
 3. [../../src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs)
 4. [../../src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs)
 5. [../../src/adapter/inbound/tui/app/shell_rendering.rs](../../src/adapter/inbound/tui/app/shell_rendering.rs)
@@ -25,14 +25,17 @@
 ## 이번 회차 이슈
 
 - 구조 이슈:
-  - `src/application/service/parallel_mode/mod.rs`는 현재 `3170 LOC` 수준의 hotspot이다.
+  - `src/application/service/parallel_mode/mod.rs`는 facade 수준으로 줄었고, 남은 hotspot은
+    `pool.rs`, `distributor.rs`, `session_detail.rs` 같은 child module에 있다.
+  - readiness, supervisor state, roster projection, selected detail, pool slot state, cleanup
+    decision은 `src/domain/parallel_mode.rs`로 내려가 있다.
   - `src/adapter/inbound/tui/app/shell_presentation.rs`와 `shell_rendering.rs`도 presentation, wording, layout, overlay projection이 넓게 섞여 있다.
-- lint 단서:
-  - `collapsible_if`
-  - `too_many_arguments`
+- boundary 단서:
+  - service child module이 I/O orchestration과 순수 판단을 다시 섞기 시작하는지 확인한다.
+  - domain으로 내려간 projection이 application/TUI copy로 다시 중복되지 않는지 확인한다.
 - 수업에서 볼 질문:
-  - 이 경고들은 단순 축약 문제인가, 아니면 책임이 제자리를 못 찾았다는 신호인가?
-  - 어떤 기준으로 `readiness`, `slots`, `distributor`, `recovery`, `snapshot`을 분리할 수 있는가?
+  - 어떤 기준으로 `readiness`, `slots`, `distributor`, `recovery`, `snapshot`을 service와 domain에 나눌 수 있는가?
+  - 지금 domain에 있는 판단 중 application으로 되돌아가면 어떤 테스트가 길어지는가?
   - presentation에서는 layout과 copy projection을 왜 나눠야 하는가?
 
 ## 실습
@@ -44,7 +47,8 @@
   - 이동할 책임
   - 같이 옮길 테스트
 - 수정 과제:
-  - `parallel_mode`를 readiness/slots/distributor/recovery/snapshot 하위 경계로 다시 자르는 설계 초안 작성
+  - `parallel_mode/pool.rs`에서 추가로 domain으로 내릴 수 있는 순수 판단 후보를 하나 찾는다.
+  - `parallel_mode/distributor.rs`에서 I/O orchestration과 queue-state projection의 경계를 설명한다.
   - shell presentation에서 footer/status copy builder를 별도 projection 타입으로 분리하는 초안 작성
 
 ## 수강생이 가져가야 할 판단 기준
