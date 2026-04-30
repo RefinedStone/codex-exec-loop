@@ -20,15 +20,14 @@ use crate::application::service::planning::runtime::facade::{
 };
 use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::prompt_sections::{
-    PlanningPromptHandoff, PlanningWorkerAuthorityPromptContext,
-    add_worker_authority_context_sections, worker_previous_handoff_lines, worker_role_lines,
-    worker_task_authority_output_contract,
+    PlanningPromptHandoff, PlanningTaskMutationPromptMode, PlanningWorkerAuthorityPromptContext,
+    add_planning_task_mutation_sections, add_worker_authority_context_sections,
+    worker_previous_handoff_lines, worker_role_lines,
 };
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, extract_planning_task_commands,
 };
-use crate::application::service::planning::task_tool::planning_task_tool_contract_json;
 use crate::application::service::prompt_component::PromptDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,25 +498,21 @@ fn build_planning_queue_refresh_prompt(
     previous_handoff_task: Option<&PlanningTaskHandoff>,
     authority_context: &PlanningWorkerAuthorityPromptContext,
 ) -> String {
-    add_worker_authority_context_sections(
+    let builder = add_worker_authority_context_sections(
         PromptDocument::builder("planning-worker-refresh").lines("role", worker_role_lines()),
         authority_context,
-    )
-    .bullets("output-contract", worker_task_authority_output_contract())
-    .text(
-        "planning-task-tool-contract",
-        planning_task_tool_contract_json(),
-    )
-    .bullets("refresh-policy", queue_refresh_policy_rules())
-    .bullets("queue-advancement", queue_advancement_rules())
-    .optional_text("latest-operator-request", latest_user_message)
-    .lines(
-        "previous-handoff",
-        worker_previous_handoff_lines(previous_handoff_task.map(worker_handoff)),
-    )
-    .text("main-session-latest-reply", latest_main_reply)
-    .build()
-    .render()
+    );
+    add_planning_task_mutation_sections(builder, PlanningTaskMutationPromptMode::Refresh)
+        .bullets("refresh-policy", queue_refresh_policy_rules())
+        .bullets("queue-advancement", queue_advancement_rules())
+        .optional_text("latest-operator-request", latest_user_message)
+        .lines(
+            "previous-handoff",
+            worker_previous_handoff_lines(previous_handoff_task.map(worker_handoff)),
+        )
+        .text("main-session-latest-reply", latest_main_reply)
+        .build()
+        .render()
 }
 
 fn build_planning_queue_idle_derive_prompt(
@@ -527,30 +522,26 @@ fn build_planning_queue_idle_derive_prompt(
     queue_idle_prompt_markdown: &str,
     authority_context: &PlanningWorkerAuthorityPromptContext,
 ) -> String {
-    add_worker_authority_context_sections(
+    let builder = add_worker_authority_context_sections(
         PromptDocument::builder("planning-worker-queue-idle-review")
             .lines("role", worker_role_lines()),
         authority_context,
-    )
-    .bullets("output-contract", worker_task_authority_output_contract())
-    .text(
-        "planning-task-tool-contract",
-        planning_task_tool_contract_json(),
-    )
-    .bullets("idle-review-policy", queue_idle_review_policy_rules())
-    .optional_text("latest-operator-request", latest_user_message)
-    .lines(
-        "previous-handoff",
-        worker_previous_handoff_lines(previous_handoff_task.map(worker_handoff)),
-    )
-    .text("queue-idle-review-prompt", queue_idle_prompt_markdown)
-    .text("main-session-latest-reply", latest_main_reply)
-    .bullets(
-        "final-queue-idle-decision-rules",
-        queue_idle_final_decision_rules(),
-    )
-    .build()
-    .render()
+    );
+    add_planning_task_mutation_sections(builder, PlanningTaskMutationPromptMode::Refresh)
+        .bullets("idle-review-policy", queue_idle_review_policy_rules())
+        .optional_text("latest-operator-request", latest_user_message)
+        .lines(
+            "previous-handoff",
+            worker_previous_handoff_lines(previous_handoff_task.map(worker_handoff)),
+        )
+        .text("queue-idle-review-prompt", queue_idle_prompt_markdown)
+        .text("main-session-latest-reply", latest_main_reply)
+        .bullets(
+            "final-queue-idle-decision-rules",
+            queue_idle_final_decision_rules(),
+        )
+        .build()
+        .render()
 }
 
 fn build_planning_official_completion_prompt(
@@ -563,27 +554,23 @@ fn build_planning_official_completion_prompt(
     let serialized_contract = serialize_official_completion_refresh_contract(contract);
     let contract_block = format!("```json\n{serialized_contract}\n```");
 
-    add_worker_authority_context_sections(
+    let builder = add_worker_authority_context_sections(
         PromptDocument::builder("planning-worker-official-completion")
             .lines("role", worker_role_lines()),
         authority_context,
-    )
-    .bullets("output-contract", worker_task_authority_output_contract())
-    .text(
-        "planning-task-tool-contract",
-        planning_task_tool_contract_json(),
-    )
-    .bullets("completion-policy", official_completion_policy_rules())
-    .bullets("queue-advancement", queue_advancement_rules())
-    .optional_text("latest-operator-request", latest_user_message)
-    .lines(
-        "previous-handoff",
-        worker_previous_handoff_lines(previous_handoff_task.map(worker_handoff)),
-    )
-    .text("completion-refresh-contract", &contract_block)
-    .text("main-session-latest-reply", latest_main_reply)
-    .build()
-    .render()
+    );
+    add_planning_task_mutation_sections(builder, PlanningTaskMutationPromptMode::Refresh)
+        .bullets("completion-policy", official_completion_policy_rules())
+        .bullets("queue-advancement", queue_advancement_rules())
+        .optional_text("latest-operator-request", latest_user_message)
+        .lines(
+            "previous-handoff",
+            worker_previous_handoff_lines(previous_handoff_task.map(worker_handoff)),
+        )
+        .text("completion-refresh-contract", &contract_block)
+        .text("main-session-latest-reply", latest_main_reply)
+        .build()
+        .render()
 }
 
 fn serialize_official_completion_refresh_contract(

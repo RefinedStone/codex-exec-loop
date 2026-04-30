@@ -1,4 +1,5 @@
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::task_tool::planning_task_tool_contract_json;
 use crate::application::service::prompt_component::PromptDocumentBuilder;
 
 const PLANNING_TASK_COMMANDS_OUTPUT_CONTRACT: &str = "Final answer must include exactly one fenced JSON object: `{\"planning_task_commands\":{\"version\":1,\"commands\":[...]}}`.";
@@ -8,6 +9,12 @@ const PLANNING_TASK_COMMANDS_WRAPPER_RULE: &str =
 const MAX_WORKER_DIRECTION_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_TASK_AUTHORITY_CHARS: usize = 4_000;
 const MAX_WORKER_QUEUE_PROJECTION_CHARS: usize = 2_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanningTaskMutationPromptMode {
+    Refresh,
+    Repair,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlanningPromptHandoff<'a> {
@@ -92,6 +99,12 @@ pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
         PLANNING_TASK_COMMANDS_WRAPPER_RULE.to_string(),
         "`commands` must be the smallest create/update set needed to resolve the validation errors."
             .to_string(),
+        "Priority repairs must keep `base_priority + dynamic_priority_delta` within `0..100`."
+            .to_string(),
+        "When `dynamic_priority_delta != 0`, include `priority_reason` or preserve the existing non-empty reason."
+            .to_string(),
+        "Do not use an empty `commands` array to resolve a listed validation error when a rejected candidate command or task id is present."
+            .to_string(),
         "When the rejected candidate used wrapped commands, preserve the same task intent and rewrite it into the flat `op` command shape."
             .to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
@@ -99,6 +112,70 @@ pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
             .to_string(),
         "Resolve every validation error listed below.".to_string(),
     ]
+}
+
+pub(crate) fn add_planning_task_mutation_sections(
+    builder: PromptDocumentBuilder,
+    mode: PlanningTaskMutationPromptMode,
+) -> PromptDocumentBuilder {
+    builder
+        .bullets(
+            "mutation-workflow",
+            planning_task_mutation_workflow_rules(mode),
+        )
+        .text(
+            "planning-task-tool-contract",
+            planning_task_tool_contract_json(),
+        )
+        .code_block(
+            "planning-task-tool-examples",
+            "bash",
+            planning_task_tool_examples(mode),
+        )
+        .bullets(
+            "final-response-contract",
+            match mode {
+                PlanningTaskMutationPromptMode::Refresh => worker_task_authority_output_contract(),
+                PlanningTaskMutationPromptMode::Repair => repair_task_authority_output_contract(),
+            },
+        )
+}
+
+fn planning_task_mutation_workflow_rules(mode: PlanningTaskMutationPromptMode) -> Vec<String> {
+    let mut rules = vec![
+        "First inspect accepted task state with `akra planning-tool run .` and `op=list_tasks` before deciding create vs update."
+            .to_string(),
+        "Use `akra planning-tool run .` with `apply=true` for every create_task or update_task mutation whenever the CLI is available."
+            .to_string(),
+        "After a successful planning-tool mutation, the final `planning_task_commands` envelope must use `commands: []` to prevent double application."
+            .to_string(),
+        "Use non-empty final `planning_task_commands` only as a fallback when the planning-tool CLI cannot be used or returns an error."
+            .to_string(),
+        "Never both apply a mutation with planning-tool and repeat the same mutation in the final envelope."
+            .to_string(),
+    ];
+    if mode == PlanningTaskMutationPromptMode::Repair {
+        rules.extend([
+            "In repair mode, do not answer with empty commands until the listed validation errors are actually resolved."
+                .to_string(),
+            "If planning-tool rejects the repair mutation, correct the payload and retry within this turn before falling back to final commands."
+                .to_string(),
+        ]);
+    }
+    rules
+}
+
+fn planning_task_tool_examples(mode: PlanningTaskMutationPromptMode) -> &'static str {
+    match mode {
+        PlanningTaskMutationPromptMode::Refresh => {
+            r#"printf '%s\n' '{"version":1,"op":"list_tasks","status":["ready","in_progress","blocked","proposed"],"limit":20}' | akra planning-tool run .
+printf '%s\n' '{"version":1,"op":"update_task","apply":true,"task_id":"task-123","status":"done","priority_reason":"Completed by latest accepted work."}' | akra planning-tool run ."#
+        }
+        PlanningTaskMutationPromptMode::Repair => {
+            r#"printf '%s\n' '{"version":1,"op":"list_tasks","limit":20}' | akra planning-tool run .
+printf '%s\n' '{"version":1,"op":"update_task","apply":true,"task_id":"task-123","dynamic_priority_delta":-10,"priority_reason":"Adjusted so combined priority stays within 0..100."}' | akra planning-tool run ."#
+        }
+    }
 }
 
 pub(crate) fn runtime_task_authority_contract_rules() -> Vec<String> {
@@ -176,10 +253,11 @@ pub(crate) fn truncate_prompt_section(body: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanningPromptHandoff, PlanningWorkerAuthorityPromptContext,
+        PlanningPromptHandoff, PlanningTaskMutationPromptMode,
+        PlanningWorkerAuthorityPromptContext, add_planning_task_mutation_sections,
         add_worker_authority_context_sections, repair_constraints, repair_previous_handoff_lines,
-        runtime_task_authority_contract_rules, worker_previous_handoff_lines, worker_role_lines,
-        worker_task_authority_output_contract,
+        repair_task_authority_output_contract, runtime_task_authority_contract_rules,
+        worker_previous_handoff_lines, worker_role_lines, worker_task_authority_output_contract,
     };
     use crate::application::service::prompt_component::PromptDocument;
 
@@ -203,6 +281,35 @@ mod tests {
         assert!(contract.contains("planning-task-tool"));
         assert!(contract.contains("does not apply it twice"));
         assert!(contract.contains("Do not return `task_authority`"));
+    }
+
+    #[test]
+    fn shared_mutation_sections_make_tool_use_primary() {
+        let prompt = add_planning_task_mutation_sections(
+            PromptDocument::builder("task"),
+            PlanningTaskMutationPromptMode::Refresh,
+        )
+        .build()
+        .render();
+
+        assert!(prompt.contains("[mutation-workflow]"));
+        assert!(prompt.contains("First inspect accepted task state"));
+        assert!(prompt.contains("Use `akra planning-tool run .`"));
+        assert!(prompt.contains("commands: []"));
+        assert!(prompt.contains("only as a fallback"));
+        assert!(prompt.contains("[planning-task-tool-contract]"));
+        assert!(prompt.contains("[planning-task-tool-examples]"));
+        assert!(prompt.contains("[final-response-contract]"));
+    }
+
+    #[test]
+    fn repair_contract_names_priority_and_empty_command_guards() {
+        let contract = repair_task_authority_output_contract().join("\n");
+
+        assert!(contract.contains("base_priority + dynamic_priority_delta"));
+        assert!(contract.contains("within `0..100`"));
+        assert!(contract.contains("priority_reason"));
+        assert!(contract.contains("empty `commands` array"));
     }
 
     #[test]
