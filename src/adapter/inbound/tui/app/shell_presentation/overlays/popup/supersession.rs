@@ -256,6 +256,7 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
     if let Some(provenance) = distributor.head_rebase_provenance.as_deref() {
         lines.push(Line::from(format!("provenance: {provenance}")));
     }
+    lines.extend(build_orchestrator_lines(distributor));
     if distributor.queue_items.is_empty() {
         lines.push(Line::from(
             "queue: no items are waiting for distributor work",
@@ -287,6 +288,35 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
             .iter()
             .map(|entry| Line::from(format!("{}: {}", entry.stage_label, entry.summary))),
     );
+    lines
+}
+
+fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
+    let status = &distributor.orchestrator_status;
+    let mut lines = vec![
+        Line::from(format!("orchestrator head: {}", status.queue_head)),
+        Line::from(format!("orchestrator barrier: {}", status.barrier_state)),
+        Line::from(format!(
+            "orchestrator held queue: {}",
+            status.held_queue_count
+        )),
+        Line::from(format!(
+            "integration worktree: {}",
+            status.integration_worktree_readiness
+        )),
+    ];
+    if let Some(reason) = status.blocked_reason.as_deref() {
+        lines.push(Line::from(format!("blocked reason: {reason}")));
+    }
+    if !status.conflict_files.is_empty() {
+        lines.push(Line::from(format!(
+            "conflict files: {}",
+            status.conflict_files.join(", ")
+        )));
+    }
+    if let Some(reason) = status.slot_return_wait_reason.as_deref() {
+        lines.push(Line::from(format!("slot return: {reason}")));
+    }
     lines
 }
 
@@ -357,10 +387,10 @@ mod tests {
         ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
         ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
         ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
-        ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
-        ParallelModePoolSlotSnapshot, ParallelModePoolSlotState, ParallelModeQueueItemState,
-        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-        ParallelModeSupervisorState,
+        ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus,
+        ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+        ParallelModeQueueItemState, ParallelModeSupervisorDetailSnapshot,
+        ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
     };
 
     #[test]
@@ -466,6 +496,50 @@ mod tests {
             "next: agent-2 / Task Two / queued / akra-agent/slot-2/task-two / def5678 / commit-ready result accepted into distributor queue"
         ));
         assert!(!rendered.contains("pr_pending"));
+    }
+
+    #[test]
+    fn distributor_lines_render_orchestrator_status_details() {
+        let snapshot = ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-1",
+                "Task One",
+                ParallelModeQueueItemState::Blocked,
+                "akra-agent/slot-1/task-one",
+                "abc1234",
+                "could not cherry-pick into `akra` cleanly",
+            )],
+            vec![],
+            "blocked",
+            "could not cherry-pick into `akra` cleanly",
+        )
+        .with_orchestrator_status(ParallelModeOrchestratorStatus {
+            queue_head: "agent-1 / task-1 / blocked".to_string(),
+            barrier_state: "blocked".to_string(),
+            blocked_reason: Some("could not cherry-pick into `akra` cleanly".to_string()),
+            conflict_files: vec!["conflict.txt".to_string()],
+            held_queue_count: 2,
+            integration_worktree_readiness: "blocked: dirty worktree".to_string(),
+            slot_return_wait_reason: Some(
+                "slot `slot-1` stays running until the queue head is integrated".to_string(),
+            ),
+        });
+
+        let rendered = build_distributor_lines(&snapshot)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("orchestrator head: agent-1 / task-1 / blocked"));
+        assert!(rendered.contains("orchestrator barrier: blocked"));
+        assert!(rendered.contains("orchestrator held queue: 2"));
+        assert!(rendered.contains("integration worktree: blocked: dirty worktree"));
+        assert!(rendered.contains("blocked reason: could not cherry-pick into `akra` cleanly"));
+        assert!(rendered.contains("conflict files: conflict.txt"));
+        assert!(rendered.contains(
+            "slot return: slot `slot-1` stays running until the queue head is integrated"
+        ));
     }
 
     #[test]

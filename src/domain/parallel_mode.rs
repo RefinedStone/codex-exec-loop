@@ -1085,6 +1085,31 @@ impl ParallelModeDistributorQueueItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeOrchestratorStatus {
+    pub queue_head: String,
+    pub barrier_state: String,
+    pub blocked_reason: Option<String>,
+    pub conflict_files: Vec<String>,
+    pub held_queue_count: usize,
+    pub integration_worktree_readiness: String,
+    pub slot_return_wait_reason: Option<String>,
+}
+
+impl ParallelModeOrchestratorStatus {
+    pub fn idle() -> Self {
+        Self {
+            queue_head: "none".to_string(),
+            barrier_state: "idle".to_string(),
+            blocked_reason: None,
+            conflict_files: Vec::new(),
+            held_queue_count: 0,
+            integration_worktree_readiness: "not inspected".to_string(),
+            slot_return_wait_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModeDistributorSnapshot {
     pub queue_items: Vec<ParallelModeDistributorQueueItem>,
     pub completion_feed: Vec<ParallelModeCompletionFeedEntry>,
@@ -1092,6 +1117,7 @@ pub struct ParallelModeDistributorSnapshot {
     pub note: String,
     pub head_blocked_detail: Option<String>,
     pub head_rebase_provenance: Option<String>,
+    pub orchestrator_status: ParallelModeOrchestratorStatus,
 }
 
 impl ParallelModeDistributorSnapshot {
@@ -1108,6 +1134,7 @@ impl ParallelModeDistributorSnapshot {
             note: note.into(),
             head_blocked_detail: None,
             head_rebase_provenance: None,
+            orchestrator_status: ParallelModeOrchestratorStatus::idle(),
         }
     }
 
@@ -1118,6 +1145,11 @@ impl ParallelModeDistributorSnapshot {
 
     pub fn with_head_rebase_provenance(mut self, provenance: Option<String>) -> Self {
         self.head_rebase_provenance = provenance.filter(|provenance| !provenance.trim().is_empty());
+        self
+    }
+
+    pub fn with_orchestrator_status(mut self, status: ParallelModeOrchestratorStatus) -> Self {
+        self.orchestrator_status = status;
         self
     }
 
