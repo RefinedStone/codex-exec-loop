@@ -655,7 +655,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit runtime slot lease transaction")?;
 
-        mirror_runtime_slot_lease(&location, lease)?;
         Ok(())
     }
 
@@ -693,7 +692,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit runtime slot lease removal transaction")?;
 
-        remove_runtime_slot_lease_mirror(&location, slot_id)?;
         Ok(())
     }
 
@@ -747,7 +745,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit runtime session detail transaction")?;
 
-        mirror_runtime_session_detail(&location, detail)?;
         Ok(())
     }
 
@@ -807,7 +804,6 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit runtime distributor queue transaction")?;
 
-        mirror_runtime_distributor_queue_record(&location, record)?;
         Ok(())
     }
 
@@ -1327,20 +1323,6 @@ fn draft_display_path(
     )
 }
 
-fn legacy_runtime_pool_root(location: &PlanningAuthorityLocation) -> PathBuf {
-    let canonical_repo_root = Path::new(&location.canonical_repo_root);
-    let repo_name = canonical_repo_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("workspace");
-    let parent_dir = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
-    parent_dir
-        .join(format!("{repo_name}-akra-worktrees"))
-        .join(stable_short_hash(&canonical_repo_root.to_string_lossy()))
-        .join("akra-pool")
-}
-
 fn management_project_root(canonical_repo_root: &Path) -> PathBuf {
     let repo_name = canonical_repo_root
         .file_name()
@@ -1384,112 +1366,6 @@ fn stable_short_hash(value: &str) -> String {
     }
 
     format!("{hash:016x}")[..12].to_string()
-}
-
-fn runtime_slot_leases_root(location: &PlanningAuthorityLocation) -> PathBuf {
-    legacy_runtime_pool_root(location).join(".leases")
-}
-
-fn runtime_slot_lease_path(location: &PlanningAuthorityLocation, slot_id: &str) -> PathBuf {
-    runtime_slot_leases_root(location).join(format!("{slot_id}.json"))
-}
-
-fn runtime_session_history_dir(location: &PlanningAuthorityLocation) -> PathBuf {
-    legacy_runtime_pool_root(location).join(".agent-sessions")
-}
-
-fn runtime_session_detail_path(location: &PlanningAuthorityLocation, session_key: &str) -> PathBuf {
-    let filename = session_key
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    runtime_session_history_dir(location).join(format!("{filename}.json"))
-}
-
-fn runtime_distributor_queue_root(location: &PlanningAuthorityLocation) -> PathBuf {
-    legacy_runtime_pool_root(location).join(".distributor-queue")
-}
-
-fn runtime_distributor_queue_path(
-    location: &PlanningAuthorityLocation,
-    queue_item_id: &str,
-) -> PathBuf {
-    runtime_distributor_queue_root(location).join(format!("{queue_item_id}.json"))
-}
-
-fn mirror_runtime_slot_lease(
-    location: &PlanningAuthorityLocation,
-    lease: &ParallelModeSlotLeaseSnapshot,
-) -> Result<()> {
-    let leases_root = runtime_slot_leases_root(location);
-    fs::create_dir_all(&leases_root)
-        .with_context(|| format!("failed to create {}", leases_root.display()))?;
-    fs::write(
-        runtime_slot_lease_path(location, &lease.slot_id),
-        serde_json::to_string_pretty(lease)
-            .context("failed to serialize mirrored runtime slot lease")?,
-    )
-    .with_context(|| format!("failed to mirror runtime slot lease `{}`", lease.slot_id))?;
-    Ok(())
-}
-
-fn remove_runtime_slot_lease_mirror(
-    location: &PlanningAuthorityLocation,
-    slot_id: &str,
-) -> Result<()> {
-    let path = runtime_slot_lease_path(location, slot_id);
-    if path.exists() {
-        fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
-    }
-    Ok(())
-}
-
-fn mirror_runtime_session_detail(
-    location: &PlanningAuthorityLocation,
-    detail: &ParallelModeAgentSessionDetailSnapshot,
-) -> Result<()> {
-    let history_dir = runtime_session_history_dir(location);
-    fs::create_dir_all(&history_dir)
-        .with_context(|| format!("failed to create {}", history_dir.display()))?;
-    fs::write(
-        runtime_session_detail_path(location, &detail.session_key),
-        serde_json::to_string_pretty(detail)
-            .context("failed to serialize mirrored runtime session detail")?,
-    )
-    .with_context(|| {
-        format!(
-            "failed to mirror runtime session detail `{}`",
-            detail.session_key
-        )
-    })?;
-    Ok(())
-}
-
-fn mirror_runtime_distributor_queue_record(
-    location: &PlanningAuthorityLocation,
-    record: &PlanningAuthorityDistributorQueueRecord,
-) -> Result<()> {
-    let queue_root = runtime_distributor_queue_root(location);
-    fs::create_dir_all(&queue_root)
-        .with_context(|| format!("failed to create {}", queue_root.display()))?;
-    fs::write(
-        runtime_distributor_queue_path(location, &record.queue_item_id),
-        serde_json::to_string_pretty(record)
-            .context("failed to serialize mirrored distributor queue record")?,
-    )
-    .with_context(|| {
-        format!(
-            "failed to mirror runtime distributor queue record `{}`",
-            record.queue_item_id
-        )
-    })?;
-    Ok(())
 }
 
 fn apply_active_workspace_record(

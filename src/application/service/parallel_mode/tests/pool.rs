@@ -656,6 +656,43 @@ fn acquire_slot_lease_persists_metadata_and_marks_slot_leased() {
 }
 
 #[test]
+fn pool_ignores_stale_legacy_lease_mirror_after_store_removal() {
+    let repo = TempGitRepo::new("stale-lease-mirror");
+    let service = test_parallel_mode_service();
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    assert!(repo.slot_lease_path(1).exists());
+    SqlitePlanningAuthorityAdapter::remove_runtime_slot_lease(
+        &repo.workspace_dir(),
+        &lease.slot_id,
+    )
+    .expect("authority-store lease should be removed");
+
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let pool = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&readiness),
+    );
+    let slot = &pool.slots[0];
+
+    assert!(repo.slot_lease_path(1).exists());
+    assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
+    assert_eq!(slot.owner_label, "cleanup pending");
+    assert!(slot.branch_name.starts_with("akra-agent/slot-1/"));
+}
+
+#[test]
 fn acquire_slot_lease_truncates_long_branch_slug_with_stable_hash() {
     let repo = TempGitRepo::new("lease-slot-long-branch");
     let service = test_parallel_mode_service();

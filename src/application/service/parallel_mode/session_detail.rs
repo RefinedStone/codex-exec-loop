@@ -597,32 +597,6 @@ where
     Ok(detail)
 }
 
-pub(super) fn load_agent_session_detail_records(
-    pool_root: &Path,
-) -> Vec<ParallelModeAgentSessionDetailSnapshot> {
-    let history_dir = agent_session_history_dir(pool_root);
-    let Ok(entries) = fs::read_dir(history_dir) else {
-        return Vec::new();
-    };
-
-    let mut records = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .filter_map(|path| fs::read_to_string(path).ok())
-        .filter_map(|content| {
-            serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content).ok()
-        })
-        .collect::<Vec<_>>();
-    records.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| left.session_key.cmp(&right.session_key))
-    });
-    records
-}
-
 pub(super) fn read_agent_session_detail_record(
     pool_root: &Path,
     session_key: &str,

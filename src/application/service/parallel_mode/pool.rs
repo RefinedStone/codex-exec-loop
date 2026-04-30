@@ -13,10 +13,8 @@ use crate::domain::parallel_mode::{
 };
 
 use super::current_branch_name;
-use super::distributor::load_distributor_queue_records;
 use super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
-use super::session_detail::load_agent_session_detail_records;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, AKRA_BRANCH, DEFAULT_POOL_SIZE,
     NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
@@ -194,8 +192,7 @@ pub(super) fn reconcile_pool_board_and_context(
         )));
     }
     let created_pool_root = !pool_root_existed;
-    let runtime_projection =
-        load_runtime_projection_snapshot(planning_authority, &repo_root, &pool_root);
+    let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
     let can_refresh_akra_baseline =
         can_refresh_akra_baseline_from_workspace(&repo_root, &runtime_projection);
     let Ok((_akra_head, created_akra_branch)) =
@@ -480,8 +477,7 @@ fn load_pool_runtime_context_from_roots(
         return Err("worktree list inspection failed");
     };
     let pool_root = derive_default_pool_root(canonical_repo_root);
-    let runtime_projections =
-        load_runtime_projection_snapshot(planning_authority, repo_root, &pool_root);
+    let runtime_projections = load_runtime_projection_snapshot(planning_authority, repo_root);
 
     Ok(PoolRuntimeContext {
         repo_root: repo_root.to_string(),
@@ -499,19 +495,10 @@ fn load_pool_runtime_context_from_roots(
 fn load_runtime_projection_snapshot(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
-    pool_root: &Path,
 ) -> PlanningAuthorityRuntimeProjectionSnapshot {
     planning_authority
         .load_runtime_projections(workspace_dir)
-        .unwrap_or_else(|_| {
-            let (slot_leases, invalid_slot_leases) = read_slot_leases(pool_root);
-            PlanningAuthorityRuntimeProjectionSnapshot {
-                slot_leases,
-                invalid_slot_leases,
-                session_details: load_agent_session_detail_records(pool_root),
-                distributor_queue_records: load_distributor_queue_records(pool_root),
-            }
-        })
+        .unwrap_or_default()
 }
 
 fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
@@ -631,8 +618,7 @@ fn cleanup_reusable_slots(
     worktree_records: &[GitWorktreeRecord],
 ) -> usize {
     let mut cleaned_slots = 0;
-    let slot_leases =
-        load_runtime_projection_snapshot(planning_authority, repo_root, pool_root).slot_leases;
+    let slot_leases = load_runtime_projection_snapshot(planning_authority, repo_root).slot_leases;
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -1389,52 +1375,6 @@ fn slot_leases_root(pool_root: &Path) -> PathBuf {
 
 pub(super) fn slot_lease_file_path(pool_root: &Path, slot_id: &str) -> PathBuf {
     slot_leases_root(pool_root).join(format!("{slot_id}.json"))
-}
-
-fn read_slot_leases(
-    pool_root: &Path,
-) -> (
-    BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
-    BTreeSet<String>,
-) {
-    let leases_root = slot_leases_root(pool_root);
-    let Ok(entries) = fs::read_dir(&leases_root) else {
-        return (BTreeMap::new(), BTreeSet::new());
-    };
-
-    let mut slot_leases = BTreeMap::new();
-    let mut invalid_slot_leases = BTreeSet::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-            continue;
-        }
-        let slot_id = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_string)
-            .unwrap_or_default();
-        if slot_id.is_empty() {
-            continue;
-        }
-
-        let Ok(contents) = fs::read_to_string(&path) else {
-            invalid_slot_leases.insert(slot_id);
-            continue;
-        };
-        let Ok(lease) = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&contents) else {
-            invalid_slot_leases.insert(slot_id);
-            continue;
-        };
-        if lease.slot_id != slot_id {
-            invalid_slot_leases.insert(slot_id);
-            continue;
-        }
-
-        slot_leases.insert(slot_id, lease);
-    }
-
-    (slot_leases, invalid_slot_leases)
 }
 
 pub(super) fn write_slot_lease(

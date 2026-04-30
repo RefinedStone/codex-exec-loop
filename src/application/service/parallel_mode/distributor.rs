@@ -655,6 +655,7 @@ fn sanitize_runtime_record_key(value: &str) -> String {
     key
 }
 
+#[cfg(test)]
 pub(super) fn load_distributor_queue_records(
     pool_root: &Path,
 ) -> Vec<ParallelModeDistributorQueueRecord> {
