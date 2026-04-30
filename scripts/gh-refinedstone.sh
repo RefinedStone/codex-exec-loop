@@ -124,6 +124,18 @@ if isinstance(data, dict):
 ' "${field_name}"
 }
 
+url_encode() {
+  local value
+  value="$1"
+
+  VALUE="${value}" python3 -c '
+import os
+import urllib.parse
+
+print(urllib.parse.quote(os.environ["VALUE"], safe=""))
+'
+}
+
 api_request() {
   local method
   local endpoint
@@ -171,6 +183,102 @@ api_request() {
 
   cat "${response_file}"
   rm -f "${response_file}"
+}
+
+auth_status_with_api() {
+  local response_body
+  local login
+
+  response_body="$(api_request GET "/user")"
+  login="$(json_string_field "${response_body}" "login")"
+  if [[ "${login}" != "RefinedStone" ]]; then
+    echo "gh-refinedstone: expected RefinedStone token but GitHub returned ${login:-unknown}" >&2
+    exit 1
+  fi
+
+  printf 'Logged in to github.com as RefinedStone\n'
+}
+
+list_prs_with_api() {
+  local repo_full_name
+  local state
+  local base_branch
+  local head_branch
+  local json_fields
+
+  repo_full_name="$(parse_repo_full_name)"
+  state="open"
+  base_branch=""
+  head_branch=""
+  json_fields=""
+
+  while (($# > 0)); do
+    case "$1" in
+      --state)
+        state="${2-}"
+        shift 2
+        ;;
+      --base)
+        base_branch="${2-}"
+        shift 2
+        ;;
+      --head)
+        head_branch="${2-}"
+        shift 2
+        ;;
+      --json)
+        json_fields="${2-}"
+        shift 2
+        ;;
+      *)
+        echo "gh-refinedstone: unsupported pr list option ${1} without gh installed" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  local endpoint
+  endpoint="/repos/${repo_full_name}/pulls?state=$(url_encode "${state}")"
+  if [[ -n "${base_branch}" ]]; then
+    endpoint="${endpoint}&base=$(url_encode "${base_branch}")"
+  fi
+  if [[ -n "${head_branch}" ]]; then
+    endpoint="${endpoint}&head=$(url_encode "RefinedStone:${head_branch}")"
+  fi
+
+  local response_body
+  response_body="$(api_request GET "${endpoint}")"
+  JSON_BODY="${response_body}" JSON_FIELDS="${json_fields}" python3 -c '
+import json
+import os
+
+items = json.loads(os.environ["JSON_BODY"])
+fields = {field for field in os.environ.get("JSON_FIELDS", "").split(",") if field}
+
+def include(name):
+    return not fields or name in fields
+
+result = []
+for item in items:
+    row = {}
+    if include("number"):
+        row["number"] = item.get("number")
+    if include("url"):
+        row["url"] = item.get("html_url")
+    if include("title"):
+        row["title"] = item.get("title")
+    if include("state"):
+        row["state"] = item.get("state", "").upper()
+    if include("baseRefName"):
+        row["baseRefName"] = (item.get("base") or {}).get("ref")
+    if include("headRefName"):
+        row["headRefName"] = (item.get("head") or {}).get("ref")
+    if include("isDraft"):
+        row["isDraft"] = bool(item.get("draft"))
+    result.append(row)
+
+print(json.dumps(result))
+'
 }
 
 create_pr_with_api() {
@@ -366,9 +474,17 @@ if command -v gh >/dev/null 2>&1; then
 fi
 
 case "${1-}:${2-}" in
+  auth:status)
+    shift 2
+    auth_status_with_api "$@"
+    ;;
   pr:create)
     shift 2
     create_pr_with_api "$@"
+    ;;
+  pr:list)
+    shift 2
+    list_prs_with_api "$@"
     ;;
   pr:view)
     shift 2
@@ -379,7 +495,7 @@ case "${1-}:${2-}" in
     close_pr_with_api "$@"
     ;;
   *)
-    echo "gh-refinedstone: gh is not installed and direct fallback currently supports 'pr create', 'pr view', 'pr close', and 'review-reply'" >&2
+    echo "gh-refinedstone: gh is not installed and direct fallback currently supports 'auth status', 'pr create', 'pr list', 'pr view', 'pr close', and 'review-reply'" >&2
     exit 1
     ;;
 esac

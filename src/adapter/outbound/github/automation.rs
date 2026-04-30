@@ -78,11 +78,21 @@ impl GithubAutomationAdapter {
                 format!("gh found at {}", path.display()),
                 None,
             ),
+            Err(_) if Path::new(GITHUB_SCRIPT_PATH).exists() => {
+                ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::GhBinary,
+                    ParallelModeCapabilityState::Ready,
+                    format!(
+                        "gh is not installed; RefinedStone API fallback is available at {GITHUB_SCRIPT_PATH}"
+                    ),
+                    None,
+                )
+            }
             Err(_) => ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GhBinary,
                 ParallelModeCapabilityState::Degraded,
-                "gh is not installed on PATH",
-                Some("install GitHub CLI or plan for manual PR handling".to_string()),
+                "gh is not installed on PATH and the RefinedStone fallback script is missing",
+                Some("install GitHub CLI or restore scripts/gh-refinedstone.sh".to_string()),
             ),
         }
     }
@@ -100,28 +110,39 @@ impl GithubAutomationAdapter {
             );
         }
 
-        let output = Command::new("gh")
-            .current_dir(repo_root)
-            .args(["auth", "status"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .status();
+        let auth_status = if which::which("gh").is_ok() {
+            Command::new("gh")
+                .current_dir(repo_root)
+                .args(["auth", "status"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .status()
+        } else {
+            Command::new("bash")
+                .current_dir(repo_root)
+                .args([GITHUB_SCRIPT_PATH, "auth", "status"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .status()
+        };
 
-        match output {
-            Ok(status) if status.success() => ParallelModeCapabilitySnapshot::new(
+        if auth_status.is_ok_and(|status| status.success()) {
+            return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GhAuth,
                 ParallelModeCapabilityState::Ready,
-                "gh auth status succeeded",
+                "GitHub automation authentication succeeded",
                 None,
-            ),
-            _ => ParallelModeCapabilitySnapshot::new(
-                ParallelModeCapabilityKey::GhAuth,
-                ParallelModeCapabilityState::Degraded,
-                "gh is installed but not authenticated for this workspace",
-                Some("run `gh auth login` before enabling GitHub automation".to_string()),
-            ),
+            );
         }
+
+        ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::GhAuth,
+            ParallelModeCapabilityState::Degraded,
+            "GitHub automation is not authenticated for this workspace",
+            Some("verify gh auth or the repo-local RefinedStone credential".to_string()),
+        )
     }
 
     fn find_open_pull_request(
@@ -131,8 +152,9 @@ impl GithubAutomationAdapter {
         head_branch: &str,
     ) -> Result<Option<GithubAutomationPullRequest>> {
         let output = run_command(
-            "gh",
+            "bash",
             &[
+                GITHUB_SCRIPT_PATH,
                 "pr",
                 "list",
                 "--state",
