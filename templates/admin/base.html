@@ -251,11 +251,15 @@
         display: flex;
         justify-content: space-between;
         gap: 12px;
+        align-items: center;
         padding: 14px 16px;
         border-bottom: 1px solid var(--line-soft);
       }
       .list-header h2, .list-header p {
         margin: 0;
+      }
+      .list-filter {
+        min-width: min(24rem, 100%);
       }
       .entity-list {
         display: grid;
@@ -328,6 +332,12 @@
       .empty-state {
         padding: 16px;
       }
+      .filter-empty {
+        display: none;
+      }
+      .filter-empty.is-visible {
+        display: block;
+      }
       .error-notice {
         background: var(--error-soft);
         border-color: #ffd0cc;
@@ -359,6 +369,7 @@
         .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
         .shell { padding: 14px; }
         .toolbar { display: grid; }
+        .list-header { align-items: stretch; flex-direction: column; }
         .entity-row summary {
           grid-template-columns: 1fr;
         }
@@ -373,6 +384,30 @@
         const token = document.querySelector('meta[name="csrf-token"]')?.content;
         if (token) {
           event.detail.headers["X-CSRF-Token"] = token;
+        }
+      });
+
+      document.addEventListener("input", function (event) {
+        const filter = event.target.closest("[data-list-filter]");
+        if (!filter) return;
+
+        const targetId = filter.dataset.listFilter;
+        const list = document.getElementById(targetId);
+        if (!list) return;
+
+        const query = filter.value.trim().toLowerCase();
+        const rows = [...list.querySelectorAll("[data-filter-text]")];
+        let visibleCount = 0;
+
+        for (const row of rows) {
+          const isVisible = row.dataset.filterText.toLowerCase().includes(query);
+          row.hidden = !isVisible;
+          if (isVisible) visibleCount += 1;
+        }
+
+        const emptyState = document.querySelector(`[data-filter-empty="${targetId}"]`);
+        if (emptyState) {
+          emptyState.classList.toggle("is-visible", visibleCount === 0);
         }
       });
     </script>

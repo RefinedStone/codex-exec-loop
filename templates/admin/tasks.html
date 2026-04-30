@@ -84,13 +84,18 @@
       <h2>Tasks</h2>
       <p>Task catalog view. Open a row to edit details; queue order is derived from priority.</p>
     </div>
+    <label class="field list-filter">
+      <span>Search tasks</span>
+      <input type="search" data-list-filter="task-list" placeholder="title, id, direction, status">
+    </label>
   </div>
   {% if management.tasks.is_empty() %}
   <p class="empty-state">No tasks are stored in the ledger.</p>
   {% else %}
-  <div class="entity-list">
+  <p class="empty-state filter-empty" data-filter-empty="task-list">No tasks match the current search.</p>
+  <div class="entity-list" id="task-list">
     {% for task in management.tasks %}
-    <details class="entity-row">
+    <details class="entity-row" data-filter-text="{{ task.title }} {{ task.id }} {{ task.direction_id }} {{ task.status }}">
       <summary>
         <span class="entity-main">
           <strong>{{ task.title }}</strong>

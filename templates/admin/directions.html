@@ -76,10 +76,15 @@
       <h2>Directions</h2>
       <p>{{ management.directions.len() }} total</p>
     </div>
+    <label class="field list-filter">
+      <span>Search directions</span>
+      <input type="search" data-list-filter="direction-list" placeholder="title, id, state, detail doc">
+    </label>
   </div>
-  <div class="entity-list">
+  <p class="empty-state filter-empty" data-filter-empty="direction-list">No directions match the current search.</p>
+  <div class="entity-list" id="direction-list">
     {% for direction in management.directions %}
-    <details class="entity-row">
+    <details class="entity-row" data-filter-text="{{ direction.title }} {{ direction.id }} {{ direction.state }} {{ direction.detail_doc_path }}">
       <summary>
         <span class="entity-main">
           <strong>{{ direction.title }}</strong>
