@@ -6,8 +6,7 @@ use super::{
     allocate_agent_branch_name, build_pool_board, derive_default_pool_root,
     detect_canonical_repo_root, lease_session_key, parse_https_remote,
     read_agent_session_detail_record, reconcile_pool_board, resolve_workspace_slot_lease,
-    run_command, sanitize_task_slug, short_branch_slug_hash, short_sha, slot_id,
-    slot_lease_file_path,
+    run_command, sanitize_task_slug, short_branch_slug_hash, slot_id, slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;

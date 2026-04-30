@@ -30,10 +30,10 @@ use self::distributor::ParallelModeDistributorService;
 use self::pool::{
     PoolBoardWithContextResult, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
     branch_is_cleanup_ready, branch_is_integrated_into_akra, build_pool_board, build_pool_slots,
-    cleanup_slot, inspect_pool_board_and_context, inspect_slot_git_status,
-    load_pool_runtime_context, pool_operator_recovery_notice, reconcile_pool_board,
-    reconcile_pool_board_and_context, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    short_sha, write_slot_lease,
+    cleanup_slot, detect_canonical_repo_root, inspect_pool_board_and_context,
+    inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
+    reconcile_pool_board, reconcile_pool_board_and_context, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, short_sha, write_slot_lease,
 };
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds, inspect_akra_branch,
@@ -53,9 +53,7 @@ use self::session_detail::{
 use self::supervisor::ParallelModeSupervisorService;
 
 #[cfg(test)]
-use self::pool::{
-    derive_default_pool_root, detect_canonical_repo_root, slot_id, slot_lease_file_path,
-};
+use self::pool::{derive_default_pool_root, slot_id, slot_lease_file_path};
 #[cfg(test)]
 use self::readiness::parse_https_remote;
 #[cfg(test)]
@@ -78,6 +76,20 @@ pub struct ParallelModeDispatchPlan {
     pub idle_slot_count: usize,
     pub excluded_task_ids: Vec<String>,
     pub candidates: Vec<PriorityQueueTask>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeOrchestratorTrigger {
+    MainTurnCompleted,
+    PlanningRefreshCompleted,
+    ManualDispatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeOrchestratorTickResult {
+    pub trigger: ParallelModeOrchestratorTrigger,
+    pub blocked: bool,
+    pub notices: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -379,6 +391,30 @@ impl ParallelModeService {
         })
     }
 
+    pub fn run_orchestrator_tick(
+        &self,
+        workspace_dir: &str,
+        trigger: ParallelModeOrchestratorTrigger,
+    ) -> Result<ParallelModeOrchestratorTickResult, String> {
+        if let Some(blocked_notice) = inspect_akra_integration_worktree_blocker(
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        ) {
+            return Ok(ParallelModeOrchestratorTickResult {
+                trigger,
+                blocked: true,
+                notices: vec![blocked_notice],
+            });
+        }
+
+        let notices = self.distributor_service.process_queue(workspace_dir)?;
+        Ok(ParallelModeOrchestratorTickResult {
+            trigger,
+            blocked: false,
+            notices,
+        })
+    }
+
     pub fn mark_slot_running(
         &self,
         workspace_dir: &str,
@@ -613,6 +649,29 @@ fn parallel_dispatch_excluded_task_ids(context: &PoolRuntimeContext) -> Vec<Stri
     );
 
     task_ids.into_iter().collect()
+}
+
+fn inspect_akra_integration_worktree_blocker(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Option<String> {
+    let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)?;
+    let branch_name = current_branch_name(&canonical_repo_root)?;
+    if branch_name != AKRA_BRANCH {
+        return Some(format!(
+            "orchestrator blocked / integration worktree must be checked out to `{AKRA_BRANCH}` but is `{branch_name}`"
+        ));
+    }
+
+    let status = inspect_slot_git_status(&canonical_repo_root)?;
+    if !status.is_clean_baseline() {
+        return Some(format!(
+            "orchestrator blocked / integration worktree must be clean before queue processing: {}",
+            status.detail_label()
+        ));
+    }
+
+    None
 }
 
 fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {

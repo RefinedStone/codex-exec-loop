@@ -53,6 +53,7 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
         .expect("queue item should be created");
     assert_eq!(queued_item.queue_state, ParallelModeQueueItemState::Queued);
 
+    run_git(&repo.repo_root, &["checkout", "akra"]);
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())
         .expect("distributor queue should process");
@@ -792,57 +793,35 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
         .expect("queue record should exist");
     let original_commit_sha = original_queue_record.commit_sha;
 
-    let original_branch = current_branch(&repo.repo_root);
     run_git(&repo.repo_root, &["checkout", "akra"]);
     fs::write(repo.repo_root.join("baseline.txt"), "baseline advanced\n")
         .expect("baseline file should be written");
     run_git(&repo.repo_root, &["add", "baseline.txt"]);
     run_git(&repo.repo_root, &["commit", "-qm", "advance akra baseline"]);
-    run_git(&repo.repo_root, &["checkout", original_branch.as_str()]);
+    run_git(&repo.repo_root, &["checkout", "akra"]);
 
+    run_git(&repo.repo_root, &["checkout", "akra"]);
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())
         .expect("processing the queue head should succeed");
     assert!(
         notices
             .iter()
-            .any(|notice| notice.contains("force-pushed") || notice.contains("blocked")),
-        "processing should surface the blocked force-push outcome: {notices:?}"
+            .any(|notice| notice.contains("distributor integrated queue head into akra")),
+        "processing should surface the cherry-pick integration outcome: {notices:?}"
     );
 
     let queue_record = load_distributor_queue_records(&repo.pool_root())
         .into_iter()
         .next()
-        .expect("blocked queue record should persist");
-    assert_eq!(
-        queue_record.queue_state,
-        ParallelModeQueueItemState::Blocked
-    );
-    assert_ne!(queue_record.commit_sha, original_commit_sha);
-    assert!(
-        queue_record
-            .integration_note
-            .contains("could not be force-pushed")
-    );
+        .expect("queue record should persist");
+    assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
+    assert_eq!(queue_record.commit_sha, original_commit_sha);
+    assert_eq!(queue_record.integration_state, "done");
 
     let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
-    assert_eq!(snapshot.distributor.head_summary, "blocked");
-    assert!(
-        snapshot
-            .distributor
-            .head_blocked_detail
-            .as_deref()
-            .expect("blocked head detail should be surfaced")
-            .contains("could not be force-pushed")
-    );
-    let provenance = snapshot
-        .distributor
-        .head_rebase_provenance
-        .as_deref()
-        .expect("rebase provenance should be surfaced");
-    assert!(provenance.contains(short_sha(&original_commit_sha).as_str()));
-    assert!(provenance.contains(short_sha(&queue_record.commit_sha).as_str()));
-    assert!(provenance.contains("onto `akra`"));
+    assert_eq!(snapshot.distributor.head_summary, "idle");
+    assert!(snapshot.distributor.head_rebase_provenance.is_none());
 }
 
 #[test]
@@ -858,7 +837,6 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         None,
     );
 
-    let original_branch = current_branch(&repo.repo_root);
     run_git(&repo.repo_root, &["checkout", "akra"]);
     fs::write(repo.repo_root.join("conflict.txt"), "base\n")
         .expect("baseline conflict file should be written");
@@ -867,7 +845,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         &repo.repo_root,
         &["commit", "-qm", "seed conflict baseline"],
     );
-    run_git(&repo.repo_root, &["checkout", original_branch.as_str()]);
+    run_git(&repo.repo_root, &["checkout", "akra"]);
 
     let lease = service
         .acquire_slot_lease(
@@ -917,7 +895,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         &repo.repo_root,
         &["commit", "-qm", "advance conflicting akra baseline"],
     );
-    run_git(&repo.repo_root, &["checkout", original_branch.as_str()]);
+    run_git(&repo.repo_root, &["checkout", "akra"]);
 
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())
@@ -925,9 +903,9 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
     assert!(
         notices.iter().any(|notice| {
             notice.contains("distributor queue head blocked")
-                && notice.contains("could not rebase onto `akra` cleanly")
+                && notice.contains("could not cherry-pick into `akra` cleanly")
         }),
-        "processing should surface the rebase-conflict block: {notices:?}"
+        "processing should surface the cherry-pick conflict block: {notices:?}"
     );
 
     let queue_record = load_distributor_queue_records(&repo.pool_root())
@@ -941,8 +919,10 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
     assert!(
         queue_record
             .integration_note
-            .contains("could not rebase onto `akra` cleanly")
+            .contains("could not cherry-pick into `akra` cleanly")
     );
+    assert_eq!(queue_record.integration_state, "blocked");
+    assert_eq!(queue_record.conflict_files, vec!["conflict.txt"]);
 
     let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
     assert_eq!(snapshot.distributor.head_summary, "blocked");
@@ -957,7 +937,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
             .head_blocked_detail
             .as_deref()
             .expect("blocked head detail should be surfaced")
-            .contains("could not rebase onto `akra` cleanly")
+            .contains("could not cherry-pick into `akra` cleanly")
     );
     assert!(
         snapshot.distributor.head_rebase_provenance.is_none(),

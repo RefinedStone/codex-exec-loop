@@ -23,7 +23,7 @@ use super::{
     record_integrating_session_detail, record_merge_pending_session_detail,
     record_merge_queued_session_detail, record_pr_pending_session_detail,
     record_pushing_session_detail, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    short_sha, write_slot_lease,
+    run_command, short_sha, write_slot_lease,
 };
 
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
@@ -141,14 +141,23 @@ impl ParallelModeDistributorService {
         let timestamp = current_timestamp();
         let record = ParallelModeDistributorQueueRecord {
             queue_item_id: distributor_queue_item_id(&resolution.lease, &timestamp),
+            queue_order_key: queue_order_key_from_timestamp(&timestamp),
             session_key,
+            root_turn_id: None,
+            slot_id: resolution.lease.slot_id.clone(),
             agent_id: resolution.lease.agent_id.clone(),
             task_id: resolution.lease.task_id.clone(),
             task_title: resolution.lease.task_title.clone(),
+            source_branch: resolution.lease.branch_name.clone(),
+            source_commit_sha: commit_sha.clone(),
             branch_name: resolution.lease.branch_name.clone(),
             worktree_path: resolution.lease.worktree_path.clone(),
             original_commit_sha: Some(commit_sha.clone()),
             commit_sha,
+            planning_refresh_state: "done".to_string(),
+            integration_state: "queued".to_string(),
+            conflict_files: Vec::new(),
+            recovery_note: None,
             validation_summary: detail.validation_summary.clone(),
             authority_refresh_outcome: detail.authority_refresh_outcome.clone(),
             github_capabilities: Some(github_capabilities),
@@ -624,6 +633,16 @@ fn distributor_queue_item_id(lease: &ParallelModeSlotLeaseSnapshot, timestamp: &
     ))
 }
 
+fn queue_order_key_from_timestamp(timestamp: &str) -> u64 {
+    timestamp
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .take(20)
+        .collect::<String>()
+        .parse::<u64>()
+        .unwrap_or(0)
+}
+
 fn sanitize_runtime_record_key(value: &str) -> String {
     let mut key = String::new();
     for ch in value.chars() {
@@ -1095,6 +1114,8 @@ fn distributor_integrate_branch(
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
 ) -> Result<String, String> {
+    let source_branch = record.effective_source_branch();
+    let source_commit_sha = record.effective_source_commit_sha();
     let slot_status = inspect_slot_git_status(&resolution.workspace_path).ok_or_else(|| {
         format!(
             "slot `{}` git status could not be inspected for distributor delivery",
@@ -1115,9 +1136,7 @@ fn distributor_integrate_branch(
         );
     }
 
-    if current_branch_name(&resolution.workspace_path).as_deref()
-        != Some(record.branch_name.as_str())
-    {
+    if current_branch_name(&resolution.workspace_path).as_deref() != Some(source_branch.as_str()) {
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
@@ -1126,7 +1145,7 @@ fn distributor_integrate_branch(
             record,
             format!(
                 "slot `{}` is no longer checked out to `{}`",
-                resolution.lease.slot_id, record.branch_name
+                resolution.lease.slot_id, source_branch
             ),
         );
     }
@@ -1137,7 +1156,7 @@ fn distributor_integrate_branch(
             resolution.lease.slot_id
         )
     })?;
-    if current_head != record.commit_sha {
+    if current_head != source_commit_sha {
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
@@ -1146,7 +1165,7 @@ fn distributor_integrate_branch(
             record,
             format!(
                 "branch head drifted from expected commit `{}` to `{}`",
-                short_sha(&record.commit_sha),
+                short_sha(&source_commit_sha),
                 short_sha(&current_head)
             ),
         );
@@ -1174,19 +1193,43 @@ fn distributor_integrate_branch(
         &record.integration_note,
     );
 
-    if !branch_is_integrated_into_akra(&resolution.context.repo_root, &record.branch_name) {
-        let worktree = resolution.workspace_path.display().to_string();
+    let integration_repo_root = resolution.context.canonical_repo_root.display().to_string();
+
+    if !branch_is_integrated_into_akra(&integration_repo_root, &source_branch) {
+        if let Err(notice) = ensure_akra_integration_worktree_ready(
+            planning_authority,
+            resolution,
+            record,
+            &integration_repo_root,
+        ) {
+            return Ok(notice);
+        }
+
         if !command_succeeds(
             "git",
             [
                 "-C",
-                worktree.as_str(),
-                "-c",
-                "rebase.autoStash=true",
-                "rebase",
-                AKRA_BRANCH,
+                integration_repo_root.as_str(),
+                "cherry-pick",
+                source_commit_sha.as_str(),
             ],
         ) {
+            let conflict_files = collect_cherry_pick_conflict_files(&integration_repo_root);
+            let _ = command_succeeds(
+                "git",
+                [
+                    "-C",
+                    integration_repo_root.as_str(),
+                    "cherry-pick",
+                    "--abort",
+                ],
+            );
+            record.conflict_files = conflict_files.clone();
+            record.recovery_note = Some(
+                "resolve the conflict manually or update the source branch, then rerun orchestration"
+                    .to_string(),
+            );
+            record.integration_state = "blocked".to_string();
             return block_distributor_queue_record(
                 planning_authority,
                 &resolution.context.repo_root,
@@ -1194,30 +1237,20 @@ fn distributor_integrate_branch(
                 Some(&resolution.lease),
                 record,
                 format!(
-                    "branch `{}` could not rebase onto `{AKRA_BRANCH}` cleanly",
-                    record.branch_name
+                    "commit `{}` from `{}` could not cherry-pick into `{AKRA_BRANCH}` cleanly{}",
+                    short_sha(&source_commit_sha),
+                    source_branch,
+                    format_conflict_file_suffix(&conflict_files),
                 ),
             );
         }
 
-        let previous_commit_sha = record.commit_sha.clone();
-        if record
-            .original_commit_sha
-            .as_deref()
-            .filter(|commit| !commit.trim().is_empty())
-            .is_none()
-        {
-            record.original_commit_sha = Some(previous_commit_sha.clone());
-        }
-        record.commit_sha =
-            resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
-                format!(
-                    "slot `{}` workspace head could not be resolved after distributor rebase",
-                    resolution.lease.slot_id
-                )
-            })?;
-        record.integration_note =
-            format!("branch rebased onto `{AKRA_BRANCH}` and is ready for local integration");
+        record.integration_state = "done".to_string();
+        record.integration_note = format!(
+            "commit `{}` from `{}` cherry-picked into `{AKRA_BRANCH}`",
+            short_sha(&source_commit_sha),
+            source_branch
+        );
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
             planning_authority,
@@ -1225,73 +1258,9 @@ fn distributor_integrate_branch(
             &resolution.context.pool_root,
             record,
         )?;
-        let rebase_summary = rebase_provenance_label(record).unwrap_or_else(|| {
-            "branch rebased onto akra and is ready for local integration".to_string()
-        });
-        let _ = record_integrating_session_detail(
-            planning_authority,
-            &resolution.context.repo_root,
-            &resolution.context.pool_root,
-            &resolution.lease,
-            &rebase_summary,
-        );
-        if record.commit_sha != previous_commit_sha {
-            let repo_root = resolution.context.repo_root.clone();
-            if let Err(error) = github_automation.push_branch(&repo_root, &record.branch_name, true)
-            {
-                return block_distributor_queue_record(
-                    planning_authority,
-                    &resolution.context.repo_root,
-                    &resolution.context.pool_root,
-                    Some(&resolution.lease),
-                    record,
-                    format!(
-                        "rebased branch `{}` could not be force-pushed: {error}",
-                        record.branch_name
-                    ),
-                );
-            }
-            record.integration_note =
-                "rebased branch force-pushed and ready for local integration".to_string();
-            record.updated_at = current_timestamp();
-            write_distributor_queue_record(
-                planning_authority,
-                &resolution.context.repo_root,
-                &resolution.context.pool_root,
-                record,
-            )?;
-            let force_push_summary = rebase_provenance_label(record).map_or_else(
-                || "rebased branch force-pushed and ready for local integration".to_string(),
-                |provenance| format!("{provenance} / force-pushed and ready for local integration"),
-            );
-            let _ = record_integrating_session_detail(
-                planning_authority,
-                &resolution.context.repo_root,
-                &resolution.context.pool_root,
-                &resolution.lease,
-                &force_push_summary,
-            );
-        }
-
-        if !command_succeeds(
-            "git",
-            ["-C", worktree.as_str(), "branch", "-f", AKRA_BRANCH, "HEAD"],
-        ) {
-            return block_distributor_queue_record(
-                planning_authority,
-                &resolution.context.repo_root,
-                &resolution.context.pool_root,
-                Some(&resolution.lease),
-                record,
-                format!(
-                    "local `{AKRA_BRANCH}` could not advance to `{}`",
-                    short_sha(&record.commit_sha)
-                ),
-            );
-        }
     }
 
-    let repo_root = resolution.context.repo_root.clone();
+    let repo_root = integration_repo_root;
     if let Err(error) = github_automation.push_integration_branch(&repo_root, AKRA_BRANCH) {
         return block_distributor_queue_record(
             planning_authority,
@@ -1420,6 +1389,80 @@ fn distributor_cleanup_integrated_slot(
     ))
 }
 
+fn ensure_akra_integration_worktree_ready(
+    planning_authority: &dyn PlanningAuthorityPort,
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+    integration_repo_root: &str,
+) -> Result<(), String> {
+    if current_branch_name(Path::new(integration_repo_root)).as_deref() != Some(AKRA_BRANCH) {
+        let message = format!(
+            "integration worktree must be checked out to `{AKRA_BRANCH}` before cherry-pick delivery"
+        );
+        let _ = block_distributor_queue_record(
+            planning_authority,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            message.clone(),
+        )?;
+        return Err(message);
+    }
+
+    let Some(status) = inspect_slot_git_status(Path::new(integration_repo_root)) else {
+        let message = "integration worktree git status could not be inspected".to_string();
+        let _ = block_distributor_queue_record(
+            planning_authority,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            message.clone(),
+        )?;
+        return Err(message);
+    };
+    if !status.is_clean_baseline() {
+        let message = format!(
+            "integration worktree must be clean before cherry-pick delivery: {}",
+            status.detail_label()
+        );
+        let _ = block_distributor_queue_record(
+            planning_authority,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            message.clone(),
+        )?;
+        return Err(message);
+    }
+
+    Ok(())
+}
+
+fn collect_cherry_pick_conflict_files(repo_root: &str) -> Vec<String> {
+    run_command(
+        "git",
+        ["-C", repo_root, "diff", "--name-only", "--diff-filter=U"],
+        None,
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .map(str::to_string)
+    .collect::<Vec<_>>()
+}
+
+fn format_conflict_file_suffix(conflict_files: &[String]) -> String {
+    if conflict_files.is_empty() {
+        String::new()
+    } else {
+        format!(" / conflicts: {}", conflict_files.join(", "))
+    }
+}
+
 fn block_distributor_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
@@ -1429,6 +1472,10 @@ fn block_distributor_queue_record(
     failure_detail: String,
 ) -> Result<String, String> {
     record.queue_state = ParallelModeQueueItemState::Blocked;
+    record.integration_state = "blocked".to_string();
+    if record.recovery_note.is_none() {
+        record.recovery_note = Some(failure_detail.clone());
+    }
     record.integration_note = failure_detail.clone();
     record.updated_at = current_timestamp();
     write_distributor_queue_record(planning_authority, workspace_dir, pool_root, record)?;
@@ -1457,8 +1504,8 @@ fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueReco
         "Automated distributor delivery for a supersession result.\n\n- Agent: {}\n- Task ID: {}\n- Branch: `{}`\n- Commit: `{}`\n- Validation: {}\n- Official refresh: {}",
         record.agent_id,
         record.task_id,
-        record.branch_name,
-        record.commit_sha,
+        record.effective_source_branch(),
+        record.effective_source_commit_sha(),
         record.validation_summary.trim(),
         record.authority_refresh_outcome.trim()
     )

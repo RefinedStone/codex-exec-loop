@@ -1,6 +1,6 @@
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_mode::{
-    ParallelModeOfficialCompletionReport, ParallelModeService,
+    ParallelModeOfficialCompletionReport, ParallelModeOrchestratorTrigger, ParallelModeService,
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 
@@ -276,13 +276,13 @@ impl ParallelModeTurnService {
             }
         }
 
-        match self
-            .parallel_mode_service
-            .process_distributor_queue(workspace_directory)
-        {
-            Ok(mut delivery_notices) => notices.append(&mut delivery_notices),
+        match self.parallel_mode_service.run_orchestrator_tick(
+            workspace_directory,
+            ParallelModeOrchestratorTrigger::PlanningRefreshCompleted,
+        ) {
+            Ok(tick_result) => notices.extend(tick_result.notices),
             Err(error) => notices.push(format!(
-                "distributor delivery failed after official refresh: {error}"
+                "orchestrator tick failed after official refresh: {error}"
             )),
         }
 

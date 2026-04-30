@@ -24,15 +24,33 @@ pub enum PlanningAuthorityOfficialRefreshClaimStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanningAuthorityDistributorQueueRecord {
     pub queue_item_id: String,
+    #[serde(default)]
+    pub queue_order_key: u64,
     pub session_key: String,
+    #[serde(default)]
+    pub root_turn_id: Option<String>,
+    #[serde(default)]
+    pub slot_id: String,
     pub agent_id: String,
     pub task_id: String,
     pub task_title: String,
+    #[serde(default)]
+    pub source_branch: String,
+    #[serde(default)]
+    pub source_commit_sha: String,
     pub branch_name: String,
     pub worktree_path: String,
     pub commit_sha: String,
     #[serde(default)]
     pub original_commit_sha: Option<String>,
+    #[serde(default)]
+    pub planning_refresh_state: String,
+    #[serde(default)]
+    pub integration_state: String,
+    #[serde(default)]
+    pub conflict_files: Vec<String>,
+    #[serde(default)]
+    pub recovery_note: Option<String>,
     pub validation_summary: String,
     pub authority_refresh_outcome: String,
     #[serde(default)]
@@ -53,10 +71,26 @@ impl PlanningAuthorityDistributorQueueRecord {
             self.agent_id.clone(),
             self.task_title.clone(),
             self.queue_state,
-            self.branch_name.clone(),
+            self.effective_source_branch(),
             self.commit_sha.chars().take(7).collect::<String>(),
             self.integration_note.clone(),
         )
+    }
+
+    pub fn effective_source_branch(&self) -> String {
+        if self.source_branch.trim().is_empty() {
+            self.branch_name.clone()
+        } else {
+            self.source_branch.clone()
+        }
+    }
+
+    pub fn effective_source_commit_sha(&self) -> String {
+        if self.source_commit_sha.trim().is_empty() {
+            self.commit_sha.clone()
+        } else {
+            self.source_commit_sha.clone()
+        }
     }
 }
 
