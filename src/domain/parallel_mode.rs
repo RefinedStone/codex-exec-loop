@@ -249,6 +249,14 @@ impl ParallelModeSlotLeaseState {
             Self::CleanupPending => "cleanup_pending",
         }
     }
+
+    pub fn pool_slot_state(self) -> ParallelModePoolSlotState {
+        match self {
+            Self::Leased => ParallelModePoolSlotState::Leased,
+            Self::Running => ParallelModePoolSlotState::Running,
+            Self::CleanupPending => ParallelModePoolSlotState::AwaitingCleanup,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,6 +374,50 @@ impl ParallelModePoolSlotSnapshot {
             branch_name: branch_name.into(),
             worktree_label: worktree_label.into(),
             owner_label: owner_label.into(),
+        }
+    }
+
+    pub fn from_lease(
+        slot_id: impl Into<String>,
+        branch_name: impl Into<String>,
+        worktree_label: impl Into<String>,
+        lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Self {
+        Self::new(
+            slot_id,
+            lease.state.pool_slot_state(),
+            branch_name,
+            worktree_label,
+            lease.owner_label(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelModePoolSlotCleanupDecision {
+    pub lease_state: Option<ParallelModeSlotLeaseState>,
+    pub worktree_clean: bool,
+    pub branch_integrated: bool,
+}
+
+impl ParallelModePoolSlotCleanupDecision {
+    pub fn new(
+        lease_state: Option<ParallelModeSlotLeaseState>,
+        worktree_clean: bool,
+        branch_integrated: bool,
+    ) -> Self {
+        Self {
+            lease_state,
+            worktree_clean,
+            branch_integrated,
+        }
+    }
+
+    pub fn is_cleanup_ready(self) -> bool {
+        match self.lease_state {
+            Some(ParallelModeSlotLeaseState::CleanupPending) => self.branch_integrated,
+            Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running) => false,
+            None => self.worktree_clean && self.branch_integrated,
         }
     }
 }
@@ -1115,9 +1167,9 @@ mod tests {
     use super::{
         ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
         ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-        ParallelModeLiveSessionDetailDefaults, ParallelModeReadinessSnapshot,
-        ParallelModeReadinessState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-        ParallelModeSupervisorState,
+        ParallelModeLiveSessionDetailDefaults, ParallelModePoolSlotCleanupDecision,
+        ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+        ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
     };
 
     #[test]
@@ -1334,6 +1386,51 @@ mod tests {
         )
         .expect("history fallback should be selected");
         assert_eq!(history_selected.slot_id, "slot-1");
+    }
+
+    #[test]
+    fn pool_slot_cleanup_decision_respects_lease_state_and_branch_integration() {
+        assert!(
+            ParallelModePoolSlotCleanupDecision::new(
+                Some(ParallelModeSlotLeaseState::CleanupPending),
+                false,
+                true
+            )
+            .is_cleanup_ready()
+        );
+        assert!(
+            !ParallelModePoolSlotCleanupDecision::new(
+                Some(ParallelModeSlotLeaseState::Running),
+                true,
+                true
+            )
+            .is_cleanup_ready()
+        );
+        assert!(ParallelModePoolSlotCleanupDecision::new(None, true, true).is_cleanup_ready());
+        assert!(!ParallelModePoolSlotCleanupDecision::new(None, false, true).is_cleanup_ready());
+    }
+
+    #[test]
+    fn pool_slot_snapshot_projects_lease_state_to_pool_slot_state() {
+        let lease = lease(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            ParallelModeSlotLeaseState::CleanupPending,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:05:00Z"),
+        );
+
+        let slot = super::ParallelModePoolSlotSnapshot::from_lease(
+            "slot-1",
+            lease.branch_name.as_str(),
+            "slot-1 / clean",
+            &lease,
+        );
+
+        assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
+        assert_eq!(slot.owner_label, "agent-1 / task-1");
     }
 
     fn lease(

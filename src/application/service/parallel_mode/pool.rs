@@ -8,8 +8,8 @@ use crate::application::port::outbound::planning_authority_port::{
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModePoolSlotSnapshot, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
 use super::current_branch_name;
@@ -640,16 +640,19 @@ fn cleanup_reusable_slots(
             continue;
         }
         let slot_lease = slot_leases.get(&slot_id);
-        let cleanup_ready = match slot_lease.map(|lease| lease.state) {
-            Some(ParallelModeSlotLeaseState::CleanupPending) => {
-                branch_is_cleanup_ready(repo_root, branch_name)
-            }
-            Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running) => false,
-            None => {
-                inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
-                    && branch_is_cleanup_ready(repo_root, branch_name)
-            }
-        };
+        let lease_state = slot_lease.map(|lease| lease.state);
+        let worktree_clean = lease_state.is_none()
+            && inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline);
+        let branch_integrated = !matches!(
+            lease_state,
+            Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running)
+        ) && branch_is_cleanup_ready(repo_root, branch_name);
+        let cleanup_ready = ParallelModePoolSlotCleanupDecision::new(
+            lease_state,
+            worktree_clean,
+            branch_integrated,
+        )
+        .is_cleanup_ready();
         if !cleanup_ready {
             continue;
         }
@@ -898,10 +901,14 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
                         .unwrap_or_else(|| "operator recovery".to_string()),
                 );
             }
-            if slot_lease.is_none()
-                && slot_status.is_clean_baseline()
-                && branch_is_cleanup_ready(&context.repo_root, branch_name)
-            {
+            let cleanup_ready = slot_lease.is_none()
+                && ParallelModePoolSlotCleanupDecision::new(
+                    None,
+                    slot_status.is_clean_baseline(),
+                    branch_is_cleanup_ready(&context.repo_root, branch_name),
+                )
+                .is_cleanup_ready();
+            if cleanup_ready {
                 return ParallelModePoolSlotSnapshot::new(
                     slot_id,
                     ParallelModePoolSlotState::AwaitingCleanup,
@@ -954,18 +961,11 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
                 );
             }
 
-            return ParallelModePoolSlotSnapshot::new(
+            return ParallelModePoolSlotSnapshot::from_lease(
                 slot_id,
-                match slot_lease.state {
-                    ParallelModeSlotLeaseState::Leased => ParallelModePoolSlotState::Leased,
-                    ParallelModeSlotLeaseState::Running => ParallelModePoolSlotState::Running,
-                    ParallelModeSlotLeaseState::CleanupPending => {
-                        ParallelModePoolSlotState::AwaitingCleanup
-                    }
-                },
                 branch_name,
                 annotate_worktree_label(base_worktree_label, &slot_status.detail_label()),
-                slot_lease.owner_label(),
+                slot_lease,
             );
         }
 
