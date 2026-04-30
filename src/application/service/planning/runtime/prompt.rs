@@ -415,8 +415,8 @@ impl PlanningPromptService {
             .result_output_markdown
             .as_deref()
             .expect("complete planning workspace should include result output");
-        let queue_summary = build_queue_summary(&queue_projection);
-        let proposal_summary = build_proposal_summary(&queue_projection);
+        let queue_summary = queue_projection.queue_summary();
+        let proposal_summary = queue_projection.proposal_summary(MAX_PROPOSAL_SUMMARY_TITLES);
         let prompt_fragment =
             build_prompt_fragment(&directions, &queue_projection, result_output_markdown);
         let queue_idle_prompt_path =
@@ -671,57 +671,6 @@ fn follow_up_proposal_rules() -> Vec<String> {
         "When the user later asks to prioritize, queue, or execute earlier proposals, update the relevant proposal tasks instead of creating duplicates."
             .to_string(),
     ]
-}
-
-fn build_queue_summary(queue_projection: &PriorityQueueProjection) -> String {
-    match queue_projection.next_task.as_ref() {
-        Some(task) => format!(
-            "next task: rank {} / {} / {} / priority {}",
-            task.rank,
-            task.task_id.trim(),
-            task.task_title.trim(),
-            task.combined_priority,
-        ),
-        None => "queue idle: no executable planning task".to_string(),
-    }
-}
-
-fn build_proposal_summary(queue_projection: &PriorityQueueProjection) -> Option<String> {
-    if queue_projection.proposed_tasks.is_empty() {
-        return None;
-    }
-
-    let task_titles = queue_projection
-        .proposed_tasks
-        .iter()
-        .map(|task| task.task_title.trim())
-        .filter(|title| !title.is_empty())
-        .take(MAX_PROPOSAL_SUMMARY_TITLES)
-        .collect::<Vec<_>>();
-    let remaining_count = queue_projection
-        .proposed_tasks
-        .len()
-        .saturating_sub(task_titles.len());
-    let title_segment = if task_titles.is_empty() {
-        String::new()
-    } else {
-        let mut segment = format!(": {}", task_titles.join(" | "));
-        if remaining_count > 0 {
-            segment.push_str(&format!(" | +{remaining_count} more"));
-        }
-        segment
-    };
-
-    Some(format!(
-        "{} promotable follow-up proposal{} available{}",
-        queue_projection.proposed_tasks.len(),
-        if queue_projection.proposed_tasks.len() == 1 {
-            ""
-        } else {
-            "s"
-        },
-        title_segment,
-    ))
 }
 
 fn trimmed_non_empty(value: &str) -> Option<&str> {

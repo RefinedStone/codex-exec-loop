@@ -496,11 +496,130 @@ impl PlanningValidationResult {
 }
 
 impl PriorityQueueProjection {
+    pub fn queue_summary(&self) -> String {
+        match self.next_task.as_ref() {
+            Some(task) => format!(
+                "next task: rank {} / {} / {} / priority {}",
+                task.rank,
+                task.task_id.trim(),
+                task.task_title.trim(),
+                task.combined_priority,
+            ),
+            None => "queue idle: no executable planning task".to_string(),
+        }
+    }
+
+    pub fn proposal_summary(&self, max_visible_titles: usize) -> Option<String> {
+        if self.proposed_tasks.is_empty() {
+            return None;
+        }
+
+        let task_titles = self
+            .proposed_tasks
+            .iter()
+            .map(|task| task.task_title.trim())
+            .filter(|title| !title.is_empty())
+            .take(max_visible_titles)
+            .collect::<Vec<_>>();
+        let remaining_count = self.proposed_tasks.len().saturating_sub(task_titles.len());
+        let title_segment = if task_titles.is_empty() {
+            String::new()
+        } else {
+            let mut segment = format!(": {}", task_titles.join(" | "));
+            if remaining_count > 0 {
+                segment.push_str(&format!(" | +{remaining_count} more"));
+            }
+            segment
+        };
+
+        Some(format!(
+            "{} promotable follow-up proposal{} available{}",
+            self.proposed_tasks.len(),
+            if self.proposed_tasks.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            title_segment,
+        ))
+    }
+
     pub fn visible_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.active_tasks.iter().take(limit).cloned().collect()
     }
 
     pub fn visible_proposed_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.proposed_tasks.iter().take(limit).cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod priority_queue_projection_tests {
+    use super::{PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus};
+
+    fn queue_task(rank: usize, task_id: &str, task_title: &str) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank,
+            task_id: task_id.to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_title: "General workstream".to_string(),
+            task_title: task_title.to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 80,
+            updated_at: "2026-04-30T00:00:00Z".to_string(),
+            rank_reasons: vec!["status=ready".to_string()],
+        }
+    }
+
+    fn projection(
+        next_task: Option<PriorityQueueTask>,
+        proposed_tasks: Vec<PriorityQueueTask>,
+    ) -> PriorityQueueProjection {
+        PriorityQueueProjection {
+            next_task,
+            active_tasks: Vec::new(),
+            proposed_tasks,
+            skipped_tasks: Vec::<PriorityQueueSkippedTask>::new(),
+        }
+    }
+
+    #[test]
+    fn queue_summary_projects_next_task_details() {
+        let projection = projection(
+            Some(queue_task(1, " task-1 ", " Extract domain summary ")),
+            Vec::new(),
+        );
+
+        assert_eq!(
+            projection.queue_summary(),
+            "next task: rank 1 / task-1 / Extract domain summary / priority 80"
+        );
+    }
+
+    #[test]
+    fn queue_summary_reports_idle_when_no_task_is_executable() {
+        let projection = projection(None, Vec::new());
+
+        assert_eq!(
+            projection.queue_summary(),
+            "queue idle: no executable planning task"
+        );
+    }
+
+    #[test]
+    fn proposal_summary_projects_count_titles_and_overflow() {
+        let projection = projection(
+            None,
+            vec![
+                queue_task(1, "proposal-1", " Plan A "),
+                queue_task(2, "proposal-2", "Plan B"),
+                queue_task(3, "proposal-3", "Plan C"),
+            ],
+        );
+
+        assert_eq!(
+            projection.proposal_summary(2).as_deref(),
+            Some("3 promotable follow-up proposals available: Plan A | Plan B | +1 more")
+        );
     }
 }
