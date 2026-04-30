@@ -22,7 +22,7 @@
 3. [../../src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs)
 4. [../../src/application/service/planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs)
 
-## 이번 회차 이슈
+## 이번 회차 관찰 지점
 
 - 대상 경계 묶음:
   - [GithubAutomationAdapter](../../src/adapter/outbound/github/automation.rs)의 process execution boundary

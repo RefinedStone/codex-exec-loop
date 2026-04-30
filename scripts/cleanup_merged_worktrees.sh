@@ -83,7 +83,7 @@ branch_is_targeted() {
 
 branch_is_parallel_agent_slot() {
   local candidate="$1"
-  [[ "${candidate}" == akra-agent/slot-*/* ]]
+  [[ "${candidate}" == akra-agent/slot-* ]]
 }
 
 worktree_is_clean() {

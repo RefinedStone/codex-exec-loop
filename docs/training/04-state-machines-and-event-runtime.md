@@ -20,9 +20,9 @@
 1. [../../src/adapter/inbound/tui/app/conversation_runtime.rs](../../src/adapter/inbound/tui/app/conversation_runtime.rs)
 2. [../../src/adapter/inbound/tui/app/shell_runtime.rs](../../src/adapter/inbound/tui/app/shell_runtime.rs)
 3. [../../src/adapter/inbound/tui/app/conversation_model_tests.rs](../../src/adapter/inbound/tui/app/conversation_model_tests.rs)
-4. [../../src/adapter/inbound/tui/app/turn_submission_runtime](../../src/adapter/inbound/tui/app/turn_submission_runtime)
+4. [../../src/adapter/inbound/tui/app/turn_submission_runtime.rs](../../src/adapter/inbound/tui/app/turn_submission_runtime.rs)
 
-## 이번 회차 이슈
+## 이번 회차 관찰 지점
 
 - 대표 회귀 테스트:
   - `missing_terminal_event_becomes_forced_failure_and_notice`

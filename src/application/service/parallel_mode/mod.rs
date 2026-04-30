@@ -357,7 +357,7 @@ impl ParallelModeService {
         let excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
         let excluded = excluded_task_ids
             .iter()
-            .map(String::as_str)
+            .map(|task_id| task_id.trim().to_string())
             .collect::<BTreeSet<_>>();
         let candidates = planning_snapshot
             .queue_projection()

@@ -771,7 +771,7 @@ mod tests {
         assert!(prompt.contains("[db-queue-projection]"));
         assert!(prompt.contains("\"planning_task_commands\""));
         assert!(prompt.contains("[planning-task-tool-contract]"));
-        assert!(prompt.contains("bash scripts/planning-tool.sh run ."));
+        assert!(prompt.contains("akra planning-tool run ."));
         assert!(prompt.contains("do not use payload.worktree_path"));
         assert!(prompt.contains("Do not return `task_authority`"));
         assert!(prompt.contains("Use only the accepted DB authority sections"));
@@ -862,7 +862,7 @@ mod tests {
         );
 
         assert!(prompt.contains("[planning-task-tool-contract]"));
-        assert!(prompt.contains("bash scripts/planning-tool.sh run ."));
+        assert!(prompt.contains("akra planning-tool run ."));
         assert!(prompt.contains("do not use payload.worktree_path"));
         assert!(prompt.contains("/tmp/parallel-worktree"));
         assert!(prompt.contains("worktree_path` are provenance"));

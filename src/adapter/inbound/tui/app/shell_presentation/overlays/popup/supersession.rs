@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use ratatui::text::Line;
 
 use crate::domain::parallel_mode::{
@@ -141,11 +143,21 @@ fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
         return lines;
     }
 
+    let slot_health_by_id = supervisor_snapshot
+        .pool
+        .slots
+        .iter()
+        .map(|slot| (slot.slot_id.as_str(), slot_health_summary_from_slot(slot)))
+        .collect::<BTreeMap<_, _>>();
+
     lines.extend(roster.entries.iter().map(|entry| {
         let state_label = display_supersession_state_label(&entry.state_label);
         let duration_label =
             display_roster_duration_label(&entry.state_label, &entry.duration_label);
-        let slot_health = slot_health_summary(supervisor_snapshot, &entry.slot_id);
+        let slot_health = slot_health_by_id
+            .get(entry.slot_id.as_str())
+            .map(String::as_str)
+            .unwrap_or("slot not projected");
         Line::from(format!(
             "{}: {} / {} / {} / {} / {} / {} / {}",
             entry.agent_id,
@@ -287,11 +299,12 @@ fn display_supersession_state_label(state_label: &str) -> String {
 }
 
 fn display_roster_duration_label(state_label: &str, duration_label: &str) -> String {
-    if state_label == "running" && !duration_label.trim().is_empty() {
-        return format!("working {}", duration_label.trim());
+    let trimmed_duration = duration_label.trim();
+    if state_label == "running" && !trimmed_duration.is_empty() {
+        return format!("working {trimmed_duration}");
     }
 
-    duration_label.to_string()
+    trimmed_duration.to_string()
 }
 
 fn slot_health_summary(
@@ -312,7 +325,7 @@ fn slot_health_summary_from_slot(slot: &ParallelModePoolSlotSnapshot) -> String 
         ParallelModePoolSlotState::Leased
         | ParallelModePoolSlotState::Running
         | ParallelModePoolSlotState::AwaitingCleanup => "slot ok".to_string(),
-        ParallelModePoolSlotState::Idle => "slot idle mismatch".to_string(),
+        ParallelModePoolSlotState::Idle => "slot idle".to_string(),
         ParallelModePoolSlotState::Missing => format!(
             "slot missing: {}",
             worktree_health_detail(&slot.worktree_label)

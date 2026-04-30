@@ -25,21 +25,22 @@ impl ParallelModeReadinessState {
     }
 
     pub fn derive_from_capabilities(capabilities: &[ParallelModeCapabilitySnapshot]) -> Self {
-        if capabilities
-            .iter()
-            .any(|capability| capability.state == ParallelModeCapabilityState::Blocked)
-        {
-            return Self::Blocked;
+        let mut degraded = false;
+        for capability in capabilities {
+            match capability.state {
+                ParallelModeCapabilityState::Blocked => return Self::Blocked,
+                ParallelModeCapabilityState::Degraded | ParallelModeCapabilityState::Repairing => {
+                    degraded = true;
+                }
+                ParallelModeCapabilityState::Ready => {}
+            }
         }
 
-        if capabilities
-            .iter()
-            .any(|capability| capability.state != ParallelModeCapabilityState::Ready)
-        {
-            return Self::Degraded;
+        if degraded {
+            Self::Degraded
+        } else {
+            Self::Ready
         }
-
-        Self::Ready
     }
 }
 
@@ -348,6 +349,10 @@ impl ParallelModeSlotLeaseSnapshot {
             },
             ParallelModeSlotLeaseState::Leased => None,
         }
+    }
+
+    pub fn selection_priority(&self) -> (u8, &str) {
+        (roster_state_priority(self.state), roster_recency_key(self))
     }
 }
 
@@ -718,7 +723,10 @@ impl ParallelModeAgentSessionDetailSnapshot {
             return Some(detail);
         }
 
-        if let Some(lease) = sorted_active_leases(leases).first() {
+        if let Some(lease) = leases
+            .iter()
+            .max_by(|left, right| compare_lease_selection(left, right))
+        {
             return Some(Self::live_for_lease(
                 lease,
                 detail_for_lease(history, lease),
@@ -844,7 +852,7 @@ impl ParallelModeAgentRosterSnapshot {
     }
 
     pub fn project_from_leases(
-        leases: &[ParallelModeSlotLeaseSnapshot],
+        leases: Vec<ParallelModeSlotLeaseSnapshot>,
         details: &[ParallelModeAgentSessionDetailSnapshot],
         mode_enabled: bool,
         running_duration_labels: &BTreeMap<String, String>,
@@ -871,16 +879,19 @@ impl ParallelModeAgentRosterSnapshot {
 }
 
 fn sorted_active_leases(
-    leases: &[ParallelModeSlotLeaseSnapshot],
+    mut active_leases: Vec<ParallelModeSlotLeaseSnapshot>,
 ) -> Vec<ParallelModeSlotLeaseSnapshot> {
-    let mut active_leases = leases.to_vec();
-    active_leases.sort_by(|left, right| {
-        roster_state_priority(right.state)
-            .cmp(&roster_state_priority(left.state))
-            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
-            .then_with(|| left.slot_id.cmp(&right.slot_id))
-    });
+    active_leases.sort_by(|left, right| compare_lease_selection(right, left));
     active_leases
+}
+
+fn compare_lease_selection(
+    left: &ParallelModeSlotLeaseSnapshot,
+    right: &ParallelModeSlotLeaseSnapshot,
+) -> std::cmp::Ordering {
+    left.selection_priority()
+        .cmp(&right.selection_priority())
+        .then_with(|| right.slot_id.cmp(&left.slot_id))
 }
 
 fn detail_for_lease(
@@ -1213,6 +1224,46 @@ mod tests {
     }
 
     #[test]
+    fn readiness_derivation_marks_degraded_when_capability_is_repairing() {
+        let readiness = ParallelModeReadinessState::derive_from_capabilities(&[
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GitRepository,
+                ParallelModeCapabilityState::Ready,
+                "ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::Planning,
+                ParallelModeCapabilityState::Repairing,
+                "repair in progress",
+                Some("wait for repair".to_string()),
+            ),
+        ]);
+
+        assert_eq!(readiness, ParallelModeReadinessState::Degraded);
+    }
+
+    #[test]
+    fn readiness_derivation_marks_ready_when_all_capabilities_are_ready() {
+        let readiness = ParallelModeReadinessState::derive_from_capabilities(&[
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GitRepository,
+                ParallelModeCapabilityState::Ready,
+                "ready",
+                None,
+            ),
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::Planning,
+                ParallelModeCapabilityState::Ready,
+                "ready",
+                None,
+            ),
+        ]);
+
+        assert_eq!(readiness, ParallelModeReadinessState::Ready);
+    }
+
+    #[test]
     fn supervisor_state_recovers_when_enabled_readiness_blocks_parallel_mode() {
         let readiness = ParallelModeReadinessSnapshot::new(
             "/repo",
@@ -1268,7 +1319,7 @@ mod tests {
         let duration_labels = BTreeMap::from([(running.session_key(), "7m".to_string())]);
 
         let roster = super::ParallelModeAgentRosterSnapshot::project_from_leases(
-            &[cleanup, leased, running],
+            vec![cleanup, leased, running],
             &[detail],
             true,
             &duration_labels,

@@ -397,7 +397,7 @@ fn matches_project_filter(session: &SessionSummary, project_filter: &SessionProj
 fn tokenize_search_query(search_query: &str) -> Vec<String> {
     search_query
         .split_whitespace()
-        .map(|token| token.trim().to_ascii_lowercase())
+        .map(|token| token.trim().to_lowercase())
         .filter(|token| !token.is_empty())
         .collect()
 }

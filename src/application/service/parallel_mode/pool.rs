@@ -609,10 +609,10 @@ fn reset_reusable_detached_baseline_slots(
         if !worktree_record.detached {
             continue;
         }
-        let Some(slot_status) = inspect_slot_git_status(&slot_path) else {
-            continue;
-        };
-        if worktree_record.head_sha == akra_head && slot_status.is_clean_baseline() {
+        let slot_status = inspect_slot_git_status(&slot_path);
+        if worktree_record.head_sha == akra_head
+            && slot_status.is_some_and(SlotGitStatus::is_clean_baseline)
+        {
             continue;
         }
         let slot_path_string = slot_path.display().to_string();
@@ -676,7 +676,11 @@ fn cleanup_reusable_slots(
         let branch_integrated = !matches!(
             lease_state,
             Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running)
-        ) && branch_is_cleanup_ready(repo_root, branch_name);
+        ) && (matches!(
+            lease_state,
+            Some(ParallelModeSlotLeaseState::CleanupPending)
+        ) || worktree_clean)
+            && branch_is_cleanup_ready(repo_root, branch_name);
         let cleanup_ready = ParallelModePoolSlotCleanupDecision::new(
             lease_state,
             worktree_clean,
@@ -931,11 +935,12 @@ fn inspect_pool_slot(context: &PoolRuntimeContext, slot_id: &str) -> ParallelMod
                         .unwrap_or_else(|| "operator recovery".to_string()),
                 );
             }
+            let worktree_clean = slot_status.is_clean_baseline();
             let cleanup_ready = slot_lease.is_none()
                 && ParallelModePoolSlotCleanupDecision::new(
                     None,
-                    slot_status.is_clean_baseline(),
-                    branch_is_cleanup_ready(&context.repo_root, branch_name),
+                    worktree_clean,
+                    worktree_clean && branch_is_cleanup_ready(&context.repo_root, branch_name),
                 )
                 .is_cleanup_ready();
             if cleanup_ready {

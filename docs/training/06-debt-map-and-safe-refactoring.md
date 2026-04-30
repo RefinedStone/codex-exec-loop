@@ -22,7 +22,7 @@
 4. [../../src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs)
 5. [../../src/adapter/inbound/tui/app/shell_rendering.rs](../../src/adapter/inbound/tui/app/shell_rendering.rs)
 
-## 이번 회차 이슈
+## 이번 회차 관찰 지점
 
 - 구조 이슈:
   - `src/application/service/parallel_mode/mod.rs`는 facade 수준으로 줄었고, 남은 hotspot은

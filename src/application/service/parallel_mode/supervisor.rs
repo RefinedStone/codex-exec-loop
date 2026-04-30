@@ -166,11 +166,12 @@ fn build_agent_roster_from_context(
     mode_enabled: bool,
 ) -> ParallelModeAgentRosterSnapshot {
     let leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    let duration_labels = running_duration_labels(&leases);
     ParallelModeAgentRosterSnapshot::project_from_leases(
-        &leases,
+        leases,
         &context.session_details,
         mode_enabled,
-        &running_duration_labels(&leases),
+        &duration_labels,
     )
 }
 

@@ -369,7 +369,7 @@ fn run_parallel_dispatch_worker(
     match service_thread.join() {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            if !stream_state.saw_failed_event {
+            if stream_state.turn_completed.is_none() && !stream_state.saw_failed_event {
                 stream_state.saw_failed_event = true;
                 if !stream_state.saw_turn_started {
                     stream_state.saw_failed_before_turn_started = true;
@@ -381,7 +381,7 @@ fn run_parallel_dispatch_worker(
             ));
         }
         Err(_) => {
-            if !stream_state.saw_failed_event {
+            if stream_state.turn_completed.is_none() && !stream_state.saw_failed_event {
                 stream_state.saw_failed_event = true;
                 if !stream_state.saw_turn_started {
                     stream_state.saw_failed_before_turn_started = true;
@@ -511,7 +511,9 @@ fn run_parallel_dispatch_official_completion(
     };
     let latest_main_reply = latest_main_reply
         .filter(|reply| !reply.trim().is_empty())
-        .unwrap_or("parallel worker completed without a final text response");
+        .unwrap_or(
+            "parallel worker TurnCompleted was captured, but no final text response was recorded",
+        );
     let validation_summary =
         parallel_dispatch_validation_summary(&turn_completed.changed_planning_file_paths);
     let completion_report = match turn_service.begin_official_completion(

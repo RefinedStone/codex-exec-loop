@@ -29,7 +29,7 @@
 4. `Option`, default, validation 책임을 어디에 둘지 설명한다.
 5. 타입이 풍부해질수록 함수 인자 개수가 왜 줄어야 하는지 설명한다.
 
-## 이번 회차 이슈
+## 이번 회차 관찰 지점
 
 - 대상 심볼:
   - [PriorityQueueProjection](../../src/domain/planning/mod.rs)

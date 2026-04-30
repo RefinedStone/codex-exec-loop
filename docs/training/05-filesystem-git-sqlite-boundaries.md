@@ -21,7 +21,7 @@
 3. [../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs](../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs)
 4. [../../src/adapter/outbound/filesystem/planning_workspace.rs](../../src/adapter/outbound/filesystem/planning_workspace.rs)
 
-## 이번 회차 이슈
+## 이번 회차 관찰 지점
 
 - 대표 회귀 테스트:
   - `acquire_slot_lease_persists_metadata_and_marks_slot_leased`

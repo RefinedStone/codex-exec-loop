@@ -591,7 +591,12 @@ impl PlanningDirectionsService {
                 .planning_workspace_port
                 .load_optional_planning_file(workspace_dir, path)
             {
-                Ok(Some(body)) => return Ok((path.to_string(), body)),
+                Ok(Some(body)) => {
+                    return Ok((
+                        path.to_string(),
+                        normalize_queue_idle_review_prompt_markdown(&body),
+                    ));
+                }
                 Ok(None) => {
                     return Ok((
                         path.to_string(),
@@ -631,15 +636,19 @@ fn normalize_queue_idle_review_prompt_markdown(prompt_markdown: &str) -> String 
 
 fn is_legacy_queue_idle_review_prompt(prompt_markdown: &str) -> bool {
     let normalized = prompt_markdown.to_lowercase();
-    [
-        "directions.toml",
-        "task-ledger",
-        "task catalog compatibility",
+    let source_markers = ["directions.toml", "task-ledger"];
+    let legacy_behavior_markers = [
         "latest answer clearly implies",
         "latest accepted answer",
-    ]
-    .iter()
-    .any(|legacy_marker| normalized.contains(legacy_marker))
+        "task catalog compatibility",
+    ];
+
+    source_markers
+        .iter()
+        .any(|legacy_marker| normalized.contains(legacy_marker))
+        && legacy_behavior_markers
+            .iter()
+            .any(|legacy_marker| normalized.contains(legacy_marker))
 }
 
 fn build_maintenance_draft_name() -> String {
@@ -771,6 +780,13 @@ mod tests {
     #[test]
     fn queue_idle_review_prompt_keeps_db_authority_copy() {
         let prompt = "# Queue Idle Review Prompt\n\n- Use accepted DB authority.";
+
+        assert_eq!(normalize_queue_idle_review_prompt_markdown(prompt), prompt);
+    }
+
+    #[test]
+    fn queue_idle_review_prompt_keeps_custom_copy_that_mentions_legacy_terms() {
+        let prompt = "# Queue Idle Review Prompt\n\n- Explain why directions.toml and task-ledger are legacy terms, but keep accepted DB authority as the source of truth.";
 
         assert_eq!(normalize_queue_idle_review_prompt_markdown(prompt), prompt);
     }
