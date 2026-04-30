@@ -77,12 +77,12 @@ authority root.
 
 **Code references**
 
-- `src/adapter/outbound/filesystem_planning_workspace_adapter.rs`
-- `src/application/service/planning_prompt_service.rs`
+- `src/adapter/outbound/filesystem/planning_workspace.rs`
+- `src/application/service/planning/runtime/prompt.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime/stream_execution.rs`
-- `src/application/service/parallel_mode_turn_service.rs`
+- `src/application/service/parallel_mode/turn.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs`
-- `src/application/service/planning_worker_orchestration_service.rs`
+- `src/application/service/planning/worker/orchestration.rs`
 
 ## R2. Non-Transactional Planning Writes
 
@@ -119,9 +119,9 @@ operations.
 
 **Code references**
 
-- `src/adapter/outbound/filesystem_planning_workspace_adapter.rs`
-- `src/application/service/planning_reconciliation_service.rs`
-- `src/application/service/planning_prompt_service.rs`
+- `src/adapter/outbound/filesystem/planning_workspace.rs`
+- `src/application/service/planning/repair/reconciliation.rs`
+- `src/application/service/planning/runtime/prompt.rs`
 
 ## R3. Process-Local Official Completion Ordering
 
@@ -156,8 +156,8 @@ Official completion refresh ordering is enforced only inside one app process.
 
 **Code references**
 
-- `src/application/service/planning_worker_orchestration_service.rs`
-- `src/application/service/parallel_mode_service.rs`
+- `src/application/service/planning/worker/orchestration.rs`
+- `src/application/service/parallel_mode/`
 
 ## R4. Distributor Queue Claim Gap
 
@@ -193,7 +193,7 @@ The distributor queue is file-backed but does not have a durable queue-head clai
 
 **Code references**
 
-- `src/application/service/parallel_mode_distributor_service.rs`
+- `src/application/service/parallel_mode/distributor.rs`
 
 ## R5. Lease And Session Detail Lost Updates
 
@@ -229,8 +229,8 @@ optimistic versioning.
 
 **Code references**
 
-- `src/application/service/parallel_mode_service.rs`
-- `src/application/service/parallel_mode_distributor_service.rs`
+- `src/application/service/parallel_mode/`
+- `src/application/service/parallel_mode/distributor.rs`
 
 ## R6. Git-Tracked Planning Leakage
 
@@ -263,8 +263,8 @@ Planning authority files remain normal repo files and can leak into feature bran
 
 **Code references**
 
-- `src/adapter/outbound/filesystem_planning_workspace_adapter.rs`
-- `src/application/service/planning_reconciliation_service.rs`
+- `src/adapter/outbound/filesystem/planning_workspace.rs`
+- `src/application/service/planning/repair/reconciliation.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime/stream_execution.rs`
 
 ## R7. Restart Recovery Gap
@@ -299,9 +299,9 @@ Some runtime state survives in files, but ordering, claims, and global delivery 
 
 **Code references**
 
-- `src/application/service/planning_worker_orchestration_service.rs`
-- `src/application/service/parallel_mode_turn_service.rs`
-- `src/application/service/parallel_mode_distributor_service.rs`
+- `src/application/service/planning/worker/orchestration.rs`
+- `src/application/service/parallel_mode/turn.rs`
+- `src/application/service/parallel_mode/distributor.rs`
 
 ## R8. Queue Projection Export Drift
 
@@ -334,8 +334,8 @@ from the current ledger.
 
 **Code references**
 
-- `src/application/service/planning_prompt_service.rs`
-- `src/application/service/planning_reconciliation_service.rs`
+- `src/application/service/planning/runtime/prompt.rs`
+- `src/application/service/planning/repair/reconciliation.rs`
 
 ## Recommended Architectural Response
 

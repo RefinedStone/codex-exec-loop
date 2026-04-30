@@ -5,14 +5,14 @@ use super::{
     ShellOverlay,
 };
 use crate::domain::session_browser::{
-    SessionBrowserSelection, SessionBrowserView, build_session_browser_view,
+    SessionBrowserPage, SessionBrowserSelection, build_session_browser_page,
 };
 use crate::domain::session_summary::SessionSummary;
 
 impl NativeTuiApp {
     pub(super) fn current_session(&self) -> Option<&SessionSummary> {
-        self.current_session_browser_view()
-            .and_then(|browser_view| browser_view.selected_session())
+        self.current_session_browser_page()
+            .and_then(|browser_page| browser_page.selected_session())
     }
 
     pub(super) fn open_conversation_shell(&mut self) {
@@ -23,8 +23,8 @@ impl NativeTuiApp {
 
     pub(super) fn move_selection(&mut self, delta: isize) {
         let Some(next_selection) = self
-            .current_session_browser_view()
-            .map(|browser_view| browser_view.selection_after_delta(delta))
+            .current_session_browser_page()
+            .map(|browser_page| browser_page.selection_after_delta(delta))
         else {
             return;
         };
@@ -35,8 +35,8 @@ impl NativeTuiApp {
     pub(super) fn jump_to_first_session(&mut self) {
         self.session_overlay_ui_state.jump_to_first_page();
         let next_selection = self
-            .current_session_browser_view()
-            .map(|browser_view| browser_view.first_selection())
+            .current_session_browser_page()
+            .map(|browser_page| browser_page.first_selection())
             .unwrap_or(SessionBrowserSelection {
                 index: 0,
                 session_id: None,
@@ -46,13 +46,13 @@ impl NativeTuiApp {
 
     pub(super) fn jump_to_last_session(&mut self) {
         let total_pages = self
-            .current_session_browser_view()
-            .map(|browser_view| browser_view.projection.total_pages)
+            .current_session_browser_page()
+            .map(|browser_page| browser_page.projection.total_pages)
             .unwrap_or(0);
         self.session_overlay_ui_state.jump_to_last_page(total_pages);
         let next_selection = self
-            .current_session_browser_view()
-            .map(|browser_view| browser_view.last_selection())
+            .current_session_browser_page()
+            .map(|browser_page| browser_page.last_selection())
             .unwrap_or(SessionBrowserSelection {
                 index: 0,
                 session_id: None,
@@ -66,12 +66,12 @@ impl NativeTuiApp {
         self.sync_session_browser_selection();
     }
 
-    fn current_session_browser_view(&self) -> Option<SessionBrowserView<'_>> {
+    fn current_session_browser_page(&self) -> Option<SessionBrowserPage<'_>> {
         let current_workspace_directory = self.current_workspace_directory();
         if let SessionState::Ready(catalog) = &self.session_state
             && let Some(recent_sessions) = catalog.recent_sessions()
         {
-            return Some(build_session_browser_view(
+            return Some(build_session_browser_page(
                 recent_sessions,
                 self.session_overlay_ui_state.browser_state(),
                 Some(current_workspace_directory.as_str()),
@@ -90,10 +90,10 @@ impl NativeTuiApp {
 
     fn sync_session_browser_selection(&mut self) {
         let (selected_session_index, selected_session_id) =
-            match self.current_session_browser_view() {
-                Some(browser_view) => (
-                    browser_view.selected_index.unwrap_or(0),
-                    browser_view
+            match self.current_session_browser_page() {
+                Some(browser_page) => (
+                    browser_page.selected_index.unwrap_or(0),
+                    browser_page
                         .selected_session()
                         .map(|session| session.id.clone()),
                 ),
@@ -144,11 +144,11 @@ impl NativeTuiApp {
     }
 
     pub(super) fn cycle_session_project_filter(&mut self, delta: isize) {
-        let Some(browser_view) = self.current_session_browser_view() else {
+        let Some(browser_page) = self.current_session_browser_page() else {
             return;
         };
 
-        let Some(next_filter) = browser_view.projection.cycled_project_filter(delta) else {
+        let Some(next_filter) = browser_page.projection.cycled_project_filter(delta) else {
             return;
         };
 
@@ -158,11 +158,11 @@ impl NativeTuiApp {
     }
 
     pub(super) fn move_session_page(&mut self, delta: isize) {
-        let Some(browser_view) = self.current_session_browser_view() else {
+        let Some(browser_page) = self.current_session_browser_page() else {
             return;
         };
 
-        let total_pages = browser_view.projection.total_pages;
+        let total_pages = browser_page.projection.total_pages;
         self.session_overlay_ui_state.move_page(delta, total_pages);
         self.sync_session_browser_selection();
     }
@@ -234,6 +234,6 @@ impl NativeTuiApp {
     }
 
     pub(super) fn session_browser_available(&self) -> bool {
-        self.current_session_browser_view().is_some()
+        self.current_session_browser_page().is_some()
     }
 }

@@ -49,9 +49,9 @@ Avoid unrelated parallel edits in these files:
 - `src/adapter/inbound/tui/app/shell_controller.rs`
 - `src/adapter/inbound/tui/app/planning_init_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/planning_draft_editor_ui.rs`
-- `src/application/service/planning_init_service.rs`
-- `src/application/service/planning_prompt_service.rs`
-- `src/application/service/planning_reconciliation_service.rs`
+- `src/application/service/planning/authoring/init.rs`
+- `src/application/service/planning/runtime/prompt.rs`
+- `src/application/service/planning/repair/reconciliation.rs`
 - `docs/README.md`
 - `docs/design/06-planning-runtime-and-draft-editor.md`
 - `docs/plan/10-inline-scrollback-shell.md`

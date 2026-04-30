@@ -15,7 +15,7 @@ use crate::adapter::inbound::tui::shell_chrome::SessionState;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
 use crate::domain::session_browser::SessionProjectFilterOption;
 use crate::domain::session_browser::{
-    SessionBrowserProjection, SessionBrowserView, SessionProjectFilter, build_session_browser_view,
+    SessionBrowserPage, SessionBrowserProjection, SessionProjectFilter, build_session_browser_page,
 };
 use crate::domain::session_summary::SessionSummary;
 
@@ -57,7 +57,7 @@ pub(super) fn build_session_overlay_content(
             let Some(recent_sessions) = catalog.recent_sessions() else {
                 return build_non_queryable_session_catalog_content(catalog);
             };
-            let browser_view = build_session_browser_view(
+            let browser_page = build_session_browser_page(
                 recent_sessions,
                 app.session_overlay_ui_state.browser_state(),
                 Some(current_workspace_directory.as_str()),
@@ -66,7 +66,7 @@ pub(super) fn build_session_overlay_content(
             );
             if recent_sessions.items.is_empty() {
                 let mut lines =
-                    build_session_browser_summary_lines(app, &browser_view, catalog.tier());
+                    build_session_browser_summary_lines(app, &browser_page, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(session_catalog_empty_provider_line()));
                 lines.push(Line::from(session_catalog_empty_action_hint_line()));
@@ -80,24 +80,24 @@ pub(super) fn build_session_overlay_content(
                 );
             }
 
-            if browser_view.visible_sessions.is_empty() {
+            if browser_page.visible_sessions.is_empty() {
                 let search_query = app
                     .session_overlay_ui_state
                     .browser_state()
                     .search_query
                     .as_str();
                 let mut lines =
-                    build_session_browser_summary_lines(app, &browser_view, catalog.tier());
+                    build_session_browser_summary_lines(app, &browser_page, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(build_session_empty_detail_line(
-                    &browser_view,
+                    &browser_page,
                     search_query,
                 )));
-                lines.push(Line::from(build_session_empty_hint_line(&browser_view)));
+                lines.push(Line::from(build_session_empty_hint_line(&browser_page)));
                 return (
                     OverlayListView {
                         message_lines: Some(vec![Line::from(build_session_empty_message(
-                            &browser_view,
+                            &browser_page,
                             search_query,
                         ))]),
                         items: Vec::new(),
@@ -107,23 +107,23 @@ pub(super) fn build_session_overlay_content(
                 );
             }
 
-            let Some(selected_session) = browser_view.selected_session() else {
+            let Some(selected_session) = browser_page.selected_session() else {
                 let search_query = app
                     .session_overlay_ui_state
                     .browser_state()
                     .search_query
                     .as_str();
                 let mut lines =
-                    build_session_browser_summary_lines(app, &browser_view, catalog.tier());
+                    build_session_browser_summary_lines(app, &browser_page, catalog.tier());
                 lines.push(Line::from(""));
                 lines.push(Line::from(build_session_empty_detail_line(
-                    &browser_view,
+                    &browser_page,
                     search_query,
                 )));
                 return (
                     OverlayListView {
                         message_lines: None,
-                        items: browser_view
+                        items: browser_page
                             .visible_sessions
                             .iter()
                             .copied()
@@ -153,7 +153,7 @@ pub(super) fn build_session_overlay_content(
 
             lines.extend(build_session_browser_summary_lines(
                 app,
-                &browser_view,
+                &browser_page,
                 catalog.tier(),
             ));
 
@@ -169,13 +169,13 @@ pub(super) fn build_session_overlay_content(
             (
                 OverlayListView {
                     message_lines: None,
-                    items: browser_view
+                    items: browser_page
                         .visible_sessions
                         .iter()
                         .copied()
                         .map(build_session_list_entry)
                         .collect(),
-                    selected_index: browser_view.selected_index,
+                    selected_index: browser_page.selected_index,
                 },
                 lines,
             )
@@ -185,16 +185,16 @@ pub(super) fn build_session_overlay_content(
 
 fn build_session_browser_summary_lines(
     app: &NativeTuiApp,
-    browser_view: &SessionBrowserView<'_>,
+    browser_page: &SessionBrowserPage<'_>,
     catalog_tier: SessionCatalogTier,
 ) -> Vec<Line<'static>> {
-    let active_filter_option = browser_view.projection.active_project_filter_option();
+    let active_filter_option = browser_page.projection.active_project_filter_option();
     let filter_label = active_filter_option
         .map(session_project_filter_option_label)
         .unwrap_or_else(|| session_project_filter_label(&SessionProjectFilter::AllProjects));
     let filter_session_count = active_filter_option
         .map(|option| option.session_count)
-        .unwrap_or(browser_view.projection.filtered_session_count);
+        .unwrap_or(browser_page.projection.filtered_session_count);
     let browser_query = if app.session_overlay_ui_state.is_search_query_editing() {
         app.session_overlay_ui_state.search_query_editor_buffer()
     } else {
@@ -212,16 +212,16 @@ fn build_session_browser_summary_lines(
             format_session_query_label(browser_query)
         )),
         Line::from(format_session_filter_line(
-            &browser_view.projection,
+            &browser_page.projection,
             filter_label.as_str(),
             filter_session_count,
         )),
         Line::from(build_session_project_context_line(
-            &browser_view.projection,
+            &browser_page.projection,
             &app.current_workspace_directory(),
         )),
         Line::from(format_session_browser_line(
-            &browser_view.projection,
+            &browser_page.projection,
             filter_label.as_str(),
         )),
     ];
@@ -290,47 +290,47 @@ fn build_session_project_context_line(
 }
 
 fn build_session_empty_message(
-    browser_view: &SessionBrowserView<'_>,
+    browser_page: &SessionBrowserPage<'_>,
     search_query: &str,
 ) -> String {
-    let active_filter_label = browser_view
+    let active_filter_label = browser_page
         .projection
         .active_project_filter_option()
         .map(session_project_filter_option_label);
     format_session_empty_message(
-        &browser_view.projection.active_project_filter,
+        &browser_page.projection.active_project_filter,
         search_query,
         active_filter_label.as_deref(),
-        browser_view
+        browser_page
             .projection
             .active_project_filter_option()
             .is_some_and(|option| option.is_current_workspace),
-        browser_view.projection.filtered_session_count,
+        browser_page.projection.filtered_session_count,
     )
 }
 
 fn build_session_empty_detail_line(
-    browser_view: &SessionBrowserView<'_>,
+    browser_page: &SessionBrowserPage<'_>,
     search_query: &str,
 ) -> String {
-    let active_filter_label = browser_view
+    let active_filter_label = browser_page
         .projection
         .active_project_filter_option()
         .map(session_project_filter_option_label);
     format_session_empty_detail_line(
-        &browser_view.projection.active_project_filter,
+        &browser_page.projection.active_project_filter,
         search_query,
         active_filter_label.as_deref(),
-        browser_view
+        browser_page
             .projection
             .active_project_filter_option()
             .is_some_and(|option| option.is_current_workspace),
-        browser_view.projection.filtered_session_count,
+        browser_page.projection.filtered_session_count,
     )
 }
 
-fn build_session_empty_hint_line(browser_view: &SessionBrowserView<'_>) -> String {
-    if browser_view.projection.filtered_session_count == 0 {
+fn build_session_empty_hint_line(browser_page: &SessionBrowserPage<'_>) -> String {
+    if browser_page.projection.filtered_session_count == 0 {
         "Press c to clear the browser, Tab/BackTab to cycle filters, or r to reload.".to_string()
     } else {
         "Use Up/Down or Home/End to pick another session, or reload with r.".to_string()

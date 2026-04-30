@@ -130,7 +130,7 @@ impl SessionBrowserProjection {
     }
 }
 
-pub struct SessionBrowserView<'a> {
+pub struct SessionBrowserPage<'a> {
     pub projection: SessionBrowserProjection,
     pub visible_sessions: Vec<&'a SessionSummary>,
     pub selected_index: Option<usize>,
@@ -142,7 +142,7 @@ pub struct SessionBrowserSelection {
     pub session_id: Option<String>,
 }
 
-impl<'a> SessionBrowserView<'a> {
+impl<'a> SessionBrowserPage<'a> {
     pub fn selected_session(&self) -> Option<&'a SessionSummary> {
         self.selected_index
             .and_then(|selected_index| self.visible_sessions.get(selected_index).copied())
@@ -281,13 +281,13 @@ pub fn project_recent_sessions(
     }
 }
 
-pub fn build_session_browser_view<'a>(
+pub fn build_session_browser_page<'a>(
     recent_sessions: &'a RecentSessions,
     browser_state: &SessionBrowserState,
     current_workspace_directory: Option<&str>,
     selected_session_id: Option<&str>,
     selected_session_index: usize,
-) -> SessionBrowserView<'a> {
+) -> SessionBrowserPage<'a> {
     let projection =
         project_recent_sessions(recent_sessions, browser_state, current_workspace_directory);
     let visible_sessions = projection
@@ -301,7 +301,7 @@ pub fn build_session_browser_view<'a>(
         selected_session_index,
     );
 
-    SessionBrowserView {
+    SessionBrowserPage {
         projection,
         visible_sessions,
         selected_index,
@@ -785,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_view_clamps_selection_to_visible_page() {
+    fn browser_page_clamps_selection_to_visible_page() {
         let recent_sessions = RecentSessions {
             items: vec![
                 sample_session("thread-1", "/tmp/root-a", "alpha"),
@@ -802,12 +802,12 @@ mod tests {
             project_filter: SessionProjectFilter::AllProjects,
         };
 
-        let browser_view =
-            build_session_browser_view(&recent_sessions, &browser_state, None, None, 5);
+        let browser_page =
+            build_session_browser_page(&recent_sessions, &browser_state, None, None, 5);
 
-        assert_eq!(browser_view.selected_index, Some(0));
+        assert_eq!(browser_page.selected_index, Some(0));
         assert_eq!(
-            browser_view
+            browser_page
                 .selected_session()
                 .map(|session| session.id.as_str()),
             Some("thread-3")
@@ -815,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_view_preserves_selected_session_by_id_after_filtering() {
+    fn browser_page_preserves_selected_session_by_id_after_filtering() {
         let recent_sessions = RecentSessions {
             items: vec![
                 sample_session("thread-1", "/tmp/root-a", "alpha"),
@@ -832,12 +832,12 @@ mod tests {
             project_filter: SessionProjectFilter::AllProjects,
         };
 
-        let browser_view =
-            build_session_browser_view(&recent_sessions, &browser_state, None, Some("thread-3"), 1);
+        let browser_page =
+            build_session_browser_page(&recent_sessions, &browser_state, None, Some("thread-3"), 1);
 
-        assert_eq!(browser_view.selected_index, Some(0));
+        assert_eq!(browser_page.selected_index, Some(0));
         assert_eq!(
-            browser_view
+            browser_page
                 .selected_session()
                 .map(|session| session.id.as_str()),
             Some("thread-3")
@@ -845,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_view_selection_after_delta_clamps_and_preserves_session_id() {
+    fn browser_page_selection_after_delta_clamps_and_preserves_session_id() {
         let recent_sessions = RecentSessions {
             items: vec![
                 sample_session("thread-1", "/tmp/root-a", "alpha"),
@@ -856,10 +856,10 @@ mod tests {
             next_cursor: None,
         };
         let browser_state = SessionBrowserState::default();
-        let browser_view =
-            build_session_browser_view(&recent_sessions, &browser_state, None, Some("thread-2"), 0);
+        let browser_page =
+            build_session_browser_page(&recent_sessions, &browser_state, None, Some("thread-2"), 0);
 
-        let selection = browser_view.selection_after_delta(5);
+        let selection = browser_page.selection_after_delta(5);
 
         assert_eq!(
             selection,
@@ -871,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_view_last_selection_returns_last_visible_session() {
+    fn browser_page_last_selection_returns_last_visible_session() {
         let recent_sessions = RecentSessions {
             items: vec![
                 sample_session("thread-1", "/tmp/root-a", "alpha"),
@@ -882,10 +882,10 @@ mod tests {
             next_cursor: None,
         };
         let browser_state = SessionBrowserState::default();
-        let browser_view =
-            build_session_browser_view(&recent_sessions, &browser_state, None, None, 0);
+        let browser_page =
+            build_session_browser_page(&recent_sessions, &browser_state, None, None, 0);
 
-        let selection = browser_view.last_selection();
+        let selection = browser_page.last_selection();
 
         assert_eq!(
             selection,
