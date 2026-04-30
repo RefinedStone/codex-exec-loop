@@ -16,15 +16,15 @@ use crate::domain::parallel_mode::{
 
 use super::supervisor::selected_runtime_session_detail;
 use super::{
-    AKRA_BRANCH, DEFAULT_PUSH_REMOTE_NAME, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
-    branch_exists, branch_is_integrated_into_akra, cleanup_slot, command_succeeds,
-    current_branch_name, current_timestamp, ensure_directory_exists, inspect_slot_git_status,
-    lease_session_key, load_pool_runtime_context, record_cleaned_session_detail,
-    record_cleanup_pending_session_detail, record_distributor_failed_session_detail,
-    record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_pr_pending_session_detail,
-    record_pushing_session_detail, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    run_command, short_sha, write_slot_lease,
+    DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH, PoolRuntimeContext,
+    WorkspaceSlotLeaseResolution, branch_exists, branch_is_integrated_into, cleanup_slot,
+    command_succeeds, current_branch_name, current_timestamp, ensure_directory_exists,
+    inspect_slot_git_status, lease_session_key, load_pool_runtime_context,
+    record_cleaned_session_detail, record_cleanup_pending_session_detail,
+    record_distributor_failed_session_detail, record_integrating_session_detail,
+    record_merge_pending_session_detail, record_merge_queued_session_detail,
+    record_pr_pending_session_detail, record_pushing_session_detail, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, run_command, short_sha, write_slot_lease,
 };
 
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
@@ -266,6 +266,23 @@ impl ParallelModeDistributorService {
 
         for index in 0..context.distributor_queue_records.len() {
             let mut record = context.distributor_queue_records[index].clone();
+            let matching_lease = matching_lease_for_queue_record(&context, &record).cloned();
+            recover_mismatched_slot_worktree(
+                self.planning_authority.as_ref(),
+                &context.repo_root,
+                &context.pool_root,
+                matching_lease.as_ref(),
+                &mut record,
+            )?;
+            recover_retryable_blocked_queue_record(
+                self.planning_authority.as_ref(),
+                &context.repo_root,
+                &context.pool_root,
+                matching_lease.as_ref(),
+                &mut record,
+            )?;
+            context.distributor_queue_records[index] = record.clone();
+
             if matches!(
                 record.queue_state,
                 ParallelModeQueueItemState::Idle
@@ -276,7 +293,6 @@ impl ParallelModeDistributorService {
                 continue;
             }
 
-            let matching_lease = matching_lease_for_queue_record(&context, &record).cloned();
             if !Path::new(&record.worktree_path).exists() {
                 let _ = block_distributor_queue_record(
                     self.planning_authority.as_ref(),
@@ -291,7 +307,11 @@ impl ParallelModeDistributorService {
                 continue;
             }
 
-            if branch_is_integrated_into_akra(&context.repo_root, &record.branch_name) {
+            if branch_is_integrated_into(
+                &context.repo_root,
+                &record.branch_name,
+                DISTRIBUTOR_INTEGRATION_BRANCH,
+            ) {
                 recover_integrated_queue_record(
                     self.planning_authority.as_ref(),
                     &context,
@@ -352,6 +372,110 @@ impl ParallelModeDistributorService {
     }
 }
 
+fn recover_mismatched_slot_worktree(
+    planning_authority: &dyn PlanningAuthorityPort,
+    repo_root: &str,
+    pool_root: &Path,
+    matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+    record: &mut ParallelModeDistributorQueueRecord,
+) -> Result<(), String> {
+    let Some(lease) = matching_lease else {
+        return Ok(());
+    };
+    if record.queue_state != ParallelModeQueueItemState::Blocked {
+        return Ok(());
+    }
+    if record.branch_name != lease.branch_name || record.worktree_path != lease.worktree_path {
+        return Ok(());
+    }
+    if !Path::new(&record.worktree_path).exists() {
+        return Ok(());
+    }
+    if !branch_exists(repo_root, &lease.branch_name) {
+        return Ok(());
+    }
+    if current_branch_name(Path::new(&record.worktree_path)).as_deref()
+        == Some(lease.branch_name.as_str())
+    {
+        return Ok(());
+    }
+    let Some(slot_status) = inspect_slot_git_status(Path::new(&record.worktree_path)) else {
+        return Ok(());
+    };
+    if !slot_status.is_clean_baseline() {
+        return Ok(());
+    }
+    if !command_succeeds(
+        "git",
+        [
+            "-C",
+            record.worktree_path.as_str(),
+            "checkout",
+            lease.branch_name.as_str(),
+        ],
+    ) {
+        return Ok(());
+    }
+
+    record.queue_state = ParallelModeQueueItemState::Queued;
+    record.integration_state = "queued".to_string();
+    record.recovery_note =
+        Some("recovered mismatched clean slot worktree checkout before retry".to_string());
+    record.integration_note =
+        "recovered clean slot worktree checkout and queued distributor retry".to_string();
+    record.updated_at = current_timestamp();
+    write_distributor_queue_record(planning_authority, repo_root, pool_root, record)?;
+    Ok(())
+}
+
+fn recover_retryable_blocked_queue_record(
+    planning_authority: &dyn PlanningAuthorityPort,
+    repo_root: &str,
+    pool_root: &Path,
+    matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+    record: &mut ParallelModeDistributorQueueRecord,
+) -> Result<(), String> {
+    let Some(lease) = matching_lease else {
+        return Ok(());
+    };
+    if record.queue_state != ParallelModeQueueItemState::Blocked {
+        return Ok(());
+    }
+    if !is_retryable_distributor_block(&record.integration_note) {
+        return Ok(());
+    }
+    if record.branch_name != lease.branch_name || record.worktree_path != lease.worktree_path {
+        return Ok(());
+    }
+    if current_branch_name(Path::new(&record.worktree_path)).as_deref()
+        != Some(lease.branch_name.as_str())
+    {
+        return Ok(());
+    }
+    let Some(slot_status) = inspect_slot_git_status(Path::new(&record.worktree_path)) else {
+        return Ok(());
+    };
+    if slot_status.has_pending_operation {
+        return Ok(());
+    }
+
+    record.queue_state = ParallelModeQueueItemState::Queued;
+    record.integration_state = "queued".to_string();
+    record.recovery_note = Some("recovered retryable distributor block before retry".to_string());
+    record.integration_note = "recovered retryable distributor block and queued retry".to_string();
+    record.updated_at = current_timestamp();
+    write_distributor_queue_record(planning_authority, repo_root, pool_root, record)?;
+    Ok(())
+}
+
+fn is_retryable_distributor_block(detail: &str) -> bool {
+    detail.contains("pull request ensure failed")
+        || detail.contains("could not be inspected")
+        || detail.contains("could not cherry-pick")
+        || detail.contains("integration worktree must be clean before cherry-pick delivery")
+        || detail.contains("source branch was pushed but GitHub automation is unavailable")
+}
+
 fn matching_lease_for_queue_record<'a>(
     context: &'a PoolRuntimeContext,
     record: &ParallelModeDistributorQueueRecord,
@@ -394,7 +518,9 @@ fn recover_integrated_queue_record(
     } else if !branch_exists(&context.repo_root, &record.branch_name) {
         record.queue_state = ParallelModeQueueItemState::Done;
         record.integration_note =
-            "recovered after restart: branch is already integrated into akra and slot cleanup completed"
+            format!(
+                "recovered after restart: branch is already integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} and slot cleanup completed"
+            )
                 .to_string();
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
@@ -407,9 +533,9 @@ fn recover_integrated_queue_record(
     }
 
     record.queue_state = ParallelModeQueueItemState::Cleaning;
-    record.integration_note =
-        "recovered after restart: branch is already integrated into akra and cleanup is pending"
-            .to_string();
+    record.integration_note = format!(
+        "recovered after restart: branch is already integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} and cleanup is pending"
+    );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
@@ -552,15 +678,17 @@ fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> Strin
     let Some(branch_name) = current_branch_name(repo_root) else {
         return "unknown: branch could not be inspected".to_string();
     };
-    if branch_name != AKRA_BRANCH {
-        return format!("blocked: expected `{AKRA_BRANCH}` but checked out `{branch_name}`");
+    if branch_name != DISTRIBUTOR_INTEGRATION_BRANCH {
+        return format!(
+            "blocked: expected `{DISTRIBUTOR_INTEGRATION_BRANCH}` but checked out `{branch_name}`"
+        );
     }
 
     let Some(status) = inspect_slot_git_status(repo_root) else {
         return "unknown: git status could not be inspected".to_string();
     };
-    if status.is_clean_baseline() {
-        "ready: akra worktree clean".to_string()
+    if status.is_ready_for_integration() {
+        format!("ready: {DISTRIBUTOR_INTEGRATION_BRANCH} worktree clean")
     } else {
         format!("blocked: {}", status.detail_label())
     }
@@ -622,7 +750,7 @@ fn rebase_provenance_label(record: &ParallelModeDistributorQueueRecord) -> Optio
         .unwrap_or(record.commit_sha.as_str());
     (original_commit_sha != record.commit_sha).then(|| {
         format!(
-            "rebased {} -> {} onto `{AKRA_BRANCH}`",
+            "rebased {} -> {} onto `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
             short_sha(original_commit_sha),
             short_sha(&record.commit_sha)
         )
@@ -683,8 +811,9 @@ fn build_distributor_completion_feed(
         ),
         ParallelModeCompletionFeedEntry::new(
             "merged",
-            latest_history_summary_across_records(history, &["merged", "cleaned"])
-                .unwrap_or_else(|| "nothing has been integrated into akra yet".to_string()),
+            latest_history_summary_across_records(history, &["merged", "cleaned"]).unwrap_or_else(
+                || format!("nothing has been integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} yet"),
+            ),
         ),
     ]
 }
@@ -724,7 +853,7 @@ fn build_placeholder_distributor_snapshot(
             ),
             ParallelModeCompletionFeedEntry::new(
                 "merged",
-                "nothing has been integrated into akra yet",
+                format!("nothing has been integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} yet"),
             ),
         ],
         head_summary,
@@ -1063,7 +1192,7 @@ fn distributor_ensure_pull_request(
 
     let pull_request = match github_automation.ensure_pull_request(
         &repo_root,
-        AKRA_BRANCH,
+        DISTRIBUTOR_INTEGRATION_BRANCH,
         &record.branch_name,
         &build_distributor_pull_request_title(record),
         &build_distributor_pull_request_body(record),
@@ -1178,7 +1307,7 @@ fn distributor_check_pull_request_merge_readiness(
             format!("pull request #{} is still a draft", pull_request.number),
         );
     }
-    if pull_request.base_branch != AKRA_BRANCH {
+    if pull_request.base_branch != DISTRIBUTOR_INTEGRATION_BRANCH {
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
@@ -1186,7 +1315,7 @@ fn distributor_check_pull_request_merge_readiness(
             Some(&resolution.lease),
             record,
             format!(
-                "pull request #{} targets `{}` instead of `{AKRA_BRANCH}`",
+                "pull request #{} targets `{}` instead of `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
                 pull_request.number, pull_request.base_branch
             ),
         );
@@ -1206,7 +1335,7 @@ fn distributor_check_pull_request_merge_readiness(
     }
 
     record.integration_note = format!(
-        "pull request #{} is open and ready for integration into `{AKRA_BRANCH}`",
+        "pull request #{} is open and ready for integration into `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
         pull_request.number
     );
     record.updated_at = current_timestamp();
@@ -1289,9 +1418,11 @@ fn distributor_integrate_branch(
     record.queue_state = ParallelModeQueueItemState::Integrating;
     record.integration_note = match record.pull_request_number {
         Some(pr_number) => format!(
-            "pull request #{pr_number} is ready and distributor is integrating the queued branch into akra"
+            "pull request #{pr_number} is ready and distributor is integrating the queued branch into {DISTRIBUTOR_INTEGRATION_BRANCH}"
         ),
-        None => "distributor is integrating the queued branch into akra".to_string(),
+        None => format!(
+            "distributor is integrating the queued branch into {DISTRIBUTOR_INTEGRATION_BRANCH}"
+        ),
     };
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
@@ -1310,8 +1441,12 @@ fn distributor_integrate_branch(
 
     let integration_repo_root = resolution.context.canonical_repo_root.display().to_string();
 
-    if !branch_is_integrated_into_akra(&integration_repo_root, &source_branch) {
-        if let Err(notice) = ensure_akra_integration_worktree_ready(
+    if !branch_is_integrated_into(
+        &integration_repo_root,
+        &source_branch,
+        DISTRIBUTOR_INTEGRATION_BRANCH,
+    ) {
+        if let Err(notice) = ensure_distributor_integration_worktree_ready(
             planning_authority,
             resolution,
             record,
@@ -1320,7 +1455,25 @@ fn distributor_integrate_branch(
             return Ok(notice);
         }
 
-        if !command_succeeds(
+        if commit_patch_equivalent_in_branch(
+            &integration_repo_root,
+            DISTRIBUTOR_INTEGRATION_BRANCH,
+            &source_commit_sha,
+        ) {
+            record.integration_state = "done".to_string();
+            record.integration_note = format!(
+                "commit `{}` from `{}` is already patch-equivalent in `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
+                short_sha(&source_commit_sha),
+                source_branch
+            );
+            record.updated_at = current_timestamp();
+            write_distributor_queue_record(
+                planning_authority,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                record,
+            )?;
+        } else if !command_succeeds(
             "git",
             [
                 "-C",
@@ -1352,7 +1505,7 @@ fn distributor_integrate_branch(
                 Some(&resolution.lease),
                 record,
                 format!(
-                    "commit `{}` from `{}` could not cherry-pick into `{AKRA_BRANCH}` cleanly{}",
+                    "commit `{}` from `{}` could not cherry-pick into `{DISTRIBUTOR_INTEGRATION_BRANCH}` cleanly{}",
                     short_sha(&source_commit_sha),
                     source_branch,
                     format_conflict_file_suffix(&conflict_files),
@@ -1362,7 +1515,7 @@ fn distributor_integrate_branch(
 
         record.integration_state = "done".to_string();
         record.integration_note = format!(
-            "commit `{}` from `{}` cherry-picked into `{AKRA_BRANCH}`",
+            "commit `{}` from `{}` cherry-picked into `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
             short_sha(&source_commit_sha),
             source_branch
         );
@@ -1376,14 +1529,18 @@ fn distributor_integrate_branch(
     }
 
     let repo_root = integration_repo_root;
-    if let Err(error) = github_automation.push_integration_branch(&repo_root, AKRA_BRANCH) {
+    if let Err(error) =
+        github_automation.push_integration_branch(&repo_root, DISTRIBUTOR_INTEGRATION_BRANCH)
+    {
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
             record,
-            format!("`{AKRA_BRANCH}` could not be pushed to `{DEFAULT_PUSH_REMOTE_NAME}`: {error}"),
+            format!(
+                "`{DISTRIBUTOR_INTEGRATION_BRANCH}` could not be pushed to `{DEFAULT_PUSH_REMOTE_NAME}`: {error}"
+            ),
         );
     }
     if let Some(pr_number) = record.pull_request_number {
@@ -1418,9 +1575,9 @@ fn distributor_integrate_branch(
     }
 
     record.queue_state = ParallelModeQueueItemState::Cleaning;
-    record.integration_note =
-        "branch integrated into akra, pushed to origin, and the slot is entering cleanup"
-            .to_string();
+    record.integration_note = format!(
+        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin, and the slot is entering cleanup"
+    );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
@@ -1430,7 +1587,7 @@ fn distributor_integrate_branch(
     )?;
 
     Ok(format!(
-        "distributor integrated queue head into akra / slot: {} / agent: {} / commit: {}",
+        "distributor integrated queue head into {DISTRIBUTOR_INTEGRATION_BRANCH} / slot: {} / agent: {} / commit: {}",
         resolution.lease.slot_id,
         resolution.lease.agent_id,
         short_sha(&record.commit_sha)
@@ -1487,9 +1644,9 @@ fn distributor_cleanup_integrated_slot(
         &resolution.lease,
     );
     record.queue_state = ParallelModeQueueItemState::Done;
-    record.integration_note =
-        "branch integrated into akra, GitHub delivery completed, and the slot returned to idle"
-            .to_string();
+    record.integration_note = format!(
+        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, GitHub delivery completed, and the slot returned to idle"
+    );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
@@ -1504,15 +1661,17 @@ fn distributor_cleanup_integrated_slot(
     ))
 }
 
-fn ensure_akra_integration_worktree_ready(
+fn ensure_distributor_integration_worktree_ready(
     planning_authority: &dyn PlanningAuthorityPort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     integration_repo_root: &str,
 ) -> Result<(), String> {
-    if current_branch_name(Path::new(integration_repo_root)).as_deref() != Some(AKRA_BRANCH) {
+    if current_branch_name(Path::new(integration_repo_root)).as_deref()
+        != Some(DISTRIBUTOR_INTEGRATION_BRANCH)
+    {
         let message = format!(
-            "integration worktree must be checked out to `{AKRA_BRANCH}` before cherry-pick delivery"
+            "integration worktree must be checked out to `{DISTRIBUTOR_INTEGRATION_BRANCH}` before cherry-pick delivery"
         );
         let _ = block_distributor_queue_record(
             planning_authority,
@@ -1537,7 +1696,7 @@ fn ensure_akra_integration_worktree_ready(
         )?;
         return Err(message);
     };
-    if !status.is_clean_baseline() {
+    if !status.is_ready_for_integration() {
         let message = format!(
             "integration worktree must be clean before cherry-pick delivery: {}",
             status.detail_label()
@@ -1554,6 +1713,20 @@ fn ensure_akra_integration_worktree_ready(
     }
 
     Ok(())
+}
+
+fn commit_patch_equivalent_in_branch(repo_root: &str, base_branch: &str, commit_sha: &str) -> bool {
+    let Some(cherry_output) = run_command(
+        "git",
+        ["-C", repo_root, "cherry", base_branch, commit_sha],
+        None,
+    ) else {
+        return false;
+    };
+
+    cherry_output
+        .lines()
+        .any(|line| line.trim_start().starts_with('-'))
 }
 
 fn collect_cherry_pick_conflict_files(repo_root: &str) -> Vec<String> {

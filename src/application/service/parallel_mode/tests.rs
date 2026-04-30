@@ -59,6 +59,7 @@ impl TempGitRepo {
         run_git(&repo_root, &["add", ".gitignore"]);
         run_git(&repo_root, &["commit", "-qm", "init"]);
         run_git(&repo_root, &["branch", "akra"]);
+        run_git(&repo_root, &["branch", "prerelease"]);
 
         Self { root, repo_root }
     }

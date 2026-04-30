@@ -379,16 +379,66 @@ create_pr_with_api() {
 view_pr_with_api() {
   local repo_full_name
   local pr_number
+  local json_fields
 
   repo_full_name="$(parse_repo_full_name)"
   pr_number="${1-}"
+  shift || true
+  json_fields=""
 
   if [[ -z "${pr_number}" ]]; then
     echo "gh-refinedstone: pr view requires a pull request number" >&2
     exit 1
   fi
 
-  api_request GET "/repos/${repo_full_name}/pulls/${pr_number}"
+  while (($# > 0)); do
+    case "$1" in
+      --json)
+        json_fields="${2-}"
+        shift 2
+        ;;
+      *)
+        echo "gh-refinedstone: unsupported pr view option ${1} without gh installed" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  local response_body
+  response_body="$(api_request GET "/repos/${repo_full_name}/pulls/${pr_number}")"
+  if [[ -z "${json_fields}" ]]; then
+    printf '%s\n' "${response_body}"
+    return 0
+  fi
+
+  JSON_BODY="${response_body}" JSON_FIELDS="${json_fields}" python3 -c '
+import json
+import os
+
+item = json.loads(os.environ["JSON_BODY"])
+fields = {field for field in os.environ.get("JSON_FIELDS", "").split(",") if field}
+
+def include(name):
+    return not fields or name in fields
+
+row = {}
+if include("number"):
+    row["number"] = item.get("number")
+if include("url"):
+    row["url"] = item.get("html_url")
+if include("title"):
+    row["title"] = item.get("title")
+if include("state"):
+    row["state"] = item.get("state", "").upper()
+if include("baseRefName"):
+    row["baseRefName"] = (item.get("base") or {}).get("ref")
+if include("headRefName"):
+    row["headRefName"] = (item.get("head") or {}).get("ref")
+if include("isDraft"):
+    row["isDraft"] = bool(item.get("draft"))
+
+print(json.dumps(row))
+'
 }
 
 close_pr_with_api() {

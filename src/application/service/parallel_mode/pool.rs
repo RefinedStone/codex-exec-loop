@@ -42,6 +42,10 @@ impl SlotGitStatus {
         !self.has_staged && !self.has_unstaged && !self.has_untracked && !self.has_pending_operation
     }
 
+    pub(super) fn is_ready_for_integration(self) -> bool {
+        !self.has_staged && !self.has_unstaged && !self.has_pending_operation
+    }
+
     pub(super) fn detail_label(self) -> String {
         let mut details = Vec::new();
         if self.has_staged {
@@ -673,6 +677,14 @@ fn cleanup_reusable_slots(
 }
 
 pub(super) fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {
+    branch_is_integrated_into(repo_root, branch_name, AKRA_BRANCH)
+}
+
+pub(super) fn branch_is_integrated_into(
+    repo_root: &str,
+    branch_name: &str,
+    base_branch: &str,
+) -> bool {
     command_succeeds(
         "git",
         [
@@ -681,7 +693,7 @@ pub(super) fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str)
             "merge-base",
             "--is-ancestor",
             branch_name,
-            AKRA_BRANCH,
+            base_branch,
         ],
     )
 }

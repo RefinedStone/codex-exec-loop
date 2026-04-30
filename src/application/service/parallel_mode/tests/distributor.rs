@@ -53,14 +53,16 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
         .expect("queue item should be created");
     assert_eq!(queued_item.queue_state, ParallelModeQueueItemState::Queued);
 
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    fs::write(repo.repo_root.join("operator-note.tmp"), "local note\n")
+        .expect("untracked integration note should be writable");
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())
         .expect("distributor queue should process");
     assert!(
         notices
             .iter()
-            .any(|notice| notice.contains("distributor integrated queue head into akra"))
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease"))
     );
     assert!(
         notices
@@ -80,7 +82,7 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
     assert!(
         snapshot.distributor.completion_feed[3]
             .summary
-            .contains("akra"),
+            .contains("prerelease"),
         "merge-queued feed should reflect distributor integration: {}",
         snapshot.distributor.completion_feed[3].summary
     );
@@ -119,9 +121,9 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
             .clone(),
         vec![
             format!("push:{}:false", lease.branch_name),
-            format!("ensure-pr:akra:{}", lease.branch_name),
+            format!("ensure-pr:prerelease:{}", lease.branch_name),
             "inspect-pr:77".to_string(),
-            "push-integration:akra".to_string(),
+            "push-integration:prerelease".to_string(),
             "inspect-pr:77".to_string(),
             "close-pr:77".to_string(),
         ]
@@ -135,7 +137,7 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
                 "-C",
                 repo.workspace_dir().as_str(),
                 "show",
-                "akra:feature.txt",
+                "prerelease:feature.txt",
             ],
             None,
         )
@@ -337,6 +339,247 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
             "pushing",
             "failed"
         ]
+    );
+}
+
+#[test]
+fn distributor_retries_blocked_head_after_clean_slot_branch_recovery() {
+    let repo = TempGitRepo::new("distributor-recovers-mismatched-slot-branch");
+    let github = FakeGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-queue-recovery",
+            None,
+            Some("Distributor queue recovery completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: distributor delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should enqueue")
+        .expect("queue item should be created");
+
+    run_git(
+        &slot_path,
+        &[
+            "checkout",
+            "-B",
+            "akra-agent/slot-1/stale-clean-checkout",
+            "akra",
+        ],
+    );
+    let mut record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record.queue_state = ParallelModeQueueItemState::Blocked;
+    record.integration_state = "blocked".to_string();
+    record.integration_note = "slot worktree branch mismatch".to_string();
+    record.recovery_note = Some("slot worktree branch mismatch".to_string());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("blocked queue record should be stored");
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should recover and process");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("distributor integrated queue head into prerelease")
+            || notice.contains("distributor returned slot to idle")
+    }));
+    assert_eq!(current_branch(&slot_path), "HEAD");
+    let recovered_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should remain available");
+    assert_eq!(
+        recovered_record.queue_state,
+        ParallelModeQueueItemState::Done
+    );
+    assert!(
+        recovered_record
+            .recovery_note
+            .as_deref()
+            .is_some_and(|note| note.contains("recovered mismatched clean slot"))
+    );
+}
+
+#[test]
+fn distributor_retries_blocked_pull_request_ensure_after_recovery() {
+    let repo = TempGitRepo::new("distributor-recovers-pr-ensure-block");
+    let github = FakeGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-pr-ensure-recovery",
+            None,
+            Some("Distributor PR recovery completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: distributor delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should enqueue")
+        .expect("queue item should be created");
+
+    let mut record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record.queue_state = ParallelModeQueueItemState::Blocked;
+    record.integration_state = "blocked".to_string();
+    record.integration_note =
+        "pull request ensure failed for `akra-agent/slot-1/task-one`: base invalid".to_string();
+    record.recovery_note = Some(record.integration_note.clone());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("blocked queue record should be stored");
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should recover and process");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("distributor integrated queue head into prerelease")
+            || notice.contains("distributor returned slot to idle")
+    }));
+    let recovered_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should remain available");
+    assert_eq!(
+        recovered_record.queue_state,
+        ParallelModeQueueItemState::Done
+    );
+    assert!(
+        recovered_record
+            .recovery_note
+            .as_deref()
+            .is_some_and(|note| note.contains("retryable distributor block"))
+    );
+}
+
+#[test]
+fn distributor_treats_patch_equivalent_source_commit_as_integrated() {
+    let repo = TempGitRepo::new("distributor-patch-equivalent");
+    let github = FakeGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-patch-equivalent",
+            None,
+            Some("Patch equivalent delivery completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: distributor delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should enqueue")
+        .expect("queue item should be created");
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    fs::write(repo.repo_root.join("feature.txt"), "done\n")
+        .expect("equivalent feature file should be written");
+    run_git(&repo.repo_root, &["add", "feature.txt"]);
+    run_git(&repo.repo_root, &["commit", "-qm", "equivalent work"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("distributor integrated queue head into prerelease")
+            || notice.contains("distributor returned slot to idle")
+    }));
+    let recovered_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should remain available");
+    assert_eq!(
+        recovered_record.queue_state,
+        ParallelModeQueueItemState::Done
+    );
+    assert!(
+        recovered_record
+            .integration_note
+            .contains("slot returned to idle")
     );
 }
 
@@ -566,7 +809,7 @@ fn distributor_queue_keeps_later_item_queued_behind_blocked_head() {
             .distributor
             .orchestrator_status
             .integration_worktree_readiness
-            .contains("akra"),
+            .contains("prerelease"),
         "integration worktree readiness should be surfaced: {}",
         snapshot
             .distributor
@@ -733,7 +976,13 @@ fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_reco
         .into_iter()
         .next()
         .expect("queue record should exist");
-    repo.merge_agent_slot_into_akra(&slot_path);
+    let original_branch = current_branch(&repo.repo_root);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    run_git(
+        &repo.repo_root,
+        &["merge", "--ff-only", lease.branch_name.as_str()],
+    );
+    run_git(&repo.repo_root, &["checkout", original_branch.as_str()]);
     fs::remove_file(repo.slot_lease_path(1)).expect("slot lease mirror should be removed");
     fs::remove_file(repo.session_detail_path(&session_key))
         .expect("session detail mirror should be removed");
@@ -823,21 +1072,24 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
         .expect("queue record should exist");
     let original_commit_sha = original_queue_record.commit_sha;
 
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
     fs::write(repo.repo_root.join("baseline.txt"), "baseline advanced\n")
         .expect("baseline file should be written");
     run_git(&repo.repo_root, &["add", "baseline.txt"]);
-    run_git(&repo.repo_root, &["commit", "-qm", "advance akra baseline"]);
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(
+        &repo.repo_root,
+        &["commit", "-qm", "advance prerelease baseline"],
+    );
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())
         .expect("processing the queue head should succeed");
     assert!(
         notices
             .iter()
-            .any(|notice| notice.contains("distributor integrated queue head into akra")),
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
         "processing should surface the cherry-pick integration outcome: {notices:?}"
     );
 
@@ -867,7 +1119,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         None,
     );
 
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
     fs::write(repo.repo_root.join("conflict.txt"), "base\n")
         .expect("baseline conflict file should be written");
     run_git(&repo.repo_root, &["add", "conflict.txt"]);
@@ -875,7 +1127,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         &repo.repo_root,
         &["commit", "-qm", "seed conflict baseline"],
     );
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
     let lease = service
         .acquire_slot_lease(
@@ -917,15 +1169,15 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
 
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
     fs::write(repo.repo_root.join("conflict.txt"), "baseline change\n")
         .expect("advanced baseline conflict file should be written");
     run_git(&repo.repo_root, &["add", "conflict.txt"]);
     run_git(
         &repo.repo_root,
-        &["commit", "-qm", "advance conflicting akra baseline"],
+        &["commit", "-qm", "advance conflicting prerelease baseline"],
     );
-    run_git(&repo.repo_root, &["checkout", "akra"]);
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())
@@ -933,7 +1185,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
     assert!(
         notices.iter().any(|notice| {
             notice.contains("distributor queue head blocked")
-                && notice.contains("could not cherry-pick into `akra` cleanly")
+                && notice.contains("could not cherry-pick into `prerelease` cleanly")
         }),
         "processing should surface the cherry-pick conflict block: {notices:?}"
     );
@@ -949,7 +1201,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
     assert!(
         queue_record
             .integration_note
-            .contains("could not cherry-pick into `akra` cleanly")
+            .contains("could not cherry-pick into `prerelease` cleanly")
     );
     assert_eq!(queue_record.integration_state, "blocked");
     assert_eq!(queue_record.conflict_files, vec!["conflict.txt"]);
@@ -976,7 +1228,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
             .blocked_reason
             .as_deref()
             .expect("blocked reason should be surfaced")
-            .contains("could not cherry-pick into `akra` cleanly")
+            .contains("could not cherry-pick into `prerelease` cleanly")
     );
     assert_eq!(
         snapshot.distributor.queue_items[0].queue_state,
@@ -988,7 +1240,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
             .head_blocked_detail
             .as_deref()
             .expect("blocked head detail should be surfaced")
-            .contains("could not cherry-pick into `akra` cleanly")
+            .contains("could not cherry-pick into `prerelease` cleanly")
     );
     assert!(
         snapshot.distributor.head_rebase_provenance.is_none(),
@@ -1001,7 +1253,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
             .clone(),
         vec![
             format!("push:{}:false", lease.branch_name),
-            format!("ensure-pr:akra:{}", lease.branch_name),
+            format!("ensure-pr:prerelease:{}", lease.branch_name),
             "inspect-pr:77".to_string(),
         ]
     );

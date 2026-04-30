@@ -31,7 +31,7 @@ use self::distributor::ParallelModeDistributorService;
 use self::git_sequence::{GitCommandStep, run_git_sequence};
 use self::pool::{
     PoolBoardWithContextResult, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
-    branch_is_cleanup_ready, branch_is_integrated_into_akra, build_pool_board, build_pool_slots,
+    branch_is_cleanup_ready, branch_is_integrated_into, build_pool_board, build_pool_slots,
     cleanup_slot, detect_canonical_repo_root, inspect_pool_board_and_context,
     inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
     reconcile_pool_board, reconcile_pool_board_and_context, reset_slot_worktree_to_akra,
@@ -61,6 +61,7 @@ use self::readiness::parse_https_remote;
 #[cfg(test)]
 use self::session_detail::{agent_session_detail_record_path, read_agent_session_detail_record};
 const AKRA_BRANCH: &str = "akra";
+const DISTRIBUTOR_INTEGRATION_BRANCH: &str = "prerelease";
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
@@ -659,14 +660,14 @@ fn inspect_akra_integration_worktree_blocker(
 ) -> Option<String> {
     let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)?;
     let branch_name = current_branch_name(&canonical_repo_root)?;
-    if branch_name != AKRA_BRANCH {
+    if branch_name != DISTRIBUTOR_INTEGRATION_BRANCH {
         return Some(format!(
-            "orchestrator blocked / integration worktree must be checked out to `{AKRA_BRANCH}` but is `{branch_name}`"
+            "orchestrator blocked / integration worktree must be checked out to `{DISTRIBUTOR_INTEGRATION_BRANCH}` but is `{branch_name}`"
         ));
     }
 
     let status = inspect_slot_git_status(&canonical_repo_root)?;
-    if !status.is_clean_baseline() {
+    if !status.is_ready_for_integration() {
         return Some(format!(
             "orchestrator blocked / integration worktree must be clean before queue processing: {}",
             status.detail_label()
