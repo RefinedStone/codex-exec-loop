@@ -19,6 +19,9 @@ are drop-in replacements for `codex app-server`.
 
 - Akra still ships around `codex app-server` for startup, session browsing, and the main
   conversation runtime.
+- The current code already has capability-owned ports and domain truth types for startup probing,
+  interactive turns, optional session catalog state, conversation control support, and terminal
+  attachment profile.
 - Future non-Codex work may expose only terminal or headless CLI behavior instead of a stable
   provider session API.
 - Streaming fidelity, changed-file reporting, failure truth, and recovery vocabulary matter more
@@ -47,6 +50,8 @@ Read the bridge work in this order:
 - The hub, transport matrix, capability note, experiment matrix, assumption map, and seam-priority
   note exist as `21` through `26`.
 - The main interactive runtime has been reset to a single `codex app-server` path.
+- The first capability extraction pass has landed; remaining bridge research should build on the
+  existing Rust seams instead of re-planning them.
 - The remaining implementation gap is no longer a tmux bridge slice.
   It is the planning-worker-only Claude headless runner direction.
 
@@ -54,9 +59,9 @@ Read the bridge work in this order:
 
 | Scope | Status | Reason |
 | --- | --- | --- |
-| research and planning set | feasible now | the baseline docs already cover transport comparison, capability vocabulary, and experiment framing |
+| research and planning set | feasible now | the baseline docs cover transport comparison, capability vocabulary, experiment framing, and the implemented extraction checkpoint |
 | Claude-first headless planning runner | feasible now as the next bounded slice | `PlanningWorkerPort` already exists and currently has a single app-server-backed implementation |
-| managed launch or wrapper semantics | conditionally feasible | they fit a headless worker better than a new interactive runtime, but attachment truth still needs one explicit decision |
+| managed launch or wrapper semantics | conditionally feasible | they fit a headless worker better than a new interactive runtime; attachment truth has vocabulary, but no non-Codex profile is wired yet |
 | main interactive Claude runtime | deferred | changing the primary conversation runtime is a wider product decision than the next planning-worker slice |
 | SSH or tunnel attach | deferred | auth, recovery, and portability costs are not justified by the current scope |
 | proxy or vibeProxy-style mediation | deferred | extra protocol and trust surface are not justified without a concrete local gap |

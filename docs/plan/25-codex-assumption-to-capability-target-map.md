@@ -13,21 +13,36 @@ The prioritized implementation-facing follow-ups derived from this map live in
 
 - This is an audit of current coupling, not a promise that every target becomes a real provider API.
 - One current seam may map to more than one capability target.
-- Capability names should lead future boundary work even when the current Rust type names still say
-  `Codex`.
+- Capability names should lead future boundary work; `CodexAppServerPort` now remains as a
+  compatibility port while application services depend on split capability-owned ports.
 - `SessionCatalog` remains optional even when the current Codex path happens to support it.
+
+## Implementation Checkpoint
+
+The first extraction pass has landed:
+
+- `StartupProbePort`, `InteractiveTurnRuntimePort`, and `SessionCatalogPort` exist as separate
+  application outbound ports.
+- `CodexAppServerPort` still exists, but only as a Codex-shaped compatibility adapter surface that
+  delegates to those capability-owned ports.
+- `TerminalBridgeAttachmentProfile` carries attachment mode and recovery-anchor truth through
+  startup diagnostics and conversation events.
+- `ConversationRuntimeControlTruth` records approval and interrupt support as runtime-native,
+  manual-handoff, or unsupported.
+- `SessionCatalog` now carries explicit `AttachOnly`, `HandleBasedReattach`, and
+  `ProviderBackedCatalog` tiers, including unsupported and partial states.
 
 ## Mapping Table
 
 | Current seam | Current Codex-only assumption | Capability target | Boundary note |
 | --- | --- | --- | --- |
-| `src/application/port/outbound/codex_app_server_port.rs`, `src/application/service/startup_service.rs`, `src/application/service/session_service.rs`, `src/application/service/conversation_service.rs` | one outbound port can cover startup checks, session listing, conversation snapshot loading, new-thread launch, and turn resume through one `codex app-server` model | `StartupProbe`, `InteractiveTurnRuntime`, optional `SessionCatalog` | future seams should split by capability ownership instead of cloning one universal app-server-shaped port |
-| `src/application/service/startup_service.rs`, `src/domain/startup_diagnostics.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/base.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs` | startup readiness means `codex` is on `PATH`, the app-server initialize call succeeded, and account state was read | `StartupProbe` | the probe should generalize to launch-target presence, attach viability, auth posture, and local prerequisites without assuming launch and attach are the same path |
-| `src/application/service/session_service.rs`, `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`, `src/domain/recent_sessions.rs`, `src/domain/session_browser.rs`, `src/domain/session_summary.rs` | recent-session discovery is a baseline feature backed by provider-thread listing and durable thread ids | optional `SessionCatalog` | session discovery should degrade to attach-only or handle-based reattach without making the whole bridge look broken |
-| `src/application/service/conversation_service.rs`, `src/adapter/outbound/app_server/mod.rs` | turn execution always means start or resume a provider thread, start a provider turn, and stream completion from explicit app-server events | `InteractiveTurnRuntime` | the mandatory contract is prompt submission, incremental output, completion summary, and truthful interrupt support; provider thread ids and turn ids are metadata, not the baseline boundary |
-| `src/adapter/outbound/app_server/mod.rs`, `src/adapter/inbound/tui/conversation_text.rs`, `src/adapter/inbound/tui/app/conversation_runtime.rs` | approval is effectively disabled or handed back manually because the app-server protocol does not expose client approve or deny actions, and stop or interrupt behavior is not modeled as an explicit capability | `InteractiveTurnRuntime`, `TerminalBridgeAttachment` | future runtime notes should say whether approval and interrupt are runtime-native, manual handoff, or unsupported instead of silently inheriting Codex behavior |
-| `src/adapter/outbound/app_server/mod.rs`, `src/adapter/outbound/app_server/runtime.rs` | launch, reconnect, and resume are all variations of one app-server connection story, so no separate attachment mode or recovery anchor needs to be surfaced | `TerminalBridgeAttachment` | non-Codex terminal paths need explicit mode and anchor vocabulary such as local wrapper handle, tmux pane id, SSH target, or proxy session id |
-| `src/adapter/inbound/tui/app/shell_presentation/shell_copy.rs`, `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs` | operator copy can name `codex app-server`, `codex shell`, and `codex binary` as if every future path exposes the same substrate | `StartupProbe`, `InteractiveTurnRuntime`, optional `SessionCatalog`, `TerminalBridgeAttachment` | keep Codex-specific wording only where the surface is intentionally Codex-only; otherwise prefer launch target, bridge readiness, session catalog, conversation history, approval handoff, and recovery anchor language |
+| `src/application/port/outbound/codex_app_server_port.rs`, `src/application/port/outbound/startup_probe_port.rs`, `src/application/port/outbound/session_catalog_port.rs`, `src/application/port/outbound/interactive_turn_runtime_port.rs`, `src/application/service/startup_service.rs`, `src/application/service/session_service.rs`, `src/application/service/conversation_service.rs` | the concrete Codex adapter can still satisfy startup checks, session listing, conversation snapshot loading, new-thread launch, and turn resume together | `StartupProbe`, `InteractiveTurnRuntime`, optional `SessionCatalog` | capability-owned ports are now split; remaining work is to keep new services from depending on the compatibility port directly |
+| `src/application/service/startup_service.rs`, `src/domain/startup_diagnostics.rs`, `src/adapter/inbound/tui/app/shell_presentation/capability_copy.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs` | the current shipped startup path still checks `codex` on `PATH`, app-server initialize, account state, and cwd | `StartupProbe` | startup now carries attachment profile truth, but local prerequisites and copy still need to be generalized before non-Codex paths |
+| `src/application/service/session_service.rs`, `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`, `src/domain/recent_sessions.rs`, `src/domain/session_browser.rs`, `src/domain/session_summary.rs` | the Codex path still returns provider-thread listing and durable thread ids when available | optional `SessionCatalog` | session catalog tiering now models attach-only, handle-based, and provider-backed states; remaining work is to feed real non-provider catalog states from future adapters |
+| `src/application/service/conversation_service.rs`, `src/application/port/outbound/interactive_turn_runtime_port.rs`, `src/adapter/outbound/app_server/mod.rs` | the current Codex implementation still starts or resumes a provider thread, starts a provider turn, and streams completion from explicit app-server events | `InteractiveTurnRuntime` | prompt submission, incremental output, completion summary, and control-truth reporting are capability-shaped; provider thread ids and turn ids stay metadata |
+| `src/adapter/outbound/app_server/mod.rs`, `src/adapter/inbound/tui/conversation_text.rs`, `src/adapter/inbound/tui/app/conversation_runtime.rs`, `src/domain/conversation.rs` | app-server approval and interrupt limits are still Codex-specific behavior | `InteractiveTurnRuntime`, `TerminalBridgeAttachment` | approval and interrupt truth are now explicit as runtime-native, manual-handoff, or unsupported; remaining work is deeper operator flow for those states |
+| `src/domain/terminal_bridge_attachment.rs`, `src/adapter/outbound/app_server/mod.rs`, `src/adapter/outbound/app_server/runtime.rs` | the current runtime still uses provider launch and provider reattach profiles backed by app-server threads | `TerminalBridgeAttachment` | mode and recovery-anchor vocabulary exists; future bridge work must add real local, wrapper, remote, or proxy profiles instead of adding more Codex-specific branching |
+| `src/adapter/inbound/tui/app/shell_presentation/capability_copy.rs`, `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs` | some operator copy still names `codex app-server`, `codex shell`, and `codex binary` where the surface is intentionally Codex-only | `StartupProbe`, `InteractiveTurnRuntime`, optional `SessionCatalog`, `TerminalBridgeAttachment` | capability-shaped copy helpers exist; continue moving new wording through them instead of scattering provider names |
 
 ## Capability-Specific Targets
 
@@ -35,8 +50,11 @@ The prioritized implementation-facing follow-ups derived from this map live in
 
 Current Codex-shaped state:
 
-- startup checks are hard-wired to `which codex`, app-server initialize, and account-read success
-- diagnostics fields and shell copy still encode that specific sequence directly
+- `StartupService` depends on `StartupProbePort`
+- the shipped startup checks still include `which codex`, app-server initialize, and account-read
+  success
+- diagnostics now include `TerminalBridgeAttachmentProfile`, while some shell copy still names the
+  Codex path directly
 
 Target:
 
@@ -48,10 +66,10 @@ Target:
 
 Current Codex-shaped state:
 
-- the runtime assumes explicit thread creation or resume, explicit turn ids, and server-driven turn
-  stream events
-- approval review wording is inherited from current app-server protocol limits rather than an
-  explicit capability contract
+- `ConversationService` depends on `InteractiveTurnRuntimePort`
+- the current adapter still assumes explicit thread creation or resume, explicit turn ids, and
+  server-driven turn stream events
+- approval and interrupt support are exposed through `ConversationRuntimeControlTruth`
 
 Target:
 
@@ -63,8 +81,10 @@ Target:
 
 Current Codex-shaped state:
 
-- recent sessions are treated as a normal shell feature instead of one optional capability tier
-- the session overlay reads provider session metadata as if that inventory always exists
+- `SessionService` depends on optional `SessionCatalogPort`
+- `SessionCatalogTier` already names attach-only, handle-based reattach, and provider-backed
+  catalog states
+- the Codex adapter still supplies the provider-backed catalog path
 
 Target:
 
@@ -76,8 +96,9 @@ Target:
 
 Current Codex-shaped state:
 
-- the current adapter hides launch, reconnect, and recovery inside the app-server runtime
-- no explicit attachment-mode label or recovery anchor is carried through the shell model
+- `TerminalBridgeAttachmentProfile` carries mode and recovery anchor through startup and stream
+  events
+- the current adapter only emits Codex provider-launch and provider-reattach profiles
 
 Target:
 

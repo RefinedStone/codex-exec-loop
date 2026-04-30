@@ -1,13 +1,13 @@
 # Terminal Agent Capability Boundary And Session Contract
 
-This document defines the capability seams Akra should target before any non-Codex provider work
-goes beyond research.
+This document defines the capability seams Akra uses to keep non-Codex provider work from assuming
+`codex app-server` behavior.
 
 The point is not to recreate the `codex app-server` model with different names.
 The point is to name the smallest capabilities that different terminal-agent paths can satisfy.
 Use [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md)
-for the current Codex-shaped seam inventory; this document defines the target boundary names, not
-the current implementation map.
+for the current Codex-shaped seam inventory and implementation checkpoint; this document defines
+the boundary contract.
 
 ## Boundary Principles
 
@@ -26,6 +26,15 @@ the current implementation map.
 | `StartupProbe` | yes | binary presence, auth posture, attach viability, required local prerequisites | that launch and attach are the same path |
 | `SessionCatalog` | optional | session discovery, reattach metadata, operator-selectable handles | that every provider exposes queryable sessions |
 | `TerminalBridgeAttachment` | yes for terminal-agent paths | PTY, tmux, wrapper, SSH, or proxy attach and launch semantics | that all attachment shapes expose the same control surface |
+
+Current Rust checkpoint:
+
+- `StartupProbePort`, `InteractiveTurnRuntimePort`, and `SessionCatalogPort` are application
+  outbound ports.
+- `TerminalBridgeAttachmentProfile`, `ConversationRuntimeControlTruth`, and `SessionCatalogTier`
+  are domain types used by the current Codex path.
+- `CodexAppServerPort` remains as a compatibility surface for the current adapter, not as the
+  desired shape for future providers.
 
 ## Capability Contracts
 
@@ -129,10 +138,11 @@ Akra should design for these tiers explicitly instead of claiming a universal se
 
 ## Boundary Outcome For This Cycle
 
-- `InteractiveTurnRuntime` and `StartupProbe` are mandatory research targets.
-- `TerminalBridgeAttachment` is mandatory because transport shape is the heart of the problem.
+- `InteractiveTurnRuntime` and `StartupProbe` now have application-port seams.
+- `TerminalBridgeAttachment` now has domain vocabulary for mode and recovery anchor.
 - `SessionCatalog` remains optional and must not block the local attach path.
-- Any future spike should declare which tier it satisfies before code is written.
+- Any future spike should declare which tier and attachment profile it satisfies before code is
+  written.
 
 ## Related Docs
 

@@ -50,8 +50,13 @@ guidance, and roadmap docs:
 
 ### 2. Freeze Hotspot Split Order
 
-The current debt map already names the right hotspots. The next step is to turn that map into an
-ordered execution rule so refactor work does not thrash.
+The current debt map already names the right hotspots. It is also the checkpoint for work that has
+already moved pure rules out of services: planning queue facts now live in `src/domain/planning`,
+parallel-mode readiness and pool projections live in `src/domain/parallel_mode.rs`, and session
+browser rules live under `src/domain`.
+
+The ordered execution rule now applies to the remaining mixed-responsibility files, not to those
+completed domain-extraction slices.
 
 Current target order:
 
@@ -65,18 +70,21 @@ was skipped.
 
 ### 3. Audit Codex-Only Coupling
 
-Before any external terminal-agent work, record where Codex assumptions are embedded today.
+Before any external terminal-agent work, record where Codex assumptions are embedded today and where
+the first capability seams already exist.
 
 The audit should cover:
 
-- `CodexAppServerPort`
+- `CodexAppServerPort` as a compatibility port behind split capability ports
+- `StartupProbePort`, `InteractiveTurnRuntimePort`, and optional `SessionCatalogPort`
+- `TerminalBridgeAttachmentProfile`, `ConversationRuntimeControlTruth`, and `SessionCatalogTier`
 - app-server spawn and readiness flow
 - session discovery and resume assumptions
 - approval or interrupt semantics that currently assume Codex behavior
 - startup diagnostics that currently read as Codex-specific rather than capability-specific
 
-The target is not a giant `Provider` abstraction. The target is a smaller set of capability notes
-that future implementations can satisfy selectively.
+The target is still not a giant `Provider` abstraction. The target is a smaller set of capability
+notes and implementation seams that future implementations can satisfy selectively.
 The current audit output lives in
 [25-codex-assumption-to-capability-target-map.md](25-codex-assumption-to-capability-target-map.md).
 The prioritized seam order derived from that audit lives in
