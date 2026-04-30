@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +189,23 @@ impl ParallelModeSupervisorState {
             Self::Recover => "recover",
         }
     }
+
+    pub fn derive(
+        mode_enabled: bool,
+        readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+    ) -> Self {
+        if mode_enabled
+            && readiness_snapshot.is_some_and(|snapshot| !snapshot.allows_parallel_mode())
+        {
+            return Self::Recover;
+        }
+
+        if mode_enabled {
+            return Self::Supervise;
+        }
+
+        Self::Prepare
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +316,30 @@ impl ParallelModeSlotLeaseSnapshot {
 
     pub fn owner_label(&self) -> String {
         format!("{} / {}", self.agent_id, self.task_id)
+    }
+
+    pub fn session_key(&self) -> String {
+        format!("{}@{}", self.slot_id, self.leased_at)
+    }
+
+    pub fn runtime_state_override<'a>(
+        &self,
+        detail: &'a ParallelModeAgentSessionDetailSnapshot,
+    ) -> Option<&'a str> {
+        match self.state {
+            ParallelModeSlotLeaseState::Running => match detail.state_label.as_str() {
+                "reported_complete" | "ledger_refreshing" | "commit_ready" | "merge_queued"
+                | "pushing" | "pr_pending" | "merge_pending" | "integrating" | "failed" => {
+                    Some(detail.state_label.as_str())
+                }
+                _ => None,
+            },
+            ParallelModeSlotLeaseState::CleanupPending => match detail.state_label.as_str() {
+                "failed" => Some(detail.state_label.as_str()),
+                _ => None,
+            },
+            ParallelModeSlotLeaseState::Leased => None,
+        }
     }
 }
 
@@ -581,6 +624,137 @@ impl ParallelModeAgentRosterSnapshot {
     pub fn compact_summary(&self) -> String {
         format!("{} active", self.active_count())
     }
+
+    pub fn project_from_leases(
+        leases: &[ParallelModeSlotLeaseSnapshot],
+        details: &[ParallelModeAgentSessionDetailSnapshot],
+        mode_enabled: bool,
+        running_duration_labels: &BTreeMap<String, String>,
+    ) -> Self {
+        let mut active_leases = leases.to_vec();
+        active_leases.sort_by(|left, right| {
+            roster_state_priority(right.state)
+                .cmp(&roster_state_priority(left.state))
+                .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
+                .then_with(|| left.slot_id.cmp(&right.slot_id))
+        });
+
+        let entries = active_leases
+            .iter()
+            .map(|lease| {
+                let detail = details
+                    .iter()
+                    .find(|detail| detail.session_key == lease.session_key());
+                project_agent_roster_entry(lease, detail, running_duration_labels)
+            })
+            .collect::<Vec<_>>();
+        let empty_state = if mode_enabled {
+            "no agent sessions launched in this slice"
+        } else {
+            "parallel mode is off / agent roster is read-only"
+        };
+
+        Self::new(entries, empty_state)
+    }
+}
+
+fn project_agent_roster_entry(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+    running_duration_labels: &BTreeMap<String, String>,
+) -> ParallelModeAgentRosterEntry {
+    ParallelModeAgentRosterEntry::new(
+        lease.agent_id.clone(),
+        lease.task_title.clone(),
+        lease.slot_id.clone(),
+        lease.branch_name.clone(),
+        roster_state_label(lease, detail),
+        roster_duration_label(lease, detail, running_duration_labels),
+        roster_latest_summary(lease, detail),
+    )
+}
+
+fn roster_state_priority(state: ParallelModeSlotLeaseState) -> u8 {
+    match state {
+        ParallelModeSlotLeaseState::Running => 3,
+        ParallelModeSlotLeaseState::Leased => 2,
+        ParallelModeSlotLeaseState::CleanupPending => 1,
+    }
+}
+
+fn roster_recency_key(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
+    lease
+        .running_started_at
+        .as_deref()
+        .unwrap_or(lease.leased_at.as_str())
+}
+
+pub fn roster_state_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> String {
+    if let Some(detail) = detail
+        && let Some(label) = lease.runtime_state_override(detail)
+    {
+        return label.to_string();
+    }
+
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased => "starting".to_string(),
+        ParallelModeSlotLeaseState::Running => "running".to_string(),
+        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
+    }
+}
+
+fn roster_duration_label(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+    running_duration_labels: &BTreeMap<String, String>,
+) -> String {
+    if let Some(detail) = detail {
+        match detail.state_label.as_str() {
+            "reported_complete" => return "reported".to_string(),
+            "ledger_refreshing" => return "refreshing".to_string(),
+            "commit_ready" => return "official".to_string(),
+            "merge_queued" => return "queued".to_string(),
+            "pushing" => return "pushing".to_string(),
+            "pr_pending" => return "pr pending".to_string(),
+            "merge_pending" => return "merge pending".to_string(),
+            "integrating" => return "integrating".to_string(),
+            "failed" => return "blocked".to_string(),
+            _ => {}
+        }
+    }
+
+    match lease.state {
+        ParallelModeSlotLeaseState::Leased => "launch pending".to_string(),
+        ParallelModeSlotLeaseState::Running => running_duration_labels
+            .get(&lease.session_key())
+            .cloned()
+            .unwrap_or_else(|| "active".to_string()),
+        ParallelModeSlotLeaseState::CleanupPending => "complete".to_string(),
+    }
+}
+
+pub fn roster_latest_summary(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> String {
+    detail
+        .map(|detail| detail.latest_summary.trim())
+        .filter(|summary| !summary.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| match lease.state {
+            ParallelModeSlotLeaseState::Leased => {
+                "branch reserved and agent bootstrap in progress".to_string()
+            }
+            ParallelModeSlotLeaseState::Running => {
+                "agent session is active in the leased slot".to_string()
+            }
+            ParallelModeSlotLeaseState::CleanupPending => {
+                "agent session reported completion and slot cleanup is pending".to_string()
+            }
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -753,9 +927,13 @@ impl ParallelModeSupervisorSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
-        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-        ParallelModeReadinessState,
+        ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
+        ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
+        ParallelModeReadinessState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+        ParallelModeSupervisorState,
     };
 
     #[test]
@@ -796,5 +974,135 @@ mod tests {
         ]);
 
         assert_eq!(readiness, ParallelModeReadinessState::Degraded);
+    }
+
+    #[test]
+    fn supervisor_state_recovers_when_enabled_readiness_blocks_parallel_mode() {
+        let readiness = ParallelModeReadinessSnapshot::new(
+            "/repo",
+            ParallelModeReadinessState::Blocked,
+            Vec::new(),
+            None,
+        );
+
+        assert_eq!(
+            ParallelModeSupervisorState::derive(true, Some(&readiness)),
+            ParallelModeSupervisorState::Recover
+        );
+        assert_eq!(
+            ParallelModeSupervisorState::derive(false, Some(&readiness)),
+            ParallelModeSupervisorState::Prepare
+        );
+    }
+
+    #[test]
+    fn roster_projection_sorts_active_leases_and_applies_runtime_detail_overrides() {
+        let running = lease(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            ParallelModeSlotLeaseState::Running,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:05:00Z"),
+        );
+        let leased = lease(
+            "slot-2",
+            "task-2",
+            "Task Two",
+            "agent-2",
+            ParallelModeSlotLeaseState::Leased,
+            "2026-01-01T00:10:00Z",
+            None,
+        );
+        let cleanup = lease(
+            "slot-3",
+            "task-3",
+            "Task Three",
+            "agent-3",
+            ParallelModeSlotLeaseState::CleanupPending,
+            "2026-01-01T00:20:00Z",
+            Some("2026-01-01T00:25:00Z"),
+        );
+        let detail = session_detail(
+            &running,
+            "commit_ready",
+            "official ledger refresh accepted the completion report",
+        );
+        let duration_labels = BTreeMap::from([(running.session_key(), "7m".to_string())]);
+
+        let roster = super::ParallelModeAgentRosterSnapshot::project_from_leases(
+            &[cleanup, leased, running],
+            &[detail],
+            true,
+            &duration_labels,
+        );
+
+        assert_eq!(roster.active_count(), 3);
+        assert_eq!(
+            roster.empty_state,
+            "no agent sessions launched in this slice"
+        );
+        assert_eq!(roster.entries[0].slot_id, "slot-1");
+        assert_eq!(roster.entries[0].state_label, "commit_ready");
+        assert_eq!(roster.entries[0].duration_label, "official");
+        assert_eq!(
+            roster.entries[0].latest_summary,
+            "official ledger refresh accepted the completion report"
+        );
+        assert_eq!(roster.entries[1].slot_id, "slot-2");
+        assert_eq!(roster.entries[1].state_label, "starting");
+        assert_eq!(roster.entries[1].duration_label, "launch pending");
+        assert_eq!(roster.entries[2].slot_id, "slot-3");
+        assert_eq!(roster.entries[2].state_label, "cleanup_pending");
+        assert_eq!(roster.entries[2].duration_label, "complete");
+    }
+
+    fn lease(
+        slot_id: &str,
+        task_id: &str,
+        task_title: &str,
+        agent_id: &str,
+        state: ParallelModeSlotLeaseState,
+        leased_at: &str,
+        running_started_at: Option<&str>,
+    ) -> ParallelModeSlotLeaseSnapshot {
+        ParallelModeSlotLeaseSnapshot::new(
+            slot_id,
+            task_id,
+            task_title,
+            agent_id,
+            format!("akra-agent/{slot_id}/{task_id}"),
+            format!("/repo/.akra-worktrees/{slot_id}"),
+            state,
+            leased_at,
+            running_started_at.map(str::to_string),
+        )
+    }
+
+    fn session_detail(
+        lease: &ParallelModeSlotLeaseSnapshot,
+        state_label: &str,
+        latest_summary: &str,
+    ) -> ParallelModeAgentSessionDetailSnapshot {
+        ParallelModeAgentSessionDetailSnapshot::new(
+            lease.session_key(),
+            lease.agent_id.clone(),
+            lease.task_id.clone(),
+            lease.task_title.clone(),
+            lease.slot_id.clone(),
+            Some("thread-1".to_string()),
+            lease.worktree_path.clone(),
+            lease.branch_name.clone(),
+            lease.leased_at.clone(),
+            state_label,
+            state_label,
+            latest_summary,
+            "cargo test passed",
+            "authority refreshed",
+            None,
+            Vec::new(),
+            "2026-01-01T00:30:00Z",
+        )
     }
 }

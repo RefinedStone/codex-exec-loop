@@ -2,9 +2,9 @@ use super::distributor::load_distributor_queue_records;
 use super::{
     DEFAULT_POOL_SIZE, MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey,
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeService, ParallelModeSupervisorState,
-    agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
-    derive_default_pool_root, detect_canonical_repo_root, lease_session_key, parse_https_remote,
+    ParallelModeReadinessState, ParallelModeService, agent_session_detail_record_path,
+    allocate_agent_branch_name, build_pool_board, derive_default_pool_root,
+    detect_canonical_repo_root, lease_session_key, parse_https_remote,
     read_agent_session_detail_record, reconcile_pool_board, resolve_workspace_slot_lease,
     run_command, sanitize_task_slug, short_branch_slug_hash, short_sha, slot_id,
     slot_lease_file_path,
@@ -18,7 +18,7 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
 use std::fs;
 use std::path::{Path, PathBuf};

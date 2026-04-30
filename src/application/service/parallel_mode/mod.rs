@@ -13,7 +13,6 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModePoolSlotState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseRequest,
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 
@@ -530,21 +529,6 @@ impl ParallelModeService {
 
         Ok(Some(resolution.lease))
     }
-}
-
-fn derive_supervisor_state(
-    mode_enabled: bool,
-    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
-) -> ParallelModeSupervisorState {
-    if mode_enabled && readiness_snapshot.is_some_and(|snapshot| !snapshot.allows_parallel_mode()) {
-        return ParallelModeSupervisorState::Recover;
-    }
-
-    if mode_enabled {
-        return ParallelModeSupervisorState::Supervise;
-    }
-
-    ParallelModeSupervisorState::Prepare
 }
 
 fn default_supervisor_notice(

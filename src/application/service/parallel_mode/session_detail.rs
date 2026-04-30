@@ -20,7 +20,7 @@ pub(super) fn default_authority_refresh_outcome() -> &'static str {
 }
 
 pub(super) fn lease_session_key(lease: &ParallelModeSlotLeaseSnapshot) -> String {
-    format!("{}@{}", lease.slot_id, lease.leased_at)
+    lease.session_key()
 }
 
 pub(super) fn build_assigned_session_detail(

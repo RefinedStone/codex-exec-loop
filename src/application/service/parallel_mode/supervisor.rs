@@ -1,16 +1,18 @@
+use std::collections::BTreeMap;
+
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
-    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState, roster_latest_summary,
 };
 
 use super::distributor::{ParallelModeDistributorQueueRecord, ParallelModeDistributorService};
 use super::{
     PoolBoardWithContextResult, PoolRuntimeContext, build_assigned_session_detail,
     build_pool_board, default_authority_refresh_outcome, default_supervisor_notice,
-    default_validation_summary, derive_supervisor_state, format_elapsed_label_from_timestamp,
+    default_validation_summary, format_elapsed_label_from_timestamp,
     inspect_pool_board_and_context, lease_session_key, pool_operator_recovery_notice,
     reconcile_pool_board_and_context,
 };
@@ -31,7 +33,7 @@ impl ParallelModeSupervisorService {
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
         distributor_service: &ParallelModeDistributorService,
     ) -> ParallelModeSupervisorSnapshot {
-        let state = derive_supervisor_state(mode_enabled, readiness_snapshot);
+        let state = ParallelModeSupervisorState::derive(mode_enabled, readiness_snapshot);
         let workspace_path = readiness_snapshot
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
@@ -67,7 +69,7 @@ impl ParallelModeSupervisorService {
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
         distributor_service: &ParallelModeDistributorService,
     ) -> ParallelModeSupervisorSnapshot {
-        let state = derive_supervisor_state(mode_enabled, readiness_snapshot);
+        let state = ParallelModeSupervisorState::derive(mode_enabled, readiness_snapshot);
         let workspace_path = readiness_snapshot
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
@@ -163,121 +165,27 @@ fn build_agent_roster_from_context(
     context: &PoolRuntimeContext,
     mode_enabled: bool,
 ) -> ParallelModeAgentRosterSnapshot {
-    let history = context.session_details.clone();
-    let leases = sorted_active_leases(context);
-
-    let entries = leases
-        .iter()
-        .map(|lease| {
-            let detail = session_detail_for_lease(history.as_slice(), lease);
-            build_agent_roster_entry(lease, detail.as_ref())
-        })
-        .collect::<Vec<_>>();
-    let empty_state = if mode_enabled {
-        "no agent sessions launched in this slice"
-    } else {
-        "parallel mode is off / agent roster is read-only"
-    };
-
-    ParallelModeAgentRosterSnapshot::new(entries, empty_state)
-}
-
-fn build_agent_roster_entry(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
-) -> ParallelModeAgentRosterEntry {
-    ParallelModeAgentRosterEntry::new(
-        lease.agent_id.clone(),
-        lease.task_title.clone(),
-        lease.slot_id.clone(),
-        lease.branch_name.clone(),
-        roster_state_label(lease, detail),
-        roster_duration_label(lease, detail),
-        roster_latest_summary(lease, detail),
+    let leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
+    ParallelModeAgentRosterSnapshot::project_from_leases(
+        &leases,
+        &context.session_details,
+        mode_enabled,
+        &running_duration_labels(&leases),
     )
 }
 
-fn roster_state_priority(state: ParallelModeSlotLeaseState) -> u8 {
-    match state {
-        ParallelModeSlotLeaseState::Running => 3,
-        ParallelModeSlotLeaseState::Leased => 2,
-        ParallelModeSlotLeaseState::CleanupPending => 1,
-    }
-}
-
-fn roster_recency_key(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
-    lease
-        .running_started_at
-        .as_deref()
-        .unwrap_or(lease.leased_at.as_str())
-}
-
-fn roster_state_label(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
-) -> String {
-    if let Some(detail) = detail
-        && let Some(label) = active_runtime_state_override(lease, detail)
-    {
-        return label.to_string();
-    }
-
-    match lease.state {
-        ParallelModeSlotLeaseState::Leased => "starting".to_string(),
-        ParallelModeSlotLeaseState::Running => "running".to_string(),
-        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
-    }
-}
-
-fn roster_duration_label(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
-) -> String {
-    if let Some(detail) = detail {
-        match detail.state_label.as_str() {
-            "reported_complete" => return "reported".to_string(),
-            "ledger_refreshing" => return "refreshing".to_string(),
-            "commit_ready" => return "official".to_string(),
-            "merge_queued" => return "queued".to_string(),
-            "pushing" => return "pushing".to_string(),
-            "pr_pending" => return "pr pending".to_string(),
-            "merge_pending" => return "merge pending".to_string(),
-            "integrating" => return "integrating".to_string(),
-            "failed" => return "blocked".to_string(),
-            _ => {}
-        }
-    }
-
-    match lease.state {
-        ParallelModeSlotLeaseState::Leased => "launch pending".to_string(),
-        ParallelModeSlotLeaseState::Running => lease
-            .running_started_at
-            .as_deref()
-            .and_then(format_elapsed_label_from_timestamp)
-            .unwrap_or_else(|| "active".to_string()),
-        ParallelModeSlotLeaseState::CleanupPending => "complete".to_string(),
-    }
-}
-
-fn roster_latest_summary(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
-) -> String {
-    detail
-        .map(|detail| detail.latest_summary.trim())
-        .filter(|summary| !summary.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| match lease.state {
-            ParallelModeSlotLeaseState::Leased => {
-                "branch reserved and agent bootstrap in progress".to_string()
-            }
-            ParallelModeSlotLeaseState::Running => {
-                "agent session is active in the leased slot".to_string()
-            }
-            ParallelModeSlotLeaseState::CleanupPending => {
-                "agent session reported completion and slot cleanup is pending".to_string()
-            }
+fn running_duration_labels(leases: &[ParallelModeSlotLeaseSnapshot]) -> BTreeMap<String, String> {
+    leases
+        .iter()
+        .filter(|lease| lease.state == ParallelModeSlotLeaseState::Running)
+        .filter_map(|lease| {
+            let label = lease
+                .running_started_at
+                .as_deref()
+                .and_then(format_elapsed_label_from_timestamp)?;
+            Some((lease_session_key(lease), label))
         })
+        .collect()
 }
 
 fn build_supervisor_detail(
@@ -350,7 +258,7 @@ fn live_detail_state_label(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: &ParallelModeAgentSessionDetailSnapshot,
 ) -> String {
-    if let Some(label) = active_runtime_state_override(lease, detail) {
+    if let Some(label) = lease.runtime_state_override(detail) {
         return label.to_string();
     }
 
@@ -367,31 +275,11 @@ fn live_detail_state_label(
     }
 }
 
-fn active_runtime_state_override<'a>(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    detail: &'a ParallelModeAgentSessionDetailSnapshot,
-) -> Option<&'a str> {
-    match lease.state {
-        ParallelModeSlotLeaseState::Running => match detail.state_label.as_str() {
-            "reported_complete" | "ledger_refreshing" | "commit_ready" | "merge_queued"
-            | "pushing" | "pr_pending" | "merge_pending" | "integrating" | "failed" => {
-                Some(detail.state_label.as_str())
-            }
-            _ => None,
-        },
-        ParallelModeSlotLeaseState::CleanupPending => match detail.state_label.as_str() {
-            "failed" => Some(detail.state_label.as_str()),
-            _ => None,
-        },
-        ParallelModeSlotLeaseState::Leased => None,
-    }
-}
-
 fn live_completion_state_label(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: &ParallelModeAgentSessionDetailSnapshot,
 ) -> String {
-    if active_runtime_state_override(lease, detail).is_some() {
+    if lease.runtime_state_override(detail).is_some() {
         return detail.completion_state_label.clone();
     }
 
@@ -448,12 +336,26 @@ pub(super) fn selected_runtime_session_detail(
 fn sorted_active_leases(context: &PoolRuntimeContext) -> Vec<ParallelModeSlotLeaseSnapshot> {
     let mut leases = context.slot_leases.values().cloned().collect::<Vec<_>>();
     leases.sort_by(|left, right| {
-        roster_state_priority(right.state)
-            .cmp(&roster_state_priority(left.state))
-            .then_with(|| roster_recency_key(right).cmp(roster_recency_key(left)))
+        slot_lease_selection_priority(right)
+            .cmp(&slot_lease_selection_priority(left))
             .then_with(|| left.slot_id.cmp(&right.slot_id))
     });
     leases
+}
+
+fn slot_lease_selection_priority(lease: &ParallelModeSlotLeaseSnapshot) -> (u8, &str) {
+    let state_priority = match lease.state {
+        ParallelModeSlotLeaseState::Running => 3,
+        ParallelModeSlotLeaseState::Leased => 2,
+        ParallelModeSlotLeaseState::CleanupPending => 1,
+    };
+    (
+        state_priority,
+        lease
+            .running_started_at
+            .as_deref()
+            .unwrap_or(lease.leased_at.as_str()),
+    )
 }
 
 fn session_detail_for_lease(
