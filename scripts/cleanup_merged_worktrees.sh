@@ -81,6 +81,11 @@ branch_is_targeted() {
   return 1
 }
 
+branch_is_parallel_agent_slot() {
+  local candidate="$1"
+  [[ "${candidate}" == akra-agent/slot-*/* ]]
+}
+
 worktree_is_clean() {
   local path="$1"
   if [[ ! -d "${path}" ]]; then
@@ -259,6 +264,12 @@ process_entry() {
 
   if branch_is_kept "${branch_name}"; then
     report_cleanup "skip" "kept branch" "${path}" "${branch_name}"
+    skipped_count=$((skipped_count + 1))
+    return 0
+  fi
+
+  if branch_is_parallel_agent_slot "${branch_name}"; then
+    report_cleanup "skip" "parallel agent slot is managed by runtime cleanup" "${path}" "${branch_name}"
     skipped_count=$((skipped_count + 1))
     return 0
   fi
