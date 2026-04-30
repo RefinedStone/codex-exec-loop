@@ -51,12 +51,6 @@ impl NativeTuiApp {
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
                 "auto follow-up paused because startup diagnostics need attention".to_string()
             }
-            (PromptOrigin::ParallelDispatch(_), ShellActionAvailability::Pending) => {
-                "parallel dispatch paused while startup checks are still running".to_string()
-            }
-            (PromptOrigin::ParallelDispatch(_), ShellActionAvailability::Blocked) => {
-                "parallel dispatch blocked because startup diagnostics need attention".to_string()
-            }
         }
     }
 

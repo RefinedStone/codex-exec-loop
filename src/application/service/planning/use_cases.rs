@@ -33,6 +33,7 @@ use super::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
     PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService, PlanningWorkerRunOutcome,
 };
+use crate::domain::planning::PriorityQueueTask;
 
 #[derive(Clone)]
 pub struct PlanningWorkspaceUseCases {
@@ -202,6 +203,10 @@ impl PlanningRuntimeUseCases {
     ) -> Option<PlanningMainSessionHandoff> {
         self.runtime_facade
             .build_builtin_next_task_handoff(snapshot)
+    }
+
+    pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
+        self.runtime_facade.build_task_handoff(task)
     }
 
     pub fn decide_auto_followup(

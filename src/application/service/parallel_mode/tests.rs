@@ -14,12 +14,14 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDistributorQueueRecord;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
+use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

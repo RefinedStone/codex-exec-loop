@@ -28,6 +28,7 @@ use self::runtime::{
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, emit_codex_app_server_launch_attachment,
     emit_codex_app_server_reattach_attachment,
@@ -557,6 +558,43 @@ impl PlanningThreadLauncher for CodexAppServerAdapter {
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         self.run_hidden_planning_thread_stream(workspace_directory, prompt, event_sender)
+    }
+}
+
+impl ParallelAgentWorkerPort for CodexAppServerAdapter {
+    fn run_isolated_new_thread_stream(
+        &self,
+        cwd: &str,
+        prompt: &str,
+        event_sender: Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        let result = self.with_isolated_streaming_runtime(|connection| {
+            let thread_response = connection.start_thread(ThreadStartParams {
+                cwd: Some(cwd.to_string()),
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox: Some(self.execution_policy.sandbox_mode),
+                model: None,
+            })?;
+            let thread_id = thread_response.thread.id.clone();
+            emit_codex_app_server_launch_attachment(&event_sender);
+            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
+                thread_id: thread_id.clone(),
+                title: thread_title(&thread_response.thread),
+                cwd: thread_response.thread.cwd.clone(),
+            });
+
+            self.start_turn_and_wait_for_stream(
+                connection,
+                &thread_id,
+                vec![TurnInputItem::text(prompt)],
+                None,
+                None,
+                &event_sender,
+            )
+        });
+
+        finish_stream_result(result, &event_sender)
     }
 }
 

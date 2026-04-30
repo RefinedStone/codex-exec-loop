@@ -110,9 +110,6 @@ pub(super) fn reduce_conversation_runtime(
                         context.handoff_task.as_ref(),
                     );
                 }
-                PromptOrigin::ParallelDispatch(context) => {
-                    state.record_parallel_dispatch_submission(&context.handoff_task);
-                }
             }
             let auto_follow_progress = format!(
                 "{}/{}",
@@ -136,13 +133,6 @@ pub(super) fn reduce_conversation_runtime(
                     }
                     message
                 }
-                PromptOrigin::ParallelDispatch(context) => ConversationMessage::new(
-                    ConversationMessageKind::User,
-                    context.transcript_text.clone(),
-                    None,
-                    None,
-                )
-                .with_display_label("Parallel Dispatch"),
                 _ => ConversationMessage::new(
                     ConversationMessageKind::User,
                     transcript_text,
@@ -160,10 +150,6 @@ pub(super) fn reduce_conversation_runtime(
                 PromptOrigin::AutoFollow(context) => format!(
                     "auto follow-up submitted / turn {auto_follow_progress} / mode: {}",
                     context.mode_label
-                ),
-                PromptOrigin::ParallelDispatch(context) => format!(
-                    "parallel dispatch submitted / turn {auto_follow_progress} / task: {}",
-                    context.handoff_task.task_title
                 ),
             };
             effects.push(ConversationRuntimeEffect::StartStream {

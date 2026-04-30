@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
@@ -49,6 +51,7 @@ impl NativeTuiApp {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
+        parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
         parallel_mode_service: ParallelModeService,
         planning: PlanningServices,
     ) -> Self {
@@ -88,6 +91,7 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
+            parallel_agent_worker_port,
             turn_control_truth,
             parallel_mode_service,
             planning,

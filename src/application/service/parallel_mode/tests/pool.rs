@@ -1,11 +1,121 @@
 use super::*;
 
+fn planning_snapshot_with_active_tasks(task_ids: &[&str]) -> PlanningRuntimeSnapshot {
+    let active_tasks = task_ids
+        .iter()
+        .enumerate()
+        .map(|(index, task_id)| queue_task(index + 1, task_id))
+        .collect::<Vec<_>>();
+    let queue_projection = PriorityQueueProjection {
+        next_task: active_tasks.first().cloned(),
+        active_tasks,
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    PlanningRuntimeSnapshot::ready_with_queue_projection(
+        "prompt".to_string(),
+        queue_projection.queue_summary(),
+        None,
+        queue_projection.next_task.clone(),
+        queue_projection,
+    )
+}
+
+fn queue_task(rank: usize, task_id: &str) -> PriorityQueueTask {
+    PriorityQueueTask {
+        rank,
+        task_id: task_id.to_string(),
+        direction_id: "direction-1".to_string(),
+        direction_title: "Direction".to_string(),
+        task_title: format!("Task {rank}"),
+        status: TaskStatus::Ready,
+        combined_priority: 100 - rank as i32,
+        updated_at: format!("2026-04-30T00:0{rank}:00Z"),
+        rank_reasons: vec!["ready".to_string()],
+    }
+}
+
 #[test]
 fn unavailable_pool_board_does_not_report_exhausted() {
     let pool = build_pool_board(&SqlitePlanningAuthorityAdapter::new(), "/tmp/root", None);
 
     assert_eq!(pool.unavailable_slots, DEFAULT_POOL_SIZE);
     assert!(!pool.exhausted);
+}
+
+#[test]
+fn build_dispatch_plan_fills_idle_slots_with_distinct_active_tasks() {
+    let repo = TempGitRepo::new("dispatch-fill");
+    let service = test_parallel_mode_service();
+    let planning_snapshot =
+        planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
+
+    let plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .expect("dispatch plan should build");
+
+    assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE);
+    assert_eq!(
+        plan.candidates
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-1", "task-2", "task-3"]
+    );
+}
+
+#[test]
+fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
+    let repo = TempGitRepo::new("dispatch-excludes");
+    let service = test_parallel_mode_service();
+    let planning_snapshot =
+        planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
+    let _leased = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task-1 lease should be acquired");
+    let queued_record = PlanningAuthorityDistributorQueueRecord {
+        queue_item_id: "queued-task-2".to_string(),
+        session_key: "slot-2@queued".to_string(),
+        agent_id: "agent-task-2".to_string(),
+        task_id: "task-2".to_string(),
+        task_title: "Task 2".to_string(),
+        branch_name: "akra-agent/slot-2/task-2".to_string(),
+        worktree_path: repo.workspace_dir(),
+        commit_sha: repo.head_sha(),
+        original_commit_sha: None,
+        validation_summary: "queued".to_string(),
+        authority_refresh_outcome: "official".to_string(),
+        github_capabilities: None,
+        pull_request_number: None,
+        pull_request_url: None,
+        queue_state: ParallelModeQueueItemState::Queued,
+        integration_note: "queued for distributor".to_string(),
+        enqueued_at: "2026-04-30T00:00:00Z".to_string(),
+        updated_at: "2026-04-30T00:00:00Z".to_string(),
+    };
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &queued_record,
+    )
+    .expect("queued distributor record should be stored");
+
+    let plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .expect("dispatch plan should build");
+
+    assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(plan.excluded_task_ids, vec!["task-1", "task-2"]);
+    assert_eq!(
+        plan.candidates
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-3", "task-4"]
+    );
 }
 
 #[test]

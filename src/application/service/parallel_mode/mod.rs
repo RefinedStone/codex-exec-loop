@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
+use crate::domain::planning::PriorityQueueTask;
 
 mod completion;
 pub(crate) mod distributor;
@@ -70,6 +72,13 @@ const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
     "inspect the slot branch, merge or discard it manually, then rerun reconcile";
 
 pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefreshContract;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeDispatchPlan {
+    pub idle_slot_count: usize,
+    pub excluded_task_ids: Vec<String>,
+    pub candidates: Vec<PriorityQueueTask>,
+}
 
 #[derive(Clone)]
 pub struct ParallelModeService {
@@ -331,6 +340,45 @@ impl ParallelModeService {
         Ok(lease)
     }
 
+    pub fn build_dispatch_plan(
+        &self,
+        workspace_dir: &str,
+        planning_snapshot: &PlanningRuntimeSnapshot,
+        requested_count: usize,
+    ) -> Result<ParallelModeDispatchPlan, String> {
+        let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
+        let idle_slot_count = build_pool_slots(&context)
+            .into_iter()
+            .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
+            .count();
+        let capacity = requested_count.min(idle_slot_count);
+        let excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
+        let excluded = excluded_task_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let candidates = planning_snapshot
+            .queue_projection()
+            .map(|projection| {
+                projection
+                    .active_tasks
+                    .iter()
+                    .filter(|task| !excluded.contains(task.task_id.trim()))
+                    .take(capacity)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(ParallelModeDispatchPlan {
+            idle_slot_count,
+            excluded_task_ids,
+            candidates,
+        })
+    }
+
     pub fn mark_slot_running(
         &self,
         workspace_dir: &str,
@@ -544,6 +592,27 @@ fn default_supervisor_notice(
         (true, None) => Some("rerun readiness to hydrate the supervisor board".to_string()),
         (false, None) => None,
     }
+}
+
+fn parallel_dispatch_excluded_task_ids(context: &PoolRuntimeContext) -> Vec<String> {
+    let mut task_ids = BTreeSet::new();
+    task_ids.extend(
+        context
+            .slot_leases
+            .values()
+            .map(|lease| lease.task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty()),
+    );
+    task_ids.extend(
+        context
+            .distributor_queue_records
+            .iter()
+            .filter(|record| record.queue_state.is_active())
+            .map(|record| record.task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty()),
+    );
+
+    task_ids.into_iter().collect()
 }
 
 fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {

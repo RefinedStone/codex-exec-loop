@@ -959,6 +959,9 @@ fn make_test_app() -> NativeTuiApp {
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
+        Arc::new(
+            crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
+        ),
         crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
         PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
     );

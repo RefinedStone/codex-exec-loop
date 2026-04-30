@@ -10,6 +10,7 @@ use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
@@ -44,6 +45,7 @@ fn build_default_app() -> NativeTuiApp {
     let startup_service = StartupService::new(app_server_adapter.clone());
     let session_service = SessionService::new(app_server_adapter.clone());
     let conversation_service = ConversationService::new(app_server_adapter.clone());
+    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter.clone();
     let planning = PlanningServices::from_ports(
         planning_workspace_port,
         planning_authority.clone(),
@@ -59,6 +61,7 @@ fn build_default_app() -> NativeTuiApp {
         startup_service,
         session_service,
         conversation_service,
+        parallel_agent_worker_port,
         parallel_mode_service,
         planning,
     );
@@ -154,6 +157,9 @@ mod tests {
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
+            Arc::new(
+                crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
+            ),
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
             PlanningServices::from_workspace_port(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),

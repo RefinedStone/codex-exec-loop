@@ -126,18 +126,22 @@ impl PlanningRuntimeFacadeService {
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
         let queue_head = snapshot.queue_head()?;
-        Some(PlanningMainSessionHandoff {
-            prompt: render_builtin_next_task_handoff_prompt(queue_head),
+        Some(self.build_task_handoff(queue_head))
+    }
+
+    pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
+        PlanningMainSessionHandoff {
+            prompt: render_builtin_next_task_handoff_prompt(task),
             transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
             task: PlanningTaskHandoff {
-                task_id: queue_head.task_id.trim().to_string(),
-                task_title: queue_head.task_title.trim().to_string(),
-                direction_id: queue_head.direction_id.trim().to_string(),
-                combined_priority: queue_head.combined_priority,
-                updated_at: queue_head.updated_at.trim().to_string(),
-                status_label: queue_head.status.label().to_string(),
+                task_id: task.task_id.trim().to_string(),
+                task_title: task.task_title.trim().to_string(),
+                direction_id: task.direction_id.trim().to_string(),
+                combined_priority: task.combined_priority,
+                updated_at: task.updated_at.trim().to_string(),
+                status_label: task.status.label().to_string(),
             },
-        })
+        }
     }
 
     pub fn builtin_next_task_preview_prompt(&self, snapshot: &PlanningRuntimeSnapshot) -> String {

@@ -11,6 +11,7 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::ParallelModeService;
@@ -186,16 +187,9 @@ struct AutoFollowupSubmitContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ParallelDispatchSubmitContext {
-    transcript_text: String,
-    handoff_task: PlanningTaskHandoff,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptOrigin {
     Manual,
     AutoFollow(Box<AutoFollowupSubmitContext>),
-    ParallelDispatch(Box<ParallelDispatchSubmitContext>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,6 +280,7 @@ struct NativeTuiApp {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
+    parallel_agent_worker_port: std::sync::Arc<dyn ParallelAgentWorkerPort>,
     turn_control_truth: ConversationRuntimeControlTruth,
     parallel_mode_service: ParallelModeService,
     planning: PlanningServices,

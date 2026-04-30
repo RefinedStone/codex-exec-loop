@@ -217,6 +217,14 @@ impl ParallelModeTurnService {
             )
     }
 
+    pub fn reserve_official_completion_refresh_order(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<Option<u64>, String> {
+        self.parallel_mode_service
+            .reserve_workspace_official_completion_refresh_order(workspace_directory)
+    }
+
     pub fn mark_official_completion_failed(&self, workspace_directory: &str, failure_detail: &str) {
         let _ = self
             .parallel_mode_service
