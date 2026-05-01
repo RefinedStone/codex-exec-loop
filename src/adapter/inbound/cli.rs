@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
 
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -13,9 +12,14 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::{
-    PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot, PlanningServices,
-    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningWorkspaceInitResult,
-    PlanningWorkspaceResetResult,
+    PlanningResetTarget, PlanningServices, PlanningTaskToolRequest, PlanningTaskToolResponse,
+};
+
+mod reports;
+
+use self::reports::{
+    DoctorReport, InitReport, PlanningToolErrorReport, ResetReport, render_doctor_report,
+    render_init_report, render_json_line, render_reset_report,
 };
 
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
@@ -27,142 +31,6 @@ const PLANNING_TOOL_USAGE: &str = "Usage: akra planning-tool <contract|run> [wor
 const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";
 const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
 const TELEGRAM_BOT_ALIAS_USAGE: &str = "Alias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DoctorReport {
-    workspace_path: String,
-    report: PlanningDoctorReport,
-}
-
-impl DoctorReport {
-    fn path_issue(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            report: PlanningDoctorReport::path_issue(issue),
-        }
-    }
-
-    fn from_service_report(workspace_path: String, report: PlanningDoctorReport) -> Self {
-        Self {
-            workspace_path,
-            report,
-        }
-    }
-
-    fn exit_code(&self) -> i32 {
-        self.report.exit_code()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct InitReport {
-    workspace_path: String,
-    mode: &'static str,
-    created_file_count: Option<usize>,
-    queue_idle_policy: Option<String>,
-    status: Option<String>,
-    issue: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResetReport {
-    workspace_path: String,
-    target: Option<&'static str>,
-    rewritten_paths: Vec<String>,
-    removed_paths: Vec<String>,
-    status: Option<String>,
-    issue: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct PlanningToolErrorReport {
-    ok: bool,
-    operation: String,
-    error: String,
-    guidance: Vec<String>,
-}
-
-impl InitReport {
-    fn path_issue(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            mode: "simple",
-            created_file_count: None,
-            queue_idle_policy: None,
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    fn success(
-        workspace_path: String,
-        result: &PlanningWorkspaceInitResult,
-        snapshot: &PlanningRuntimeSnapshot,
-    ) -> Self {
-        Self {
-            workspace_path,
-            mode: bootstrap_mode_label(result.mode),
-            created_file_count: Some(result.created_file_count),
-            queue_idle_policy: Some(snapshot.queue_idle_policy().label().to_string()),
-            status: Some("planning workspace initialized".to_string()),
-            issue: None,
-        }
-    }
-
-    fn failure(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            mode: "simple",
-            created_file_count: None,
-            queue_idle_policy: None,
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    fn exit_code(&self) -> i32 {
-        if self.issue.is_some() { 1 } else { 0 }
-    }
-}
-
-impl ResetReport {
-    fn path_issue(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            target: None,
-            rewritten_paths: Vec::new(),
-            removed_paths: Vec::new(),
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    fn success(workspace_path: String, result: &PlanningWorkspaceResetResult) -> Self {
-        Self {
-            workspace_path,
-            target: Some(result.target.label()),
-            rewritten_paths: result.rewritten_paths.clone(),
-            removed_paths: result.removed_paths.clone(),
-            status: Some("planning workspace reset".to_string()),
-            issue: None,
-        }
-    }
-
-    fn failure(workspace_path: String, target: PlanningResetTarget, issue: String) -> Self {
-        Self {
-            workspace_path,
-            target: Some(target.label()),
-            rewritten_paths: Vec::new(),
-            removed_paths: Vec::new(),
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    fn exit_code(&self) -> i32 {
-        if self.issue.is_some() { 1 } else { 0 }
-    }
-}
 
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
     run_with_args(std::env::args_os().skip(1), stdout)
@@ -498,94 +366,6 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
     {
         Ok(result) => ResetReport::success(workspace_label, &result),
         Err(error) => ResetReport::failure(workspace_label, target, error.to_string()),
-    }
-}
-
-fn render_doctor_report(stdout: &mut impl Write, report: &DoctorReport) -> Result<()> {
-    writeln!(stdout, "workspace: {}", report.workspace_path)?;
-    writeln!(
-        stdout,
-        "planning state: {}",
-        report.report.planning_state().label()
-    )?;
-
-    if let Some(queue_idle_policy) = report.report.queue_idle_policy() {
-        writeln!(stdout, "queue-idle policy: {queue_idle_policy}")?;
-    }
-    if let Some(queue_summary) = report.report.queue_summary() {
-        writeln!(stdout, "queue summary: {queue_summary}")?;
-    }
-    if let Some(proposal_summary) = report.report.proposal_summary() {
-        writeln!(stdout, "proposal summary: {proposal_summary}")?;
-    }
-    if let Some(health) = report.report.health() {
-        writeln!(stdout, "health: {health}")?;
-    }
-    if let Some(issue) = report.report.issue() {
-        writeln!(stdout, "issue: {issue}")?;
-    }
-    if let Some(note) = report.report.note() {
-        writeln!(stdout, "note: {note}")?;
-    }
-
-    Ok(())
-}
-
-fn render_init_report(stdout: &mut impl Write, report: &InitReport) -> Result<()> {
-    writeln!(stdout, "workspace: {}", report.workspace_path)?;
-    writeln!(stdout, "command: init")?;
-    writeln!(stdout, "mode: {}", report.mode)?;
-
-    if let Some(created_file_count) = report.created_file_count {
-        writeln!(stdout, "created files: {created_file_count}")?;
-    }
-    if let Some(queue_idle_policy) = &report.queue_idle_policy {
-        writeln!(stdout, "queue-idle policy: {queue_idle_policy}")?;
-    }
-    if let Some(status) = &report.status {
-        writeln!(stdout, "status: {status}")?;
-    }
-    if let Some(issue) = &report.issue {
-        writeln!(stdout, "issue: {issue}")?;
-    }
-
-    Ok(())
-}
-
-fn render_reset_report(stdout: &mut impl Write, report: &ResetReport) -> Result<()> {
-    writeln!(stdout, "workspace: {}", report.workspace_path)?;
-    writeln!(stdout, "command: reset")?;
-    if let Some(target) = report.target {
-        writeln!(stdout, "target: {target}")?;
-    }
-    for rewritten_path in &report.rewritten_paths {
-        writeln!(stdout, "rewritten: {rewritten_path}")?;
-    }
-    for removed_path in &report.removed_paths {
-        writeln!(stdout, "removed: {removed_path}")?;
-    }
-    if let Some(status) = &report.status {
-        writeln!(stdout, "status: {status}")?;
-    }
-    if let Some(issue) = &report.issue {
-        writeln!(stdout, "issue: {issue}")?;
-    }
-
-    Ok(())
-}
-
-fn render_json_line<T: Serialize>(stdout: &mut impl Write, value: &T) -> Result<()> {
-    serde_json::to_writer(&mut *stdout, value).context("failed to serialize JSON response")?;
-    writeln!(stdout)?;
-    Ok(())
-}
-
-fn bootstrap_mode_label(
-    mode: crate::application::service::planning::PlanningBootstrapMode,
-) -> &'static str {
-    match mode {
-        crate::application::service::planning::PlanningBootstrapMode::Detail => "detail",
-        crate::application::service::planning::PlanningBootstrapMode::Simple => "simple",
     }
 }
 
