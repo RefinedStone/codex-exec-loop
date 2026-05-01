@@ -77,6 +77,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `domain/parallel_mode/readiness.rs`.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
+- `src/application/service/planning/worker/orchestration.rs` keeps planning worker prompt assembly
+  and prompt contract tests in `worker/orchestration/prompts.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
   rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
