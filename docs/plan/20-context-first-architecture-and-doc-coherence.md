@@ -60,10 +60,11 @@ completed domain-extraction slices.
 
 Current target order:
 
-1. parallel-mode integration-style tests
+1. parallel-mode delivery, pool cleanup, supervisor, or test follow-up only when behavior changes
+   touch those flows
 2. planning runtime validation or prompt follow-up only when behavior changes touch those flows
-3. parallel-mode delivery, pool cleanup, or supervisor follow-up only when behavior changes touch
-   those flows
+3. admin/planning DTO surface only when behavior changes expose an isolated projection or document
+   helper
 
 The rule is simple: do not begin a later hotspot slice without first recording why the earlier one
 was skipped.
