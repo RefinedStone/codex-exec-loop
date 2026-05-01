@@ -136,6 +136,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `telegram_bot/config.rs`.
 - `src/adapter/outbound/app_server/protocol.rs` keeps active-turn app-server notification
   translation in `app_server/protocol/turn_notifications.rs`.
+- `src/adapter/outbound/app_server/mod.rs` keeps app-server approval, reviewer, and sandbox
+  execution policy env parsing in `app_server/execution_policy.rs`.
 - `src/adapter/outbound/app_server/connection.rs` keeps pending notification buffering and
   stderr/warning diagnostics in `app_server/connection/diagnostics.rs`.
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps planner
