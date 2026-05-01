@@ -246,11 +246,13 @@ fn remove_stale_pool_allocation_lock(lock_path: &Path) {
     };
     if age >= POOL_ALLOCATION_LOCK_STALE_AFTER {
         let owner_path = lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE);
-        if fs::read_to_string(owner_path)
-            .ok()
-            .and_then(|owner| pool_allocation_lock_owner_pid(&owner))
-            .is_some_and(pool_allocation_lock_owner_is_alive)
-        {
+        if !matches!(
+            fs::read_to_string(owner_path)
+                .ok()
+                .and_then(|owner| pool_allocation_lock_owner_pid(&owner))
+                .map(pool_allocation_lock_owner_liveness),
+            None | Some(PoolAllocationLockOwnerLiveness::Dead)
+        ) {
             return;
         }
         let _ = fs::remove_dir_all(lock_path);
@@ -263,8 +265,55 @@ fn pool_allocation_lock_owner_pid(owner_token: &str) -> Option<u32> {
         .find_map(|line| line.strip_prefix("pid=")?.parse::<u32>().ok())
 }
 
-fn pool_allocation_lock_owner_is_alive(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolAllocationLockOwnerLiveness {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+fn pool_allocation_lock_owner_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
+    platform_process_liveness(pid)
+}
+
+#[cfg(unix)]
+fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
+    match std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+    {
+        Ok(status) if status.success() => PoolAllocationLockOwnerLiveness::Alive,
+        Ok(_) => PoolAllocationLockOwnerLiveness::Dead,
+        Err(_) => PoolAllocationLockOwnerLiveness::Unknown,
+    }
+}
+
+#[cfg(windows)]
+fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
+    let filter = format!("PID eq {pid}");
+    match std::process::Command::new("tasklist")
+        .args(["/FI", filter.as_str(), "/NH"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout
+                .split_whitespace()
+                .any(|field| field.trim() == pid.to_string())
+            {
+                PoolAllocationLockOwnerLiveness::Alive
+            } else {
+                PoolAllocationLockOwnerLiveness::Dead
+            }
+        }
+        Ok(_) => PoolAllocationLockOwnerLiveness::Dead,
+        Err(_) => PoolAllocationLockOwnerLiveness::Unknown,
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn platform_process_liveness(_pid: u32) -> PoolAllocationLockOwnerLiveness {
+    PoolAllocationLockOwnerLiveness::Unknown
 }
 
 pub(super) fn reconcile_pool_board(
