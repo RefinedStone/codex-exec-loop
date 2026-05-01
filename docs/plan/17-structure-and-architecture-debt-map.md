@@ -44,9 +44,9 @@ If a change starts with a later hotspot, record why an earlier hotspot was skipp
 
 Recent extraction work moved several formerly service-local calculations into domain types:
 
-- `src/domain/parallel_mode.rs` now derives parallel readiness, supervisor state, pool slot state
-  from lease state, cleanup-ready decisions, roster entries, selected detail, and live-detail
-  enrichment.
+- `src/domain/parallel_mode.rs` now derives supervisor state and pool slot state from lease state,
+  cleanup-ready decisions, roster entries, selected detail, and live-detail enrichment; readiness
+  capability models live in `src/domain/parallel_mode/readiness.rs`.
 - `src/domain/planning` now owns planning semantic validation, priority queue ordering and
   skip/proposal classification, queue visibility, and queue/proposal summary projection.
 - The application layer should therefore focus new parallel-mode and planning work on orchestration,
@@ -73,6 +73,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/domain/session_browser.rs` keeps search tokenization and ranking in
   `domain/session_browser/search.rs`, leaving state, projection, project filtering, and page
   selection in the parent domain module.
+- `src/domain/parallel_mode.rs` keeps readiness capability keys, states, and snapshots in
+  `domain/parallel_mode/readiness.rs`.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
