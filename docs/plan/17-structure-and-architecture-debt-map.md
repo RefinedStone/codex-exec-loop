@@ -131,7 +131,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/adapter/inbound/tui/app/github_polling.rs` keeps review polling state/bootstrap tests in
   `github_polling/tests.rs`.
 - `src/application/service/parallel_mode/tests/distributor/mod.rs` keeps blocked/retry/patch
-  equivalence distributor queue contracts in `parallel_mode/tests/distributor/blocked.rs`.
+  equivalence distributor queue contracts in `parallel_mode/tests/distributor/blocked.rs`, and
+  rebase provenance/conflict contracts in `parallel_mode/tests/distributor/rebase.rs`.
 - `src/application/service/parallel_mode/tests/pool/mod.rs` keeps reconciliation/provision/reset
   and cleanup contracts in `parallel_mode/tests/pool/reconciliation.rs`.
 - `src/adapter/inbound/admin_api/mod.rs` keeps JSON planning API handlers in
