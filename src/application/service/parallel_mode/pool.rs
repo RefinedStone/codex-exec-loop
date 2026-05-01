@@ -23,6 +23,7 @@ use super::{
 
 mod allocation_lock;
 mod board;
+mod lease_store;
 mod paths;
 mod slot_inspection;
 
@@ -31,6 +32,9 @@ use self::board::{
     build_blocked_pool_board, build_pool_board_from_context,
     build_pool_slots as build_pool_slots_from_context, build_unavailable_pool_board,
 };
+#[cfg(test)]
+pub(super) use self::lease_store::slot_lease_file_path;
+pub(super) use self::lease_store::{remove_slot_lease, write_slot_lease};
 use self::paths::{
     annotate_worktree_label, canonicalize_best_effort, parse_worktree_records, resolve_branch_head,
     resolve_pool_baseline_head, worktree_paths_match,
@@ -800,57 +804,6 @@ pub(super) fn slot_id(slot_number: usize) -> String {
 
 pub(super) fn short_sha(commit_sha: &str) -> String {
     commit_sha.chars().take(7).collect::<String>()
-}
-
-fn slot_leases_root(pool_root: &Path) -> PathBuf {
-    pool_root.join(".leases")
-}
-
-pub(super) fn slot_lease_file_path(pool_root: &Path, slot_id: &str) -> PathBuf {
-    slot_leases_root(pool_root).join(format!("{slot_id}.json"))
-}
-
-pub(super) fn write_slot_lease(
-    planning_authority: &dyn PlanningAuthorityPort,
-    workspace_dir: &str,
-    pool_root: &Path,
-    lease: &ParallelModeSlotLeaseSnapshot,
-) -> Result<(), String> {
-    planning_authority
-        .upsert_runtime_slot_lease(workspace_dir, lease)
-        .map_err(|error| format!("failed to store slot lease `{}`: {error}", lease.slot_id))?;
-
-    let leases_root = slot_leases_root(pool_root);
-    ensure_directory_exists(&leases_root)
-        .map_err(|error| format!("failed to create lease directory: {error}"))?;
-    let lease_path = slot_lease_file_path(pool_root, &lease.slot_id);
-    let temp_path = lease_path.with_extension("tmp");
-    let lease_body = serde_json::to_string_pretty(lease)
-        .map_err(|error| format!("failed to serialize slot lease: {error}"))?;
-    fs::write(&temp_path, lease_body).map_err(|error| {
-        format!(
-            "failed to write temporary slot lease `{}`: {error}",
-            lease.slot_id
-        )
-    })?;
-    fs::rename(&temp_path, &lease_path)
-        .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
-}
-
-fn remove_slot_lease(
-    planning_authority: &dyn PlanningAuthorityPort,
-    workspace_dir: &str,
-    pool_root: &Path,
-    slot_id: &str,
-) -> bool {
-    if planning_authority
-        .remove_runtime_slot_lease(workspace_dir, slot_id)
-        .is_err()
-    {
-        return false;
-    }
-    let lease_path = slot_lease_file_path(pool_root, slot_id);
-    !lease_path.exists() || fs::remove_file(lease_path).is_ok()
 }
 
 pub(super) fn resolve_workspace_head_sha(workspace_path: &Path) -> Option<String> {
