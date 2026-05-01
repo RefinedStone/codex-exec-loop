@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
@@ -7,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -18,7 +17,6 @@ use super::protocol::{
     ThreadListResponse, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
     ThreadStartParams, ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse,
     TurnNotificationHandling, TurnStartParams, TurnStartResponse, handle_turn_notification,
-    sort_and_dedup_warnings,
 };
 
 const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
@@ -26,7 +24,10 @@ const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const DEFAULT_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const MAX_FATAL_STDERR_LINES: usize = 4;
+
+mod diagnostics;
+
+use self::diagnostics::{ConnectionDiagnostics, PendingNotifications};
 
 #[derive(Clone, Default)]
 pub(super) struct AppServerTurnInterruptSignal {
@@ -539,99 +540,6 @@ impl Drop for AppServerConnection {
     }
 }
 
-#[derive(Default)]
-struct PendingNotifications {
-    entries: VecDeque<AppServerNotification>,
-}
-
-impl PendingNotifications {
-    fn push(&mut self, notification: AppServerNotification) {
-        self.entries.push_back(notification);
-    }
-
-    fn pop_front(&mut self) -> Option<AppServerNotification> {
-        self.entries.pop_front()
-    }
-
-    fn drain_warning_texts(&mut self) -> Vec<String> {
-        self.entries
-            .drain(..)
-            .map(|notification| {
-                notification
-                    .warning_text("after the response completed without a turn stream consumer")
-            })
-            .collect()
-    }
-}
-
-#[derive(Default)]
-struct ConnectionDiagnostics {
-    warnings: Vec<String>,
-    fatal_stderr: Vec<String>,
-}
-
-impl ConnectionDiagnostics {
-    fn record_warning(&mut self, warning: String) {
-        if !warning.trim().is_empty() {
-            self.warnings.push(warning);
-        }
-    }
-
-    fn record_warnings<I>(&mut self, warnings: I)
-    where
-        I: IntoIterator<Item = String>,
-    {
-        self.warnings.extend(
-            warnings
-                .into_iter()
-                .filter(|warning| !warning.trim().is_empty()),
-        );
-    }
-
-    fn record_stderr(&mut self, line: String) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-
-        if is_fatal_stderr_line(trimmed) {
-            self.fatal_stderr.push(trimmed.to_string());
-            if self.fatal_stderr.len() > MAX_FATAL_STDERR_LINES {
-                self.fatal_stderr.remove(0);
-            }
-        } else {
-            self.warnings.push(trimmed.to_string());
-        }
-    }
-
-    fn take_warnings(&mut self) -> Vec<String> {
-        sort_and_dedup_warnings(&mut self.warnings);
-        std::mem::take(&mut self.warnings)
-    }
-
-    fn error(&self, message: impl Into<String>) -> anyhow::Error {
-        let mut message = message.into();
-        if !self.fatal_stderr.is_empty() {
-            message.push_str(" / recent stderr: ");
-            message.push_str(&self.fatal_stderr.join(" | "));
-        }
-        anyhow!(message)
-    }
-}
-
-fn is_fatal_stderr_line(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-
-    lower.starts_with("fatal")
-        || lower.starts_with("panic")
-        || lower.starts_with("error")
-        || lower.contains(" fatal ")
-        || lower.contains(" panic")
-        || lower.contains(" error")
-        || lower.contains("failed")
-        || lower.contains("backtrace")
-}
-
 enum AppServerLine {
     Stdout(String),
     Stderr(String),
@@ -659,13 +567,7 @@ fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
 mod tests {
     use std::time::Duration;
 
-    use serde_json::json;
-
-    use super::{
-        AppServerConnectionConfig, ConnectionDiagnostics, PendingNotifications,
-        RESPONSE_TIMEOUT_ENV_VAR,
-    };
-    use crate::adapter::outbound::app_server::protocol::AppServerNotification;
+    use super::{AppServerConnectionConfig, RESPONSE_TIMEOUT_ENV_VAR};
 
     #[test]
     fn response_timeout_defaults_to_fifteen_seconds() {
@@ -692,46 +594,6 @@ mod tests {
                 Duration::from_secs(15)
             );
         }
-    }
-
-    #[test]
-    fn pending_notifications_become_warnings_if_no_turn_stream_consumes_them() {
-        let mut pending = PendingNotifications::default();
-        pending.push(
-            AppServerNotification::from_value(json!({
-                "method": "item/agentMessage/delta",
-                "params": {
-                    "turnId": "turn-1"
-                }
-            }))
-            .expect("notification should parse"),
-        );
-
-        assert_eq!(
-            pending.drain_warning_texts(),
-            vec![
-                "app-server sent notification `item/agentMessage/delta` after the response completed without a turn stream consumer"
-                    .to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn fatal_stderr_is_attached_to_errors_instead_of_warning_bucket() {
-        let mut diagnostics = ConnectionDiagnostics::default();
-        diagnostics.record_stderr("fatal: transport closed".to_string());
-        diagnostics.record_stderr("workspace prompt missing".to_string());
-
-        assert_eq!(
-            diagnostics.take_warnings(),
-            vec!["workspace prompt missing".to_string()]
-        );
-        assert!(
-            diagnostics
-                .error("turn failed")
-                .to_string()
-                .contains("fatal: transport closed")
-        );
     }
 
     #[test]
