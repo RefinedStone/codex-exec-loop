@@ -85,6 +85,9 @@ Recent extraction work moved several formerly service-local calculations into do
   equivalence distributor queue contracts in `parallel_mode/tests/distributor/blocked.rs`.
 - `src/application/service/parallel_mode/tests/pool/mod.rs` keeps reconciliation/provision/reset
   and cleanup contracts in `parallel_mode/tests/pool/reconciliation.rs`.
+- `src/adapter/inbound/admin_api/mod.rs` keeps JSON planning API handlers in
+  `admin_api/api.rs`, leaving server bootstrap, router wiring, page handlers, and shared render
+  helpers in the parent module.
 
 ## Planning Hotspot Audit
 
@@ -97,7 +100,7 @@ The remaining planning hotspots by current implementation size and mixed respons
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
 | 1 | parallel-mode integration-style tests | distributor and pool test clusters now have first-pass subsystem splits; remaining files are narrower recovery, lease, supervisor, and dispatch contracts | split only when a behavior change touches one of those contracts |
-| 2 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
+| 2 | `src/application/service/planning/admin/*` and `src/adapter/inbound/admin_api/*` | admin facade and adapter API/page boundaries are split; remaining pressure should come from a concrete admin behavior change, not speculative DTO churn | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
 | 3 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation and prompt assembly are now below line pressure and have shared path/prompt projection owners; future pressure should come from behavior changes | extract additional rule groups only when a behavior change touches them |
 
 Queued next narrow slice:
