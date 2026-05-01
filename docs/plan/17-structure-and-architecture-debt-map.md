@@ -106,7 +106,8 @@ Recent extraction work moved several formerly service-local calculations into do
   branch collision checks in `parallel_mode/branch_names.rs`, dispatch/blocker helpers in
   `parallel_mode/orchestration.rs`, and shared git/fs support helpers in `parallel_mode/support.rs`.
 - `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs` keeps history flush suffix/sync
-  contracts in `inline_terminal_adapter/tests/history_flush.rs`.
+  contracts in `inline_terminal_adapter/tests/history_flush.rs` and shared test app fixtures in
+  `inline_terminal_adapter/tests/fixtures.rs`.
 - `src/adapter/inbound/tui/app/inline_shell_commands.rs` keeps parser, palette, hint, and help
   tests in `inline_shell_commands/tests.rs`.
 - `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs` keeps planning overlay/editor
