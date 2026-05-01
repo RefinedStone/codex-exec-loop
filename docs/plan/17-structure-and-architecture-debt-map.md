@@ -107,6 +107,8 @@ Recent extraction work moved several formerly service-local calculations into do
   helpers in the parent module.
 - `src/adapter/inbound/telegram_bot/mod.rs` keeps command parsing and parser-only help fallback in
   `telegram_bot/message.rs`.
+- `src/adapter/outbound/app_server/protocol.rs` keeps active-turn app-server notification
+  translation in `app_server/protocol/turn_notifications.rs`.
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps planner
   worker panel projection helpers in `turn_submission_runtime/post_turn_execution/planner_worker_panel.rs`.
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps hidden planning
