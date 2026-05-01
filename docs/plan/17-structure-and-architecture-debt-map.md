@@ -90,6 +90,8 @@ Recent extraction work moved several formerly service-local calculations into do
   and prompt contract tests in `worker/orchestration/prompts.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
   rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
+- `src/application/service/parallel_mode/distributor/delivery.rs` keeps integration worktree,
+  patch-equivalence, and cherry-pick conflict helpers in `parallel_mode/distributor/delivery/integration.rs`.
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
   `parallel_mode/pool/board.rs`, slot lease mirror persistence in
   `parallel_mode/pool/lease_store.rs`, and cleanup/reset helpers in
