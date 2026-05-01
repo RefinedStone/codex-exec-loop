@@ -97,7 +97,9 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
   rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
 - `src/application/service/parallel_mode/distributor/delivery.rs` keeps integration worktree,
-  patch-equivalence, and cherry-pick conflict helpers in `parallel_mode/distributor/delivery/integration.rs`.
+  patch-equivalence, and cherry-pick conflict helpers in `parallel_mode/distributor/delivery/integration.rs`;
+  GitHub push, PR ensure, and merge-readiness stages live in
+  `parallel_mode/distributor/delivery/github.rs`.
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
   `parallel_mode/pool/board.rs`, slot lease mirror persistence in
   `parallel_mode/pool/lease_store.rs`, and cleanup/reset helpers in
