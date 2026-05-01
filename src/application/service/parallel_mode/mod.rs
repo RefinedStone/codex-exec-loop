@@ -703,18 +703,23 @@ fn allocate_agent_branch_name(
         .or_else(|| sanitize_task_slug(task_id))
         .or_else(|| sanitize_task_slug(task_title))
         .unwrap_or_else(|| "task".to_string());
+    let remote_branch_names = remote_agent_branch_names(repo_root, slot_id);
     let mut collision_index = 1usize;
     loop {
         let candidate = build_agent_branch_name(slot_id, &sanitized_slug, collision_index);
-        if agent_branch_name_is_available(repo_root, &candidate) {
+        if agent_branch_name_is_available(repo_root, &candidate, &remote_branch_names) {
             return candidate;
         }
         collision_index += 1;
     }
 }
 
-fn agent_branch_name_is_available(repo_root: &str, branch_name: &str) -> bool {
-    !branch_exists(repo_root, branch_name) && !remote_branch_exists(repo_root, branch_name)
+fn agent_branch_name_is_available(
+    repo_root: &str,
+    branch_name: &str,
+    remote_branch_names: &BTreeSet<String>,
+) -> bool {
+    !branch_exists(repo_root, branch_name) && !remote_branch_names.contains(branch_name)
 }
 
 fn build_agent_branch_name(slot_id: &str, sanitized_slug: &str, collision_index: usize) -> String {
@@ -817,33 +822,62 @@ fn branch_exists(repo_root: &str, branch_name: &str) -> bool {
     )
 }
 
-fn remote_branch_exists(repo_root: &str, branch_name: &str) -> bool {
-    let remote_ref = format!("refs/remotes/{DEFAULT_PUSH_REMOTE_NAME}/{branch_name}");
-    if command_succeeds(
+fn remote_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
+    let mut branch_names = remote_tracking_agent_branch_names(repo_root, slot_id);
+    branch_names.extend(remote_live_agent_branch_names(repo_root, slot_id));
+    branch_names
+}
+
+fn remote_tracking_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
+    let refs_prefix =
+        format!("refs/remotes/{DEFAULT_PUSH_REMOTE_NAME}/{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
+    let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
+    run_command(
         "git",
         [
             "-C",
             repo_root,
-            "show-ref",
-            "--verify",
-            "--quiet",
-            remote_ref.as_str(),
+            "for-each-ref",
+            "--format=%(refname)",
+            refs_prefix.as_str(),
         ],
-    ) {
-        return true;
-    }
+        None,
+    )
+    .map(|output| {
+        output
+            .lines()
+            .filter_map(|line| line.strip_prefix(&refs_prefix))
+            .map(|suffix| format!("{branch_prefix}{suffix}"))
+            .collect()
+    })
+    .unwrap_or_default()
+}
 
-    command_succeeds(
+fn remote_live_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
+    let refs_prefix = "refs/heads/";
+    let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
+    let pattern = format!("refs/heads/{branch_prefix}*");
+    run_command(
         "git",
         [
             "-C",
             repo_root,
             "ls-remote",
-            "--exit-code",
+            "--heads",
             DEFAULT_PUSH_REMOTE_NAME,
-            &format!("refs/heads/{branch_name}"),
+            pattern.as_str(),
         ],
+        None,
     )
+    .map(|output| {
+        output
+            .lines()
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .filter_map(|remote_ref| remote_ref.strip_prefix(refs_prefix))
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn current_branch_name(worktree_path: &Path) -> Option<String> {

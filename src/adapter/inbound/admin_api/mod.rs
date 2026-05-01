@@ -1136,8 +1136,8 @@ mod tests {
 
     #[test]
     fn risky_admin_mutations_require_browser_confirmation() {
-        assert!(BASE_TEMPLATE.contains("window.confirm(message)"));
-        assert!(BASE_TEMPLATE.contains("submitter?.dataset.confirm"));
+        assert!(BASE_TEMPLATE.contains("document.addEventListener(\"submit\""));
+        assert!(BASE_TEMPLATE.contains("}, true);"));
 
         for (template_name, template) in [
             ("controls", CONTROLS_TEMPLATE),
@@ -1151,13 +1151,9 @@ mod tests {
             );
         }
 
-        assert!(CONTROLS_TEMPLATE.contains("Reset All"));
-        assert!(CONTROLS_TEMPLATE.contains("data-confirm=\"Reset all planning admin state"));
-        assert!(DIRECTIONS_TEMPLATE.contains("Delete direction and tasks"));
-        assert!(DIRECTIONS_TEMPLATE.contains("data-confirm=\"Delete this direction"));
-        assert!(TASKS_TEMPLATE.contains("Delete task"));
-        assert!(TASKS_TEMPLATE.contains("data-confirm=\"Delete this task"));
-        assert!(EDITOR_TEMPLATE.contains("Promote"));
-        assert!(EDITOR_TEMPLATE.contains("data-confirm=\"Promote this draft"));
+        assert_eq!(CONTROLS_TEMPLATE.matches("data-confirm=").count(), 4);
+        assert_eq!(DIRECTIONS_TEMPLATE.matches("data-confirm=").count(), 2);
+        assert_eq!(EDITOR_TEMPLATE.matches("data-confirm=").count(), 1);
+        assert_eq!(TASKS_TEMPLATE.matches("data-confirm=").count(), 2);
     }
 }

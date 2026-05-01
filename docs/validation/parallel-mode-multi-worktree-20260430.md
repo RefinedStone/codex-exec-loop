@@ -16,6 +16,9 @@ Observed run:
 - Source commit B: `24482aee13ed765c45e336a4920da19f67fb23f8`
 - Pull request B: `#561`
 - Integration commit B: `bff732bd0c5322f47fd88c370c7c348cf6116e5e`
-- Result: the first `akra parallel-tick` processed only queue head A and returned `slot-1` to idle while B stayed queued in `slot-2`; the second tick processed B and returned `slot-2` to idle; a final idle tick reconciled all three pool worktrees to the current `prerelease` head.
+- Result:
+  1. The first `akra parallel-tick` processed only queue head A and returned `slot-1` to idle, while B stayed queued in `slot-2`.
+  2. The second tick processed B and returned `slot-2` to idle.
+  3. A final idle tick reconciled all three pool worktrees to the current `prerelease` head.
 
 The unrelated feature worktree `feature-native-planning-prompt-assembly` stayed present throughout the run and was not modified.

@@ -287,6 +287,7 @@ fn sample_lease_request(
 struct FakeReadinessRuntime {
     gh_path: Option<PathBuf>,
     gh_auth_ok: bool,
+    fallback_script_available: bool,
     fallback_auth_ok: bool,
 }
 
@@ -340,8 +341,12 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         path.to_path_buf()
     }
 
-    fn path_exists(&self, _path: &Path) -> bool {
-        false
+    fn path_exists(&self, path: &Path) -> bool {
+        self.fallback_script_available
+            && path
+                .to_str()
+                .map(|value| value.ends_with("scripts/gh-refinedstone.sh"))
+                .unwrap_or(false)
     }
 
     fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
@@ -372,6 +377,7 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
 #[test]
 fn readiness_accepts_repo_github_fallback_when_gh_is_missing() {
     let runtime = FakeReadinessRuntime {
+        fallback_script_available: true,
         fallback_auth_ok: true,
         ..Default::default()
     };
