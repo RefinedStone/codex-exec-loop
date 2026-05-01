@@ -1,5 +1,3 @@
-use std::path::{Component, Path};
-
 use anyhow::{Result, anyhow};
 
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
@@ -7,6 +5,8 @@ use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUE
 use crate::application::service::planning::shared::contract::{
     PLANNING_DIRECTION_DOCS_DIRECTORY, default_direction_detail_doc_path,
 };
+#[cfg(test)]
+use crate::application::service::planning::shared::planning_paths::is_valid_planning_markdown_path;
 use crate::domain::planning::DirectionCatalogDocument;
 
 pub(super) fn trimmed_non_empty(value: &str) -> Option<&str> {
@@ -90,26 +90,6 @@ pub(super) fn default_validated_direction_detail_doc_path(direction_id: &str) ->
             direction_id.trim()
         ))
     }
-}
-
-pub(super) fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
-    let normalized = path.trim().replace('\\', "/");
-    if normalized.is_empty()
-        || normalized.starts_with('/')
-        || normalized.contains("../")
-        || normalized.contains("/..")
-        || Path::new(&normalized)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-    {
-        return false;
-    }
-
-    let Some(suffix) = normalized.strip_prefix(required_prefix) else {
-        return false;
-    };
-
-    suffix.starts_with('/') && suffix.len() > 1 && normalized.ends_with(".md")
 }
 
 pub(super) fn set_direction_detail_doc_path(

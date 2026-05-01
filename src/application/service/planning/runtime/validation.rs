@@ -1,11 +1,10 @@
-use std::path::{Component, Path};
-
 use serde_json::Value;
 
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY,
 };
+use crate::application::service::planning::shared::planning_paths::is_valid_planning_markdown_path;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningFileKind, PlanningSemanticValidationService,
     PlanningValidationReport, PlanningValidationResult, PlanningWorkspaceFiles, QueueIdlePolicy,
@@ -223,26 +222,6 @@ impl PlanningValidationService {
             }
         }
     }
-}
-
-fn is_valid_planning_markdown_path(path: &str, required_prefix: &str) -> bool {
-    let normalized = path.trim().replace('\\', "/");
-    if normalized.is_empty()
-        || normalized.starts_with('/')
-        || normalized.contains("../")
-        || normalized.contains("/..")
-        || Path::new(&normalized)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-    {
-        return false;
-    }
-
-    let Some(suffix) = normalized.strip_prefix(required_prefix) else {
-        return false;
-    };
-
-    suffix.starts_with('/') && suffix.len() > 1 && normalized.ends_with(".md")
 }
 
 fn placeholder_marker(line: &str) -> Option<&'static str> {
