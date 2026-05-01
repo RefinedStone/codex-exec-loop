@@ -1,4 +1,4 @@
-use super::{extract_file_updates, nav_for_kind};
+use super::pages::{extract_file_updates, nav_for_kind};
 use crate::application::service::planning::{PlanningAdminDraftKind, PlanningAdminFileKey};
 use std::collections::HashMap;
 
