@@ -80,7 +80,7 @@ Recent extraction work moved several formerly service-local calculations into do
   `domain/session_browser/tests.rs`, leaving state, projection, project filtering, and page
   selection in the parent domain module.
 - `src/domain/parallel_mode.rs` keeps readiness capability keys, states, and snapshots in
-  `domain/parallel_mode/readiness.rs`.
+  `domain/parallel_mode/readiness.rs` and domain contract tests in `domain/parallel_mode/tests.rs`.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
 - `src/application/service/planning/runtime/validation.rs` keeps workspace validation contract tests
