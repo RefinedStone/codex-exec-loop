@@ -57,6 +57,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - All non-reference source files under `src/` are below the 1000-line threshold.
 - `src/adapter/inbound/tui/app/planning/controller.rs` is split into overlay key handlers, draft
   editor actions, and status/reset copy helpers under `planning/controller/`.
+- `src/adapter/inbound/tui/app/conversation_model/view_model.rs` keeps warning, runtime-notice,
+  approval, and control support status helpers in `conversation_model/view_model/status.rs`.
 - `src/adapter/outbound/filesystem/planning_workspace.rs` no longer imports the concrete SQLite
   authority adapter; repo-scoped workspace behavior is injected through
   `RepoScopedPlanningWorkspacePort`.
