@@ -83,6 +83,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `domain/parallel_mode/readiness.rs`.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
+- `src/application/service/planning/runtime/validation.rs` keeps workspace validation contract tests
+  in `runtime/validation/tests.rs`.
 - `src/application/service/planning/runtime/intake.rs` keeps local runtime task draft generation,
   prompt normalization, title/id derivation, and generator contract tests in
   `runtime/intake/draft.rs`.
