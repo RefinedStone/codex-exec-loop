@@ -1,16 +1,15 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningSemanticValidationService,
-    PlanningValidationReport, PriorityQueueProjection, PriorityQueueService, PriorityQueueTask,
-    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
+    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PriorityQueueProjection,
+    PriorityQueueService, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
+    TaskStatus,
 };
 
 const DEFAULT_TASK_PRIORITY: i32 = 80;
@@ -21,6 +20,7 @@ const MAX_TASK_MUTATION_COMMANDS: usize = 16;
 
 mod commands;
 mod helpers;
+mod validation;
 
 pub use self::commands::{
     PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskMutationCommand,
@@ -28,9 +28,8 @@ pub use self::commands::{
 };
 use self::helpers::{
     build_task_id, default_relation_note, direction_title, find_direction, format_timestamp,
-    increment_suffix, normalize_references, reject_task_validation_errors, required_id,
-    required_text, select_direction, task_id_exists, terminal_status, validate_priorities,
-    validate_task_reference,
+    increment_suffix, normalize_references, required_id, required_text, select_direction,
+    task_id_exists, terminal_status,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -531,43 +530,6 @@ impl PlanningTaskMutationService {
         }
         task.updated_at = format_timestamp(updated_at);
         Ok(true)
-    }
-
-    fn validate_and_project(
-        &self,
-        directions: &DirectionCatalogDocument,
-        task_authority: &TaskAuthorityDocument,
-    ) -> Result<PriorityQueueProjection> {
-        let mut report = PlanningValidationReport::new();
-        PlanningSemanticValidationService::new().validate(
-            Some(directions),
-            Some(task_authority),
-            &mut report,
-        );
-        reject_task_validation_errors(&report)?;
-        self.validate_task_links(task_authority)?;
-        validate_priorities(task_authority)?;
-        self.priority_queue_service
-            .build_projection(directions, task_authority)
-            .context("failed to rebuild planning queue projection")
-    }
-
-    fn validate_task_links(&self, task_authority: &TaskAuthorityDocument) -> Result<()> {
-        let task_ids = task_authority
-            .tasks
-            .iter()
-            .map(|task| task.id.trim().to_string())
-            .collect::<HashSet<_>>();
-        for task in &task_authority.tasks {
-            let task_id = task.id.trim();
-            for dependency_id in &task.depends_on {
-                validate_task_reference("dependency", task_id, dependency_id, &task_ids)?;
-            }
-            for blocker_id in &task.blocked_by {
-                validate_task_reference("blocker", task_id, blocker_id, &task_ids)?;
-            }
-        }
-        Ok(())
     }
 
     fn commit_authority(
