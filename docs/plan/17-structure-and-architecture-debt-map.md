@@ -125,6 +125,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession.rs` keeps
   supersession popup rendering contracts in
   `shell_presentation/overlays/popup/supersession/tests.rs`.
+- `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs` keeps empty-state and
+  project-context copy helpers in `shell_presentation/session_browser/empty_state.rs`.
 - `src/adapter/inbound/tui/app/github_polling.rs` keeps review polling state/bootstrap tests in
   `github_polling/tests.rs`.
 - `src/application/service/parallel_mode/tests/distributor/mod.rs` keeps blocked/retry/patch
