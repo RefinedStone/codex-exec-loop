@@ -103,7 +103,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `parallel_mode/pool/lease_store.rs`, and cleanup/reset helpers in
   `parallel_mode/pool/cleanup.rs`.
 - `src/application/service/parallel_mode/mod.rs` keeps agent branch naming, slug truncation, and
-  branch collision checks in `parallel_mode/branch_names.rs`.
+  branch collision checks in `parallel_mode/branch_names.rs`, dispatch/blocker helpers in
+  `parallel_mode/orchestration.rs`, and shared git/fs support helpers in `parallel_mode/support.rs`.
 - `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs` keeps history flush suffix/sync
   contracts in `inline_terminal_adapter/tests/history_flush.rs`.
 - `src/adapter/inbound/tui/app/inline_shell_commands.rs` keeps parser, palette, hint, and help
