@@ -1,9 +1,6 @@
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-
-use chrono::Utc;
 
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
@@ -22,23 +19,26 @@ mod branch_names;
 mod completion;
 pub(crate) mod distributor;
 mod git_sequence;
+mod orchestration;
 mod pool;
 mod readiness;
 mod session_detail;
 pub(crate) mod supervisor;
+mod support;
 pub(crate) mod turn;
 
 use self::branch_names::{allocate_agent_branch_name, branch_exists};
 use self::distributor::ParallelModeDistributorService;
-use self::git_sequence::{GitCommandStep, run_git_sequence};
+use self::orchestration::{
+    inspect_akra_integration_worktree_blocker, parallel_dispatch_excluded_task_ids,
+};
 use self::pool::{
     PoolBoardWithContextResult, PoolRuntimeContext, WorkspaceSlotLeaseResolution,
     acquire_pool_allocation_lock, branch_is_cleanup_ready, branch_is_integrated_into,
-    build_pool_board, build_pool_slots, cleanup_slot, detect_canonical_repo_root,
-    inspect_pool_board_and_context, inspect_slot_git_status, load_pool_runtime_context,
-    pool_operator_recovery_notice, reconcile_pool_board, reconcile_pool_board_and_context,
-    reset_slot_worktree_to_akra, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    short_sha, write_slot_lease,
+    build_pool_board, build_pool_slots, cleanup_slot, inspect_pool_board_and_context,
+    inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
+    reconcile_pool_board, reconcile_pool_board_and_context, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, short_sha, write_slot_lease,
 };
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds, inspect_akra_branch,
@@ -56,9 +56,14 @@ use self::session_detail::{
     record_thread_prepared_session_detail,
 };
 use self::supervisor::ParallelModeSupervisorService;
+pub(super) use self::support::{
+    current_branch_name, current_timestamp, discard_unstarted_slot_branch, ensure_directory_exists,
+};
 
 #[cfg(test)]
 use self::branch_names::{sanitize_task_slug, short_branch_slug_hash};
+#[cfg(test)]
+use self::pool::detect_canonical_repo_root;
 #[cfg(test)]
 use self::pool::{derive_default_pool_root, slot_id, slot_lease_file_path};
 #[cfg(test)]
@@ -638,89 +643,6 @@ fn default_supervisor_notice(
         (true, None) => Some("rerun readiness to hydrate the supervisor board".to_string()),
         (false, None) => None,
     }
-}
-
-fn parallel_dispatch_excluded_task_ids(context: &PoolRuntimeContext) -> Vec<String> {
-    let mut task_ids = BTreeSet::new();
-    task_ids.extend(
-        context
-            .slot_leases
-            .values()
-            .map(|lease| lease.task_id.trim().to_string())
-            .filter(|task_id| !task_id.is_empty()),
-    );
-    task_ids.extend(
-        context
-            .distributor_queue_records
-            .iter()
-            .filter(|record| record.queue_state.is_active())
-            .map(|record| record.task_id.trim().to_string())
-            .filter(|task_id| !task_id.is_empty()),
-    );
-
-    task_ids.into_iter().collect()
-}
-
-fn inspect_akra_integration_worktree_blocker(
-    planning_authority: &dyn PlanningAuthorityPort,
-    workspace_dir: &str,
-) -> Option<String> {
-    let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)?;
-    let branch_name = current_branch_name(&canonical_repo_root)?;
-    if branch_name != DISTRIBUTOR_INTEGRATION_BRANCH {
-        return Some(format!(
-            "orchestrator blocked / integration worktree must be checked out to `{DISTRIBUTOR_INTEGRATION_BRANCH}` but is `{branch_name}`"
-        ));
-    }
-
-    let status = inspect_slot_git_status(&canonical_repo_root)?;
-    if !status.is_ready_for_integration() {
-        return Some(format!(
-            "orchestrator blocked / integration worktree must be clean before queue processing: {}",
-            status.detail_label()
-        ));
-    }
-
-    None
-}
-
-fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        return Ok(());
-    }
-
-    fs::create_dir_all(path)
-}
-
-fn current_timestamp() -> String {
-    Utc::now().to_rfc3339()
-}
-
-fn current_branch_name(worktree_path: &Path) -> Option<String> {
-    let worktree_path_string = worktree_path.display().to_string();
-    run_command(
-        "git",
-        [
-            "-C",
-            worktree_path_string.as_str(),
-            "rev-parse",
-            "--abbrev-ref",
-            "HEAD",
-        ],
-        None,
-    )
-}
-
-fn discard_unstarted_slot_branch(repo_root: &str, slot_path: &Path, branch_name: &str) -> bool {
-    reset_slot_worktree_to_akra(slot_path).succeeded()
-        && run_git_sequence(
-            "delete unstarted slot branch",
-            vec![GitCommandStep::new(
-                "delete agent branch",
-                ["-C", repo_root, "branch", "-D", branch_name],
-            )],
-        )
-        .succeeded()
 }
 
 #[cfg(test)]
