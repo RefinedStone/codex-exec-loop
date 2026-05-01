@@ -9,7 +9,7 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
 };
 
 use super::current_branch_name;
@@ -25,6 +25,7 @@ mod board;
 mod cleanup;
 mod lease_store;
 mod paths;
+mod reconcile;
 mod slot_inspection;
 
 pub(super) use self::allocation_lock::acquire_pool_allocation_lock;
@@ -44,6 +45,10 @@ use self::paths::{
     resolve_pool_baseline_head, worktree_paths_match,
 };
 pub(super) use self::paths::{derive_default_pool_root, inspect_slot_git_status};
+use self::reconcile::{
+    can_refresh_pool_baseline_from_workspace, ensure_pool_baseline_branch, provision_missing_slots,
+    reset_reusable_detached_baseline_slots,
+};
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
 use self::slot_inspection::summarize_pool_reconcile_status;
 
@@ -351,87 +356,6 @@ pub(super) fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelMode
     build_pool_slots_from_context(context)
 }
 
-fn can_refresh_pool_baseline_from_workspace(
-    repo_root: &str,
-    runtime_projection: &PlanningAuthorityRuntimeProjectionSnapshot,
-) -> bool {
-    runtime_projection.distributor_queue_records.is_empty()
-        && runtime_projection.slot_leases.values().all(|lease| {
-            matches!(
-                lease.state,
-                ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running
-            )
-        })
-        && current_branch_name(Path::new(repo_root)).is_some_and(|branch_name| {
-            branch_name != POOL_BASELINE_BRANCH
-                && !branch_name.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/"))
-        })
-}
-
-fn ensure_pool_baseline_branch(
-    repo_root: &str,
-    reset_to_current_head: bool,
-) -> Result<(String, bool), ()> {
-    if reset_to_current_head && let Some(head_sha) = resolve_branch_head(repo_root, "HEAD") {
-        let existed = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH).is_some();
-        if command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "branch",
-                "-f",
-                POOL_BASELINE_BRANCH,
-                "HEAD",
-            ],
-        ) {
-            return Ok((head_sha, !existed));
-        }
-    }
-
-    if let Some(baseline_head) = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH) {
-        return Ok((baseline_head, false));
-    }
-
-    let remote_ref = format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}");
-    let created = if command_succeeds(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "show-ref",
-            "--verify",
-            "--quiet",
-            remote_ref.as_str(),
-        ],
-    ) {
-        command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "branch",
-                POOL_BASELINE_BRANCH,
-                remote_ref.as_str(),
-            ],
-        )
-    } else if command_succeeds("git", ["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
-        command_succeeds(
-            "git",
-            ["-C", repo_root, "branch", POOL_BASELINE_BRANCH, "HEAD"],
-        )
-    } else {
-        false
-    };
-
-    if !created {
-        return Err(());
-    }
-
-    resolve_branch_head(repo_root, POOL_BASELINE_BRANCH)
-        .map(|baseline_head| (baseline_head, true))
-        .ok_or(())
-}
 pub(super) fn load_pool_runtime_context(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
@@ -552,91 +476,6 @@ fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
         None,
     )?;
     Some(parse_worktree_records(&worktree_output))
-}
-
-fn provision_missing_slots(
-    repo_root: &str,
-    pool_root: &Path,
-    worktree_records: &[GitWorktreeRecord],
-) -> usize {
-    let mut provisioned_slots = 0;
-
-    for slot_number in 1..=DEFAULT_POOL_SIZE {
-        let slot_path = pool_root.join(slot_id(slot_number));
-        if worktree_records
-            .iter()
-            .any(|record| record.path == slot_path)
-            || slot_path.exists()
-        {
-            continue;
-        }
-
-        let Some(slot_parent) = slot_path.parent() else {
-            continue;
-        };
-        if ensure_directory_exists(slot_parent).is_err() {
-            continue;
-        }
-
-        let slot_path_string = slot_path.display().to_string();
-        if command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "worktree",
-                "add",
-                "--detach",
-                slot_path_string.as_str(),
-                POOL_BASELINE_BRANCH,
-            ],
-        ) {
-            provisioned_slots += 1;
-        }
-    }
-
-    provisioned_slots
-}
-
-fn reset_reusable_detached_baseline_slots(
-    repo_root: &str,
-    pool_root: &Path,
-    worktree_records: &[GitWorktreeRecord],
-    slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
-) -> usize {
-    let baseline_head = resolve_pool_baseline_head(repo_root).unwrap_or_default();
-    if baseline_head.is_empty() {
-        return 0;
-    }
-
-    let mut reset_slots = 0;
-    for slot_number in 1..=DEFAULT_POOL_SIZE {
-        let slot_id = slot_id(slot_number);
-        if slot_leases.contains_key(&slot_id) {
-            continue;
-        }
-        let slot_path = pool_root.join(&slot_id);
-        let Some(worktree_record) = worktree_records
-            .iter()
-            .find(|record| record.path == slot_path)
-        else {
-            continue;
-        };
-        if !worktree_record.detached {
-            continue;
-        }
-        let slot_status = inspect_slot_git_status(&slot_path);
-        if worktree_record.head_sha == baseline_head
-            && slot_status.is_some_and(SlotGitStatus::is_clean_baseline)
-        {
-            continue;
-        }
-        if reset_slot_worktree_to_akra(&slot_path).succeeded() {
-            reset_slots += 1;
-        }
-    }
-
-    reset_slots
 }
 
 pub(super) fn detect_canonical_repo_root(
