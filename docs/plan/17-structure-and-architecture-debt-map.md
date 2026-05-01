@@ -97,7 +97,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/planning/worker/orchestration.rs` keeps planning worker prompt assembly
   and prompt contract tests in `worker/orchestration/prompts.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
-  rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
+  rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`,
+  and queue persistence/blocking helpers in `parallel_mode/distributor/store.rs`.
 - `src/application/service/parallel_mode/distributor/delivery.rs` keeps integration worktree,
   patch-equivalence, and cherry-pick conflict helpers in `parallel_mode/distributor/delivery/integration.rs`;
   GitHub push, PR ensure, and merge-readiness stages live in
