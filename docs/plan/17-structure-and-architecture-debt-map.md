@@ -106,7 +106,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `admin_api/api.rs`, leaving server bootstrap, router wiring, page handlers, and shared render
   helpers in the parent module.
 - `src/adapter/inbound/telegram_bot/mod.rs` keeps command parsing and parser-only help fallback in
-  `telegram_bot/message.rs`.
+  `telegram_bot/message.rs`, and CLI/environment configuration loading in
+  `telegram_bot/config.rs`.
 - `src/adapter/outbound/app_server/protocol.rs` keeps active-turn app-server notification
   translation in `app_server/protocol/turn_notifications.rs`.
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps planner
