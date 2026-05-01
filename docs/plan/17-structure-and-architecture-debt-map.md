@@ -19,7 +19,7 @@ hurting both implementation safety and review quality.
 Use this order for the current cycle when choosing a refactor slice. Completed checkpoints stay here
 only when they prevent repeated work.
 
-1. test shape: broad shell rendering and parallel-mode integration-style tests
+1. parallel-mode integration-style tests
 2. planning runtime follow-up only when behavior changes touch validation or prompt assembly
 3. parallel mode follow-up only when behavior changes touch delivery, pool cleanup, or supervisor
    wiring
@@ -74,6 +74,12 @@ Recent extraction work moved several formerly service-local calculations into do
   rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
   `parallel_mode/pool/board.rs`.
+- `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs` keeps history flush suffix/sync
+  contracts in `inline_terminal_adapter/tests/history_flush.rs`.
+- `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs` keeps planning overlay/editor
+  rendering contracts in `shell_rendering_contract_tests/planning.rs`.
+- `src/adapter/inbound/tui/app/shell_runtime/tests.rs` keeps redraw scheduler contracts in
+  `shell_runtime/tests/scheduler.rs`.
 
 ## Planning Hotspot Audit
 
@@ -85,19 +91,18 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
-| 1 | broad shell rendering and parallel-mode integration-style tests | behavior is well-covered, but several test files still mix journeys and subsystem contracts | split tests by operator journey or narrow subsystem contract |
+| 1 | parallel-mode integration-style tests | shell runtime/rendering test clusters now have first-pass journey splits; parallel-mode distributor/pool tests are still the broadest remaining test contracts | split one parallel-mode test cluster by subsystem contract |
 | 2 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
 | 3 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation and prompt assembly are now below line pressure and have shared path/prompt projection owners; future pressure should come from behavior changes | extract additional rule groups only when a behavior change touches them |
 
 Queued next narrow slice:
 
-- **Task:** Split one broad shell rendering or parallel-mode integration-style test cluster by
-  operator journey or subsystem contract.
-- **Why next:** line-limit, controller, repair, directions, runtime prompt/path, pool board, and
-  distributor snapshot checkpoints are complete; the next structural pressure is test intent, not
-  production module size.
-- **Target write set:** one test cluster plus any local test helpers needed to keep fixture setup
-  readable.
+- **Task:** Split one parallel-mode integration-style test cluster by subsystem contract.
+- **Why next:** line-limit, controller, repair, directions, runtime prompt/path, shell rendering,
+  shell runtime, inline terminal history, pool board, and distributor snapshot checkpoints are
+  complete; the next structural pressure is parallel-mode test intent.
+- **Target write set:** one `src/application/service/parallel_mode/tests/*` cluster plus any local
+  test helpers needed to keep fixture setup readable.
 - **Acceptance:** the same behavior remains covered, but a future change can find the relevant test
   without opening unrelated journeys.
 
