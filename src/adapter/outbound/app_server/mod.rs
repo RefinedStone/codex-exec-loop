@@ -1,4 +1,5 @@
 pub(crate) mod connection;
+mod execution_policy;
 mod planning_worker;
 mod planning_worker_skill;
 pub(crate) mod protocol;
@@ -12,14 +13,14 @@ use anyhow::{Result, anyhow};
 use self::connection::{
     AppServerConnection, AppServerConnectionConfig, AppServerTurnInterruptSignal,
 };
+use self::execution_policy::AppServerExecutionPolicy;
 pub use self::planning_worker::AppServerPlanningWorkerAdapter;
 pub(crate) use self::planning_worker::PlanningThreadLauncher;
 use self::planning_worker_skill::PlanningWorkerSkillAdapter;
 use self::protocol::{
-    ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
-    ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem, TurnStartParams,
-    initialize_detail, sort_and_dedup_warnings, thread_title, to_conversation_snapshot,
-    to_session_summary,
+    ReasoningEffortValue, ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem,
+    TurnStartParams, initialize_detail, sort_and_dedup_warnings, thread_title,
+    to_conversation_snapshot, to_session_summary,
 };
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
@@ -37,9 +38,6 @@ use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationS
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
-const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
-const APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
-const SANDBOX_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE";
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 
 #[derive(Clone)]
@@ -51,91 +49,6 @@ pub struct CodexAppServerAdapter {
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
     turn_interrupt_signal: AppServerTurnInterruptSignal,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AppServerExecutionPolicy {
-    approval_policy: ApprovalPolicyValue,
-    approvals_reviewer: Option<ApprovalsReviewerValue>,
-    sandbox_mode: SandboxModeValue,
-}
-
-impl Default for AppServerExecutionPolicy {
-    fn default() -> Self {
-        Self {
-            // Default to full access so turns do not stall waiting for approvals the TUI
-            // cannot yet resolve interactively.
-            approval_policy: ApprovalPolicyValue::Never,
-            approvals_reviewer: Some(ApprovalsReviewerValue::User),
-            sandbox_mode: SandboxModeValue::DangerFullAccess,
-        }
-    }
-}
-
-impl AppServerExecutionPolicy {
-    fn from_environment() -> Self {
-        Self::from_env_values(
-            std::env::var(APPROVAL_POLICY_ENV_VAR).ok().as_deref(),
-            std::env::var(APPROVALS_REVIEWER_ENV_VAR).ok().as_deref(),
-            std::env::var(SANDBOX_MODE_ENV_VAR).ok().as_deref(),
-        )
-    }
-
-    fn from_env_values(
-        approval_policy_value: Option<&str>,
-        approvals_reviewer_value: Option<&str>,
-        sandbox_mode_value: Option<&str>,
-    ) -> Self {
-        let mut policy = Self::default();
-
-        if let Some(approval_policy) = parse_approval_policy_value(approval_policy_value) {
-            policy.approval_policy = approval_policy;
-        }
-        if let Some(approvals_reviewer) = parse_approvals_reviewer_value(approvals_reviewer_value) {
-            policy.approvals_reviewer = Some(approvals_reviewer);
-        }
-        if let Some(sandbox_mode) = parse_sandbox_mode_value(sandbox_mode_value) {
-            policy.sandbox_mode = sandbox_mode;
-        }
-
-        policy
-    }
-}
-
-fn normalize_execution_policy_value(value: Option<&str>) -> Option<String> {
-    let raw_value = value?.trim();
-    if raw_value.is_empty() {
-        return None;
-    }
-
-    Some(raw_value.to_ascii_lowercase().replace(['_', ' '], "-"))
-}
-
-fn parse_approval_policy_value(value: Option<&str>) -> Option<ApprovalPolicyValue> {
-    match normalize_execution_policy_value(value).as_deref() {
-        Some("untrusted") => Some(ApprovalPolicyValue::Untrusted),
-        Some("on-failure") => Some(ApprovalPolicyValue::OnFailure),
-        Some("on-request") => Some(ApprovalPolicyValue::OnRequest),
-        Some("never") => Some(ApprovalPolicyValue::Never),
-        _ => None,
-    }
-}
-
-fn parse_approvals_reviewer_value(value: Option<&str>) -> Option<ApprovalsReviewerValue> {
-    match normalize_execution_policy_value(value).as_deref() {
-        Some("user") => Some(ApprovalsReviewerValue::User),
-        Some("guardian-subagent") => Some(ApprovalsReviewerValue::GuardianSubagent),
-        _ => None,
-    }
-}
-
-fn parse_sandbox_mode_value(value: Option<&str>) -> Option<SandboxModeValue> {
-    match normalize_execution_policy_value(value).as_deref() {
-        Some("read-only") => Some(SandboxModeValue::ReadOnly),
-        Some("workspace-write") => Some(SandboxModeValue::WorkspaceWrite),
-        Some("danger-full-access") => Some(SandboxModeValue::DangerFullAccess),
-        _ => None,
-    }
 }
 
 impl CodexAppServerAdapter {
@@ -613,65 +526,7 @@ fn finish_stream_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AppServerExecutionPolicy,
-        CodexAppServerAdapter, SANDBOX_MODE_ENV_VAR,
-    };
-    use crate::adapter::outbound::app_server::protocol::{
-        ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue,
-    };
-
-    #[test]
-    fn execution_policy_defaults_to_full_access_without_approvals() {
-        assert_eq!(
-            AppServerExecutionPolicy::from_env_values(None, None, None),
-            AppServerExecutionPolicy {
-                approval_policy: ApprovalPolicyValue::Never,
-                approvals_reviewer: Some(ApprovalsReviewerValue::User),
-                sandbox_mode: SandboxModeValue::DangerFullAccess,
-            }
-        );
-    }
-
-    #[test]
-    fn execution_policy_parses_environment_overrides() {
-        assert_eq!(
-            AppServerExecutionPolicy::from_env_values(
-                Some("on_request"),
-                Some("guardian-subagent"),
-                Some("workspace write")
-            ),
-            AppServerExecutionPolicy {
-                approval_policy: ApprovalPolicyValue::OnRequest,
-                approvals_reviewer: Some(ApprovalsReviewerValue::GuardianSubagent),
-                sandbox_mode: SandboxModeValue::WorkspaceWrite,
-            }
-        );
-    }
-
-    #[test]
-    fn execution_policy_ignores_invalid_environment_values() {
-        assert_eq!(
-            AppServerExecutionPolicy::from_env_values(Some("bogus"), Some("nope"), Some("unknown")),
-            AppServerExecutionPolicy::default()
-        );
-    }
-
-    #[test]
-    fn execution_policy_environment_variable_names_are_stable() {
-        assert_eq!(
-            APPROVAL_POLICY_ENV_VAR,
-            "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY"
-        );
-        assert_eq!(
-            APPROVALS_REVIEWER_ENV_VAR,
-            "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER"
-        );
-        assert_eq!(
-            SANDBOX_MODE_ENV_VAR,
-            "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE"
-        );
-    }
+    use super::CodexAppServerAdapter;
 
     #[test]
     fn planning_worker_turn_input_attaches_queue_mutation_skill_before_prompt() {
