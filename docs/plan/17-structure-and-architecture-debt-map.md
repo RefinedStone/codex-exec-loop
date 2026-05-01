@@ -19,11 +19,11 @@ hurting both implementation safety and review quality.
 Use this order for the current cycle when choosing a refactor slice. Completed checkpoints stay here
 only when they prevent repeated work.
 
-1. planning repair: `src/application/service/planning/repair/reconciliation.rs`
-2. planning authoring support files: `src/application/service/planning/authoring/directions.rs`
-3. parallel mode service child modules: `src/application/service/parallel_mode/pool.rs`,
+1. parallel mode service child modules: `src/application/service/parallel_mode/pool.rs`,
    `src/application/service/parallel_mode/distributor.rs`, and supervisor wiring
-4. test shape: broad shell rendering and parallel-mode integration-style tests
+2. planning runtime rule groups: `src/application/service/planning/runtime/validation.rs` and
+   `src/application/service/planning/runtime/prompt.rs`
+3. test shape: broad shell rendering and parallel-mode integration-style tests
 
 If a change starts with a later hotspot, record why an earlier hotspot was skipped.
 
@@ -62,6 +62,11 @@ Recent extraction work moved several formerly service-local calculations into do
   `RepoScopedPlanningWorkspacePort`.
 - `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs` keeps active-document,
   runtime-projection, repo-scoped-workspace, store, and path helpers in child modules.
+- `src/application/service/planning/repair/reconciliation.rs` keeps guard tests and fixtures in
+  `repair/reconciliation/tests.rs`.
+- `src/application/service/planning/authoring/directions.rs` keeps supporting-file path validation,
+  default detail-doc generation, queue-idle prompt normalization, and catalog path mutation helpers
+  in `authoring/directions/supporting_files.rs`.
 
 ## Planning Hotspot Audit
 
@@ -73,22 +78,17 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
-| 1 | `src/application/service/planning/repair/reconciliation.rs` | repair orchestration, protected-file restore, prompt construction, focused ledger excerpts, and tests share one module | split focused excerpt helpers and repair prompt construction behind the repair boundary |
-| 2 | `src/application/service/planning/authoring/directions.rs` | direction summary, supporting-file staging, doctor repair, and path rewriting share one authoring service | split supporting-file path rewrite helpers from the service methods |
-| 3 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation rules and runtime prompt assembly are large but already stay inside runtime boundaries; queue facts have moved to domain | extract rule groups only after repair and directions boundaries are clearer |
-| 4 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
+| 1 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation rules and runtime prompt assembly are large but already stay inside runtime boundaries; queue facts have moved to domain | extract rule groups only when a behavior change touches them |
+| 2 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
 
 Queued next narrow slice:
 
-- **Task:** Split focused ledger excerpt and prompt-building helpers out of
-  `src/application/service/planning/repair/reconciliation.rs`.
-- **Why next:** admin facade/file-sync work has already been split into child modules, while repair
-  reconciliation still mixes prompt assembly, protected restore, accepted-authority comparison, and
-  large test fixtures.
-- **Target write set:** `src/application/service/planning/repair/reconciliation.rs` plus one small
-  child module under `src/application/service/planning/repair/`.
-- **Acceptance:** public repair behavior and rejection reporting stay unchanged; existing
-  planning/repair tests continue to pass.
+- **Task:** Keep parallel-mode child modules below the line threshold while separating orchestration
+  from pure projection and queue-delivery policy.
+- **Why next:** planning repair and directions supporting-file slices are now split, while
+  `parallel_mode/distributor.rs` and `parallel_mode/pool.rs` remain the largest service modules.
+- **Target write set:** one `src/application/service/parallel_mode/*` child module at a time.
+- **Acceptance:** existing parallel-mode distributor or pool focused tests continue to pass.
 
 ## Chosen Boundary Model
 
