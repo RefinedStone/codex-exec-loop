@@ -1,6 +1,3 @@
-use std::sync::Arc;
-
-use anyhow::Result;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
@@ -9,32 +6,23 @@ use ratatui::style::Color;
 use super::super::tui_testkit;
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort,
-};
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
-use crate::application::service::planning::PlanningServices;
-use crate::application::service::planning::{PlanningDraftEditorFile, PlanningDraftEditorSession};
-use crate::application::service::session_service::SessionService;
-use crate::application::service::startup_service::StartupService;
-use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-    ParallelModeCapabilityState, ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeReadinessState,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
-use crate::domain::session_summary::SessionSummary;
-use crate::domain::startup_diagnostics::StartupDiagnostics;
-use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
+#[path = "shell_rendering_contract_tests/fixtures.rs"]
+mod fixtures;
 #[path = "shell_rendering_contract_tests/planning.rs"]
 mod planning;
+
+pub(super) use self::fixtures::{
+    make_test_app, sample_parallel_mode_snapshot, sample_planning_editor_session, sample_session,
+    sample_startup_diagnostics,
+};
 
 #[test]
 fn centered_rect_clamps_percentages_above_hundred() {
@@ -522,102 +510,6 @@ fn exit_confirmation_uses_shared_akra_chrome() {
     assert!(rendered.contains("Exit codex-exec-loop?"));
 }
 
-struct FakeCodexAppServerPort;
-
-impl CodexAppServerPort for FakeCodexAppServerPort {
-    fn load_startup_context(&self) -> Result<AppServerStartupContext> {
-        Ok(AppServerStartupContext {
-            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
-            initialize_detail: "ok".to_string(),
-            account_detail: "ok".to_string(),
-            account_ok: true,
-            warnings: Vec::new(),
-        })
-    }
-
-    fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
-        Ok(RecentSessions {
-            items: Vec::new(),
-            warnings: Vec::new(),
-            next_cursor: None,
-        }
-        .into())
-    }
-
-    fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
-        Ok(ConversationSnapshot {
-            thread_id: thread_id.to_string(),
-            title: "Loaded thread".to_string(),
-            cwd: "/tmp/root".to_string(),
-            messages: Vec::new(),
-            warnings: Vec::new(),
-            runtime_notices: Vec::new(),
-        })
-    }
-
-    fn request_stop_all_sessions(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn run_new_thread_stream(
-        &self,
-        _cwd: &str,
-        _prompt: &str,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn run_turn_stream(
-        &self,
-        _thread_id: &str,
-        _prompt: &str,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
-    ) -> Result<()> {
-        Ok(())
-    }
-}
-
-pub(super) fn make_test_app() -> NativeTuiApp {
-    let codex_port = Arc::new(FakeCodexAppServerPort);
-    let mut app = NativeTuiApp::new(
-        StartupService::new(codex_port.clone()),
-        SessionService::new(codex_port.clone()),
-        ConversationService::new(codex_port),
-        Arc::new(
-            crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
-        ),
-        super::test_helpers::test_parallel_mode_service(),
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
-    );
-    app.show_startup_ascii_art = false;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        panic!("test app should start with a ready draft conversation");
-    };
-    conversation.cwd = "/tmp/root".to_string();
-    conversation.draft_workspace_directory = "/tmp/root".to_string();
-    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::uninitialized());
-    app
-}
-
-pub(super) fn sample_startup_diagnostics() -> StartupDiagnostics {
-    StartupDiagnostics {
-        cwd: "/tmp/root".to_string(),
-        codex_binary_ok: true,
-        codex_binary_detail: "codex".to_string(),
-        workspace_ok: true,
-        workspace_path: "/tmp/root".to_string(),
-        workspace_detail: "workspace found".to_string(),
-        attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
-        initialize_ok: true,
-        initialize_detail: "app-server initialize ok".to_string(),
-        account_ok: true,
-        account_detail: "account ok".to_string(),
-        warnings: Vec::new(),
-        schema_snapshot: "snapshot.json".to_string(),
-    }
-}
-
 #[test]
 fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
     let mut app = make_test_app();
@@ -641,81 +533,4 @@ fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
     assert!(summary.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
     assert!(checks.contains("[ok] attachment mode: provider-launched"));
     assert!(checks.contains("[ok] recovery anchor: provider-thread-id"));
-}
-
-fn sample_session(id: &str) -> SessionSummary {
-    SessionSummary {
-        id: id.to_string(),
-        name: Some(format!("Session {id}")),
-        preview: "Preview line".to_string(),
-        cwd: "/tmp/root".to_string(),
-        source: "native".to_string(),
-        model_provider: "openai".to_string(),
-        updated_at_epoch: 1_700_000_000,
-        status_type: "ready".to_string(),
-        path: format!("/tmp/root/{id}.json"),
-        git_branch: Some("feature/demo".to_string()),
-    }
-}
-
-fn sample_parallel_mode_snapshot(
-    readiness: ParallelModeReadinessState,
-) -> ParallelModeReadinessSnapshot {
-    ParallelModeReadinessSnapshot::new(
-        "/tmp/root",
-        readiness,
-        vec![
-            ParallelModeCapabilitySnapshot::new(
-                ParallelModeCapabilityKey::GitRepository,
-                ParallelModeCapabilityState::Ready,
-                "git repo detected at /tmp/root",
-                None,
-            ),
-            ParallelModeCapabilitySnapshot::new(
-                ParallelModeCapabilityKey::Planning,
-                match readiness {
-                    ParallelModeReadinessState::Ready => ParallelModeCapabilityState::Ready,
-                    ParallelModeReadinessState::Degraded => ParallelModeCapabilityState::Degraded,
-                    ParallelModeReadinessState::Blocked => ParallelModeCapabilityState::Blocked,
-                    ParallelModeReadinessState::Repairing => {
-                        ParallelModeCapabilityState::Repairing
-                    }
-                },
-                "planning workspace is healthy",
-                Some("review the readiness panel".to_string()),
-            ),
-        ],
-        Some("planning: degraded / cause: planning workspace is healthy / next action: review the readiness panel".to_string()),
-    )
-}
-
-pub(super) fn sample_planning_editor_session() -> PlanningDraftEditorSession {
-    PlanningDraftEditorSession {
-        draft_name: "bootstrap-test".to_string(),
-        draft_directory: "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test".to_string(),
-        editable_files: vec![
-            PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
-                staged_path:
-                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/result-output.md"
-                        .to_string(),
-                body: "version = 1\n".to_string(),
-            },
-            PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
-                staged_path:
-                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/.codex-exec-loop/planning/result-output.md"
-                        .to_string(),
-                body: "{\n  \"version\": 1,\n  \"tasks\": []\n}".to_string(),
-            },
-            PlanningDraftEditorFile {
-                active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
-                staged_path:
-                    "/tmp/root/.codex-exec-loop/planning/drafts/bootstrap-test/result-output.md"
-                        .to_string(),
-                body: "# result\n".to_string(),
-            },
-        ],
-        validation_report: Default::default(),
-    }
 }
