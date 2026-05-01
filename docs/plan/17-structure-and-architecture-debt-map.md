@@ -79,6 +79,8 @@ Recent extraction work moved several formerly service-local calculations into do
   rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
   `parallel_mode/pool/board.rs`.
+- `src/application/service/parallel_mode/mod.rs` keeps agent branch naming, slug truncation, and
+  branch collision checks in `parallel_mode/branch_names.rs`.
 - `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs` keeps history flush suffix/sync
   contracts in `inline_terminal_adapter/tests/history_flush.rs`.
 - `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs` keeps planning overlay/editor
