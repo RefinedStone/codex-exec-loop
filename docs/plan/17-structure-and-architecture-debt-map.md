@@ -92,6 +92,9 @@ Recent extraction work moved several formerly service-local calculations into do
   worker panel projection helpers in `turn_submission_runtime/post_turn_execution/planner_worker_panel.rs`.
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps hidden planning
   repair retries in `turn_submission_runtime/post_turn_execution/repair.rs`.
+- `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps official
+  completion capture and refresh handling in
+  `turn_submission_runtime/post_turn_execution/official_completion.rs`.
 
 ## Planning Hotspot Audit
 
