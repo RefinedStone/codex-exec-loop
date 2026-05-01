@@ -66,6 +66,8 @@ Recent extraction work moved several formerly service-local calculations into do
   draft-file staging, runtime-projection, repo-scoped-workspace, store, and path helpers in child
   modules, and task-authority row persistence in
   `sqlite_planning_authority_adapter/task_authority_rows.rs`.
+- `src/adapter/outbound/github/review_poller.rs` keeps parser, credential, and snapshot mapping
+  tests in `github/review_poller/tests.rs`.
 - `src/application/service/planning/repair/reconciliation.rs` keeps guard tests and fixtures in
   `repair/reconciliation/tests.rs`.
 - `src/application/service/planning/authoring/directions.rs` keeps supporting-file path validation,
