@@ -19,9 +19,8 @@ hurting both implementation safety and review quality.
 Use this order for the current cycle when choosing a refactor slice. Completed checkpoints stay here
 only when they prevent repeated work.
 
-1. planning runtime rule groups: `src/application/service/planning/runtime/validation.rs` and
-   `src/application/service/planning/runtime/prompt.rs`
-2. test shape: broad shell rendering and parallel-mode integration-style tests
+1. test shape: broad shell rendering and parallel-mode integration-style tests
+2. planning runtime follow-up only when behavior changes touch validation or prompt assembly
 3. parallel mode follow-up only when behavior changes touch delivery, pool cleanup, or supervisor
    wiring
 
@@ -67,6 +66,10 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/planning/authoring/directions.rs` keeps supporting-file path validation,
   default detail-doc generation, queue-idle prompt normalization, and catalog path mutation helpers
   in `authoring/directions/supporting_files.rs`.
+- `src/application/service/planning/shared/planning_paths.rs` is the shared owner for planning
+  markdown path validation used by runtime validation and directions authoring.
+- `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
+  `runtime/prompt/fragment.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
   rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
@@ -82,19 +85,21 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
-| 1 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation rules and runtime prompt assembly are large but already stay inside runtime boundaries; queue facts have moved to domain | extract rule groups only when a behavior change touches them |
+| 1 | broad shell rendering and parallel-mode integration-style tests | behavior is well-covered, but several test files still mix journeys and subsystem contracts | split tests by operator journey or narrow subsystem contract |
 | 2 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
+| 3 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation and prompt assembly are now below line pressure and have shared path/prompt projection owners; future pressure should come from behavior changes | extract additional rule groups only when a behavior change touches them |
 
 Queued next narrow slice:
 
-- **Task:** Extract planning runtime rule groups only when a behavior change touches validation or
-  prompt assembly.
-- **Why next:** line-limit, controller, repair, directions, pool board, and distributor snapshot
-  checkpoints are complete; the next structural pressure is duplicated planning language across
-  validation and prompt assembly.
-- **Target write set:** one `src/application/service/planning/runtime/*` module plus focused tests.
-- **Acceptance:** existing planning runtime tests continue to pass and the moved rule group has one
-  clear owner.
+- **Task:** Split one broad shell rendering or parallel-mode integration-style test cluster by
+  operator journey or subsystem contract.
+- **Why next:** line-limit, controller, repair, directions, runtime prompt/path, pool board, and
+  distributor snapshot checkpoints are complete; the next structural pressure is test intent, not
+  production module size.
+- **Target write set:** one test cluster plus any local test helpers needed to keep fixture setup
+  readable.
+- **Acceptance:** the same behavior remains covered, but a future change can find the relevant test
+  without opening unrelated journeys.
 
 ## Chosen Boundary Model
 
