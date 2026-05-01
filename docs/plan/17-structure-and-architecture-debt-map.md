@@ -106,7 +106,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
   `parallel_mode/pool/board.rs`, slot lease mirror persistence in
   `parallel_mode/pool/lease_store.rs`, and cleanup/reset helpers in
-  `parallel_mode/pool/cleanup.rs`.
+  `parallel_mode/pool/cleanup.rs`; baseline refresh, missing-slot provisioning, and reusable
+  detached-slot reset helpers live in `parallel_mode/pool/reconcile.rs`.
 - `src/application/service/parallel_mode/mod.rs` keeps agent branch naming, slug truncation, and
   branch collision checks in `parallel_mode/branch_names.rs`, dispatch/blocker helpers in
   `parallel_mode/orchestration.rs`, and shared git/fs support helpers in `parallel_mode/support.rs`.
