@@ -85,6 +85,8 @@ Recent extraction work moved several formerly service-local calculations into do
   rendering contracts in `shell_rendering_contract_tests/planning.rs`.
 - `src/adapter/inbound/tui/app/shell_runtime/tests.rs` keeps redraw scheduler contracts in
   `shell_runtime/tests/scheduler.rs`.
+- `src/adapter/inbound/tui/app/github_polling.rs` keeps review polling state/bootstrap tests in
+  `github_polling/tests.rs`.
 - `src/application/service/parallel_mode/tests/distributor/mod.rs` keeps blocked/retry/patch
   equivalence distributor queue contracts in `parallel_mode/tests/distributor/blocked.rs`.
 - `src/application/service/parallel_mode/tests/pool/mod.rs` keeps reconciliation/provision/reset
