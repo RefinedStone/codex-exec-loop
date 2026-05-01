@@ -50,20 +50,20 @@ guidance, and roadmap docs:
 
 ### 2. Freeze Hotspot Split Order
 
-The current debt map already names the right hotspots. It is also the checkpoint for work that has
-already moved pure rules out of services: planning queue facts now live in `src/domain/planning`,
-parallel-mode readiness and pool projections live in `src/domain/parallel_mode.rs`, and session
-browser rules live under `src/domain`.
+The current debt map names the next hotspots and records completed checkpoints so future work does
+not repeat already-finished splits. Pure planning queue facts live in `src/domain/planning`,
+parallel-mode projections live under `src/domain/parallel_mode`, and session browser rules live
+under `src/domain`.
 
 The ordered execution rule now applies to the remaining mixed-responsibility files, not to those
 completed domain-extraction slices.
 
 Current target order:
 
-1. `src/adapter/inbound/tui/app/shell_presentation.rs` and nearby rendering or projection files
-2. `src/adapter/inbound/tui/app/conversation_runtime.rs`
-3. `src/adapter/inbound/tui/app/planning/controller.rs`
-4. `src/application/service/parallel_mode/`
+1. `src/application/service/planning/repair/reconciliation.rs`
+2. `src/application/service/planning/authoring/directions.rs`
+3. `src/application/service/parallel_mode/` child modules
+4. broad shell rendering and parallel-mode integration-style tests
 
 The rule is simple: do not begin a later hotspot slice without first recording why the earlier one
 was skipped.
@@ -127,6 +127,8 @@ That work sets up terminal-agent exploration without overpromising multi-provide
 - A contributor can trace one roadmap item into the relevant code with one roadmap doc plus one
   current-truth doc.
 - The hotspot order is explicit enough that future PRs can say why they chose one slice first.
+- Completed line-limit and adapter-decoupling slices are recorded as checkpoints rather than active
+  work.
 - `docs/supersession/` stays compact for implemented behavior and comparatively detailed only for
   unfinished work.
 - Docs/design is not polluted with future-state promises.

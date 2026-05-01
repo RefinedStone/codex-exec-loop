@@ -1,10 +1,12 @@
 # Structure And Architecture Debt Map
 
-This document maps structural debt to operator-visible product costs so future refactors stay tied to UX and reliability outcomes.
+This document maps structural debt to operator-visible product costs so future refactors stay tied
+to UX and reliability outcomes.
 
 ## Guiding Principle
 
-Refactors are justified when they make the shell easier to reason about, easier to evolve safely, or easier to recover when something goes wrong.
+Refactors are justified when they make the shell easier to reason about, easier to evolve safely, or
+easier to recover when something goes wrong.
 
 This is not a style-cleanup list. It is a product-facing debt map.
 
@@ -14,13 +16,14 @@ hurting both implementation safety and review quality.
 
 ## Current Hotspot Order
 
-Use this order for the current cycle when choosing a refactor slice:
+Use this order for the current cycle when choosing a refactor slice. Completed checkpoints stay here
+only when they prevent repeated work.
 
-1. shell presentation: `src/adapter/inbound/tui/app/shell_presentation.rs` and nearby rendering or projection files
-2. conversation runtime: `src/adapter/inbound/tui/app/conversation_runtime.rs`
-3. planning controller: `src/adapter/inbound/tui/app/planning/controller.rs` and nearby authoring UI
-4. parallel mode service slices: `src/application/service/parallel_mode/pool.rs`,
+1. planning repair: `src/application/service/planning/repair/reconciliation.rs`
+2. planning authoring support files: `src/application/service/planning/authoring/directions.rs`
+3. parallel mode service child modules: `src/application/service/parallel_mode/pool.rs`,
    `src/application/service/parallel_mode/distributor.rs`, and supervisor wiring
+4. test shape: broad shell rendering and parallel-mode integration-style tests
 
 If a change starts with a later hotspot, record why an earlier hotspot was skipped.
 
@@ -28,11 +31,11 @@ If a change starts with a later hotspot, record why an earlier hotspot was skipp
 
 | Area | Current hotspot | Operator-facing cost | Target boundary |
 | --- | --- | --- | --- |
-| shell presentation | `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation/status_panels.rs` | status meaning is spread across rendering and presentation code, making UX iteration harder | separate state wording, layout policy, and overlay projection |
-| conversation runtime | `src/adapter/inbound/tui/app/conversation_runtime.rs`, `conversation_model.rs`, `conversation_model/view_model.rs` | turn lifecycle, continuation state, and shell status compete in one runtime surface | separate conversation lifecycle from continuation lifecycle and surface projection |
-| planning controller | `src/adapter/inbound/tui/app/planning/controller.rs`, `planning_draft_editor_ui.rs` | planning setup, editor safety, and direction-side authoring feel coupled | separate planning setup flow, authoring flow, and close-risk handling |
-| parallel mode service | `src/application/service/parallel_mode/pool.rs`, `src/application/service/parallel_mode/distributor.rs`, `src/application/service/parallel_mode/session_detail.rs` | pool recovery, distributor delivery, and session history are now split from the facade, but the larger child modules still require careful tracing | keep service modules focused on orchestration and keep pure readiness, roster, detail, slot, and cleanup decisions in `src/domain/parallel_mode.rs` |
-| planning runtime services | `src/application/service/planning/authoring/directions.rs`, `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/repair/reconciliation.rs`, `src/application/service/planning/runtime/prompt.rs` | planning concepts are powerful but spread across many services with overlapping product language | keep semantic validation and queue facts in `src/domain/planning`; distinguish authoring, validation, runtime prompt assembly, and recovery more sharply |
+| shell presentation | `src/adapter/inbound/tui/app/shell_presentation/*` | the broad surface is now split, but overlay copy and layout still require several neighboring files | keep wording, projection, and layout modules separate |
+| conversation runtime | `src/adapter/inbound/tui/app/conversation_runtime.rs`, `conversation_model.rs`, `conversation_model/view_model.rs` | current file sizes are controlled, but continuation and conversation status still need clear ownership when behavior changes | separate conversation lifecycle from continuation lifecycle and surface projection |
+| planning controller | `src/adapter/inbound/tui/app/planning/controller.rs`, `controller/*`, `planning_draft_editor_ui.rs` | setup keys, status copy, and close-risk helpers are split; future work should avoid re-coupling effectful controller paths | keep setup, authoring, and close-risk handling in dedicated modules |
+| parallel mode service | `src/application/service/parallel_mode/pool.rs`, `src/application/service/parallel_mode/distributor.rs`, `src/application/service/parallel_mode/session_detail.rs` | pool recovery, distributor delivery, and session history are split from the facade, but the larger child modules still require careful tracing | keep service modules focused on orchestration and keep pure readiness, roster, detail, slot, and cleanup decisions in `src/domain/parallel_mode` |
+| planning runtime services | `src/application/service/planning/authoring/directions.rs`, `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/repair/reconciliation.rs`, `src/application/service/planning/runtime/prompt.rs` | planning concepts are powerful but spread across services with overlapping product language | keep semantic validation and queue facts in `src/domain/planning`; distinguish authoring, validation, runtime prompt assembly, and recovery more sharply |
 | continuation policy and queue behavior | `src/application/service/planning/runtime/policy.rs`, `src/application/service/planning/runtime/facade.rs`, `src/application/service/planning/worker/orchestration.rs` | queue-driven continuation is hard to explain because policy, prompting, and recovery are separated differently than the operator sees them | align continuation policy surface with operator concepts such as next task, pause reason, and resume path |
 | outbound infrastructure layout | `src/adapter/outbound/` as one flat directory | DB, GitHub, filesystem, and app-server details are harder to skip when tracing feature logic | group outbound adapters by infrastructure boundary and keep composition near entrypoints |
 | broad integration-style tests | `src/adapter/inbound/tui/app/shell_rendering*_tests.rs`, `src/application/service/parallel_mode/tests/*`, and planning runtime test clusters | behavior is well-covered, but intent is harder to discover for future changes | split tests by operator journey and subsystem contract |
@@ -49,6 +52,17 @@ Recent extraction work moved several formerly service-local calculations into do
 - The application layer should therefore focus new parallel-mode and planning work on orchestration,
   persistence, prompt assembly, and recovery side effects.
 
+## Completed Boundary Checkpoints
+
+- All non-reference source files under `src/` are below the 1000-line threshold.
+- `src/adapter/inbound/tui/app/planning/controller.rs` is split into overlay key handlers and
+  status/reset copy helpers under `planning/controller/`.
+- `src/adapter/outbound/filesystem/planning_workspace.rs` no longer imports the concrete SQLite
+  authority adapter; repo-scoped workspace behavior is injected through
+  `RepoScopedPlanningWorkspacePort`.
+- `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs` keeps active-document,
+  runtime-projection, repo-scoped-workspace, store, and path helpers in child modules.
+
 ## Planning Hotspot Audit
 
 Composition wiring is no longer the planning hotspot. The planning feature composition now delegates
@@ -60,10 +74,9 @@ The remaining planning hotspots by current implementation size and mixed respons
 | Rank | Hotspot | Current pressure | Narrow next slice |
 | --- | --- | --- | --- |
 | 1 | `src/application/service/planning/repair/reconciliation.rs` | repair orchestration, protected-file restore, prompt construction, focused ledger excerpts, and tests share one module | split focused excerpt helpers and repair prompt construction behind the repair boundary |
-| 2 | `src/adapter/inbound/tui/app/planning/controller.rs` | shell command dispatch, setup flow, draft editor close-risk handling, reset parsing, and status copy share one controller impl | split reset/status-copy helpers before moving effectful controller paths |
-| 3 | `src/application/service/planning/authoring/directions.rs` | direction summary, supporting-file staging, doctor repair, and path rewriting share one authoring service | split supporting-file path rewrite helpers from the service methods |
-| 4 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation rules and runtime prompt assembly are large but already stay inside runtime boundaries; queue facts have moved to domain | extract rule groups only after controller and repair boundaries are clearer |
-| 5 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
+| 2 | `src/application/service/planning/authoring/directions.rs` | direction summary, supporting-file staging, doctor repair, and path rewriting share one authoring service | split supporting-file path rewrite helpers from the service methods |
+| 3 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation rules and runtime prompt assembly are large but already stay inside runtime boundaries; queue facts have moved to domain | extract rule groups only after repair and directions boundaries are clearer |
+| 4 | `src/application/service/planning/admin/*` | admin facade and file-sync orchestration are now split into child modules, but exported DTOs still make the folder a broad public surface | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
 
 Queued next narrow slice:
 
