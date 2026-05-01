@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use askama::Template;
+use axum::Router;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
@@ -25,15 +25,15 @@ use crate::application::service::planning::{
     PlanningResetTarget, PlanningServices,
 };
 
+mod api;
 mod forms;
 #[cfg(test)]
 mod tests;
 mod views;
 
 use self::forms::{
-    CreateDraftForm, CreateDraftRequest, DirectionMutationForm, DraftMutationForm,
-    DraftPromoteApiResponse, EditorQuery, FileSyncForm, IdDeleteForm, OverviewApiResponse,
-    ResetForm, ResetRequest, SaveDraftRequest, TaskMutationForm,
+    CreateDraftForm, DirectionMutationForm, DraftMutationForm, EditorQuery, FileSyncForm,
+    IdDeleteForm, ResetForm, TaskMutationForm,
 };
 use self::views::{
     ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate, EditorTemplate,
@@ -133,31 +133,31 @@ fn build_router(state: AdminAppState) -> Router {
             post(promote_draft_page),
         )
         .route("/admin/controls/reset", post(reset_page))
-        .route("/api/planning/summary", get(summary_api))
-        .route("/api/planning/runtime", get(runtime_api))
-        .route("/api/planning/drafts", post(create_draft_api))
+        .route("/api/planning/summary", get(api::summary_api))
+        .route("/api/planning/runtime", get(api::runtime_api))
+        .route("/api/planning/drafts", post(api::create_draft_api))
         .route(
             "/api/planning/drafts/{draft_name}",
-            get(load_draft_api).put(save_draft_api),
+            get(api::load_draft_api).put(api::save_draft_api),
         )
         .route(
             "/api/planning/drafts/{draft_name}/validate",
-            post(validate_draft_api),
+            post(api::validate_draft_api),
         )
         .route(
             "/api/planning/drafts/{draft_name}/promote",
-            post(promote_draft_api),
+            post(api::promote_draft_api),
         )
-        .route("/api/planning/directions", post(upsert_direction_api))
+        .route("/api/planning/directions", post(api::upsert_direction_api))
         .route(
             "/api/planning/directions/delete",
-            post(delete_direction_api),
+            post(api::delete_direction_api),
         )
-        .route("/api/planning/tasks", post(upsert_task_api))
-        .route("/api/planning/tasks/delete", post(delete_task_api))
-        .route("/api/planning/files/export", post(export_files_api))
-        .route("/api/planning/files/apply", post(apply_files_api))
-        .route("/api/planning/reset", post(reset_api))
+        .route("/api/planning/tasks", post(api::upsert_task_api))
+        .route("/api/planning/tasks/delete", post(api::delete_task_api))
+        .route("/api/planning/files/export", post(api::export_files_api))
+        .route("/api/planning/files/apply", post(api::apply_files_api))
+        .route("/api/planning/reset", post(api::reset_api))
         .with_state(state)
 }
 
@@ -500,228 +500,6 @@ async fn reset_page(
         .reset_workspace(target)
         .map_err(internal_server_error)?;
     Ok(Redirect::to("/admin/controls?notice=planning%20workspace%20reset").into_response())
-}
-
-async fn summary_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-) -> std::result::Result<Response, StatusCode> {
-    let (jar, csrf_token) = ensure_csrf_cookie(jar);
-    let overview = state
-        .facade
-        .load_overview()
-        .map_err(internal_server_error)?;
-    Ok((
-        jar,
-        Json(OverviewApiResponse {
-            csrf_token,
-            overview,
-        }),
-    )
-        .into_response())
-}
-
-async fn runtime_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-) -> std::result::Result<Response, StatusCode> {
-    let (jar, _) = ensure_csrf_cookie(jar);
-    let runtime = state
-        .facade
-        .load_runtime_summary()
-        .map_err(internal_server_error)?;
-    Ok((jar, Json(runtime)).into_response())
-}
-
-async fn create_draft_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<CreateDraftRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let session = state
-        .facade
-        .create_draft_session(request.kind, request.direction_id.as_deref())
-        .map_err(internal_server_error)?;
-    Ok(Json(session).into_response())
-}
-
-async fn load_draft_api(
-    State(state): State<AdminAppState>,
-    Path(draft_name): Path<String>,
-    Query(query): Query<EditorQuery>,
-) -> std::result::Result<Response, StatusCode> {
-    let session = state
-        .facade
-        .load_draft_session(PlanningAdminDraftLoadRequest {
-            draft_name,
-            kind: query.kind,
-            direction_id: query.direction_id,
-        })
-        .map_err(internal_server_error)?;
-    Ok(Json(session).into_response())
-}
-
-async fn save_draft_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Path(draft_name): Path<String>,
-    Json(request): Json<SaveDraftRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let (_, session) = state
-        .facade
-        .save_draft(PlanningAdminDraftMutationRequest {
-            draft_name,
-            kind: request.kind,
-            direction_id: request.direction_id,
-            files: request.files,
-        })
-        .map_err(internal_server_error)?;
-    Ok(Json(session).into_response())
-}
-
-async fn validate_draft_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Path(draft_name): Path<String>,
-    Json(request): Json<SaveDraftRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let (_, session) = state
-        .facade
-        .save_draft(PlanningAdminDraftMutationRequest {
-            draft_name,
-            kind: request.kind,
-            direction_id: request.direction_id,
-            files: request.files,
-        })
-        .map_err(internal_server_error)?;
-    Ok(Json(session).into_response())
-}
-
-async fn promote_draft_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Path(draft_name): Path<String>,
-    Json(request): Json<SaveDraftRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let (result, session) = state
-        .facade
-        .promote_draft(PlanningAdminDraftMutationRequest {
-            draft_name,
-            kind: request.kind,
-            direction_id: request.direction_id,
-            files: request.files,
-        })
-        .map_err(internal_server_error)?;
-    Ok(Json(DraftPromoteApiResponse {
-        promoted_file_count: result.promoted_file_count,
-        is_valid: result.validation_report.is_valid(),
-        session,
-    })
-    .into_response())
-}
-
-async fn upsert_direction_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<PlanningAdminDirectionMutationRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .upsert_direction(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
-}
-
-async fn delete_direction_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<PlanningAdminDirectionDeleteRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .delete_direction(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
-}
-
-async fn upsert_task_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<PlanningAdminTaskMutationRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .upsert_task(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
-}
-
-async fn delete_task_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<PlanningAdminTaskDeleteRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .delete_task(request)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
-}
-
-async fn export_files_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .export_active_files_for_edit()
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
-}
-
-async fn apply_files_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .apply_exported_files()
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
-}
-
-async fn reset_api(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Json(request): Json<ResetRequest>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .reset_workspace(parse_reset_target(&request.target)?)
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
 }
 
 fn page_mutation_request(
