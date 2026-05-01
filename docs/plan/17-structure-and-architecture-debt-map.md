@@ -83,6 +83,9 @@ Recent extraction work moved several formerly service-local calculations into do
   `domain/parallel_mode/readiness.rs`.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
+- `src/application/service/planning/runtime/intake.rs` keeps local runtime task draft generation,
+  prompt normalization, title/id derivation, and generator contract tests in
+  `runtime/intake/draft.rs`.
 - `src/application/service/planning/task_mutation.rs` keeps command extraction in
   `task_mutation/commands.rs`, mutation tests in `task_mutation/tests.rs`, and task mutation helper
   rules in `task_mutation/helpers.rs`.
@@ -140,7 +143,7 @@ The remaining planning hotspots by current implementation size and mixed respons
 | --- | --- | --- | --- |
 | 1 | parallel-mode integration-style tests | distributor and pool test clusters now have first-pass subsystem splits; remaining files are narrower recovery, lease, supervisor, and dispatch contracts | split only when a behavior change touches one of those contracts |
 | 2 | `src/application/service/planning/admin/*` and `src/adapter/inbound/admin_api/*` | admin facade and adapter API/page boundaries are split; remaining pressure should come from a concrete admin behavior change, not speculative DTO churn | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
-| 3 | `src/application/service/planning/runtime/validation.rs` and `src/application/service/planning/runtime/prompt.rs` | validation and prompt assembly are now below line pressure and have shared path/prompt projection owners; future pressure should come from behavior changes | extract additional rule groups only when a behavior change touches them |
+| 3 | `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/runtime/prompt.rs`, and `src/application/service/planning/runtime/intake.rs` | validation, prompt assembly, and intake draft generation are now below line pressure and have shared path/prompt/draft projection owners; future pressure should come from behavior changes | extract additional rule groups only when a behavior change touches them |
 
 Queued next narrow slice:
 
