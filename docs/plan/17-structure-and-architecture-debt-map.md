@@ -116,6 +116,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `parallel_mode/support.rs`.
 - `src/application/service/parallel_mode/session_detail.rs` keeps session-detail file persistence,
   path sanitization, and history append deduplication in `parallel_mode/session_detail/store.rs`.
+- `src/adapter/inbound/tui/app/parallel_mode.rs` keeps parallel dispatch worker stream handling
+  and official-completion refresh coordination in `parallel_mode/dispatch_worker.rs`.
 - `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs` keeps history flush suffix/sync
   contracts in `inline_terminal_adapter/tests/history_flush.rs` and shared test app fixtures in
   `inline_terminal_adapter/tests/fixtures.rs`.
