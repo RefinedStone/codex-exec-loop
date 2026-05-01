@@ -139,6 +139,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs` keeps official
   completion capture and refresh handling in
   `turn_submission_runtime/post_turn_execution/official_completion.rs`.
+- `src/adapter/inbound/tui/app/planning_draft_editor_ui.rs` keeps editor state contract tests in
+  `planning_draft_editor_ui/tests.rs`.
 
 ## Planning Hotspot Audit
 
