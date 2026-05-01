@@ -107,6 +107,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/parallel_mode/mod.rs` keeps agent branch naming, slug truncation, and
   branch collision checks in `parallel_mode/branch_names.rs`, dispatch/blocker helpers in
   `parallel_mode/orchestration.rs`, and shared git/fs support helpers in `parallel_mode/support.rs`.
+- `src/application/service/parallel_mode/session_detail.rs` keeps session-detail file persistence,
+  path sanitization, and history append deduplication in `parallel_mode/session_detail/store.rs`.
 - `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs` keeps history flush suffix/sync
   contracts in `inline_terminal_adapter/tests/history_flush.rs` and shared test app fixtures in
   `inline_terminal_adapter/tests/fixtures.rs`.
