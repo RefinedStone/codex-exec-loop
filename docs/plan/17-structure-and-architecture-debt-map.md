@@ -70,6 +70,9 @@ Recent extraction work moved several formerly service-local calculations into do
   in `authoring/directions/supporting_files.rs`.
 - `src/application/service/planning/shared/planning_paths.rs` is the shared owner for planning
   markdown path validation used by runtime validation and directions authoring.
+- `src/domain/session_browser.rs` keeps search tokenization and ranking in
+  `domain/session_browser/search.rs`, leaving state, projection, project filtering, and page
+  selection in the parent domain module.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
