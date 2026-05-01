@@ -61,7 +61,8 @@ Recent extraction work moved several formerly service-local calculations into do
   authority adapter; repo-scoped workspace behavior is injected through
   `RepoScopedPlanningWorkspacePort`.
 - `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs` keeps active-document,
-  runtime-projection, repo-scoped-workspace, store, and path helpers in child modules.
+  draft-file staging, runtime-projection, repo-scoped-workspace, store, and path helpers in child
+  modules.
 - `src/application/service/planning/repair/reconciliation.rs` keeps guard tests and fixtures in
   `repair/reconciliation/tests.rs`.
 - `src/application/service/planning/authoring/directions.rs` keeps supporting-file path validation,
