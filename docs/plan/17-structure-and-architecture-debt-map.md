@@ -73,7 +73,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `repair/reconciliation/tests.rs`.
 - `src/application/service/planning/authoring/directions.rs` keeps supporting-file path validation,
   default detail-doc generation, queue-idle prompt normalization, and catalog path mutation helpers
-  in `authoring/directions/supporting_files.rs`.
+  in `authoring/directions/supporting_files.rs`; test-only doctor repair flow lives in
+  `authoring/directions/doctor.rs`.
 - `src/application/service/planning/shared/planning_paths.rs` is the shared owner for planning
   markdown path validation used by runtime validation and directions authoring.
 - `src/domain/session_browser.rs` keeps search tokenization and ranking in
