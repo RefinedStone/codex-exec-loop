@@ -20,6 +20,7 @@ use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, default_direction_detail_doc_path,
 };
+use crate::application::service::planning::shared::planning_paths::is_valid_planning_markdown_path;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, QueueIdlePolicy,
@@ -32,8 +33,8 @@ use self::supporting_files::{
     build_default_detail_doc_markdown, default_validated_direction_detail_doc_path,
 };
 use self::supporting_files::{
-    is_valid_planning_markdown_path, normalize_queue_idle_review_prompt_markdown,
-    set_direction_detail_doc_path, set_queue_idle_prompt_path, trimmed_non_empty,
+    normalize_queue_idle_review_prompt_markdown, set_direction_detail_doc_path,
+    set_queue_idle_prompt_path, trimmed_non_empty,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
