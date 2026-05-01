@@ -15,14 +15,17 @@ use crate::application::port::outbound::telegram_bot_port::{
     TelegramUpdate,
 };
 use crate::application::service::planning::{
-    PlanningAdminFacadeService, PlanningControlCommand, PlanningControlService,
-    PlanningResetTarget, PlanningServices,
+    PlanningAdminFacadeService, PlanningControlCommand, PlanningControlService, PlanningServices,
 };
 
 const DEFAULT_POLL_TIMEOUT_SECONDS: u16 = 30;
 const DEFAULT_POLL_LIMIT: u8 = 100;
 const DEFAULT_FAILURE_BACKOFF: Duration = Duration::from_secs(2);
 const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nAlias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nEnv: AKRA_TELEGRAM_BOT_TOKEN, AKRA_TELEGRAM_ALLOWED_CHAT_IDS=123,456\nConfig: $XDG_CONFIG_HOME/akra/telegram.env or ~/.config/akra/telegram.env";
+
+mod message;
+
+use self::message::{TelegramInboundCommand, TelegramParsedMessage, parse_message};
 
 #[derive(Debug, Clone)]
 struct TelegramBotArgs {
@@ -296,19 +299,6 @@ impl TelegramBotPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TelegramInboundCommand {
-    WhoAmI,
-    Planning(PlanningControlCommand),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TelegramParsedMessage {
-    Ignore,
-    Error(String),
-    Command(TelegramInboundCommand),
-}
-
 struct TelegramBotRunner {
     gateway: Arc<dyn TelegramBotPort>,
     control_service: PlanningControlService,
@@ -485,134 +475,6 @@ impl TelegramBotRunner {
         if !self.failure_backoff.is_zero() {
             thread::sleep(self.failure_backoff);
         }
-    }
-}
-
-fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
-    let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
-        return TelegramParsedMessage::Ignore;
-    };
-
-    let mut parts = text.split_whitespace();
-    let Some(raw_command) = parts.next() else {
-        return TelegramParsedMessage::Ignore;
-    };
-    let command = normalize_command(raw_command);
-    let arguments = parts.collect::<Vec<_>>();
-
-    match command.as_str() {
-        "/start" | "/help" | "help" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Help),
-            "/help",
-        ),
-        "/whoami" => {
-            parse_command_without_arguments(&arguments, TelegramInboundCommand::WhoAmI, "/whoami")
-        }
-        "/status" | "status" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Status),
-            "/status",
-        ),
-        "/queue" | "queue" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Queue),
-            "/queue",
-        ),
-        "/plan" => parse_plan_arguments(&arguments),
-        "/reset_queue" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                PlanningResetTarget::Queue,
-            )),
-            "/reset_queue",
-        ),
-        "/reset_directions" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                PlanningResetTarget::Directions,
-            )),
-            "/reset_directions",
-        ),
-        "/reset_all" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                PlanningResetTarget::All,
-            )),
-            "/reset_all",
-        ),
-        "/reset" => parse_reset_arguments(&arguments),
-        token if token.starts_with('/') => TelegramParsedMessage::Error(format!(
-            "지원하지 않는 명령어입니다: {token}\n{}",
-            PlanningControlService::new(Arc::new(NoopPlanningControlSurface)).help_text()
-        )),
-        _ => TelegramParsedMessage::Ignore,
-    }
-}
-
-fn parse_command_without_arguments(
-    arguments: &[&str],
-    command: TelegramInboundCommand,
-    usage: &'static str,
-) -> TelegramParsedMessage {
-    if arguments.is_empty() {
-        TelegramParsedMessage::Command(command)
-    } else {
-        TelegramParsedMessage::Error(format!("사용법: {usage}"))
-    }
-}
-
-fn parse_plan_arguments(arguments: &[&str]) -> TelegramParsedMessage {
-    match arguments {
-        [] | ["status"] => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            PlanningControlCommand::Status,
-        )),
-        _ => TelegramParsedMessage::Error("사용법: /plan [status]".to_string()),
-    }
-}
-
-fn parse_reset_arguments(arguments: &[&str]) -> TelegramParsedMessage {
-    let [target] = arguments else {
-        return TelegramParsedMessage::Error(
-            "사용법: /reset queue | /reset directions | /reset all".to_string(),
-        );
-    };
-
-    let command = match *target {
-        "queue" => PlanningControlCommand::Reset(PlanningResetTarget::Queue),
-        "directions" => PlanningControlCommand::Reset(PlanningResetTarget::Directions),
-        "all" => PlanningControlCommand::Reset(PlanningResetTarget::All),
-        _ => {
-            return TelegramParsedMessage::Error(
-                "사용법: /reset queue | /reset directions | /reset all".to_string(),
-            );
-        }
-    };
-    TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command))
-}
-
-fn normalize_command(raw_command: &str) -> String {
-    let lowered = raw_command.to_ascii_lowercase();
-    let mut parts = lowered.split('@');
-    parts.next().unwrap_or_default().to_string()
-}
-
-struct NoopPlanningControlSurface;
-
-impl crate::application::service::planning::control::PlanningControlSurface
-    for NoopPlanningControlSurface
-{
-    fn load_status_snapshot(
-        &self,
-    ) -> Result<crate::application::service::planning::control::PlanningControlStatusSnapshot> {
-        bail!("noop control surface should not execute");
-    }
-
-    fn reset_workspace(
-        &self,
-        _target: PlanningResetTarget,
-    ) -> Result<crate::application::service::planning::control::PlanningControlResetOutcome> {
-        bail!("noop control surface should not execute");
     }
 }
 
