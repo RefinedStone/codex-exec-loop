@@ -265,27 +265,14 @@ pub(super) fn record_pushing_session_detail(
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(
+    record_distributor_progress_session_detail(
         planning_authority,
         workspace_dir,
         pool_root,
         lease,
-        |current| {
-            let timestamp = current_timestamp();
-            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-            detail.state_label = "pushing".to_string();
-            detail.completion_state_label = "merge_queued".to_string();
-            detail.latest_summary = summary.trim().to_string();
-            detail.distributor_outcome = Some(summary.trim().to_string());
-            detail.updated_at = timestamp.clone();
-            push_session_history(
-                &mut detail,
-                "pushing",
-                timestamp,
-                summary.trim().to_string(),
-            );
-            detail
-        },
+        "pushing",
+        summary,
+        false,
     )
 }
 
@@ -296,27 +283,14 @@ pub(super) fn record_pr_pending_session_detail(
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(
+    record_distributor_progress_session_detail(
         planning_authority,
         workspace_dir,
         pool_root,
         lease,
-        |current| {
-            let timestamp = current_timestamp();
-            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-            detail.state_label = "pr_pending".to_string();
-            detail.completion_state_label = "merge_queued".to_string();
-            detail.latest_summary = summary.trim().to_string();
-            detail.distributor_outcome = Some(summary.trim().to_string());
-            detail.updated_at = timestamp.clone();
-            push_session_history(
-                &mut detail,
-                "pr_pending",
-                timestamp,
-                summary.trim().to_string(),
-            );
-            detail
-        },
+        "pr_pending",
+        summary,
+        false,
     )
 }
 
@@ -327,27 +301,14 @@ pub(super) fn record_merge_pending_session_detail(
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(
+    record_distributor_progress_session_detail(
         planning_authority,
         workspace_dir,
         pool_root,
         lease,
-        |current| {
-            let timestamp = current_timestamp();
-            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-            detail.state_label = "merge_pending".to_string();
-            detail.completion_state_label = "merge_queued".to_string();
-            detail.latest_summary = summary.trim().to_string();
-            detail.distributor_outcome = Some(summary.trim().to_string());
-            detail.updated_at = timestamp.clone();
-            push_session_history(
-                &mut detail,
-                "merge_pending",
-                timestamp,
-                summary.trim().to_string(),
-            );
-            detail
-        },
+        "merge_pending",
+        summary,
+        false,
     )
 }
 
@@ -358,6 +319,26 @@ pub(super) fn record_integrating_session_detail(
     lease: &ParallelModeSlotLeaseSnapshot,
     summary: &str,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    record_distributor_progress_session_detail(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        "integrating",
+        summary,
+        true,
+    )
+}
+
+fn record_distributor_progress_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    state_label: &'static str,
+    summary: &str,
+    replace_latest_same_state_history: bool,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
         workspace_dir,
@@ -365,24 +346,21 @@ pub(super) fn record_integrating_session_detail(
         lease,
         |current| {
             let timestamp = current_timestamp();
+            let summary = summary.trim().to_string();
             let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-            detail.state_label = "integrating".to_string();
+            detail.state_label = state_label.to_string();
             detail.completion_state_label = "merge_queued".to_string();
-            detail.latest_summary = summary.trim().to_string();
-            detail.distributor_outcome = Some(summary.trim().to_string());
+            detail.latest_summary = summary.clone();
+            detail.distributor_outcome = Some(summary.clone());
             detail.updated_at = timestamp.clone();
-            if let Some(last_entry) = detail.history.last_mut()
-                && last_entry.state_label == "integrating"
+            if replace_latest_same_state_history
+                && let Some(last_entry) = detail.history.last_mut()
+                && last_entry.state_label == state_label
             {
                 last_entry.timestamp = timestamp;
-                last_entry.summary = summary.trim().to_string();
+                last_entry.summary = summary;
             } else {
-                push_session_history(
-                    &mut detail,
-                    "integrating",
-                    timestamp,
-                    summary.trim().to_string(),
-                );
+                push_session_history(&mut detail, state_label, timestamp, summary);
             }
             detail
         },
