@@ -13,7 +13,6 @@ use crate::domain::parallel_mode::{
 };
 
 use super::current_branch_name;
-use super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL,
@@ -23,6 +22,7 @@ use super::{
 
 mod allocation_lock;
 mod board;
+mod cleanup;
 mod lease_store;
 mod paths;
 mod slot_inspection;
@@ -31,6 +31,10 @@ pub(super) use self::allocation_lock::acquire_pool_allocation_lock;
 use self::board::{
     build_blocked_pool_board, build_pool_board_from_context,
     build_pool_slots as build_pool_slots_from_context, build_unavailable_pool_board,
+};
+use self::cleanup::cleanup_reusable_slots;
+pub(super) use self::cleanup::{
+    branch_is_cleanup_ready, branch_is_integrated_into, cleanup_slot, reset_slot_worktree_to_akra,
 };
 #[cfg(test)]
 pub(super) use self::lease_store::slot_lease_file_path;
@@ -633,159 +637,6 @@ fn reset_reusable_detached_baseline_slots(
     }
 
     reset_slots
-}
-
-fn cleanup_reusable_slots(
-    planning_authority: &dyn PlanningAuthorityPort,
-    repo_root: &str,
-    pool_root: &Path,
-    worktree_records: &[GitWorktreeRecord],
-) -> usize {
-    let mut cleaned_slots = 0;
-    let slot_leases = load_runtime_projection_snapshot(planning_authority, repo_root).slot_leases;
-
-    for slot_number in 1..=DEFAULT_POOL_SIZE {
-        let slot_id = slot_id(slot_number);
-        let slot_path = pool_root.join(&slot_id);
-        let Some(worktree_record) = worktree_records
-            .iter()
-            .find(|record| record.path == slot_path)
-        else {
-            continue;
-        };
-        let Some(branch_name) = worktree_record.branch_name.as_deref() else {
-            continue;
-        };
-        let expected_agent_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
-        if !branch_name.starts_with(&expected_agent_prefix) {
-            continue;
-        }
-        let slot_lease = slot_leases.get(&slot_id);
-        let lease_state = slot_lease.map(|lease| lease.state);
-        let worktree_clean = lease_state.is_none()
-            && inspect_slot_git_status(&slot_path).is_some_and(SlotGitStatus::is_clean_baseline);
-        let branch_integrated = !matches!(
-            lease_state,
-            Some(ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running)
-        ) && (matches!(
-            lease_state,
-            Some(ParallelModeSlotLeaseState::CleanupPending)
-        ) || worktree_clean)
-            && branch_is_cleanup_ready(repo_root, branch_name);
-        let cleanup_ready = ParallelModePoolSlotCleanupDecision::new(
-            lease_state,
-            worktree_clean,
-            branch_integrated,
-        )
-        .is_cleanup_ready();
-        if !cleanup_ready {
-            continue;
-        }
-        if cleanup_slot(
-            planning_authority,
-            repo_root,
-            pool_root,
-            &slot_id,
-            &slot_path,
-            branch_name,
-        ) {
-            cleaned_slots += 1;
-        }
-    }
-
-    cleaned_slots
-}
-
-pub(super) fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {
-    branch_is_integrated_into(repo_root, branch_name, POOL_BASELINE_BRANCH)
-}
-
-pub(super) fn branch_is_integrated_into(
-    repo_root: &str,
-    branch_name: &str,
-    base_branch: &str,
-) -> bool {
-    command_succeeds(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "merge-base",
-            "--is-ancestor",
-            branch_name,
-            base_branch,
-        ],
-    )
-}
-
-pub(super) fn branch_is_cleanup_ready(repo_root: &str, branch_name: &str) -> bool {
-    branch_is_integrated_into_akra(repo_root, branch_name)
-}
-
-pub(super) fn cleanup_slot(
-    planning_authority: &dyn PlanningAuthorityPort,
-    repo_root: &str,
-    pool_root: &Path,
-    slot_id: &str,
-    slot_path: &Path,
-    branch_name: &str,
-) -> bool {
-    let reset_report = reset_slot_worktree_to_akra(slot_path);
-    if !reset_report.succeeded() {
-        let _failure_summary = reset_report.failure_summary();
-        return false;
-    }
-    let delete_branch = run_git_sequence(
-        "delete cleaned slot branch",
-        vec![GitCommandStep::new(
-            "delete agent branch",
-            ["-C", repo_root, "branch", "-D", branch_name],
-        )],
-    );
-    if !delete_branch.succeeded() {
-        let _failure_summary = delete_branch.failure_summary();
-        return false;
-    }
-    if !remove_slot_lease(planning_authority, repo_root, pool_root, slot_id) {
-        return false;
-    }
-
-    inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
-}
-
-pub(super) fn reset_slot_worktree_to_akra(
-    slot_path: &Path,
-) -> super::git_sequence::GitCommandSequenceReport {
-    let slot_path_string = slot_path.display().to_string();
-    run_git_sequence(
-        "reset slot worktree to pool baseline",
-        vec![
-            GitCommandStep::new(
-                "checkout pool baseline detached",
-                [
-                    "-C",
-                    slot_path_string.as_str(),
-                    "checkout",
-                    "--detach",
-                    POOL_BASELINE_BRANCH,
-                ],
-            ),
-            GitCommandStep::new(
-                "hard reset to pool baseline",
-                [
-                    "-C",
-                    slot_path_string.as_str(),
-                    "reset",
-                    "--hard",
-                    POOL_BASELINE_BRANCH,
-                ],
-            ),
-            GitCommandStep::new(
-                "clean untracked files",
-                ["-C", slot_path_string.as_str(), "clean", "-fdx"],
-            ),
-        ],
-    )
 }
 
 pub(super) fn detect_canonical_repo_root(
