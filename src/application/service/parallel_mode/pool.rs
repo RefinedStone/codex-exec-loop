@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_authority_port::{
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot,
     ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
@@ -22,17 +22,22 @@ use super::{
 };
 
 mod allocation_lock;
+mod board;
 mod paths;
 mod slot_inspection;
 
 pub(super) use self::allocation_lock::acquire_pool_allocation_lock;
+use self::board::{
+    build_blocked_pool_board, build_pool_board_from_context,
+    build_pool_slots as build_pool_slots_from_context, build_unavailable_pool_board,
+};
 use self::paths::{
-    annotate_worktree_label, canonicalize_best_effort, display_pool_path, parse_worktree_records,
-    resolve_branch_head, resolve_pool_baseline_head, worktree_paths_match,
+    annotate_worktree_label, canonicalize_best_effort, parse_worktree_records, resolve_branch_head,
+    resolve_pool_baseline_head, worktree_paths_match,
 };
 pub(super) use self::paths::{derive_default_pool_root, inspect_slot_git_status};
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
-use self::slot_inspection::{inspect_pool_slot, summarize_pool_reconcile_status};
+use self::slot_inspection::summarize_pool_reconcile_status;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GitWorktreeRecord {
@@ -334,6 +339,10 @@ pub(super) fn inspect_pool_board_and_context(
     }
 }
 
+pub(super) fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelModePoolSlotSnapshot> {
+    build_pool_slots_from_context(context)
+}
+
 fn can_refresh_pool_baseline_from_workspace(
     repo_root: &str,
     runtime_projection: &PlanningAuthorityRuntimeProjectionSnapshot,
@@ -535,22 +544,6 @@ fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
         None,
     )?;
     Some(parse_worktree_records(&worktree_output))
-}
-
-fn build_pool_board_from_context(
-    context: &PoolRuntimeContext,
-    reconcile_status: impl Into<String>,
-) -> ParallelModePoolBoardSnapshot {
-    let slots = build_pool_slots(context);
-    let pool_root_label = display_pool_path(&context.canonical_repo_root, &context.pool_root);
-
-    ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
-}
-
-pub(super) fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelModePoolSlotSnapshot> {
-    (1..=DEFAULT_POOL_SIZE)
-        .map(|slot_number| inspect_pool_slot(context, &slot_id(slot_number)))
-        .collect::<Vec<_>>()
 }
 
 fn provision_missing_slots(
@@ -791,51 +784,6 @@ pub(super) fn reset_slot_worktree_to_akra(
     )
 }
 
-fn build_unavailable_pool_board(
-    planning_authority: &dyn PlanningAuthorityPort,
-    workspace_dir: &str,
-    reconcile_status: impl Into<String>,
-    branch_name: &str,
-    worktree_label: &str,
-    owner_label: &str,
-) -> ParallelModePoolBoardSnapshot {
-    let pool_root_label = derive_pool_root_label(planning_authority, workspace_dir);
-    let slots = (1..=DEFAULT_POOL_SIZE)
-        .map(|slot_number| {
-            ParallelModePoolSlotSnapshot::new(
-                slot_id(slot_number),
-                ParallelModePoolSlotState::Unavailable,
-                branch_name,
-                worktree_label,
-                owner_label,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
-}
-
-fn build_blocked_pool_board(
-    planning_authority: &dyn PlanningAuthorityPort,
-    workspace_dir: &str,
-    reconcile_status: impl Into<String>,
-    detail: &str,
-) -> ParallelModePoolBoardSnapshot {
-    let pool_root_label = derive_pool_root_label(planning_authority, workspace_dir);
-    let slots = (1..=DEFAULT_POOL_SIZE)
-        .map(|slot_number| {
-            ParallelModePoolSlotSnapshot::new(
-                slot_id(slot_number),
-                ParallelModePoolSlotState::Blocked,
-                "unknown",
-                detail,
-                "operator recovery",
-            )
-        })
-        .collect::<Vec<_>>();
-
-    ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
-}
 pub(super) fn detect_canonical_repo_root(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
@@ -846,17 +794,6 @@ pub(super) fn detect_canonical_repo_root(
         .map(|location| PathBuf::from(location.canonical_repo_root))
 }
 
-fn derive_pool_root_label(
-    planning_authority: &dyn PlanningAuthorityPort,
-    workspace_dir: &str,
-) -> String {
-    detect_canonical_repo_root(planning_authority, workspace_dir)
-        .map(|canonical_repo_root| {
-            let pool_root = derive_default_pool_root(&canonical_repo_root);
-            display_pool_path(&canonical_repo_root, &pool_root)
-        })
-        .unwrap_or_else(|| "not available".to_string())
-}
 pub(super) fn slot_id(slot_number: usize) -> String {
     format!("slot-{slot_number}")
 }

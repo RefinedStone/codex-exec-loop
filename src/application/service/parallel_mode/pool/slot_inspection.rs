@@ -1,4 +1,7 @@
 use super::*;
+use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoolSlotState};
+
+use super::paths::display_pool_path;
 
 pub(super) fn inspect_pool_slot(
     context: &PoolRuntimeContext,
