@@ -60,10 +60,11 @@ completed domain-extraction slices.
 
 Current target order:
 
-1. `src/application/service/parallel_mode/` child modules
-2. `src/application/service/planning/runtime/validation.rs` and
+1. `src/application/service/planning/runtime/validation.rs` and
    `src/application/service/planning/runtime/prompt.rs`
-3. broad shell rendering and parallel-mode integration-style tests
+2. broad shell rendering and parallel-mode integration-style tests
+3. parallel-mode delivery, pool cleanup, or supervisor follow-up only when behavior changes touch
+   those flows
 
 The rule is simple: do not begin a later hotspot slice without first recording why the earlier one
 was skipped.

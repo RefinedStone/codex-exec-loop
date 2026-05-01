@@ -19,11 +19,11 @@ hurting both implementation safety and review quality.
 Use this order for the current cycle when choosing a refactor slice. Completed checkpoints stay here
 only when they prevent repeated work.
 
-1. parallel mode service child modules: `src/application/service/parallel_mode/pool.rs`,
-   `src/application/service/parallel_mode/distributor.rs`, and supervisor wiring
-2. planning runtime rule groups: `src/application/service/planning/runtime/validation.rs` and
+1. planning runtime rule groups: `src/application/service/planning/runtime/validation.rs` and
    `src/application/service/planning/runtime/prompt.rs`
-3. test shape: broad shell rendering and parallel-mode integration-style tests
+2. test shape: broad shell rendering and parallel-mode integration-style tests
+3. parallel mode follow-up only when behavior changes touch delivery, pool cleanup, or supervisor
+   wiring
 
 If a change starts with a later hotspot, record why an earlier hotspot was skipped.
 
@@ -34,7 +34,7 @@ If a change starts with a later hotspot, record why an earlier hotspot was skipp
 | shell presentation | `src/adapter/inbound/tui/app/shell_presentation/*` | the broad surface is now split, but overlay copy and layout still require several neighboring files | keep wording, projection, and layout modules separate |
 | conversation runtime | `src/adapter/inbound/tui/app/conversation_runtime.rs`, `conversation_model.rs`, `conversation_model/view_model.rs` | current file sizes are controlled, but continuation and conversation status still need clear ownership when behavior changes | separate conversation lifecycle from continuation lifecycle and surface projection |
 | planning controller | `src/adapter/inbound/tui/app/planning/controller.rs`, `controller/*`, `planning_draft_editor_ui.rs` | setup keys, status copy, and close-risk helpers are split; future work should avoid re-coupling effectful controller paths | keep setup, authoring, and close-risk handling in dedicated modules |
-| parallel mode service | `src/application/service/parallel_mode/pool.rs`, `src/application/service/parallel_mode/distributor.rs`, `src/application/service/parallel_mode/session_detail.rs` | pool recovery, distributor delivery, and session history are split from the facade, but the larger child modules still require careful tracing | keep service modules focused on orchestration and keep pure readiness, roster, detail, slot, and cleanup decisions in `src/domain/parallel_mode` |
+| parallel mode service | `src/application/service/parallel_mode/pool.rs`, `src/application/service/parallel_mode/distributor.rs`, `src/application/service/parallel_mode/session_detail.rs` | pool board projection and distributor snapshot projection are split, but delivery and cleanup flows should stay narrow when they change | keep service modules focused on orchestration and keep pure readiness, roster, detail, slot, and cleanup decisions in `src/domain/parallel_mode` |
 | planning runtime services | `src/application/service/planning/authoring/directions.rs`, `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/repair/reconciliation.rs`, `src/application/service/planning/runtime/prompt.rs` | planning concepts are powerful but spread across services with overlapping product language | keep semantic validation and queue facts in `src/domain/planning`; distinguish authoring, validation, runtime prompt assembly, and recovery more sharply |
 | continuation policy and queue behavior | `src/application/service/planning/runtime/policy.rs`, `src/application/service/planning/runtime/facade.rs`, `src/application/service/planning/worker/orchestration.rs` | queue-driven continuation is hard to explain because policy, prompting, and recovery are separated differently than the operator sees them | align continuation policy surface with operator concepts such as next task, pause reason, and resume path |
 | outbound infrastructure layout | `src/adapter/outbound/` as one flat directory | DB, GitHub, filesystem, and app-server details are harder to skip when tracing feature logic | group outbound adapters by infrastructure boundary and keep composition near entrypoints |
@@ -67,6 +67,10 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/planning/authoring/directions.rs` keeps supporting-file path validation,
   default detail-doc generation, queue-idle prompt normalization, and catalog path mutation helpers
   in `authoring/directions/supporting_files.rs`.
+- `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
+  rebase provenance, and completion-feed projection in `parallel_mode/distributor/snapshot.rs`.
+- `src/application/service/parallel_mode/pool.rs` keeps pool-board projection helpers in
+  `parallel_mode/pool/board.rs`.
 
 ## Planning Hotspot Audit
 
@@ -83,12 +87,14 @@ The remaining planning hotspots by current implementation size and mixed respons
 
 Queued next narrow slice:
 
-- **Task:** Keep parallel-mode child modules below the line threshold while separating orchestration
-  from pure projection and queue-delivery policy.
-- **Why next:** planning repair and directions supporting-file slices are now split, while
-  `parallel_mode/distributor.rs` and `parallel_mode/pool.rs` remain the largest service modules.
-- **Target write set:** one `src/application/service/parallel_mode/*` child module at a time.
-- **Acceptance:** existing parallel-mode distributor or pool focused tests continue to pass.
+- **Task:** Extract planning runtime rule groups only when a behavior change touches validation or
+  prompt assembly.
+- **Why next:** line-limit, controller, repair, directions, pool board, and distributor snapshot
+  checkpoints are complete; the next structural pressure is duplicated planning language across
+  validation and prompt assembly.
+- **Target write set:** one `src/application/service/planning/runtime/*` module plus focused tests.
+- **Acceptance:** existing planning runtime tests continue to pass and the moved rule group has one
+  clear owner.
 
 ## Chosen Boundary Model
 
