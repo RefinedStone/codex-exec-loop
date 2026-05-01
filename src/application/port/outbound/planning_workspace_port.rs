@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningDraftFileRecord {
@@ -114,4 +115,57 @@ pub trait PlanningWorkspacePort: Send + Sync {
         active_path: &str,
         body: &str,
     ) -> Result<String>;
+}
+
+pub trait RepoScopedPlanningWorkspacePort: Send + Sync {
+    fn is_git_backed_workspace(&self, workspace_dir: &str) -> bool;
+
+    fn resolve_active_workspace_root(&self, workspace_dir: &str) -> PathBuf;
+
+    fn stage_repo_scoped_draft_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftFileRecord],
+    ) -> Result<PlanningDraftStageRecord>;
+
+    fn load_repo_scoped_draft_files(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+    ) -> Result<PlanningDraftLoadRecord>;
+
+    fn replace_repo_scoped_draft_file(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        active_path: &str,
+        body: &str,
+    ) -> Result<String>;
+
+    fn load_active_workspace_files(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningWorkspaceLoadRecord>;
+
+    fn commit_active_workspace_files(
+        &self,
+        workspace_dir: &str,
+        record: &PlanningWorkspaceLoadRecord,
+    ) -> Result<()>;
+
+    fn load_active_planning_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<String>>;
+
+    fn replace_active_planning_file(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+        body: Option<&str>,
+    ) -> Result<()>;
+
+    fn remove_active_planning_entry(&self, workspace_dir: &str, relative_path: &str) -> Result<()>;
 }

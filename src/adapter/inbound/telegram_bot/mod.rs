@@ -71,8 +71,10 @@ fn build_planning_admin_facade(workspace_dir: String) -> PlanningAdminFacadeServ
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
     let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning_workspace_port = Arc::new(
+        FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(planning_authority.clone()),
+    );
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
         planning_authority.clone(),

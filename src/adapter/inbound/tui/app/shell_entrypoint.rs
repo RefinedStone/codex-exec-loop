@@ -38,7 +38,10 @@ fn build_default_app() -> NativeTuiApp {
     let sqlite_planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning_authority: Arc<dyn PlanningAuthorityPort> = sqlite_planning_authority.clone();
     let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
-    let planning_workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    let planning_workspace_port =
+        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
+            sqlite_planning_authority.clone(),
+        ));
     let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
         AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
     );
