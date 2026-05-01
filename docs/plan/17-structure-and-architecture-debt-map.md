@@ -144,7 +144,8 @@ Recent extraction work moved several formerly service-local calculations into do
   `cli/reports.rs`, leaving command dispatch and production service wiring in the parent module.
 - `src/adapter/inbound/telegram_bot/mod.rs` keeps command parsing and parser-only help fallback in
   `telegram_bot/message.rs`, and CLI/environment configuration loading in
-  `telegram_bot/config.rs`.
+  `telegram_bot/config.rs`. Bot-facing parser/config/runner coverage lives in
+  `telegram_bot/tests.rs`.
 - `src/adapter/outbound/app_server/protocol.rs` keeps active-turn app-server notification
   translation in `app_server/protocol/turn_notifications.rs`.
 - `src/adapter/outbound/app_server/mod.rs` keeps app-server approval, reviewer, and sandbox
