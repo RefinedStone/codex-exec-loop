@@ -13,7 +13,6 @@ use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
 
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -22,9 +21,23 @@ use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
     PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
-    PlanningAdminManagementView, PlanningAdminOverview, PlanningAdminSessionView,
-    PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest, PlanningResetTarget,
-    PlanningServices,
+    PlanningAdminSessionView, PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
+    PlanningResetTarget, PlanningServices,
+};
+
+mod forms;
+#[cfg(test)]
+mod tests;
+mod views;
+
+use self::forms::{
+    CreateDraftForm, CreateDraftRequest, DirectionMutationForm, DraftMutationForm,
+    DraftPromoteApiResponse, EditorQuery, FileSyncForm, IdDeleteForm, OverviewApiResponse,
+    ResetForm, ResetRequest, SaveDraftRequest, TaskMutationForm,
+};
+use self::views::{
+    ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate, EditorTemplate,
+    TasksTemplate,
 };
 
 const DEFAULT_PORT: u16 = 18442;
@@ -38,190 +51,6 @@ struct AdminAppState {
 #[derive(Debug, Default)]
 struct AdminServerArgs {
     port: u16,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct EditorQuery {
-    kind: PlanningAdminDraftKind,
-    #[serde(default)]
-    direction_id: Option<String>,
-    #[serde(default)]
-    notice: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CreateDraftForm {
-    csrf_token: String,
-    kind: PlanningAdminDraftKind,
-    #[serde(default)]
-    direction_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct DraftMutationForm {
-    csrf_token: String,
-    kind: PlanningAdminDraftKind,
-    #[serde(default)]
-    direction_id: Option<String>,
-    #[serde(flatten)]
-    values: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ResetForm {
-    csrf_token: String,
-    target: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct DirectionMutationForm {
-    csrf_token: String,
-    #[serde(default)]
-    id: String,
-    title: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    success_criteria_text: String,
-    #[serde(default)]
-    scope_hints_text: String,
-    #[serde(default)]
-    detail_doc_path: String,
-    #[serde(default)]
-    state: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct IdDeleteForm {
-    csrf_token: String,
-    id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct TaskMutationForm {
-    csrf_token: String,
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    direction_id: String,
-    title: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    base_priority: String,
-    #[serde(default)]
-    dynamic_priority_delta: String,
-    #[serde(default)]
-    priority_reason: String,
-    #[serde(default)]
-    depends_on_text: String,
-    #[serde(default)]
-    blocked_by_text: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct FileSyncForm {
-    csrf_token: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CreateDraftRequest {
-    kind: PlanningAdminDraftKind,
-    #[serde(default)]
-    direction_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SaveDraftRequest {
-    kind: PlanningAdminDraftKind,
-    #[serde(default)]
-    direction_id: Option<String>,
-    #[serde(default)]
-    files: Vec<PlanningAdminDraftFileUpdate>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ResetRequest {
-    target: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct OverviewApiResponse {
-    csrf_token: String,
-    overview: PlanningAdminOverview,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DraftPromoteApiResponse {
-    promoted_file_count: usize,
-    is_valid: bool,
-    session: PlanningAdminSessionView,
-}
-
-#[derive(Template)]
-#[template(path = "admin/dashboard.html")]
-struct DashboardTemplate {
-    page_title: String,
-    current_nav: &'static str,
-    workspace_dir: String,
-    csrf_token: String,
-    notice: Option<String>,
-    overview: PlanningAdminOverview,
-}
-
-#[derive(Template)]
-#[template(path = "admin/directions.html")]
-struct DirectionsTemplate {
-    page_title: String,
-    current_nav: &'static str,
-    workspace_dir: String,
-    csrf_token: String,
-    notice: Option<String>,
-    overview: PlanningAdminOverview,
-    management: PlanningAdminManagementView,
-}
-
-#[derive(Template)]
-#[template(path = "admin/tasks.html")]
-struct TasksTemplate {
-    page_title: String,
-    current_nav: &'static str,
-    workspace_dir: String,
-    csrf_token: String,
-    notice: Option<String>,
-    overview: PlanningAdminOverview,
-    management: PlanningAdminManagementView,
-}
-
-#[derive(Template)]
-#[template(path = "admin/controls.html")]
-struct ControlsTemplate {
-    page_title: String,
-    current_nav: &'static str,
-    workspace_dir: String,
-    csrf_token: String,
-    notice: Option<String>,
-    overview: PlanningAdminOverview,
-}
-
-#[derive(Template)]
-#[template(path = "admin/editor.html")]
-struct EditorTemplate {
-    page_title: String,
-    current_nav: &'static str,
-    workspace_dir: String,
-    csrf_token: String,
-    notice: Option<String>,
-    session: PlanningAdminSessionView,
-}
-
-#[derive(Template)]
-#[template(path = "admin/partials/draft_status.html")]
-struct DraftStatusTemplate {
-    notice: Option<String>,
-    session: PlanningAdminSessionView,
 }
 
 pub async fn run_from_env() -> Result<()> {
@@ -1093,67 +922,4 @@ where
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{extract_file_updates, nav_for_kind};
-    use crate::application::service::planning::{PlanningAdminDraftKind, PlanningAdminFileKey};
-    use std::collections::HashMap;
-
-    const BASE_TEMPLATE: &str = include_str!("../../../../templates/admin/base.html");
-    const CONTROLS_TEMPLATE: &str = include_str!("../../../../templates/admin/controls.html");
-    const DIRECTIONS_TEMPLATE: &str = include_str!("../../../../templates/admin/directions.html");
-    const EDITOR_TEMPLATE: &str = include_str!("../../../../templates/admin/editor.html");
-    const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.html");
-
-    #[test]
-    fn page_mutation_ignores_removed_raw_authority_file_updates() {
-        let updates = extract_file_updates(HashMap::from([
-            ("file_task_authority".to_string(), "{}".to_string()),
-            ("file_directions".to_string(), "version = 1".to_string()),
-            (
-                "file_queue_idle_prompt".to_string(),
-                "# Queue prompt".to_string(),
-            ),
-        ]));
-
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].key, PlanningAdminFileKey::QueueIdlePrompt);
-    }
-
-    #[test]
-    fn nav_no_longer_has_raw_task_authority_draft_kind() {
-        assert_eq!(
-            nav_for_kind(PlanningAdminDraftKind::FullPlanning),
-            "dashboard"
-        );
-        assert_eq!(
-            nav_for_kind(PlanningAdminDraftKind::QueueIdlePrompt),
-            "directions"
-        );
-    }
-
-    #[test]
-    fn risky_admin_mutations_require_browser_confirmation() {
-        assert!(BASE_TEMPLATE.contains("document.addEventListener(\"submit\""));
-        assert!(BASE_TEMPLATE.contains("}, true);"));
-
-        for (template_name, template) in [
-            ("controls", CONTROLS_TEMPLATE),
-            ("directions", DIRECTIONS_TEMPLATE),
-            ("editor", EDITOR_TEMPLATE),
-            ("tasks", TASKS_TEMPLATE),
-        ] {
-            assert!(
-                template.contains("data-confirm="),
-                "{template_name} should mark risky submit buttons"
-            );
-        }
-
-        assert_eq!(CONTROLS_TEMPLATE.matches("data-confirm=").count(), 4);
-        assert_eq!(DIRECTIONS_TEMPLATE.matches("data-confirm=").count(), 2);
-        assert_eq!(EDITOR_TEMPLATE.matches("data-confirm=").count(), 1);
-        assert_eq!(TASKS_TEMPLATE.matches("data-confirm=").count(), 2);
-    }
 }
