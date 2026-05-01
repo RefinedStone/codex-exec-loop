@@ -3,16 +3,12 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
-use askama::Template;
 use axum::Router;
 use axum::extract::{Form, Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::CookieJar;
-use axum_extra::extract::cookie::{Cookie, SameSite};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use rand::RngCore;
 
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -27,6 +23,7 @@ use crate::application::service::planning::{
 
 mod api;
 mod forms;
+mod helpers;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -35,13 +32,16 @@ use self::forms::{
     CreateDraftForm, DirectionMutationForm, DraftMutationForm, EditorQuery, FileSyncForm,
     IdDeleteForm, ResetForm, TaskMutationForm,
 };
+use self::helpers::{
+    encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
+    notice_location, render_fragment, render_html, verify_form_csrf, verify_header_csrf,
+};
 use self::views::{
     ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate, EditorTemplate,
     TasksTemplate,
 };
 
 const DEFAULT_PORT: u16 = 18442;
-const CSRF_COOKIE_NAME: &str = "akra_admin_csrf";
 
 #[derive(Clone)]
 struct AdminAppState {
@@ -570,71 +570,6 @@ fn draft_editor_location(
     location
 }
 
-fn notice_location(path: &str, notice: &str) -> String {
-    format!("{path}?notice={}", encode_uri_component(notice))
-}
-
-fn encode_uri_component(value: &str) -> String {
-    utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
-}
-
-fn ensure_csrf_cookie(jar: CookieJar) -> (CookieJar, String) {
-    if let Some(existing) = jar
-        .get(CSRF_COOKIE_NAME)
-        .map(|cookie| cookie.value().to_string())
-    {
-        return (jar, existing);
-    }
-
-    let token = new_csrf_token();
-    let cookie = Cookie::build((CSRF_COOKIE_NAME, token.clone()))
-        .path("/")
-        .same_site(SameSite::Lax)
-        .http_only(false)
-        .build();
-    (jar.add(cookie), token)
-}
-
-fn verify_form_csrf(jar: &CookieJar, token: &str) -> std::result::Result<(), StatusCode> {
-    let cookie_value = jar
-        .get(CSRF_COOKIE_NAME)
-        .map(|cookie| cookie.value().to_string())
-        .ok_or(StatusCode::FORBIDDEN)?;
-    if cookie_value == token {
-        Ok(())
-    } else {
-        Err(StatusCode::FORBIDDEN)
-    }
-}
-
-fn verify_header_csrf(jar: &CookieJar, headers: &HeaderMap) -> std::result::Result<(), StatusCode> {
-    let cookie_value = jar
-        .get(CSRF_COOKIE_NAME)
-        .map(|cookie| cookie.value().to_string())
-        .ok_or(StatusCode::FORBIDDEN)?;
-    let header_value = headers
-        .get("x-csrf-token")
-        .and_then(|value| value.to_str().ok())
-        .ok_or(StatusCode::FORBIDDEN)?;
-    if cookie_value == header_value {
-        Ok(())
-    } else {
-        Err(StatusCode::FORBIDDEN)
-    }
-}
-
-fn new_csrf_token() -> String {
-    let mut bytes = [0_u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn is_htmx_request(headers: &HeaderMap) -> bool {
-    headers
-        .get("hx-request")
-        .is_some_and(|value| value == HeaderValue::from_static("true"))
-}
-
 fn render_editor_page(
     jar: CookieJar,
     workspace_dir: &str,
@@ -653,24 +588,6 @@ fn render_editor_page(
             session,
         },
     )
-}
-
-fn render_html<T: Template>(
-    jar: CookieJar,
-    template: T,
-) -> std::result::Result<Response, StatusCode> {
-    let body = template.render().map_err(internal_server_error)?;
-    Ok((jar, Html(body)).into_response())
-}
-
-fn render_fragment<T: Template>(template: T) -> std::result::Result<Response, StatusCode> {
-    let body = template.render().map_err(internal_server_error)?;
-    Ok(Html(body).into_response())
-}
-
-fn internal_server_error(error: impl Into<anyhow::Error>) -> StatusCode {
-    eprintln!("admin server error: {:#}", error.into());
-    StatusCode::INTERNAL_SERVER_ERROR
 }
 
 fn parse_args<I>(args: I) -> Result<AdminServerArgs>

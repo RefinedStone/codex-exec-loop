@@ -127,8 +127,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/application/service/parallel_mode/tests/pool/mod.rs` keeps reconciliation/provision/reset
   and cleanup contracts in `parallel_mode/tests/pool/reconciliation.rs`.
 - `src/adapter/inbound/admin_api/mod.rs` keeps JSON planning API handlers in
-  `admin_api/api.rs`, leaving server bootstrap, router wiring, page handlers, and shared render
-  helpers in the parent module.
+  `admin_api/api.rs`, and CSRF/render/redirect helpers in `admin_api/helpers.rs`, leaving server
+  bootstrap, router wiring, and page handlers in the parent module.
 - `src/adapter/inbound/telegram_bot/mod.rs` keeps command parsing and parser-only help fallback in
   `telegram_bot/message.rs`, and CLI/environment configuration loading in
   `telegram_bot/config.rs`.
