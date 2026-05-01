@@ -434,7 +434,9 @@ fn build_production_planning_services() -> PlanningServices {
     ));
     let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
     PlanningServices::from_ports(
-        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
+            planning_authority.clone(),
+        )),
         planning_authority.clone(),
         planning_authority,
         Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),

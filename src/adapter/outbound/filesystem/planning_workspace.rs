@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
-    PlanningWorkspacePort,
+    PlanningWorkspacePort, RepoScopedPlanningWorkspacePort,
 };
 use crate::application::service::planning::{
     ACTIVE_PLANNING_FILE_PATHS, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
@@ -15,11 +15,30 @@ use crate::application::service::planning::{
 };
 
 #[derive(Default)]
-pub struct FilesystemPlanningWorkspaceAdapter;
+pub struct FilesystemPlanningWorkspaceAdapter {
+    repo_scoped_store: Option<Arc<dyn RepoScopedPlanningWorkspacePort>>,
+}
 
 impl FilesystemPlanningWorkspaceAdapter {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_repo_scoped_store(
+        repo_scoped_store: Arc<dyn RepoScopedPlanningWorkspacePort>,
+    ) -> Self {
+        Self {
+            repo_scoped_store: Some(repo_scoped_store),
+        }
+    }
+
+    fn repo_scoped_store(
+        &self,
+        workspace_dir: &str,
+    ) -> Option<&dyn RepoScopedPlanningWorkspacePort> {
+        self.repo_scoped_store
+            .as_deref()
+            .filter(|store| store.is_git_backed_workspace(workspace_dir))
     }
 
     fn draft_directory(workspace_dir: &str, draft_name: &str) -> PathBuf {
@@ -28,18 +47,22 @@ impl FilesystemPlanningWorkspaceAdapter {
             .join(draft_name)
     }
 
-    fn rejected_directory(workspace_dir: &str, archive_name: &str) -> PathBuf {
-        Self::active_workspace_root(workspace_dir)
+    fn rejected_directory(&self, workspace_dir: &str, archive_name: &str) -> PathBuf {
+        self.active_workspace_root(workspace_dir)
             .join(PLANNING_REJECTED_DIRECTORY)
             .join(archive_name)
     }
 
-    fn active_workspace_root(workspace_dir: &str) -> PathBuf {
-        SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir)
+    fn active_workspace_root(&self, workspace_dir: &str) -> PathBuf {
+        self.repo_scoped_store
+            .as_ref()
+            .map(|store| store.resolve_active_workspace_root(workspace_dir))
+            .unwrap_or_else(|| Path::new(workspace_dir).to_path_buf())
     }
 
-    fn active_workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
-        Self::active_workspace_root(workspace_dir).join(relative_path)
+    fn active_workspace_path(&self, workspace_dir: &str, relative_path: &str) -> PathBuf {
+        self.active_workspace_root(workspace_dir)
+            .join(relative_path)
     }
 
     fn candidate_workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
@@ -47,10 +70,11 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 
     fn read_optional_workspace_file(
+        &self,
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        let path = Self::active_workspace_path(workspace_dir, relative_path);
+        let path = self.active_workspace_path(workspace_dir, relative_path);
         if !path.is_file() {
             return Ok(None);
         }
@@ -227,8 +251,8 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::stage_repo_scoped_draft_files(
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.stage_repo_scoped_draft_files(
                 workspace_dir,
                 draft_name,
                 &canonical_files,
@@ -267,11 +291,8 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         draft_name: &str,
     ) -> Result<PlanningDraftLoadRecord> {
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            let mut loaded = SqlitePlanningAuthorityAdapter::load_repo_scoped_draft_files(
-                workspace_dir,
-                draft_name,
-            )?;
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            let mut loaded = store.load_repo_scoped_draft_files(workspace_dir, draft_name)?;
             loaded.staged_files.sort_by(|left, right| {
                 Self::draft_sort_order(&left.active_path)
                     .cmp(&Self::draft_sort_order(&right.active_path))
@@ -302,8 +323,8 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         body: &str,
     ) -> Result<String> {
         let active_path = Self::canonical_draft_active_path(active_path)?;
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::replace_repo_scoped_draft_file(
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.replace_repo_scoped_draft_file(
                 workspace_dir,
                 draft_name,
                 &active_path,
@@ -322,10 +343,12 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::load_active_workspace_files(workspace_dir);
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.load_active_workspace_files(workspace_dir);
         }
-        Self::load_workspace_record_from(workspace_dir, Self::read_optional_workspace_file)
+        Self::load_workspace_record_from(workspace_dir, |workspace_dir, relative_path| {
+            self.read_optional_workspace_file(workspace_dir, relative_path)
+        })
     }
 
     fn load_planning_workspace_candidate_files(
@@ -343,11 +366,8 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()> {
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
-                workspace_dir,
-                record,
-            );
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.commit_active_workspace_files(workspace_dir, record);
         }
 
         Self::commit_workspace_record_to_filesystem(Path::new(workspace_dir), record)
@@ -362,17 +382,14 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            let active_body = SqlitePlanningAuthorityAdapter::load_active_planning_file(
-                workspace_dir,
-                &relative_path,
-            )?;
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            let active_body = store.load_active_planning_file(workspace_dir, &relative_path)?;
             if active_body.is_some() || Self::authority_managed_path(&relative_path) {
                 return Ok(active_body);
             }
-            return Self::read_optional_workspace_file(workspace_dir, &relative_path);
+            return self.read_optional_workspace_file(workspace_dir, &relative_path);
         }
-        Self::read_optional_workspace_file(workspace_dir, &relative_path)
+        self.read_optional_workspace_file(workspace_dir, &relative_path)
     }
 
     fn load_optional_planning_candidate_file(
@@ -397,14 +414,10 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::replace_active_planning_file(
-                workspace_dir,
-                &relative_path,
-                body,
-            );
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.replace_active_planning_file(workspace_dir, &relative_path, body);
         }
-        let path = Self::active_workspace_path(workspace_dir, &relative_path);
+        let path = self.active_workspace_path(workspace_dir, &relative_path);
         match body {
             Some(body) => {
                 Self::ensure_parent_directory(&path)?;
@@ -431,13 +444,10 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
-        if SqlitePlanningAuthorityAdapter::is_git_backed_workspace(workspace_dir) {
-            return SqlitePlanningAuthorityAdapter::remove_active_planning_entry(
-                workspace_dir,
-                &relative_path,
-            );
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.remove_active_planning_entry(workspace_dir, &relative_path);
         }
-        let path = Self::active_workspace_path(workspace_dir, &relative_path);
+        let path = self.active_workspace_path(workspace_dir, &relative_path);
         if !path.exists() {
             return Ok(());
         }
@@ -460,7 +470,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         active_path: &str,
         body: &str,
     ) -> Result<String> {
-        let archive_directory = Self::rejected_directory(workspace_dir, archive_name);
+        let archive_directory = self.rejected_directory(workspace_dir, archive_name);
         fs::create_dir_all(&archive_directory)
             .with_context(|| format!("failed to create {}", archive_directory.display()))?;
 

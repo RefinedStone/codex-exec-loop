@@ -23,6 +23,7 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
 };
 mod active_documents;
+mod repo_scoped_workspace;
 mod runtime_projection;
 mod store;
 mod workspace_paths;
