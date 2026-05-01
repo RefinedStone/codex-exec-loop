@@ -60,9 +60,8 @@ completed domain-extraction slices.
 
 Current target order:
 
-1. `src/application/service/planning/runtime/validation.rs` and
-   `src/application/service/planning/runtime/prompt.rs`
-2. broad shell rendering and parallel-mode integration-style tests
+1. broad shell rendering and parallel-mode integration-style tests
+2. planning runtime validation or prompt follow-up only when behavior changes touch those flows
 3. parallel-mode delivery, pool cleanup, or supervisor follow-up only when behavior changes touch
    those flows
 
