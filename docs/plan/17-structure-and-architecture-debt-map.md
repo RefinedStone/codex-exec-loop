@@ -111,7 +111,8 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/adapter/inbound/tui/app/inline_shell_commands.rs` keeps parser, palette, hint, and help
   tests in `inline_shell_commands/tests.rs`.
 - `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs` keeps planning overlay/editor
-  rendering contracts in `shell_rendering_contract_tests/planning.rs`.
+  rendering contracts in `shell_rendering_contract_tests/planning.rs` and shared rendering test
+  fixtures in `shell_rendering_contract_tests/fixtures.rs`.
 - `src/adapter/inbound/tui/app/shell_runtime/tests.rs` keeps redraw scheduler contracts in
   `shell_runtime/tests/scheduler.rs` and input/palette key contracts in
   `shell_runtime/tests/input.rs`.
