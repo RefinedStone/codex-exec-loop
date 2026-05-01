@@ -16,16 +16,19 @@ hurting both implementation safety and review quality.
 
 ## Current Hotspot Order
 
-Use this order for the current cycle when choosing a refactor slice. Completed checkpoints stay here
-only when they prevent repeated work.
+Use this order for the current cycle when choosing a refactor slice. Most first-pass line-limit,
+adapter-decoupling, and mixed-responsibility splits are now complete, so new slices should start
+from evidence rather than file size alone.
 
-1. parallel-mode integration-style test follow-up only when behavior changes touch recovery, lease,
-   supervisor, or dispatch behavior
-2. planning runtime follow-up only when behavior changes touch validation or prompt assembly
-3. parallel mode follow-up only when behavior changes touch delivery, pool cleanup, or supervisor
-   wiring
+1. Run a completion audit against line limits, dependency direction, duplicated logic, current docs,
+   and context fan-in before declaring this architecture cycle done.
+2. Take additional production-code splits only when a concrete flow still requires unrelated
+   modules to understand it, or when a behavior change touches that flow.
+3. Split remaining broad tests only when a behavior change touches the covered recovery, lease,
+   supervisor, dispatch, rendering, or planning-runtime contract.
 
-If a change starts with a later hotspot, record why an earlier hotspot was skipped.
+If a new refactor starts without audit evidence, record which user-visible flow is still hard to
+trace and which files forced the extra context.
 
 ## Debt Map
 
@@ -171,31 +174,24 @@ Recent extraction work moved several formerly service-local calculations into do
 - `src/adapter/inbound/tui/app/planning_draft_editor_ui.rs` keeps editor state contract tests in
   `planning_draft_editor_ui/tests.rs`.
 
-## Planning Hotspot Audit
+## Remaining Audit Focus
 
-Composition wiring is no longer the planning hotspot. The planning feature composition now delegates
-shared services plus workspace, runtime, and worker dependency bundles before constructing public
-use-case groups.
+Composition wiring, line-limit pressure, concrete-adapter coupling, and the largest mixed
+production flows have first-pass checkpoints above. The next useful work is not another mechanical
+split by size; it is an evidence-backed audit of what still makes a contributor open too much
+context.
 
-The remaining planning hotspots by current implementation size and mixed responsibility are:
+Use this checklist before adding more structural PRs:
 
-| Rank | Hotspot | Current pressure | Narrow next slice |
-| --- | --- | --- | --- |
-| 1 | parallel-mode integration-style tests | distributor and pool test clusters now have first-pass subsystem splits; remaining files are narrower recovery, lease, supervisor, and dispatch contracts | split only when a behavior change touches one of those contracts |
-| 2 | `src/application/service/planning/admin/*` and `src/adapter/inbound/admin_api/*` | admin facade and adapter API/page boundaries are split; remaining pressure should come from a concrete admin behavior change, not speculative DTO churn | keep admin submodules stable and move only clearly isolated admin projections or document helpers |
-| 3 | `src/application/service/planning/runtime/validation.rs`, `src/application/service/planning/runtime/prompt.rs`, and `src/application/service/planning/runtime/intake.rs` | validation, prompt assembly, and intake draft generation are now below line pressure and have shared path/prompt/draft projection owners; future pressure should come from behavior changes | extract additional rule groups only when a behavior change touches them |
-
-Queued next narrow slice:
-
-- **Task:** Split remaining parallel-mode integration-style tests only when a behavior change touches
-  recovery, lease, supervisor, or dispatch behavior.
-- **Why next:** line-limit, controller, repair, directions, runtime prompt/path, shell rendering,
-  shell runtime, inline terminal history, pool board, distributor snapshot, distributor blocked
-  queue, and pool reconciliation checkpoints are complete; remaining test files are narrower.
-- **Target write set:** one `src/application/service/parallel_mode/tests/*` cluster plus any local
-  test helpers needed to keep fixture setup readable.
-- **Acceptance:** the same behavior remains covered, but a future change can find the relevant test
-  without opening unrelated journeys.
+- **Line limit:** confirm non-reference source files remain under 1000 lines.
+- **Dependency direction:** confirm `src/domain` does not import `application` or `adapter`, and
+  `src/application` imports concrete adapters only in test-scoped code.
+- **Duplicate logic:** prefer common helpers only where a repeated rule already exists, such as the
+  distributor session-detail progress helper.
+- **Docs:** keep current behavior in `docs/supersession/current-contract.md`, active sequencing in
+  this file and `20-context-first-*`, and historical research under `docs/plan`.
+- **Context fan-in:** for any remaining hotspot, name the exact operator flow and files a reader
+  must open today.
 
 ## Chosen Boundary Model
 

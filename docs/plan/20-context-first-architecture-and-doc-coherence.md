@@ -48,26 +48,26 @@ guidance, and roadmap docs:
 - repair
 - capability boundary
 
-### 2. Freeze Hotspot Split Order
+### 2. Keep Hotspot Work Evidence-Led
 
-The current debt map names the next hotspots and records completed checkpoints so future work does
-not repeat already-finished splits. Pure planning queue facts live in `src/domain/planning`,
-parallel-mode projections live under `src/domain/parallel_mode`, and session browser rules live
-under `src/domain`.
+The debt map records completed checkpoints so future work does not repeat already-finished splits.
+Pure planning queue facts live in `src/domain/planning`, parallel-mode projections live under
+`src/domain/parallel_mode`, and session browser rules live under `src/domain`.
 
-The ordered execution rule now applies to the remaining mixed-responsibility files, not to those
-completed domain-extraction slices.
+The first-pass split campaign is no longer driven by size alone. Future work should begin with a
+small audit that names the remaining context fan-in or dependency violation before moving code.
 
 Current target order:
 
-1. parallel-mode delivery, pool cleanup, supervisor, or test follow-up only when behavior changes
-   touch those flows
-2. planning runtime validation or prompt follow-up only when behavior changes touch those flows
-3. admin/planning DTO or adapter surface only when behavior changes expose an isolated projection,
-   document helper, or API/page boundary
+1. completion audit across line limits, dependency direction, duplicated logic, active docs, and
+   context fan-in
+2. production-code split or helper extraction only when the audit names a concrete flow that still
+   requires unrelated context
+3. test split only when a behavior change touches the covered contract and the existing test file
+   hides the relevant journey
 
-The rule is simple: do not begin a later hotspot slice without first recording why the earlier one
-was skipped.
+The rule is simple: do not start a new structural slice just because a file is still in the top
+twenty by line count. Name the flow, the extra files it forces open, and the payoff.
 
 ### 3. Audit Codex-Only Coupling
 
