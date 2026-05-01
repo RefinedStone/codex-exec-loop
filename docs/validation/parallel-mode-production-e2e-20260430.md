@@ -6,6 +6,8 @@ This document is the payload committed through a live production queued-result v
 
 Observed run:
 
+- Task ID: `prod-e2e-20260430`
+- Agent: `agent-prod-e2e`
 - Baseline: `f4d158b41ae836224dccd47f0cad5dd200c313ec`
 - Source branch: `akra-agent/slot-1/production-queued-result-e2e-2`
 - Source commit: `3e2d3276d9cd2bed6409634799c237964e83b4b1`

@@ -24,17 +24,19 @@ use super::{
 };
 
 const POOL_ALLOCATION_LOCK_DIR: &str = ".allocation-lock";
+const POOL_ALLOCATION_LOCK_OWNER_FILE: &str = "owner";
 const POOL_ALLOCATION_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const POOL_ALLOCATION_LOCK_RETRY: Duration = Duration::from_millis(25);
 const POOL_ALLOCATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(300);
 
 pub(super) struct PoolAllocationLock {
     lock_path: PathBuf,
+    owner_token: String,
 }
 
 impl Drop for PoolAllocationLock {
     fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.lock_path);
+        release_pool_allocation_lock(&self.lock_path, &self.owner_token);
     }
 }
 
@@ -174,10 +176,26 @@ pub(super) fn acquire_pool_allocation_lock(
 fn acquire_pool_allocation_lock_at(pool_root: &Path) -> Result<PoolAllocationLock, String> {
     let lock_path = pool_root.join(POOL_ALLOCATION_LOCK_DIR);
     let deadline = Instant::now() + POOL_ALLOCATION_LOCK_TIMEOUT;
+    let owner_token = pool_allocation_lock_owner_token();
 
     loop {
         match fs::create_dir(&lock_path) {
-            Ok(()) => return Ok(PoolAllocationLock { lock_path }),
+            Ok(()) => {
+                if let Err(error) = fs::write(
+                    lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE),
+                    &owner_token,
+                ) {
+                    let _ = fs::remove_dir_all(&lock_path);
+                    return Err(format!(
+                        "pool allocation lock owner could not be written at `{}`: {error}",
+                        lock_path.display()
+                    ));
+                }
+                return Ok(PoolAllocationLock {
+                    lock_path,
+                    owner_token,
+                });
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 remove_stale_pool_allocation_lock(&lock_path);
                 if Instant::now() >= deadline {
@@ -198,6 +216,24 @@ fn acquire_pool_allocation_lock_at(pool_root: &Path) -> Result<PoolAllocationLoc
     }
 }
 
+fn pool_allocation_lock_owner_token() -> String {
+    let created_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("pid={}\ncreated_at_ms={created_at}\n", std::process::id())
+}
+
+fn release_pool_allocation_lock(lock_path: &Path, owner_token: &str) {
+    let owner_path = lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE);
+    let Ok(current_owner) = fs::read_to_string(&owner_path) else {
+        return;
+    };
+    if current_owner == owner_token {
+        let _ = fs::remove_dir_all(lock_path);
+    }
+}
+
 fn remove_stale_pool_allocation_lock(lock_path: &Path) {
     let Ok(metadata) = fs::metadata(lock_path) else {
         return;
@@ -209,8 +245,26 @@ fn remove_stale_pool_allocation_lock(lock_path: &Path) {
         return;
     };
     if age >= POOL_ALLOCATION_LOCK_STALE_AFTER {
-        let _ = fs::remove_dir(lock_path);
+        let owner_path = lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE);
+        if fs::read_to_string(owner_path)
+            .ok()
+            .and_then(|owner| pool_allocation_lock_owner_pid(&owner))
+            .is_some_and(pool_allocation_lock_owner_is_alive)
+        {
+            return;
+        }
+        let _ = fs::remove_dir_all(lock_path);
     }
+}
+
+fn pool_allocation_lock_owner_pid(owner_token: &str) -> Option<u32> {
+    owner_token
+        .lines()
+        .find_map(|line| line.strip_prefix("pid=")?.parse::<u32>().ok())
+}
+
+fn pool_allocation_lock_owner_is_alive(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
 }
 
 pub(super) fn reconcile_pool_board(

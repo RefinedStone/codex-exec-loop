@@ -421,7 +421,7 @@
           event.preventDefault();
           event.stopPropagation();
         }
-      });
+      }, true);
     </script>
     <script type="module">
       const editors = [...document.querySelectorAll("textarea[data-editor-textarea]")];

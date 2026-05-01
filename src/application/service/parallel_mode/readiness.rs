@@ -181,7 +181,7 @@ pub(super) fn inspect_gh_binary(
             format!("gh found at {}", path.display()),
             None,
         ),
-        None if github_fallback_script_available() => ParallelModeCapabilitySnapshot::new(
+        None if github_fallback_script_available(runtime) => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
             ParallelModeCapabilityState::Ready,
             format!(
@@ -214,7 +214,7 @@ pub(super) fn inspect_gh_auth(
 
     let auth_succeeded = if runtime.find_executable("gh").is_some() {
         runtime.gh_auth_status(repo_root)
-    } else if github_fallback_script_available() {
+    } else if github_fallback_script_available(runtime) {
         runtime
             .run_command("bash", &[GITHUB_SCRIPT_PATH, "auth", "status"], repo_root)
             .is_some()
@@ -238,8 +238,8 @@ pub(super) fn inspect_gh_auth(
     }
 }
 
-fn github_fallback_script_available() -> bool {
-    Path::new(GITHUB_SCRIPT_PATH).exists()
+fn github_fallback_script_available(runtime: &dyn ParallelModeRuntimePort) -> bool {
+    runtime.path_exists(Path::new(GITHUB_SCRIPT_PATH))
 }
 
 pub(super) fn inspect_planning(
