@@ -81,6 +81,9 @@ Recent extraction work moved several formerly service-local calculations into do
   `domain/parallel_mode/readiness.rs`.
 - `src/application/service/planning/runtime/prompt.rs` keeps prompt fragment projection in
   `runtime/prompt/fragment.rs`.
+- `src/application/service/planning/task_mutation.rs` keeps command extraction in
+  `task_mutation/commands.rs`, mutation tests in `task_mutation/tests.rs`, and task mutation helper
+  rules in `task_mutation/helpers.rs`.
 - `src/application/service/planning/worker/orchestration.rs` keeps planning worker prompt assembly
   and prompt contract tests in `worker/orchestration/prompts.rs`.
 - `src/application/service/parallel_mode/distributor.rs` keeps snapshot, orchestrator status,
