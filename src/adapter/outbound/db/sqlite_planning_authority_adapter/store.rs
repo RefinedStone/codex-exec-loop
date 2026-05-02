@@ -1,16 +1,15 @@
 /*
-학습 주석:
-`store.rs`는 SQLite planning authority adapter의 중심 저장소 모듈입니다.
+`store.rs`는 SQLite planning authority adapter의 중심 저장소 모듈이다.
 
 이 파일은 "DB 파일을 열었을 때 어떤 schema를 보장하고, domain/application record를 어떤 조회 형태로
-다시 꺼낼 것인가"를 담당합니다. 이미 별도 모듈로 분리된 active document, draft, task authority row
-로직이 있지만, 이 파일은 여전히 전체 authority store의 공통 기반을 잡습니다.
+다시 꺼낼 것인가"를 담당한다. 이미 별도 모듈로 분리된 active document, draft, task authority row
+로직이 있지만, 이 파일은 여전히 전체 authority store의 공통 기반을 잡는다.
 
-이번 구간의 초점은 저장소 기반 계약입니다.
-- `ensure_schema`는 모든 하위 projection이 의존하는 테이블과 인덱스를 만듭니다.
-- shadow document 함수들은 파일 기반 planning workspace에서 읽은 내용을 DB에 mirror합니다.
-- metadata 함수들은 schema/mode/root/timestamp처럼 DB snapshot 전체를 설명하는 값을 기록합니다.
-- shadow load는 이전 schema나 빈 DB에서도 안전하게 빈 map으로 돌아가는 호환성 경계를 제공합니다.
+이번 구간의 초점은 저장소 기반 계약이다.
+- `ensure_schema`는 모든 하위 projection이 의존하는 테이블과 인덱스를 만든다.
+- shadow document 함수들은 파일 기반 planning workspace에서 읽은 내용을 DB에 mirror한다.
+- metadata 함수들은 schema/mode/root/timestamp처럼 DB snapshot 전체를 설명하는 값을 기록한다.
+- shadow load는 이전 schema나 빈 DB에서도 안전하게 빈 map으로 돌아가는 호환성 경계를 제공한다.
 */
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,25 +34,24 @@ use super::{
 };
 
 /*
-학습 주석:
-authority store가 필요로 하는 전체 schema를 idempotent하게 보장합니다.
+authority store가 필요로 하는 전체 schema를 idempotent하게 보장한다.
 
 이 함수는 `CREATE TABLE IF NOT EXISTS`와 `CREATE INDEX IF NOT EXISTS`만 사용하므로, 새 DB 파일뿐 아니라
-이미 존재하는 DB 파일에 여러 번 호출해도 같은 결과를 유지합니다. adapter의 다른 함수들은 자기 작업에
+이미 존재하는 DB 파일에 여러 번 호출해도 같은 결과를 유지한다. adapter의 다른 함수들은 자기 작업에
 필요한 테이블이 이미 있다고 가정하므로, DB connection을 만든 직후 이 schema 초기화가 먼저 실행되어야
-합니다.
+한다.
 
-테이블 묶음별 의미는 다음과 같습니다.
-- `authority_metadata`: schema version, 저장 mode, canonical repo root, 최근 갱신 시각 같은 store 전체 정보입니다.
-- `shadow_documents`: 파일시스템 workspace에서 읽은 planning 파일의 mirror입니다.
-- `staged_drafts` / `staged_draft_files`: repo-scoped draft staging 영역입니다.
-- `active_documents`: commit된 planning workspace snapshot입니다.
-- `planning_direction_*`: direction authority 문서와 방향별 JSON 원문입니다.
-- `planning_tasks` / `planning_task_edges` / `planning_queue_projection`: task authority와 queue projection입니다.
-- `runtime_*`: app-server/parallel runtime에서 쓰는 lease, session, queue, event projection입니다.
+테이블 묶음별 의미는 다음과 같다.
+- `authority_metadata`: schema version, 저장 mode, canonical repo root, 최근 갱신 시각 같은 store 전체 정보이다.
+- `shadow_documents`: 파일시스템 workspace에서 읽은 planning 파일의 mirror이다.
+- `staged_drafts` / `staged_draft_files`: repo-scoped draft staging 영역이다.
+- `active_documents`: commit된 planning workspace snapshot이다.
+- `planning_direction_*`: direction authority 문서와 방향별 JSON 원문이다.
+- `planning_tasks` / `planning_task_edges` / `planning_queue_projection`: task authority와 queue projection이다.
+- `runtime_*`: app-server/parallel runtime에서 쓰는 lease, session, queue, event projection이다.
 
 schema가 한 함수에 모여 있는 이유는 projection 모듈들이 서로 다른 테이블을 만져도 migration 기준은
-하나여야 하기 때문입니다. 분산된 `CREATE TABLE`은 버전 추적과 테스트 초기화를 어렵게 만듭니다.
+하나여야 하기 때문이다. 분산된 `CREATE TABLE`은 버전 추적과 테스트 초기화를 어렵게 만든다.
 */
 pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     connection
@@ -200,16 +198,15 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
 }
 
 /*
-학습 주석:
-파일시스템에서 읽은 planning 문서들을 `shadow_documents` 테이블에 전체 교체 방식으로 저장합니다.
+파일시스템에서 읽은 planning 문서들을 `shadow_documents` 테이블에 전체 교체 방식으로 저장한다.
 
-shadow store는 "현재 repo의 planning 파일들이 DB 관점에서 어떻게 보이는가"를 나타내는 mirror입니다.
-증분 patch를 시도하지 않고 먼저 테이블을 비우는 이유는 파일 삭제를 정확하게 반영하기 위해서입니다.
+shadow store는 "현재 repo의 planning 파일들이 DB 관점에서 어떻게 보이는가"를 나타내는 mirror이다.
+증분 patch를 시도하지 않고 먼저 테이블을 비우는 이유는 파일 삭제를 정확하게 반영하기 위해서이다.
 입력 `documents`에 없는 파일이 DB에 남아 있으면 이후 authority snapshot 로더가 삭제된 파일을 여전히
-존재하는 것처럼 볼 수 있습니다.
+존재하는 것처럼 볼 수 있다.
 
-이 함수는 transaction 안에서 shadow rows와 metadata timestamp를 함께 갱신합니다. 따라서 mirror 내용은
-항상 `last_synced_at`과 같은 commit 시점의 상태로 해석할 수 있습니다.
+이 함수는 transaction 안에서 shadow rows와 metadata timestamp를 함께 갱신한다. 따라서 mirror 내용은
+항상 `last_synced_at`과 같은 commit 시점의 상태로 해석할 수 있다.
 */
 pub(super) fn store_shadow_documents(
     connection: &mut Connection,
@@ -240,13 +237,12 @@ pub(super) fn store_shadow_documents(
 }
 
 /*
-학습 주석:
-authority DB 전체를 설명하는 공통 metadata를 upsert합니다.
+authority DB 전체를 설명하는 공통 metadata를 upsert한다.
 
-`timestamp_key`를 인자로 받는 이유는 호출 맥락마다 "무엇이 갱신되었는지"가 다르기 때문입니다.
-shadow sync는 `last_synced_at`, draft staging은 `last_draft_updated_at`처럼 다른 key를 넘깁니다.
+`timestamp_key`를 인자로 받는 이유는 호출 맥락마다 "무엇이 갱신되었는지"가 다르기 때문이다.
+shadow sync는 `last_synced_at`, draft staging은 `last_draft_updated_at`처럼 다른 key를 넘긴다.
 하지만 schema version, mode, canonical repo root, workspace root는 모든 갱신에서 함께 확인되어야 하는
-store identity 값입니다.
+store identity 값이다.
 */
 pub(super) fn upsert_authority_metadata(
     transaction: &rusqlite::Transaction<'_>,
@@ -270,13 +266,12 @@ pub(super) fn upsert_authority_metadata(
 }
 
 /*
-학습 주석:
-metadata key/value 하나를 insert-or-update합니다.
+metadata key/value 하나를 insert-or-update한다.
 
-metadata는 단순한 문자열 map이지만, 여러 저장 흐름에서 같은 key를 반복 갱신합니다. `ON CONFLICT(key)`
-절을 사용하면 caller가 "처음 쓰는 값인지, 기존 값을 갱신하는지"를 구분하지 않아도 됩니다. 이 함수는
+metadata는 단순한 문자열 map이지만, 여러 저장 흐름에서 같은 key를 반복 갱신한다. `ON CONFLICT(key)`
+절을 사용하면 caller가 "처음 쓰는 값인지, 기존 값을 갱신하는지"를 구분하지 않아도 된다. 이 함수는
 작은 helper지만 schema version, mode, ledger version처럼 store 해석에 필요한 기준값을 쓰는 공통
-입구입니다.
+입구이다.
 */
 pub(super) fn upsert_metadata(
     transaction: &rusqlite::Transaction<'_>,
@@ -294,15 +289,14 @@ pub(super) fn upsert_metadata(
 }
 
 /*
-학습 주석:
-shadow store에 mirror된 planning 문서들을 deterministic map으로 읽어옵니다.
+shadow store에 mirror된 planning 문서들을 deterministic map으로 읽어온다.
 
 `table_exists`를 먼저 확인하는 것은 이전 버전 DB나 아직 schema 초기화가 끝나지 않은 테스트 DB를
-읽을 때의 방어 장치입니다. shadow table이 없으면 "mirror가 없다"는 의미로 빈 map을 반환합니다.
+읽을 때의 방어 장치이다. shadow table이 없으면 "mirror가 없다"는 의미로 빈 map을 반환한다.
 
-조회는 `ORDER BY relative_path`를 사용하고 결과 컨테이너도 `BTreeMap`입니다. 둘 다 출력 순서를
-안정화하기 위한 선택입니다. planning 문서는 사람이 diff로 검토하는 일이 많기 때문에, DB가 반환하는
-행 순서가 실행마다 달라지는 상황을 피해야 합니다.
+조회는 `ORDER BY relative_path`를 사용하고 결과 컨테이너도 `BTreeMap`이다. 둘 다 출력 순서를
+안정화하기 위한 선택이다. planning 문서는 사람이 diff로 검토하는 일이 많기 때문에, DB가 반환하는
+행 순서가 실행마다 달라지는 상황을 피해야 한다.
 */
 pub(super) fn load_shadow_documents(connection: &Connection) -> Result<BTreeMap<String, String>> {
     if !table_exists(connection, "shadow_documents")? {
@@ -327,15 +321,14 @@ pub(super) fn load_shadow_documents(connection: &Connection) -> Result<BTreeMap<
 }
 
 /*
-학습 주석:
-commit된 active planning 문서 snapshot을 모두 읽어옵니다.
+commit된 active planning 문서 snapshot을 모두 읽어온다.
 
 `shadow_documents`가 파일시스템 mirror라면, `active_documents`는 authority DB가 현재 활성 workspace로
-간주하는 확정본입니다. repo-scoped flow에서는 draft를 staging한 뒤 commit하면 active snapshot이
-바뀌고, 이후 TUI나 service는 이 active snapshot을 기준으로 결과 출력 파일과 authority 문서를 봅니다.
+간주하는 확정본이다. repo-scoped flow에서는 draft를 staging한 뒤 commit하면 active snapshot이
+바뀌고, 이후 TUI나 service는 이 active snapshot을 기준으로 결과 출력 파일과 authority 문서를 본다.
 
-정렬과 `BTreeMap` 사용은 shadow load와 같은 이유입니다. 같은 DB 상태는 항상 같은 iteration 순서를
-만들어야 diff, 테스트, TUI rendering이 안정됩니다.
+정렬과 `BTreeMap` 사용은 shadow load와 같은 이유이다. 같은 DB 상태는 항상 같은 iteration 순서를
+만들어야 diff, 테스트, TUI rendering이 안정된다.
 */
 pub(super) fn load_active_documents(connection: &Connection) -> Result<BTreeMap<String, String>> {
     let mut statement = connection
@@ -356,12 +349,11 @@ pub(super) fn load_active_documents(connection: &Connection) -> Result<BTreeMap<
 }
 
 /*
-학습 주석:
-active authority document map을 그대로 노출하는 얇은 별칭입니다.
+active authority document map을 그대로 노출하는 얇은 별칭이다.
 
-이 함수는 현재 `load_active_documents`에 바로 위임하지만 이름을 따로 둡니다. 호출자 입장에서는
+이 함수는 현재 `load_active_documents`에 바로 위임하지만 이름을 따로 둔다. 호출자 입장에서는
 "active workspace의 일반 문서 map"을 읽는지, "authority 문서 저장소"를 읽는지 의도가 다를 수 있기
-때문입니다. 같은 구현을 공유하더라도 adapter 내부 API 이름으로 경계 의미를 남깁니다.
+때문이다. 같은 구현을 공유하더라도 adapter 내부 API 이름으로 경계 의미를 남긴다.
 */
 pub(super) fn load_active_authority_documents(
     connection: &Connection,
@@ -370,12 +362,11 @@ pub(super) fn load_active_authority_documents(
 }
 
 /*
-학습 주석:
-active documents에서 `PlanningWorkspaceLoadRecord`를 구성합니다.
+active documents에서 `PlanningWorkspaceLoadRecord`를 구성한다.
 
-workspace port가 필요로 하는 load record는 전체 파일 map이 아니라 현재 결과 출력 markdown입니다.
-그래서 active snapshot 전체를 읽은 뒤 `RESULT_OUTPUT_FILE_PATH`만 골라 optional field에 넣습니다.
-파일이 없으면 `None`이 되며, 이는 아직 결과 문서가 생성되지 않은 정상 상태를 뜻합니다.
+workspace port가 필요로 하는 load record는 전체 파일 map이 아니라 현재 결과 출력 markdown이다.
+그래서 active snapshot 전체를 읽은 뒤 `RESULT_OUTPUT_FILE_PATH`만 골라 optional field에 넣는다.
+파일이 없으면 `None`이 되며, 이는 아직 결과 문서가 생성되지 않은 정상 상태를 뜻한다.
 */
 pub(super) fn load_active_workspace_record(
     connection: &Connection,
@@ -387,12 +378,11 @@ pub(super) fn load_active_workspace_record(
 }
 
 /*
-학습 주석:
-direction authority snapshot을 DB에서 복원합니다.
+direction authority snapshot을 DB에서 복원한다.
 
-snapshot은 direction catalog 본문과 planning revision metadata의 조합입니다. direction catalog가 없으면
-아직 direction authority가 초기화되지 않은 상태이므로 `Ok(None)`을 반환합니다. catalog는 있는데
-`planning_revision` metadata가 없으면 이전 schema나 초기 상태로 보고 0을 사용합니다.
+snapshot은 direction catalog 본문과 planning revision metadata의 조합이다. direction catalog가 없으면
+아직 direction authority가 초기화되지 않은 상태이므로 `Ok(None)`을 반환한다. catalog는 있는데
+`planning_revision` metadata가 없으면 이전 schema나 초기 상태로 보고 0을 사용한다.
 */
 pub(super) fn load_direction_authority_snapshot_from_connection(
     connection: &Connection,
@@ -409,17 +399,16 @@ pub(super) fn load_direction_authority_snapshot_from_connection(
 }
 
 /*
-학습 주석:
-direction authority 테이블들을 domain의 `DirectionCatalogDocument`로 다시 조립합니다.
+direction authority 테이블들을 domain의 `DirectionCatalogDocument`로 다시 조립한다.
 
-저장 구조는 config row 하나와 direction row 여러 개로 나뉩니다. config row에는 catalog 전체에 적용되는
+저장 구조는 config row 하나와 direction row 여러 개로 나뉜다. config row에는 catalog 전체에 적용되는
 format version과 queue idle 설정이 들어 있고, `planning_directions`에는 각 direction의 JSON 원문이
-순서와 함께 들어 있습니다. 이 함수는 그 둘을 합쳐 application 계층이 기대하는 catalog 문서 형태로
-복원합니다.
+순서와 함께 들어 있다. 이 함수는 그 둘을 합쳐 application 계층이 기대하는 catalog 문서 형태로
+복원한다.
 
 `direction_authority_exists`를 먼저 확인하는 이유는 "authority가 없음"과 "authority는 있는데 direction이
-0개"를 구분하기 위해서입니다. 현재 schema에서는 config row 존재가 direction authority snapshot의
-존재 신호입니다.
+0개"를 구분하기 위해서이다. 현재 schema에서는 config row 존재가 direction authority snapshot의
+존재 신호이다.
 */
 pub(super) fn load_direction_catalog_from_connection(
     connection: &Connection,
@@ -458,10 +447,9 @@ pub(super) fn load_direction_catalog_from_connection(
         .context("failed to iterate planning direction rows")?;
     let mut directions = Vec::new();
     /*
-    학습 주석:
-    row에는 `direction_id` column과 `content_json`이 함께 있지만, 복원 결과는 JSON 안의 domain 구조를
-    신뢰합니다. `direction_id`는 오류 메시지에 붙여 어느 행의 JSON decode가 실패했는지 보여주는
-    진단 정보로 사용됩니다.
+        row에는 `direction_id` column과 `content_json`이 함께 있지만, 복원 결과는 JSON 안의 domain 구조를
+    신뢰한다. `direction_id`는 오류 메시지에 붙여 어느 행의 JSON decode가 실패했는지 보여주는
+    진단 정보로 사용된다.
     */
     for row in rows {
         let (direction_id, content_json) =
@@ -471,10 +459,9 @@ pub(super) fn load_direction_catalog_from_connection(
         })?);
     }
     /*
-    학습 주석:
-    queue idle 설정은 DB column 두 개로 저장되어 있지만 domain 타입은 structured enum/record입니다.
+        queue idle 설정은 DB column 두 개로 저장되어 있지만 domain 타입은 structured enum/record이다.
     작은 JSON value로 다시 감싼 뒤 serde가 domain 타입으로 decode하게 해서, 문자열 policy 해석 규칙을
-    이 store 함수 안에 중복 구현하지 않습니다.
+    이 store 함수 안에 중복 구현하지 않는다.
     */
     let queue_idle = serde_json::from_value(serde_json::json!({
         "policy": queue_idle_policy,
@@ -490,12 +477,11 @@ pub(super) fn load_direction_catalog_from_connection(
 }
 
 /*
-학습 주석:
-active snapshot에서 특정 문서 하나만 읽습니다.
+active snapshot에서 특정 문서 하나만 읽는다.
 
-대부분의 load 함수는 전체 map을 복원하지만, 일부 호출자는 상대 경로 하나의 본문만 필요합니다. 이
-helper는 `OptionalExtension`을 사용해 row 없음과 SQL 오류를 분리합니다. row가 없으면 정상적으로
-`Ok(None)`이고, DB 조회 자체가 실패하면 context가 붙은 error가 됩니다.
+대부분의 load 함수는 전체 map을 복원하지만, 일부 호출자는 상대 경로 하나의 본문만 필요하다. 이
+helper는 `OptionalExtension`을 사용해 row 없음과 SQL 오류를 분리한다. row가 없으면 정상적으로
+`Ok(None)`이고, DB 조회 자체가 실패하면 context가 붙은 error가 된다.
 */
 pub(super) fn load_active_document(
     connection: &Connection,
@@ -512,18 +498,17 @@ pub(super) fn load_active_document(
 }
 
 /*
-학습 주석:
-task authority snapshot을 DB에서 복원합니다.
+task authority snapshot을 DB에서 복원한다.
 
-task authority snapshot은 세 가지 조각의 조합입니다.
+task authority snapshot은 세 가지 조각의 조합이다.
 1. `planning_tasks`에 저장된 `TaskAuthorityDocument`
 2. `planning_queue_projection`에 저장된 현재 queue 계산 결과
 3. `authority_metadata`에 저장된 `planning_revision`
 
-task 문서가 없으면 아직 task authority가 초기화되지 않은 상태이므로 `Ok(None)`입니다. 반대로 task
+task 문서가 없으면 아직 task authority가 초기화되지 않은 상태이므로 `Ok(None)`이다. 반대로 task
 문서는 있는데 queue projection이 없으면, 이전 schema나 부분 초기화 상태를 고려해 빈 projection을
-사용합니다. 이렇게 하면 application 계층은 snapshot을 받았을 때 queue field가 항상 존재한다고
-가정할 수 있습니다.
+사용한다. 이렇게 하면 application 계층은 snapshot을 받았을 때 queue field가 항상 존재한다고
+가정할 수 있다.
 */
 pub(super) fn load_task_authority_snapshot_from_connection(
     connection: &Connection,
@@ -543,16 +528,15 @@ pub(super) fn load_task_authority_snapshot_from_connection(
 }
 
 /*
-학습 주석:
-`planning_tasks` 행들을 domain의 `TaskAuthorityDocument`로 복원합니다.
+`planning_tasks` 행들을 domain의 `TaskAuthorityDocument`로 복원한다.
 
-저장할 때 task row는 조회용 column들과 `content_json`을 함께 갖습니다. 복원에서는 JSON 원문을
-신뢰합니다. column들은 SQL 조회/정렬/인덱싱을 위한 projection이고, domain 객체의 전체 형태는
-`content_json`에 보존되어 있기 때문입니다. `task_id` column은 JSON decode 오류를 설명하는 context로
-사용합니다.
+저장할 때 task row는 조회용 column들과 `content_json`을 함께 갖다. 복원에서는 JSON 원문을
+신뢰한다. column들은 SQL 조회/정렬/인덱싱을 위한 projection이고, domain 객체의 전체 형태는
+`content_json`에 보존되어 있기 때문이다. `task_id` column은 JSON decode 오류를 설명하는 context로
+사용한다.
 
-version은 `authority_metadata`의 task ledger version에서 읽습니다. 값이 없으면 format 기본 버전을
-사용해 오래된 DB도 읽을 수 있게 합니다.
+version은 `authority_metadata`의 task ledger version에서 읽는다. 값이 없으면 format 기본 버전을
+사용해 오래된 DB도 읽을 수 있게 한다.
 */
 pub(super) fn load_task_authority_from_connection(
     connection: &Connection,
@@ -588,16 +572,15 @@ pub(super) fn load_task_authority_from_connection(
 }
 
 /*
-학습 주석:
-queue projection rows를 `PriorityQueueProjection` 구조로 복원합니다.
+queue projection rows를 `PriorityQueueProjection` 구조로 복원한다.
 
-`planning_queue_projection` 테이블은 active/proposed/skipped를 같은 schema에 담습니다. bucket과
-item_kind가 row 의미를 나누고, `content_json`은 각 bucket에 맞는 projection 타입으로 decode됩니다.
-이 함수는 bucket을 기준으로 세 Vec에 분배합니다.
+`planning_queue_projection` 테이블은 active/proposed/skipped를 같은 schema에 담는다. bucket과
+item_kind가 row 의미를 나누고, `content_json`은 각 bucket에 맞는 projection 타입으로 decode된다.
+이 함수는 bucket을 기준으로 세 Vec에 분배한다.
 
-알 수 없는 bucket은 무시합니다. 이는 forward compatibility를 위한 느슨한 처리입니다. 새 bucket이
+알 수 없는 bucket은 무시한다. 이는 forward compatibility를 위한 느슨한 처리이다. 새 bucket이
 추가된 DB를 오래된 binary가 읽을 때 전체 load를 실패시키기보다, 현재 binary가 이해하는 bucket만
-복원합니다.
+복원한다.
 */
 pub(super) fn load_queue_projection_from_connection(
     connection: &Connection,
@@ -626,10 +609,9 @@ pub(super) fn load_queue_projection_from_connection(
         })
         .context("failed to iterate planning queue projection")?;
     /*
-    학습 주석:
-    row의 `task_id`는 projection JSON에도 들어 있지만 오류 메시지를 위해 column 값을 함께 읽습니다.
+        row의 `task_id`는 projection JSON에도 들어 있지만 오류 메시지를 위해 column 값을 함께 읽는다.
     queue projection은 task authority 문서의 파생 결과라 JSON decode가 실패하면 DB snapshot 자체가
-    깨진 것이므로, 어느 bucket/task에서 실패했는지 최대한 좁혀 줍니다.
+    깨진 것이므로, 어느 bucket/task에서 실패했는지 최대한 좁혀 준다.
     */
     for row in rows {
         let (bucket, task_id, content_json) =
@@ -661,7 +643,7 @@ pub(super) fn load_queue_projection_from_connection(
     }
 
     Ok(Some(PriorityQueueProjection {
-        // 학습 주석: active queue의 첫 항목이 TUI와 worker가 우선 볼 다음 task가 됩니다.
+        // active queue의 첫 항목이 TUI와 worker가 우선 볼 다음 task가 된다.
         next_task: active_tasks.first().cloned(),
         active_tasks,
         proposed_tasks,
@@ -670,12 +652,11 @@ pub(super) fn load_queue_projection_from_connection(
 }
 
 /*
-학습 주석:
-DB에 task authority snapshot이 존재하는지 확인합니다.
+DB에 task authority snapshot이 존재하는지 확인한다.
 
-가장 명확한 신호는 `TASK_LEDGER_VERSION_METADATA_KEY` metadata입니다. 다만 이전 버전 DB나 partial write
+가장 명확한 신호는 `TASK_LEDGER_VERSION_METADATA_KEY` metadata이다. 다만 이전 버전 DB나 partial write
 상황에서는 metadata 없이 `planning_tasks` row만 있을 수 있으므로, fallback으로 task row 존재도
-확인합니다. 이 함수는 load 계열에서 `None`과 실제 빈 document를 구분하는 gate 역할을 합니다.
+확인한다. 이 함수는 load 계열에서 `None`과 실제 빈 document를 구분하는 gate 역할을 한다.
 */
 pub(super) fn task_authority_exists(connection: &Connection) -> Result<bool> {
     if read_metadata_string_connection(connection, TASK_LEDGER_VERSION_METADATA_KEY)?.is_some() {
@@ -689,11 +670,10 @@ pub(super) fn task_authority_exists(connection: &Connection) -> Result<bool> {
 }
 
 /*
-학습 주석:
-queue projection이 없을 때 사용할 구조적으로 완전한 빈 projection을 만듭니다.
+queue projection이 없을 때 사용할 구조적으로 완전한 빈 projection을 만든다.
 
 `PriorityQueueProjection`은 option이 아니라 내부 Vec들을 가진 값이므로, caller가 매번 None 처리를
-반복하지 않게 이 helper에서 빈 active/proposed/skipped 목록과 `next_task: None`을 함께 제공합니다.
+반복하지 않게 이 helper에서 빈 active/proposed/skipped 목록과 `next_task: None`을 함께 제공한다.
 */
 pub(super) fn empty_queue_projection() -> PriorityQueueProjection {
     PriorityQueueProjection {
@@ -705,16 +685,15 @@ pub(super) fn empty_queue_projection() -> PriorityQueueProjection {
 }
 
 /*
-학습 주석:
-direction catalog 변경 후 task authority가 가리키는 direction 참조를 정리합니다.
+direction catalog 변경 후 task authority가 가리키는 direction 참조를 정리한다.
 
-task는 반드시 존재하는 direction에 속해야 합니다. direction authority가 교체되거나 지워지면 기존 task 중
-사라진 direction을 참조하는 것들이 생길 수 있습니다. 이 함수는 현재 task authority를 읽고, 유효한
+task는 반드시 존재하는 direction에 속해야 한다. direction authority가 교체되거나 지워지면 기존 task 중
+사라진 direction을 참조하는 것들이 생길 수 있다. 이 함수는 현재 task authority를 읽고, 유효한
 direction id 집합에 맞지 않는 task를 제거한 뒤, 남은 task의 depends_on/blocked_by에서도 제거된 task를
-참조하는 edge를 지웁니다.
+참조하는 edge를 지운다.
 
-queue projection은 pruning 후 `empty_queue_projection`으로 초기화합니다. task 집합이 바뀌면 기존 rank와
-next task 계산은 더 이상 신뢰할 수 없으므로, 다음 계산 흐름이 새 projection을 만들게 하는 것이 안전합니다.
+queue projection은 pruning 후 `empty_queue_projection`으로 초기화한다. task 집합이 바뀌면 기존 rank와
+next task 계산은 더 이상 신뢰할 수 없으므로, 다음 계산 흐름이 새 projection을 만들게 하는 것이 안전한다.
 */
 pub(super) fn reconcile_task_authority_with_directions(
     transaction: &rusqlite::Transaction<'_>,
@@ -735,12 +714,11 @@ pub(super) fn reconcile_task_authority_with_directions(
 }
 
 /*
-학습 주석:
-direction catalog에서 유효한 direction id 집합만 추출합니다.
+direction catalog에서 유효한 direction id 집합만 추출한다.
 
-이 helper는 task pruning과 validation에서 "현재 살아 있는 direction"의 기준을 만듭니다. id는 trim해서
-저장합니다. direction 문서 작성 과정에서 공백이 섞여도 DB의 task direction_id 비교는 정규화된
-문자열끼리 이루어져야 하기 때문입니다.
+이 helper는 task pruning과 validation에서 "현재 살아 있는 direction"의 기준을 만든다. id는 trim해서
+저장한다. direction 문서 작성 과정에서 공백이 섞여도 DB의 task direction_id 비교는 정규화된
+문자열끼리 이루어져야 하기 때문이다.
 */
 pub(super) fn direction_ids(directions: &DirectionCatalogDocument) -> BTreeSet<String> {
     directions
@@ -751,16 +729,15 @@ pub(super) fn direction_ids(directions: &DirectionCatalogDocument) -> BTreeSet<S
 }
 
 /*
-학습 주석:
-direction authority tables를 새 catalog 문서로 전체 교체합니다.
+direction authority tables를 새 catalog 문서로 전체 교체한다.
 
-direction authority는 config row 하나와 direction row 여러 개로 나뉘어 저장됩니다. config row에는 catalog
+direction authority는 config row 하나와 direction row 여러 개로 나뉘어 저장된다. config row에는 catalog
 전체 version과 queue idle 정책이 들어가고, 각 direction row에는 조회용 column과 JSON 원문이 함께
-들어갑니다. task 저장과 마찬가지로 SQL에서 자주 볼 필드는 column으로 풀고, domain 복원에는
-`content_json`을 사용합니다.
+들어간다. task 저장과 마찬가지로 SQL에서 자주 볼 필드는 column으로 풀고, domain 복원에는
+`content_json`을 사용한다.
 
-먼저 기존 row를 모두 지우는 이유는 삭제된 direction을 정확히 반영하기 위해서입니다. direction은 개수가
-많지 않고 catalog 전체가 하나의 권위 문서이므로, 부분 upsert보다 전체 재생성이 의미가 더 분명합니다.
+먼저 기존 row를 모두 지우는 이유는 삭제된 direction을 정확히 반영하기 위해서이다. direction은 개수가
+많지 않고 catalog 전체가 하나의 권위 문서이므로, 부분 upsert보다 전체 재생성이 의미가 더 분명한다.
 */
 pub(super) fn replace_direction_authority_tables(
     transaction: &rusqlite::Transaction<'_>,
@@ -799,9 +776,8 @@ pub(super) fn replace_direction_authority_tables(
             .with_context(|| format!("failed to persist planning direction `{direction_id}`"))?;
     }
     /*
-    학습 주석:
-    `direction_authority_version`은 load 쪽의 존재 판단에는 직접 쓰이지 않지만, DB를 열어 보는 도구나
-    미래 migration이 현재 저장된 direction catalog version을 빠르게 확인할 수 있게 하는 metadata입니다.
+        `direction_authority_version`은 load 쪽의 존재 판단에는 직접 쓰이지 않지만, DB를 열어 보는 도구나
+    미래 migration이 현재 저장된 direction catalog version을 빠르게 확인할 수 있게 하는 metadata이다.
     */
     upsert_metadata(
         transaction,
@@ -812,11 +788,10 @@ pub(super) fn replace_direction_authority_tables(
 }
 
 /*
-학습 주석:
-direction authority를 비운 뒤 metadata version을 0으로 표시합니다.
+direction authority를 비운 뒤 metadata version을 0으로 표시한다.
 
-row를 삭제하는 것만으로도 `direction_authority_exists`는 false를 반환합니다. 여기에 version 0 metadata를
-쓰는 것은 "명시적으로 비워진 상태"를 store metadata에서도 읽을 수 있게 하기 위한 표식입니다.
+row를 삭제하는 것만으로도 `direction_authority_exists`는 false를 반환한다. 여기에 version 0 metadata를
+쓰는 것은 "명시적으로 비워진 상태"를 store metadata에서도 읽을 수 있게 하기 위한 표식이다.
 */
 pub(super) fn clear_direction_authority_tables(
     transaction: &rusqlite::Transaction<'_>,
@@ -827,12 +802,11 @@ pub(super) fn clear_direction_authority_tables(
 }
 
 /*
-학습 주석:
-direction authority의 실제 row들을 삭제합니다.
+direction authority의 실제 row들을 삭제한다.
 
 direction rows를 먼저 지우고 config를 나중에 지우면, 중간 실패가 발생하더라도 config만 남아 있는 상태를
-줄일 수 있습니다. 이 함수는 보통 외부 transaction 안에서 호출되므로 최종 원자성은 caller의 commit이
-보장합니다.
+줄일 수 있다. 이 함수는 보통 외부 transaction 안에서 호출되므로 최종 원자성은 caller의 commit이
+보장한다.
 */
 fn clear_direction_authority_rows(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     transaction
@@ -845,12 +819,11 @@ fn clear_direction_authority_rows(transaction: &rusqlite::Transaction<'_>) -> Re
 }
 
 /*
-학습 주석:
-direction authority가 DB에 존재하는지 확인합니다.
+direction authority가 DB에 존재하는지 확인한다.
 
-현재 존재 신호는 `planning_directions`에 최소 한 row가 있는지입니다. config row만으로 판단하지 않는
+현재 존재 신호는 `planning_directions`에 최소 한 row가 있는지이다. config row만으로 판단하지 않는
 이유는 config는 기본값이나 metadata 성격이 강하고, 실제 direction catalog의 핵심은 direction 목록이기
-때문입니다.
+때문이다.
 */
 fn direction_authority_exists(connection: &Connection) -> Result<bool> {
     connection
@@ -864,16 +837,15 @@ fn direction_authority_exists(connection: &Connection) -> Result<bool> {
 }
 
 /*
-학습 주석:
-task authority 문서를 현재 유효한 direction id 집합에 맞게 in-place로 정리합니다.
+task authority 문서를 현재 유효한 direction id 집합에 맞게 in-place로 정리한다.
 
-이 함수는 두 단계로 동작합니다.
-1. 존재하지 않는 direction을 참조하는 task를 제거하고, 제거된 task id를 모읍니다.
-2. 남은 task들의 `depends_on` / `blocked_by`에서 제거된 task id를 참조하는 edge를 삭제합니다.
+이 함수는 두 단계로 동작한다.
+1. 존재하지 않는 direction을 참조하는 task를 제거하고, 제거된 task id를 모은다.
+2. 남은 task들의 `depends_on` / `blocked_by`에서 제거된 task id를 참조하는 edge를 삭제한다.
 
-반환값은 실제로 문서가 바뀌었는지 여부입니다. caller는 false면 DB rewrite를 생략할 수 있고, true면
-정리된 task authority와 빈 queue projection을 다시 저장합니다. 빈 direction id 집합을 넘기면 모든 task가
-제거되므로, direction authority가 삭제된 경우에도 같은 helper를 재사용할 수 있습니다.
+반환값은 실제로 문서가 바뀌었는지 여부이다. caller는 false면 DB rewrite를 생략할 수 있고, true면
+정리된 task authority와 빈 queue projection을 다시 저장한다. 빈 direction id 집합을 넘기면 모든 task가
+제거되므로, direction authority가 삭제된 경우에도 같은 helper를 재사용할 수 있다.
 */
 pub(super) fn prune_task_authority_to_direction_ids(
     task_authority: &mut TaskAuthorityDocument,
