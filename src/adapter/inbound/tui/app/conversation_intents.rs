@@ -1,124 +1,127 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::adapter::inbound::tui::conversation_text::interrupt_blocked_status_text;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::conversation::ConversationControlSupport;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::session_summary::SessionSummary;
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+/*
+학습 주석: conversation intent reducer는 TUI key handler와 app runtime 사이의 작은 정책 계층입니다.
+shell controller나 session overlay는 "새 draft", "session open", "Ctrl-C" 같은 사용자의 의도만
+전달하고, 여기서 현재 conversation 상태와 실행 중 turn 여부를 합쳐 실제 effect를 결정합니다.
+
+이 분리를 두면 key 입력 경로가 바로 session을 바꾸거나 draft를 열지 않아도 되며, running turn
+보호 규칙을 한곳에서 유지할 수 있습니다.
+*/
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum ConversationIntentMode {
+    // 학습 주석: Loading은 아직 열 수 있는 conversation surface가 안정되지 않은 상태라 Ctrl-C를
+    // draft 전환이나 종료 확인으로 해석하지 않습니다.
     Loading,
+    // 학습 주석: Failed는 현재 shell/session surface가 복구 화면에 머문 상태입니다. Ctrl-C는
+    // 앱 종료가 아니라 새 draft로 빠지는 recovery affordance가 됩니다.
     Failed,
+    // 학습 주석: BlankDraft는 사용자가 이미 비어 있는 작성 화면에 있으므로 Ctrl-C를 종료 확인으로
+    // 연결해 accidental exit를 막습니다.
     BlankDraft,
+    // 학습 주석: Ready는 기존 conversation을 보고 있는 정상 상태입니다. Ctrl-C는 새 draft를
+    // 여는 빠른 navigation intent로 쓰입니다.
     Ready,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct ConversationIntentState {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: running turn은 session switch와 new draft를 모두 막는 최상위 guard입니다.
+    // 현재 conversation의 출력 stream과 follow-up 상태가 끊기면 안 되기 때문입니다.
     pub has_running_turn: bool,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: mode는 화면 복구/빈 draft/준비 상태별로 Ctrl-C 의미를 다르게 해석하는
+    // 최소한의 presentation state입니다.
     pub mode: ConversationIntentMode,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: running turn 중 Ctrl-C는 실제 interrupt 가능 여부를 runtime truth에 맞춰
+    // status text로만 노출합니다. 이 reducer가 interrupt command 자체를 발행하지 않는 이유입니다.
     pub interrupt_support: ConversationControlSupport,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum ConversationIntentEvent {
+    // 학습 주석: shell controller의 새 대화 요청입니다. reducer는 running turn guard를 먼저
+    // 적용한 뒤 runtime에게 draft opening effect만 넘깁니다.
     NewDraftRequested,
+    // 학습 주석: session list selection은 선택이 없을 수도 있습니다. `None`은 no-op로 남겨
+    // overlay navigation과 conversation navigation을 억지로 결합하지 않습니다.
     SessionOpenRequested {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         session: Option<Box<SessionSummary>>,
     },
+    // 학습 주석: Ctrl-C는 상태에 따라 interrupt status, new draft, exit confirmation으로
+    // 갈라지는 overloaded key라 reducer 경계에서 명시적으로 정책화합니다.
     CtrlCPressed,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum ConversationIntentEffect {
+    // 학습 주석: status는 navigation을 거부한 이유를 operator에게 남기는 side effect입니다.
     ShowStatus { status_text: String },
+    // 학습 주석: app_runtime이 실제 draft state 초기화와 shell view 전환을 담당합니다.
     OpenNewDraft,
+    // 학습 주석: reducer는 SessionSummary ownership만 넘기고, session loading과 UI state 갱신은
+    // runtime의 effect executor에 맡깁니다.
     OpenSession { session: SessionSummary },
+    // 학습 주석: 빈 draft에서 Ctrl-C가 곧장 앱 종료로 이어지지 않도록 confirmation overlay를 엽니다.
     ShowExitConfirmation,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct ConversationIntentReduction {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: effect vector를 쓰면 하나의 intent가 이후 여러 UI side effect로 확장되어도
+    // controller call site를 바꾸지 않고 reducer contract를 유지할 수 있습니다.
     pub effects: Vec<ConversationIntentEffect>,
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn reduce_conversation_intents(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     state: ConversationIntentState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     event: ConversationIntentEvent,
 ) -> ConversationIntentReduction {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut effects = Vec::new();
 
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match event {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationIntentEvent::NewDraftRequested => {
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+            // 학습 주석: 새 draft는 기존 turn의 stream, pending completion, 후속 action을 끊을 수 있어
+            // running 중에는 실제 전환 대신 설명 status만 냅니다.
             if state.has_running_turn {
                 effects.push(ConversationIntentEffect::ShowStatus {
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     status_text:
                         "turn still running; wait for completion before starting a new draft"
-                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                             .to_string(),
                 });
             } else {
                 effects.push(ConversationIntentEffect::OpenNewDraft);
             }
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationIntentEvent::SessionOpenRequested { session } => {
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+            // 학습 주석: session switch도 running turn을 잃게 만드는 navigation입니다. 선택이 없는
+            // 요청은 list cursor 상태만 의미하므로 effect 없이 흘려보냅니다.
             if state.has_running_turn {
                 effects.push(ConversationIntentEffect::ShowStatus {
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     status_text:
                         "turn still running; wait for completion before switching sessions"
-                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                             .to_string(),
                 });
             } else if let Some(session) = session {
                 effects.push(ConversationIntentEffect::OpenSession { session: *session });
             }
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationIntentEvent::CtrlCPressed => {
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+            // 학습 주석: 실행 중 Ctrl-C는 "navigation"이 아니라 "interrupt 가능 여부 안내"입니다.
+            // 실제 interrupt 제어가 없는 runtime에서도 같은 키가 안전하게 동작해야 합니다.
             if state.has_running_turn {
                 effects.push(ConversationIntentEffect::ShowStatus {
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     status_text: interrupt_blocked_status_text(state.interrupt_support),
                 });
             } else {
-                // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
                 match state.mode {
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                     ConversationIntentMode::Ready | ConversationIntentMode::Failed => {
                         effects.push(ConversationIntentEffect::OpenNewDraft);
                     }
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                     ConversationIntentMode::BlankDraft => {
                         effects.push(ConversationIntentEffect::ShowExitConfirmation);
                     }
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                     ConversationIntentMode::Loading => {}
                 }
             }
@@ -128,30 +131,21 @@ pub(super) fn reduce_conversation_intents(
     ConversationIntentReduction { effects }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod tests {
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use super::*;
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use crate::domain::conversation::ConversationControlSupport;
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn new_draft_requested_while_running_turn_only_shows_status() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: running turn guard는 새 draft navigation보다 우선합니다. 이 테스트는
+        // shell controller가 실수로 draft를 여는 effect를 받지 않는지 고정합니다.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 has_running_turn: true,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 mode: ConversationIntentMode::Ready,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationIntentEvent::NewDraftRequested,
         );
 
@@ -159,27 +153,21 @@ mod tests {
         assert!(matches!(
             reduced.effects.first(),
             Some(ConversationIntentEffect::ShowStatus { status_text })
-                // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                 if status_text
                     == "turn still running; wait for completion before starting a new draft"
         ));
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn ctrl_c_from_blank_draft_shows_exit_confirmation() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 빈 draft에서 Ctrl-C는 conversation cleanup이 아니라 앱 종료 가능성이 있어
+        // runtime이 confirmation overlay를 열도록 effect를 제한합니다.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 has_running_turn: false,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 mode: ConversationIntentMode::BlankDraft,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationIntentEvent::CtrlCPressed,
         );
 
@@ -189,21 +177,16 @@ mod tests {
         ));
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn ctrl_c_from_failed_shell_opens_new_draft() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: Failed mode는 shell recovery 화면이므로 Ctrl-C를 종료가 아니라 새 draft
+        // 전환으로 해석해 operator가 막힌 화면에서 빠져나오게 합니다.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 has_running_turn: false,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 mode: ConversationIntentMode::Failed,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationIntentEvent::CtrlCPressed,
         );
 
@@ -213,49 +196,38 @@ mod tests {
         ));
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn session_open_requested_without_selection_emits_no_effect() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: session overlay에서 선택이 없으면 conversation runtime에 아무 effect도
+        // 전달하지 않습니다. no-op를 명시해 overlay cursor 상태와 session open을 분리합니다.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 has_running_turn: false,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 mode: ConversationIntentMode::Ready,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationIntentEvent::SessionOpenRequested { session: None },
         );
 
         assert!(reduced.effects.is_empty());
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn ctrl_c_while_turn_runs_surfaces_interrupt_truth() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: reducer는 Ctrl-C를 interrupt command로 실행하지 않고 runtime capability에
+        // 맞는 안내 문구로 낮춥니다. 이 테스트가 unsupported runtime 문구를 고정합니다.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 has_running_turn: true,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 mode: ConversationIntentMode::Ready,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationIntentEvent::CtrlCPressed,
         );
 
         assert!(matches!(
             reduced.effects.as_slice(),
             [ConversationIntentEffect::ShowStatus { status_text }]
-                // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                 if status_text
                     == "turn still running; this runtime does not expose interrupt control in the shell"
         ));
