@@ -6,6 +6,18 @@ use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoo
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::paths::display_pool_path;
 
+/*
+학습 주석: pool slot inspection은 git worktree 상태와 lease metadata를 합쳐 하나의
+화면용 slot snapshot으로 바꾸는 판정기입니다. 같은 slot path라도 "worktree 없음",
+"baseline에 있지만 lease가 남음", "agent branch가 있는데 lease가 없음", "lease와 branch가
+일치함"처럼 여러 의미가 있을 수 있습니다. 이 함수는 위험한 상태를 먼저 Blocked로 분류하고,
+마지막에만 Idle이나 lease 기반 상태를 반환합니다.
+
+판정 순서가 중요합니다. invalid lease metadata, missing worktree, git status 실패 같은
+운영자가 복구해야 하는 조건을 먼저 처리해야 뒤쪽의 정상 branch 판정이 잘못 덮어쓰지
+않습니다. 이 함수의 출력은 supervisor pool board, reconcile summary, cleanup 후보 판단에
+연결됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_pool_slot(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -306,6 +318,15 @@ pub(super) fn inspect_pool_slot(
     )
 }
 
+/*
+학습 주석: reconcile status 문구는 pool board의 여러 slot 상태를 한 줄의 운영 상태로
+압축합니다. 단순 count만 세는 것이 아니라, 실행한 reconcile action이 있으면 prefix로
+붙이고, non-merged orphan branch처럼 실제 복구 행동이 필요한 원인을 우선 노출합니다.
+
+이 문자열은 TUI의 supervisor top/detail에서 사람이 바로 읽는 상태입니다. 따라서 Missing,
+AwaitingCleanup, Blocked, Idle의 조합을 사용자가 다음 행동으로 옮길 수 있는 문장으로
+바꾸는 adapter 역할을 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn summarize_pool_reconcile_status(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -437,6 +458,12 @@ pub(super) fn summarize_pool_reconcile_status(
     )
 }
 
+/*
+학습 주석: agent branch가 있는데 lease metadata가 없으면 두 가지 가능성이 있습니다.
+이미 baseline에 통합되어 cleanup만 남은 branch이거나, 아직 통합되지 않은 작업 branch가
+원장 없이 남은 위험 상태입니다. 이 함수는 git ancestry와 worktree 청결도를 합쳐 어떤
+복구 문구를 보여 줄지 결정합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn orphan_agent_branch_without_lease_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -462,6 +489,11 @@ fn orphan_agent_branch_without_lease_detail(
     parts.join(" / ")
 }
 
+/*
+학습 주석: pool 전체 공지에서는 가장 위험한 orphan slot branch를 먼저 찾아야 합니다.
+lease가 없고 아직 baseline에 통합되지 않은 agent branch는 자동 cleanup 대상이 아니며,
+사용자 작업을 잃지 않으려면 운영자가 직접 통합하거나 삭제 판단을 해야 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn find_non_merged_orphan_slot_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -478,6 +510,12 @@ fn find_non_merged_orphan_slot_branch(
     })
 }
 
+/*
+학습 주석: supervisor 상단 notice는 pool board 전체에서 가장 시급한 operator recovery
+메시지를 하나만 고릅니다. 여기서는 non-merged orphan branch를 별도 notice로 승격합니다.
+이 상태는 reconcile을 반복해도 자동으로 해결되지 않으므로, 일반 blocked count보다 구체적인
+원인과 next action을 보여 주는 것이 중요합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn pool_operator_recovery_notice(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
