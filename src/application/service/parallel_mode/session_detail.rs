@@ -37,11 +37,23 @@ pub(super) fn default_authority_refresh_outcome() -> &'static str {
     "no official completion has been reported yet"
 }
 
+/*
+학습 주석: session key는 slot lease와 session detail record를 이어 주는 안정 키입니다.
+slot id만으로는 같은 slot을 재사용한 과거 이력과 현재 lease를 구분할 수 없고, branch/path만으로는
+복구 중 변경될 수 있습니다. lease가 제공하는 session_key를 공통 키로 쓰면 supervisor,
+distributor, store가 같은 agent 실행을 추적할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn lease_session_key(lease: &ParallelModeSlotLeaseSnapshot) -> String {
     lease.session_key()
 }
 
+/*
+학습 주석: assigned detail은 lease가 만들어진 직후 supervisor에 표시할 최초 세션 기록입니다.
+아직 validation summary나 official completion 결과가 없으므로 domain projection의 기본 문구를
+함께 넣습니다. 이후 starting/running/reported_complete 같은 상태 기록 함수들이 이 record를
+업데이트하며 history를 누적합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_assigned_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -77,6 +89,12 @@ pub(super) fn record_assigned_session_detail(
     Ok(detail)
 }
 
+/*
+학습 주석: thread prepared 기록은 app-server가 thread id를 알려준 시점의 흔적입니다.
+사용자에게는 아직 "작업 실행 중"보다 이전 단계지만, 문제가 발생했을 때 어떤 Codex thread가
+slot 작업에 연결되었는지 추적할 수 있어야 합니다. 그래서 state_label은 starting으로 두고
+history에 thread id를 남깁니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn record_thread_prepared_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -157,6 +175,12 @@ pub(super) fn record_running_session_detail(
     )
 }
 
+/*
+학습 주석: reported_complete 업데이트에는 official completion 계약으로 넘길 정보와 supervisor에
+보여 줄 정보가 함께 들어 있습니다. final response summary, validation summary, failure context는
+agent가 작업을 어떤 상태로 마쳤는지 설명하고, 이후 ledger refresh와 distributor 단계가 이 record를
+이어받습니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct ReportedCompleteSessionDetailUpdate<'a> {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -260,6 +284,12 @@ pub(super) fn record_ledger_refreshing_session_detail(
     )
 }
 
+/*
+학습 주석: commit_ready는 official ledger refresh가 agent 결과를 받아들인 직후의 상태입니다.
+이 record가 생겨야 distributor가 "이 결과를 queue에 넣어도 된다"는 근거를 얻습니다. 그래서
+authority refresh outcome을 저장하고, distributor_outcome에는 아직 통합 대기 중이라는 문구를
+넣어 supervisor가 다음 단계를 드러내게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn record_commit_ready_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -440,6 +470,16 @@ pub(super) fn record_integrating_session_detail(
     )
 }
 
+/*
+학습 주석: distributor progress 기록은 pushing, pr_pending, merge_pending, integrating처럼
+delivery queue 내부의 세부 단계를 같은 함수로 처리합니다. completion_state_label은
+merge_queued로 유지해 큰 흐름에서는 "통합 큐 처리 중"으로 묶고, state_label과 latest_summary로
+구체적인 현재 단계를 보여 줍니다.
+
+integrating 단계는 같은 상태에서 summary가 자주 바뀔 수 있어 마지막 history entry를 교체할 수
+있습니다. 이렇게 하지 않으면 cherry-pick/rebase 진행 중 같은 상태의 noisy history가 과도하게
+쌓입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn record_distributor_progress_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -575,6 +615,11 @@ pub(super) fn record_official_completion_failed_session_detail(
     )
 }
 
+/*
+학습 주석: cleanup pending 기록은 "변경은 baseline에 들어갔고 slot 반환만 남았다"는 상태를
+history에 두 단계로 남깁니다. 먼저 merged를 기록해 completion feed의 merged 항목이 채워지게
+하고, 이어 cleanup_pending을 기록해 slot이 아직 idle이 아니라는 운영 상태를 보존합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn record_cleanup_pending_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -622,6 +667,11 @@ pub(super) fn record_cleanup_pending_session_detail(
     )
 }
 
+/*
+학습 주석: cleaned 기록은 slot lifecycle의 정상 종료점입니다. distributor delivery나 startup
+failure cleanup이 slot을 baseline으로 돌려놓으면 이 상태를 남겨 supervisor가 과거 세션을
+"정리 완료"로 보여 주고, roster에서는 더 이상 live lease로 취급하지 않게 됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn record_cleaned_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -662,6 +712,11 @@ pub(super) fn record_cleaned_session_detail(
     )
 }
 
+/*
+학습 주석: startup failure 기록은 turn이 running 상태에 들어가기 전에 lease가 해제된 경우를
+나타냅니다. 이 경우 distributor로 보낼 결과가 없으므로 failed와 cleaned history를 함께 남겨
+"실행 실패했고 slot은 회수됨"을 분명히 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn record_failed_start_session_detail(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -708,6 +763,11 @@ pub(super) fn record_failed_start_session_detail(
     )
 }
 
+/*
+학습 주석: running elapsed label은 supervisor roster에서 live agent가 얼마나 오래 실행 중인지
+보여 주는 표시값입니다. 저장된 RFC3339 timestamp를 UTC로 파싱하고 현재 시각과 비교합니다.
+파싱 실패는 None으로 두어 화면이 잘못된 시간을 억지로 표시하지 않게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn format_elapsed_label_from_timestamp(timestamp: &str) -> Option<String> {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.

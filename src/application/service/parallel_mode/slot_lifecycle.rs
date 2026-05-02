@@ -20,6 +20,18 @@ use super::{
 
 // 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelModeService {
+    /*
+    학습 주석: 슬롯 lease 획득은 병렬 agent 작업의 시작점입니다. TUI가 병렬 dispatch를
+    요청하면 turn service가 이 함수를 호출하고, 여기서 pool allocation lock을 잡은 뒤
+    pool을 reconcile하고, idle slot 하나를 골라 agent branch를 만듭니다. 같은 task_id나
+    agent_id가 이미 lease를 가진 경우를 거부하는 것은 한 작업/한 agent가 두 슬롯에서
+    동시에 진행되는 중복 실행을 막기 위해서입니다.
+
+    branch 생성 후 lease 저장이 실패하면 `discard_unstarted_slot_branch`로 방금 만든 branch를
+    되돌립니다. 아직 stream이 시작되지 않은 상태라 안전하게 폐기할 수 있고, 이 cleanup이
+    있어야 실패한 lease 시도가 pool을 오염시키지 않습니다. 성공하면 assigned session detail을
+    기록해 supervisor가 "slot이 누구에게 배정되었는지"를 즉시 볼 수 있게 합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn acquire_slot_lease(
         &self,
@@ -150,6 +162,15 @@ impl ParallelModeService {
         Ok(lease)
     }
 
+    /*
+    학습 주석: `mark_slot_running`은 app-server stream에서 TurnStarted가 관측된 뒤 lease를
+    Leased에서 Running으로 전환합니다. agent_id와 현재 checkout branch를 다시 확인하는 이유는
+    slot path가 다른 작업으로 바뀌었거나 lease 소유자가 어긋난 상태에서 잘못 running으로
+    승격하지 않기 위해서입니다.
+
+    running_started_at은 roster elapsed label의 기준 시간이 됩니다. 이미 값이 있으면 유지해
+    같은 running 이벤트가 중복으로 들어와도 시작 시간이 흔들리지 않게 합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn mark_slot_running(
         &self,
@@ -221,6 +242,12 @@ impl ParallelModeService {
         Ok(lease)
     }
 
+    /*
+    학습 주석: ThreadPrepared 이벤트는 아직 turn이 실행되기 전이지만, app-server가 실제
+    thread id를 확정했다는 뜻입니다. 이 함수는 workspace path로 현재 slot lease를 찾아
+    session detail에 thread id와 starting history를 남깁니다. lease가 없는 workspace라면
+    일반 대화이므로 None을 반환해 병렬 모드 상태를 건드리지 않습니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn record_workspace_slot_thread_prepared(
         &self,
@@ -249,6 +276,16 @@ impl ParallelModeService {
         .map(Some)
     }
 
+    /*
+    학습 주석: CleanupPending은 "agent 작업은 끝났고 branch가 baseline에 통합되었지만,
+    아직 slot worktree를 idle baseline으로 되돌리지 않았다"는 중간 상태입니다. 이 함수는
+    Running 상태에서만 진입하게 하고, branch가 `POOL_BASELINE_BRANCH`에 통합되었는지 확인한
+    뒤 lease와 session detail을 함께 갱신합니다.
+
+    이 확인 없이 cleanup pending으로 넘기면 distributor가 아직 통합하지 않은 변경을 slot
+    cleanup이 삭제할 수 있습니다. 그래서 branch ancestry 검사는 데이터 보존을 위한 핵심
+    안전 장치입니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn mark_slot_cleanup_pending(
         &self,
@@ -331,6 +368,12 @@ impl ParallelModeService {
         Ok(lease)
     }
 
+    /*
+    학습 주석: workspace 기반 running 전이는 turn service가 slot id를 직접 몰라도 되게 하는
+    편의 경로입니다. stream launch 이후 실제 실행 workspace는 slot worktree이므로, 그 경로로
+    lease를 역해결한 뒤 `mark_slot_running`에 위임합니다. 일반 workspace에서는 None이 되어
+    호출자가 병렬 모드와 무관한 이벤트로 처리할 수 있습니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn mark_workspace_slot_running(
         &self,
@@ -355,6 +398,14 @@ impl ParallelModeService {
         .map(Some)
     }
 
+    /*
+    학습 주석: stream이 TurnStarted 전에 실패하면 slot은 아직 의미 있는 agent 작업을 만들지
+    못한 상태입니다. 이 함수는 Leased 상태인 경우에만, worktree가 clean인지 확인한 뒤 agent
+    branch를 삭제하고 lease를 제거해 slot을 idle로 되돌립니다.
+
+    worktree가 dirty이면 자동 release를 거부합니다. 시작 전이라고 해도 파일 변경이 있으면
+    원인을 알 수 없으므로, 사용자가 확인하기 전까지 pool이 그 상태를 보존해야 합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn release_workspace_slot_lease_after_failed_start(
         &self,
