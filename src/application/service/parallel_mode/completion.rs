@@ -1,30 +1,33 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: completion 서비스는 슬롯 lease 상태와 session detail snapshot을 함께 갱신합니다.
+// lease는 slot lifecycle의 권위 상태이고, session detail은 TUI/recovery가 읽는 관찰용 projection입니다.
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
     ParallelModeSlotLeaseState,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: official completion은 agent 산출물을 planning ledger refresh 계약으로 넘기는 경계입니다.
+// 이 타입들이 hidden official worker에게 전달될 payload와 report의 application 계약을 정의합니다.
 use crate::domain::planning::{
     PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
 };
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: pool helper는 slot worktree와 lease projection을 다시 연결하고 cleanup 가능 여부를 판정합니다.
 use super::pool::{
     branch_is_cleanup_ready, cleanup_slot, resolve_workspace_head_sha, resolve_workspace_slot_lease,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: session detail helper들은 completion lifecycle의 UI-visible 상태 전이를 runtime projection에 기록합니다.
 use super::session_detail::{
     ReportedCompleteSessionDetailUpdate, record_cleaned_session_detail,
     record_commit_ready_session_detail, record_ledger_refreshing_session_detail,
     record_official_completion_failed_session_detail, record_reported_complete_session_detail,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: completion 흐름은 parallel mode service 본체와 pool baseline branch, timestamp helper를 공유합니다.
 use super::{
     POOL_BASELINE_BRANCH, ParallelModeOfficialCompletionReport, ParallelModeService,
     current_timestamp,
 };
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
+// 학습 주석: 이 impl 조각은 parallel slot이 "작업 실행 완료"에서 "ledger 반영, queue 통합, cleanup"으로
+// 넘어가는 완료 파이프라인을 담당합니다. lease 상태와 session detail projection을 함께 움직이는 것이 핵심입니다.
 impl ParallelModeService {
     /*
     학습 주석: official completion 시작은 agent가 낸 최종 응답을 planning ledger 갱신 계약으로
@@ -37,20 +40,20 @@ impl ParallelModeService {
     이유는 여러 hidden official worker가 out-of-order로 시작되어도 ledger 갱신 순서를 안정적으로
     재구성하기 위해서입니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 슬롯 workspace에서 들어온 완료 신호를 official planning refresh 계약으로 변환합니다.
     pub fn begin_workspace_official_completion(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 완료를 보고한 workspace 경로입니다. 이 값으로 어떤 slot lease인지 다시 역추적합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: official completion contract가 어느 root turn에서 파생되었는지 묶는 상위 실행 id입니다.
         root_turn_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 상위 런타임이 이미 예약한 refresh 순번입니다. 없으면 이 함수가 authority store에서 새로 예약합니다.
         official_completion_refresh_order: Option<u64>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: agent가 사용자에게 낸 최종 응답입니다. ledger payload와 session summary 생성에 사용됩니다.
         final_response_text: Option<&str>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 테스트/검증 결과 요약입니다. 없으면 runtime이 보고하지 않았다는 기본 문장을 넣습니다.
         validation_summary: Option<&str>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 실패 완료나 제한적 완료일 때 ledger와 UI에 남길 추가 맥락입니다.
         failure_context: Option<&str>,
     ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
         /*
@@ -61,21 +64,21 @@ impl ParallelModeService {
         지금 완료 전이를 받을 상태가 아니다"라는 신호라서, 상위 turn service가 일반 단일 작업
         흐름으로 계속 돌아갈 수 있습니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: workspace 경로를 authority projection에 등록된 slot lease로 해석합니다.
+        // None이면 parallel slot 완료가 아니므로 caller가 일반 completion 경로를 계속 시도할 수 있게 합니다.
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
-        // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
         else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: Running lease만 agent가 실제 작업을 끝냈다고 보고할 수 있습니다.
+        // 다른 상태는 completion lifecycle 순서가 맞지 않으므로 no-op으로 돌려보냅니다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 완료 payload는 branch 이름이 아니라 현재 worktree HEAD commit을 기준으로 고정합니다.
+        // HEAD를 읽지 못하면 official ledger가 무엇을 반영해야 하는지 알 수 없으므로 오류로 중단합니다.
         let commit_sha =
             resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
                 format!(
@@ -89,18 +92,15 @@ impl ParallelModeService {
         하기 때문입니다. 이후 distributor가 rebase, push, PR 생성, integration worktree 병합을
         수행하더라도 official completion contract는 이 순간의 agent 산출물을 가리킵니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: completed_at은 session detail, contract payload, later queue state를 연결하는 완료 시각입니다.
         let completed_at = current_timestamp();
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: refresh order는 이미 예약된 값이 있으면 재사용하고, 없으면 authority store에서 단조 증가 번호를 받습니다.
+        // `map(Ok)`는 Option<u64>를 Option<Result<u64, String>> 형태로 맞춰 `unwrap_or_else`의 예약 결과와 결합합니다.
         let refresh_order = official_completion_refresh_order
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(Ok)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .unwrap_or_else(|| {
                 self.planning_authority
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .reserve_next_official_refresh_order(&resolution.lease.worktree_path)
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .map_err(|error| error.to_string())
             })?;
         /*
@@ -110,17 +110,15 @@ impl ParallelModeService {
         contract 안으로 들어가기 때문에 recovery가 session detail이나 queue record를 다시 읽을
         때도 "어떤 완료가 먼저 ledger에 들어가야 하는지"를 재구성할 수 있습니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 공백뿐인 final response는 없는 값으로 정규화해 ledger payload가 의미 없는 문자열을 들고 가지 않게 합니다.
         let final_response_text = normalized_optional_text(final_response_text).map(str::to_string);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: validation summary는 ledger와 UI에 항상 표시할 문자열이 필요하므로 기본 문장을 제공합니다.
         let validation_summary = normalized_optional_text(validation_summary)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .unwrap_or("validation status was not reported by runtime")
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .to_string();
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: failure context도 공백을 제거한 Option으로 맞춰, 실패 맥락이 없을 때 summary fallback이 깨끗하게 동작합니다.
         let failure_context = normalized_optional_text(failure_context).map(str::to_string);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: UI용 짧은 summary는 final response의 첫 줄을 우선하고, 없으면 failure context를 fallback으로 사용합니다.
         let final_response_summary = completion_summary_from_text(
             final_response_text.as_deref(),
             failure_context.as_deref(),
@@ -139,22 +137,23 @@ impl ParallelModeService {
             &resolution.context.pool_root,
             &resolution.lease,
             ReportedCompleteSessionDetailUpdate {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: session detail의 reported_complete 시각입니다.
                 completed_at: &completed_at,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: TUI 목록에서 긴 final response 대신 보여줄 압축된 완료 설명입니다.
                 final_response_summary: &final_response_summary,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: official ledger refresh 전에 이미 관찰된 검증 결과입니다.
                 validation_summary: &validation_summary,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: 실패 맥락은 선택 값으로 보존해 성공 완료의 session detail을 불필요하게 오염시키지 않습니다.
                 failure_context: failure_context.as_deref(),
             },
         )?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+        // 학습 주석: 반환값은 hidden official worker가 ledger refresh를 수행할 계약입니다.
+        // session detail 갱신과 contract 생성이 같은 입력에서 만들어져 recovery 시 서로 맞물립니다.
         Ok(Some(PlanningOfficialCompletionRefreshContract::new(
             root_turn_id,
             refresh_order,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: payload에는 slot identity, task identity, branch/worktree, 고정 commit, 완료 요약이 모두 들어갑니다.
             PlanningOfficialCompletionRefreshPayload::new(
                 resolution.lease.agent_id,
                 resolution.lease.task_id,
