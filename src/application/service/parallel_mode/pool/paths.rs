@@ -86,6 +86,13 @@ pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {
+    /*
+    학습 주석: branch head resolution은 pool reconcile이 baseline과 agent branch의 실제 commit을
+    비교할 때 쓰는 가장 작은 git query입니다. branch name은 local branch, remote tracking ref,
+    혹은 HEAD처럼 `git rev-parse`가 이해하는 refspec 그대로 들어옵니다. 실패를 오류로 올리지
+    않고 `None`으로 접는 이유는 caller가 local prerelease 부재, remote만 존재, fresh repo 같은
+    정상적인 fallback 순서를 직접 결정해야 하기 때문입니다.
+    */
     run_command("git", ["-C", repo_root, "rev-parse", branch_name], None)
 }
 
@@ -246,6 +253,12 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn resolve_git_dir(slot_path: &Path) -> Option<PathBuf> {
+    /*
+    학습 주석: worktree의 `.git`은 일반 디렉터리일 수도 있고, common git dir을 가리키는 파일일
+    수도 있습니다. `git rev-parse --git-dir`를 쓰면 두 경우를 git이 직접 해석해 주므로,
+    slot cleanup이나 pending-operation 검사에서 잘못된 `.git` 경로를 추측하지 않아도 됩니다.
+    반환 경로가 상대 경로일 수 있어 아래에서 slot path 기준 절대 경로로 보정합니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path_string = slot_path.display().to_string();
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -259,6 +272,11 @@ pub(super) fn resolve_git_dir(slot_path: &Path) -> Option<PathBuf> {
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
+    /*
+    학습 주석: git command output은 호출 위치와 git 설정에 따라 절대 경로 또는 상대 경로가 될 수
+    있습니다. 이 helper는 상대 경로를 slot path 기준으로 붙여, 이후 `MERGE_HEAD` 같은 파일 존재
+    확인이 현재 프로세스의 working directory에 의존하지 않게 만듭니다.
+    */
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if path.is_absolute() {
         path.to_path_buf()
@@ -269,6 +287,12 @@ fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn display_pool_path(canonical_repo_root: &Path, path: &Path) -> String {
+    /*
+    학습 주석: pool worktree는 repo sibling directory 아래에 생성되므로 전체 절대 경로를 그대로
+    보여 주면 TUI board가 길고 noisy해집니다. canonical repo의 parent를 표시 root로 삼아
+    `repo-akra-worktrees/hash/akra-pool/slot-1`처럼 사람이 비교하기 쉬운 상대 label을 만들고,
+    prefix stripping이 실패하면 절대 경로를 fallback으로 사용합니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let display_root = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
     path.strip_prefix(display_root)
@@ -280,6 +304,12 @@ pub(super) fn display_pool_path(canonical_repo_root: &Path, path: &Path) -> Stri
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn annotate_worktree_label(base_label: String, detail: &str) -> String {
+    /*
+    학습 주석: pool board의 slot label은 기본 경로와 git 상태 detail을 합쳐 한 줄로 보여 줍니다.
+    `clean`은 정상 상태라 중복 표시하지 않고, dirty, pending operation, branch mismatch 같은
+    운영자가 봐야 하는 detail만 slash 뒤에 붙입니다. 이 함수가 표시 규칙을 모아 두어 slot
+    inspection 쪽은 상태 판정에 집중할 수 있습니다.
+    */
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if detail.is_empty() || detail == "clean" {
         base_label
@@ -290,6 +320,12 @@ pub(super) fn annotate_worktree_label(base_label: String, detail: &str) -> Strin
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    /*
+    학습 주석: canonicalize는 symlink와 `..`를 실제 경로로 접어 주지만, 아직 생성되지 않은 slot이나
+    테스트 중 제거된 worktree에서는 실패할 수 있습니다. 여기서는 실패를 치명 오류로 만들지 않고
+    원래 path를 보존해, caller가 존재하지 않는 경로도 비교와 표시 흐름에서 계속 다룰 수 있게
+    합니다.
+    */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
