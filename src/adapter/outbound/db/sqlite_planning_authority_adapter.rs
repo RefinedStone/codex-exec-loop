@@ -365,187 +365,162 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    active snapshot 안의 단일 planning 파일을 교체하거나 삭제합니다.
+
+    `body: Some(...)`이면 `relative_path`에 해당하는 active document를 upsert하고, `body: None`이면 같은
+    API로 삭제 의미를 표현합니다. 이 `Option` 계약은 repo-scoped workspace port에서 "파일 내용 쓰기"와
+    "파일 제거"를 하나의 좁은 경계로 전달하기 위해 사용됩니다.
+
+    `set_active_document`는 실제 내용이 달라졌는지를 bool로 돌려줍니다. 이 값이 true일 때만
+    `planning_revision`을 올리는 이유는 active snapshot 변경이 없는 요청을 runtime/poller에게 새
+    planning 상태처럼 알리지 않기 위해서입니다.
+    */
     pub(crate) fn replace_active_planning_file(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         relative_path: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         body: Option<&str>,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open authority-store active file transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let changed = set_active_document(&transaction, relative_path, body)?;
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if changed {
             bump_planning_revision(&transaction)?;
         }
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit authority-store active file transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    active snapshot에서 특정 경로와 그 하위 entry들을 제거합니다.
+
+    `remove_active_documents`는 단일 파일 삭제뿐 아니라 디렉터리 성격의 prefix 삭제도 담당할 수 있는
+    하위 helper입니다. 그래서 함수 이름도 file이 아니라 entry입니다. repo-scoped workspace에서 planning
+    artifact를 제거할 때, DB의 active snapshot과 planning revision을 함께 갱신하는 경계입니다.
+    */
     pub(crate) fn remove_active_planning_entry(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         relative_path: &str,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open authority-store active removal transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let changed = remove_active_documents(&transaction, relative_path)?;
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if changed {
             bump_planning_revision(&transaction)?;
         }
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit authority-store active removal transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    shadow store를 검사하고, 필요하면 active authority documents를 mirror합니다.
+
+    shadow store는 DB가 active authority documents를 별도 mirror table에 보존하는 진단/복구용 영역입니다.
+    이 함수는 현재 active authority documents와 이전 shadow documents를 비교해 sync 상태를 판정한 뒤,
+    active documents를 shadow table에 다시 저장합니다. 저장 직후 다시 읽어서 parity를 검증하므로,
+    inspection 결과는 "쓰기 전 상태"와 "쓰기 후 검증"을 모두 반영합니다.
+
+    반환되는 sync state 의미:
+    - `Bootstrapped`: DB 파일이 없었거나 shadow가 비어 있어 새로 mirror를 만들었습니다.
+    - `InSync`: 이전 shadow가 이미 active documents와 같았습니다.
+    - `Resynced`: 이전 shadow에 차이가 있었고 이번 호출에서 active 상태로 맞췄습니다.
+    */
     fn inspect_shadow_store_impl(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityShadowStoreInspection> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = self.resolve_authority_location(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let authority_store_path = PathBuf::from(&location.authority_store_path);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let had_store = authority_store_path.is_file();
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let previous_documents = load_shadow_documents(&connection)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let source_documents = load_active_authority_documents(&connection)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let shadow_parity_issues = compare_shadow_documents(&source_documents, &previous_documents);
         store_shadow_documents(&mut connection, &location, &source_documents)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mirrored_documents = load_shadow_documents(&connection)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let post_sync_issues = compare_shadow_documents(&source_documents, &mirrored_documents);
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if !post_sync_issues.is_empty() {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let summary = post_sync_issues.join(", ");
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Err(anyhow!(
                 "shadow store parity check failed after sync: {summary}"
             ));
         }
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let sync_state = if !had_store || previous_documents.is_empty() {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningAuthorityShadowStoreSyncState::Bootstrapped
         } else if shadow_parity_issues.is_empty() {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningAuthorityShadowStoreSyncState::InSync
         } else {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningAuthorityShadowStoreSyncState::Resynced
         };
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let parity_issue_examples = shadow_parity_issues
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .take(3)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .cloned()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .collect::<Vec<_>>();
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningAuthorityShadowStoreInspection {
             location,
             sync_state,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             mirrored_document_count: source_documents.len(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             parity_issue_count: shadow_parity_issues.len(),
             parity_issue_examples,
         })
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+source document map과 shadow/mirror document map의 차이를 사람이 읽을 수 있는 문자열 목록으로 만듭니다.
+
+두 map의 key 전체 합집합을 기준으로 비교합니다. source에는 있는데 mirror에는 없으면 shadow 누락,
+mirror에만 있으면 stale content, 둘 다 있지만 본문이 다르면 mismatch로 분류합니다. 이 함수는 실제
+복구를 수행하지 않고 진단 문구만 만들며, `inspect_shadow_store_impl`이 이 결과를 바탕으로 sync state와
+예시를 구성합니다.
+*/
 fn compare_shadow_documents(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     source_documents: &BTreeMap<String, String>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     mirrored_documents: &BTreeMap<String, String>,
 ) -> Vec<String> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let document_paths = source_documents
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .keys()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .chain(mirrored_documents.keys())
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .cloned()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .collect::<BTreeSet<_>>();
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut issues = Vec::new();
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for relative_path in document_paths {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match (
             source_documents.get(&relative_path),
             mirrored_documents.get(&relative_path),
         ) {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             (Some(_), None) => issues.push(format!("{relative_path}: missing from shadow store")),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             (None, Some(_)) => issues.push(format!(
                 "{relative_path}: shadow store contains stale content"
             )),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             (Some(source), Some(mirrored)) if source != mirrored => {
                 issues.push(format!("{relative_path}: content mismatch"));
             }
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             _ => {}
         }
     }
