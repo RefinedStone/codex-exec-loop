@@ -1,39 +1,47 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: directions service는 planning authoring에서 direction catalog를 읽고 고치는 use case입니다.
 use super::super::authoring::directions::PlanningDirectionsService;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: proposal promotion service는 staged proposal을 accepted planning state로 승격하는 authoring path입니다.
 use super::super::authoring::proposal_promotion::PlanningProposalPromotionService;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: worker orchestration service는 planner worker 실행, authority, runtime facade, task repository를
+// 연결해 background planning workflow를 제어합니다.
 use super::super::worker::orchestration::PlanningWorkerOrchestrationService;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: feature ports는 worker, workspace, authority, task repository 같은 outbound adapters를 담습니다.
 use super::PlanningFeaturePorts;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: shared services는 directions, prompt, validation, queue, runtime facade처럼 worker/authoring path가
+// 재사용하는 application service instance 묶음입니다.
 use super::shared_services::PlanningSharedServices;
 
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+// 학습 주석: 이 bundle은 worker-facing planning use cases에 필요한 service만 모읍니다. runtime bundle이
+// lightweight runtime API를 담당한다면, worker bundle은 background worker와 proposal promotion 흐름을 담당합니다.
 pub(super) struct PlanningWorkerUseCaseDependencies {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: directions는 worker 흐름에서도 direction catalog를 확인하거나 보강할 때 쓰는 authoring service입니다.
     pub(super) directions: PlanningDirectionsService,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: worker_orchestration은 planner worker 실행과 runtime state transition을 조율하는 중심 service입니다.
     pub(super) worker_orchestration: PlanningWorkerOrchestrationService,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: proposal_promotion은 worker 또는 operator가 만든 proposal을 accepted planning artifacts로
+    // 옮기는 authoring boundary입니다.
     pub(super) proposal_promotion: PlanningProposalPromotionService,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
+// 학습 주석: worker dependency constructor는 composition pass의 마지막 소비자입니다. runtime bundle 생성 후
+// 남은 ports/services ownership을 받아, clone을 최소화하면서 worker-facing services를 완성합니다.
 impl PlanningWorkerUseCaseDependencies {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 여기서는 ports/services를 value로 받습니다. worker bundle이 composition root에서 남은
+    // ownership을 가져가며, 필요한 곳에서만 task_repository처럼 두 service가 공유할 handle을 clone합니다.
     pub(super) fn new(ports: PlanningFeaturePorts, services: PlanningSharedServices) -> Self {
         Self {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: directions service는 shared services에서 이미 조립되어 있으므로 worker bundle로 이동합니다.
             directions: services.directions,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: worker orchestration은 실제 worker adapter, runtime facade, authority store, task repository를
+            // 함께 필요로 합니다. 이 조합이 background planning execution boundary입니다.
             worker_orchestration: PlanningWorkerOrchestrationService::new(
                 ports.worker,
                 services.runtime_facade,
                 ports.authority,
                 ports.task_repository.clone(),
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: proposal promotion은 workspace에 artifact를 쓰고 prompt/validation/queue/task repository를
+            // 함께 갱신합니다. task_repository는 orchestration에도 필요하므로 위에서 clone된 뒤 원본을 여기로 이동합니다.
             proposal_promotion: PlanningProposalPromotionService::with_task_repository(
                 ports.workspace,
                 services.prompt,
