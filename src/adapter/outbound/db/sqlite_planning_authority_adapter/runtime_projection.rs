@@ -699,29 +699,34 @@ fn load_runtime_projection_snapshot(
     })
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: runtime projection의 current row 변경을 시간순 이벤트로 남깁니다.
+// 호출자는 이미 트랜잭션을 열어 두었고, 이 helper는 같은 트랜잭션 안에서 sequence 증가와 event insert를 함께 수행합니다.
 fn append_runtime_event(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: current projection row를 저장/삭제하는 트랜잭션입니다. event만 따로 commit되지 않게 빌려 씁니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: upsert/remove 같은 event 동작 종류입니다.
     event_kind: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: slot_lease, session_detail, distributor_queue처럼 어떤 projection 영역의 이벤트인지 나타냅니다.
     projection_kind: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: projection 영역 안에서 대상 row를 찾는 key입니다. 예를 들면 slot_id나 session_key입니다.
     projection_key: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 사람이 로그를 훑을 때 바로 이해할 수 있는 짧은 설명입니다.
     summary: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 당시 projection payload를 JSON으로 보존해 current row가 나중에 덮여도 과거 값을 추적할 수 있게 합니다.
     payload_json: &str,
 ) -> Result<()> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: runtime_event_sequence metadata는 이벤트 로그의 단조 증가 번호입니다.
+    // runtime_events 테이블의 recorded_at만으로는 동시 저장 순서를 완전히 설명하기 어려워 sequence를 따로 둡니다.
     let sequence = read_metadata_i64(transaction, "runtime_event_sequence")?.unwrap_or(0) + 1;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: 이벤트가 기록될 당시의 planning_revision을 같이 저장합니다.
+    // 나중에 런타임 변화가 어떤 planning authority 버전을 보고 일어났는지 연결하는 단서입니다.
     let observed_planning_revision =
         read_metadata_i64(transaction, "planning_revision")?.unwrap_or(0);
+    // 학습 주석: 다음 이벤트가 같은 sequence를 쓰지 않도록 insert 전에 metadata를 갱신합니다.
+    // 같은 트랜잭션이므로 insert 실패 시 sequence 증가도 rollback됩니다.
     upsert_metadata(transaction, "runtime_event_sequence", &sequence.to_string())?;
+    // 학습 주석: 이벤트 row에는 정렬용 sequence, 대상 식별자, 사람이 읽는 summary, 원본 payload가 함께 들어갑니다.
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute(
             "INSERT INTO runtime_events
              (sequence, event_kind, projection_kind, projection_key, observed_planning_revision, summary, payload_json, recorded_at)
@@ -734,111 +739,102 @@ fn append_runtime_event(
                 observed_planning_revision,
                 summary,
                 payload_json,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: recorded_at은 사람이 보는 시간 축이고, sequence는 DB 안에서의 엄격한 순서 축입니다.
                 Utc::now().to_rfc3339()
             ],
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| {
             format!(
                 "failed to append runtime event `{event_kind}` for `{projection_kind}:{projection_key}`"
             )
         })?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: claim helper가 DB에서 읽는 최소 필드 묶음입니다.
+// Debug 파생은 오류 추적이나 테스트 진단에서 구조체 내용을 쉽게 볼 수 있게 합니다.
 #[derive(Debug)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 struct RuntimeClaimRecord {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 현재 클레임을 잡은 worker/token입니다. 재진입과 경합 판단에 쓰입니다.
     owner_token: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 클레임을 잡은 시각입니다. stale 판정은 이 값과 현재 UTC 시각의 차이로 결정됩니다.
     claimed_at: String,
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: runtime_claims에서 특정 kind/scope의 현재 소유권 row를 읽습니다.
+// row가 없으면 오류가 아니라 None으로 반환해 caller가 "비어 있음"과 "DB 실패"를 구분하게 합니다.
 fn load_runtime_claim(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: acquire/release 함수가 열어 둔 트랜잭션입니다. 같은 경합 구간 안에서 claim을 읽습니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: official-refresh인지 distributor-queue인지 같은 클레임 분류입니다.
     claim_kind: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 같은 kind 안에서 충돌 범위를 나누는 key입니다. official refresh는 전역 key, queue는 item id를 씁니다.
     scope_key: &str,
 ) -> Result<Option<RuntimeClaimRecord>> {
+    // 학습 주석: owner와 claimed_at만 읽으면 acquire 쪽의 재진입/경합 판단과 stale 판단에 충분합니다.
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT owner_token, claimed_at
              FROM runtime_claims
              WHERE claim_kind = ?1 AND scope_key = ?2",
             params![claim_kind, scope_key],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
+            // 학습 주석: row callback은 SQLite column을 작은 Rust record로 매핑하는 adapter 경계입니다.
             |row| {
-                // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
                 Ok(RuntimeClaimRecord {
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     owner_token: row.get::<_, String>(0)?,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     claimed_at: row.get::<_, String>(1)?,
                 })
             },
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: OptionalExtension이 QueryReturnedNoRows를 Ok(None)으로 바꿔 "클레임 없음"을 정상 상태로 표현합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to read runtime claim `{claim_kind}:{scope_key}`"))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: 오래된 runtime claim을 발견하면 지워서 다른 worker가 다시 소유권을 잡을 수 있게 합니다.
+// 반환 bool은 실제 삭제가 있었는지 알려줘 caller가 metadata heartbeat를 추가로 갱신할지 결정하게 합니다.
 fn clear_stale_runtime_claim(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: stale 확인과 삭제는 acquire 트랜잭션 안에서 실행되어 경합 창을 줄입니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 지울 후보의 클레임 분류입니다.
     claim_kind: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 지울 후보의 충돌 범위 key입니다.
     scope_key: &str,
 ) -> Result<bool> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: row가 없으면 정리할 것도 없으므로 false를 반환합니다.
     let Some(existing_claim) = load_runtime_claim(transaction, claim_kind, scope_key)? else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(false);
     };
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    // 학습 주석: 아직 stale 임계값을 넘지 않은 클레임은 살아 있는 owner로 간주하고 건드리지 않습니다.
     if !claim_is_stale(&existing_claim.claimed_at) {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(false);
     }
 
+    // 학습 주석: stale이라고 판단된 row만 kind/scope 기준으로 삭제합니다.
+    // owner_token을 조건에 넣지 않는 이유는 "이 scope의 오래된 소유권을 회수한다"가 목적이기 때문입니다.
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute(
             "DELETE FROM runtime_claims WHERE claim_kind = ?1 AND scope_key = ?2",
             params![claim_kind, scope_key],
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| {
             format!("failed to clear stale runtime claim `{claim_kind}:{scope_key}`")
         })?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(true)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: claimed_at 문자열이 stale 임계값을 넘었는지 판단합니다.
+// 파싱할 수 없는 timestamp는 안전하게 stale로 취급해 영구히 회수되지 않는 클레임을 만들지 않습니다.
 fn claim_is_stale(claimed_at: &str) -> bool {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: DB에는 RFC3339 문자열로 저장했으므로 먼저 timezone이 포함된 DateTime으로 파싱합니다.
     chrono::DateTime::parse_from_rfc3339(claimed_at)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: 파싱에 성공하면 UTC 기준 현재 시각과 claimed_at의 차이를 초 단위로 계산합니다.
         .map(|timestamp| {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Utc::now()
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .signed_duration_since(timestamp.with_timezone(&Utc))
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .num_seconds()
                 >= CLAIM_STALE_AFTER_SECS
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: timestamp가 깨졌다면 owner 생존을 신뢰할 수 없으므로 stale=true로 회수 가능하게 둡니다.
         .unwrap_or(true)
 }
