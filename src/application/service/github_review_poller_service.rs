@@ -454,90 +454,107 @@ mod tests {
         assert_eq!(result.changes[1].id, 301);
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+    // 학습 주석: 이 테스트는 이전 poll은 있었지만 당시 activity가 하나도 없던 상태를 검증합니다.
+    // first poll과 달리 previous_state가 존재하므로, 이후 처음 나타난 activity는 새 변화로 보여야 합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: `latest_submitted_at`이 없는 state는 "baseline은 세웠지만 비어 있었다"는 뜻입니다.
+    // service가 이를 첫 poll처럼 무시하면 사용자는 비어 있던 PR에 새로 달린 review를 놓치게 됩니다.
     fn poll_surfaces_first_activity_after_empty_baseline() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: target은 이전 baseline과 새 snapshot이 같은 PR에 속한다는 테스트 전제입니다.
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: fake snapshot에는 비어 있던 baseline 이후 처음 발견된 review comment 하나만
+        // 넣습니다. expected changes도 이 event 하나입니다.
         let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: snapshot helper가 PR metadata를 채워 주므로 테스트 본문은 edge case인
+            // "첫 activity" event에 집중할 수 있습니다.
             snapshot: snapshot(
                 target.clone(),
                 vec![event(
                     201,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: 이 review comment는 previous_state의 timestamp cursor가 없는 상태에서
+                    // 처음 등장한 activity입니다. 따라서 changes에 반드시 포함되어야 합니다.
                     GithubPullRequestActivityKind::ReviewComment,
                     "2026-04-08T10:30:00Z",
                 )],
             ),
         }));
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: default state는 latest timestamp와 seen identity가 모두 비어 있습니다. `None`이
+        // 아닌 `Some(default)`로 전달해야 first-poll baseline branch와 다른 경로를 검증합니다.
         let previous_state = GithubPullRequestPollState::default();
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 이전 state가 존재하므로 service는 현재 snapshot 전체를 "비어 있던 기준점 이후의
+        // 첫 변화"로 반환해야 합니다.
         let result = service
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: `Some(&previous_state)`가 empty baseline case를 활성화합니다.
             .poll(&target, Some(&previous_state))
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: fake port가 성공 snapshot을 반환하므로 결과를 바로 열어 changes를 확인합니다.
             .expect("poll should succeed");
 
+        // 학습 주석: 새 activity 하나가 그대로 changes에 나타나야 빈 baseline 이후 첫 review를
+        // 놓치지 않습니다.
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes[0].id, 201);
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+    // 학습 주석: 이 테스트는 cursor와 같은 timestamp에 새 event가 추가되는 GitHub edge case를
+    // 검증합니다. timestamp만 비교하면 같은 시각의 새 review comment를 놓칠 수 있습니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 이전 state가 id 210만 봤고 같은 timestamp의 id 320은 아직 못 봤다면, service는
+    // id 320을 새 변화로 남겨야 합니다. 이것이 identity set을 함께 저장하는 이유입니다.
     fn poll_keeps_new_same_timestamp_events_visible() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 같은 PR target으로 동일 timestamp bucket 안의 중복 제거 동작만 분리해서 봅니다.
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: snapshot은 같은 submitted_at을 가진 두 event를 담습니다. 하나는 이미 본 event,
+        // 하나는 새 event라 timestamp 비교만으로는 둘을 구분할 수 없습니다.
         let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 같은 timestamp bucket fixture는 `seen_events_at_latest_timestamp`가 실제로
+            // diff 결과를 좌우하는지 확인하기 위한 최소 입력입니다.
             snapshot: snapshot(
                 target.clone(),
                 vec![
                     event(
                         210,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: id 210 issue comment는 previous_state에 이미 기록된 event입니다.
+                        // changes에서 제외되어야 합니다.
                         GithubPullRequestActivityKind::IssueComment,
                         "2026-04-08T10:30:00Z",
                     ),
                     event(
                         320,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: id 320 review comment는 같은 timestamp지만 identity set에 없습니다.
+                        // 따라서 새 변화로 노출되어야 합니다.
                         GithubPullRequestActivityKind::ReviewComment,
                         "2026-04-08T10:30:00Z",
                     ),
                 ],
             ),
         }));
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: previous_state는 latest timestamp를 현재 snapshot과 같은 값으로 둡니다. 이때
+        // 새 event 판정은 timestamp가 아니라 seen identity membership에 달려 있습니다.
         let previous_state = GithubPullRequestPollState {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: cursor timestamp와 snapshot timestamp가 같아도 diff가 완전히 멈추면 안 됩니다.
             latest_submitted_at: Some("2026-04-08T10:30:00Z".to_string()),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: latest timestamp bucket에서 이미 본 event는 id 210 하나뿐입니다.
             seen_events_at_latest_timestamp: vec![
                 event(
                     210,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: kind와 id가 함께 들어간 identity가 id 320 review comment와 구분됩니다.
                     GithubPullRequestActivityKind::IssueComment,
                     "2026-04-08T10:30:00Z",
                 )
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+                // 학습 주석: state에는 전체 event가 아니라 중복 판정에 필요한 identity만 저장합니다.
                 .identity(),
             ],
         };
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: poll 호출은 같은 timestamp bucket의 identity diff branch를 통과해야 합니다.
         let result = service
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: previous_state를 읽기 전용으로 빌려 주어 같은 timestamp 기준을 적용합니다.
             .poll(&target, Some(&previous_state))
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: 성공 결과에서 changes만 확인하면 edge case 의도가 선명해집니다.
             .expect("poll should succeed");
 
+        // 학습 주석: id 210은 이미 본 event라 제외되고, id 320 하나만 changes에 남아야 합니다.
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes[0].id, 320);
     }
