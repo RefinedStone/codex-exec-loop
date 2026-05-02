@@ -1,62 +1,53 @@
-// 학습 주석: existing_workspace module은 이미 accepted planning state가 있는 workspace를 설명하는 init overlay를 만듭니다.
+// planning init copy surface는 wizard router가 세부 화면 파일을 직접 알지 않게 하는
+// facade다. 각 module은 copy DTO 또는 UI-local selection enum을 받아 공통
+// `PlanningInitOverlayView`로 수렴한다.
 #[path = "planning_init_copy/existing_workspace.rs"]
 mod existing_workspace;
-// 학습 주석: review module은 simple scaffold review와 manual editor 안내 variant를 담당합니다.
 #[path = "planning_init_copy/review.rs"]
 mod review;
-// 학습 주석: selection module은 mode/detail 선택처럼 아직 planning artifacts를 만들기 전의 wizard screens를 담당합니다.
 #[path = "planning_init_copy/selection.rs"]
 mod selection;
 
-// 학습 주석: selection builders는 UI state enum 값만 받아 현재 highlight/description을 결정합니다.
 use super::super::super::super::{PlanningInitDetailSelection, PlanningInitModeSelection};
-// 학습 주석: 모든 planning init copy builders는 renderer가 소비하는 공통 overlay DTO를 반환합니다.
 use super::super::PlanningInitOverlayView;
-// 학습 주석: existing workspace와 simple review는 app/runtime state에서 추출한 copy DTO를 view builder에 넘깁니다.
 use super::copy::{PlanningExistingWorkspaceCopy, PlanningSimpleReviewCopy};
 
-// 학습 주석: existing workspace facade entry입니다. router는 copy extraction을 끝낸 뒤 이 함수에 copy를 넘기고,
-// 이 함수는 구체 view assembly module path를 숨깁니다.
+// existing workspace path는 runtime snapshot에서 만든 copy를 받아 warning/summary/options
+// layout으로 바꾼다. app-level snapshot 선택은 위 layer에서 이미 끝났으므로 여기서는
+// stale data policy를 다시 판단하지 않는다.
 pub(super) fn build_existing_workspace_overlay_view(
-    // 학습 주석: copy에는 workspace path, runtime state label, queue/failure summaries가 이미 들어 있습니다.
     copy: PlanningExistingWorkspaceCopy,
 ) -> PlanningInitOverlayView {
-    // 학습 주석: line construction은 existing_workspace module에 위임해 이 파일은 facade surface만 유지합니다.
     existing_workspace::build_existing_workspace_overlay_view(copy)
 }
 
-// 학습 주석: mode selection facade entry입니다. mode selection은 app 전체가 아니라 selected enum 하나만
-// 필요하므로 builder dependency가 작습니다.
+// mode selection은 아직 planning artifact를 만들지 않은 순수 wizard 단계다. 선택 enum
+// 하나만 넘겨 line copy를 만들면 selection builder가 app/runtime state에 의존하지 않는다.
 pub(super) fn build_mode_selection_overlay_view(
-    // 학습 주석: 현재 선택된 init mode가 option line 강조와 설명을 결정합니다.
     selected_mode: PlanningInitModeSelection,
 ) -> PlanningInitOverlayView {
-    // 학습 주석: selection module이 common `PlanningInitOverlayView`로 조립합니다.
     selection::build_mode_selection_overlay_view(selected_mode)
 }
 
-// 학습 주석: detail selection facade entry입니다. detail-mode authoring을 택한 뒤 어떤 detail path로
-// 들어갈지 보여 주는 overlay를 만듭니다.
+// detail selection도 mode selection과 같은 pre-artifact 단계지만, 이후 manual/editor
+// 흐름의 세부 route를 결정한다. 이 facade는 그 route choice만 selection module로 넘긴다.
 pub(super) fn build_detail_selection_overlay_view(
-    // 학습 주석: selected_detail은 현재 cursor/highlight 역할을 합니다.
     selected_detail: PlanningInitDetailSelection,
 ) -> PlanningInitOverlayView {
-    // 학습 주석: detail-specific line text는 selection module에 남깁니다.
     selection::build_detail_selection_overlay_view(selected_detail)
 }
 
-// 학습 주석: simple review facade entry입니다. router가 app state에서 `PlanningSimpleReviewCopy`를 만든 뒤
-// 이 함수로 넘기면 review module이 section collection과 final assembly를 진행합니다.
+// simple review는 staged draft metadata와 validation summary를 이미 copy DTO로 받은 뒤의
+// 화면이다. review module은 app을 다시 읽지 않고 promote 가능성, first error,
+// auto-follow budget copy만 사용해 최종 overlay section을 만든다.
 pub(super) fn build_simple_review_overlay_view(
-    // 학습 주석: copy ownership을 review path로 넘겨 staged draft metadata가 중복 조회되지 않게 합니다.
     copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
-    // 학습 주석: review module은 simple review의 header/summary/options/status/key 영역을 모두 조립합니다.
     review::build_simple_review_overlay_view(copy)
 }
 
-// 학습 주석: manual editor facade entry입니다. manual editor 안내는 고정 copy로 구성되므로 별도 입력이 없습니다.
+// manual editor 안내는 dedicated editor surface와 함께 뜨는 고정 copy다. 입력을 받지
+// 않는다는 사실 자체가 이 branch가 app/runtime state를 읽지 않는다는 계약이다.
 pub(super) fn build_manual_editor_overlay_view() -> PlanningInitOverlayView {
-    // 학습 주석: review module 안의 manual editor builder를 통해 같은 planning init view shape를 반환합니다.
     review::build_manual_editor_overlay_view()
 }
